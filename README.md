@@ -77,6 +77,9 @@ Future intelligence should sit above the same capability API used by the UI and 
 - [Integrations](docs/INTEGRATIONS.md)
 - [Persistence and configuration](docs/CONFIGURATION.md)
 - [MVP and implementation order](docs/MVP.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Testing strategy](docs/TESTING.md)
+- [Glossary](docs/GLOSSARY.md)
 - [Future intelligence](docs/FUTURE.md)
 - [Decisions and open questions](docs/DECISIONS.md)
 
