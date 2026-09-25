@@ -108,4 +108,8 @@ In short:
 
 ## License
 
-License is not yet selected. Do not assume reuse terms until a LICENSE file is added.
+Lugn is **source-available under the [PolyForm Small Business License 1.0.0](LICENSE.md)**.
+
+The license permits use, modification, and distribution for qualifying small businesses and other permitted uses under its terms. Larger commercial use is not automatically granted by this license; contact the project owner to discuss separate commercial licensing.
+
+This is a source-available license rather than an OSI-approved open-source license.
