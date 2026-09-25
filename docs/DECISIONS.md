@@ -131,4 +131,6 @@ This remains subject to implementation review.
 
 ### License
 
-Repository license has not yet been selected.
+- Lugn is licensed under PolyForm Small Business License 1.0.0.
+- Uses outside those terms may be licensed separately by the project owner.
+- The project is source-available rather than OSI open source.
