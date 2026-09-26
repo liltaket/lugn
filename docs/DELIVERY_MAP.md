@@ -91,6 +91,15 @@ authorization to connect to them.
   secret environment variables, local API calls, presence freshness, and
   command feedback semantics.
 
+### Long-running history retention
+
+- Question: How should command, diagnostic, timing, and correlation histories
+  stay bounded over long runtimes without misclassifying delayed device
+  feedback as a manual override?
+- Depends on: command attribution and state-stream contracts.
+- Status: open; pending commands must remain attributable, and any archived
+  command IDs need explicit treatment before old ledger records can be pruned.
+
 ### Live integration acceptance
 
 - Question: What evidence proves sensor-event-to-command latency and physical

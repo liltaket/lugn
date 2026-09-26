@@ -39,6 +39,337 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
+  it('measures fast-path decision, dispatch, feedback, and convergence with the local receive origin', async () => {
+    const { clock, adapter, engine } = setup({
+      prelight: {
+        targets: { 'lighting.desk': { power: true } },
+      },
+    });
+    adapter.feedbackDelayMs = 125;
+    clock.advanceBy(20);
+
+    const work = engine.handleEvent({
+      type: 'presence.prelight',
+      active: true,
+      source: 'stl27l',
+      localReceivedMonotonicAt: 0,
+    });
+    await flushMicrotasks();
+
+    const timing = engine.state.timings.at(-1);
+    expect(timing?.eventReceivedAt).toBe(clock.now());
+    expect(timing).not.toHaveProperty('localReceivedMonotonicAt');
+    expect(timing?.eventToDecisionMs).toBe(20);
+    expect(timing?.commandDispatchedAt).toBeDefined();
+    expect(timing?.eventToFirstDispatchMs).toBe(20);
+    expect(timing?.feedbackObservedAt).toBeUndefined();
+
+    clock.advanceBy(124);
+    await flushMicrotasks();
+    expect(engine.state.timings.at(-1)?.eventToFirstFeedbackMs).toBeUndefined();
+
+    clock.advanceBy(1);
+    await flushMicrotasks();
+    await work;
+    await flushMicrotasks();
+
+    const completed = engine.state.timings.at(-1);
+    expect(adapter.dispatched).toHaveLength(1);
+    expect(completed?.eventToFirstFeedbackMs).toBe(145);
+    expect(completed?.eventToFullConvergenceMs).toBe(145);
+    expect(
+      [
+        completed?.eventToDecisionMs,
+        completed?.eventToFirstDispatchMs,
+        completed?.eventToFirstFeedbackMs,
+        completed?.eventToFullConvergenceMs,
+      ].every((elapsed) => elapsed !== undefined && elapsed >= 0),
+    ).toBe(true);
+    engine.dispose();
+  });
+
+  it('attributes command-less feedback to the matching fast-path command', async () => {
+    const { clock, adapter, engine } = setup({
+      prelight: {
+        targets: { 'lighting.desk': { power: true } },
+      },
+    });
+    adapter.feedbackDelayMs = 125;
+    clock.advanceBy(20);
+    const work = engine.handleEvent({
+      type: 'presence.prelight',
+      active: true,
+      source: 'stl27l',
+      localReceivedMonotonicAt: 0,
+    });
+    await flushMicrotasks();
+
+    clock.advanceBy(70);
+    adapter.externalChange(
+      'lighting.desk',
+      { power: true },
+      {
+        actor: { type: 'home_assistant' },
+        source: 'home_assistant.state_changed',
+      },
+    );
+    await flushMicrotasks();
+
+    expect(engine.state.timings.at(-1)?.eventToFirstFeedbackMs).toBe(90);
+    expect(engine.state.timings.at(-1)?.eventToFullConvergenceMs).toBe(90);
+    clock.advanceBy(55);
+    await flushMicrotasks();
+    await work;
+    expect(engine.state.timings.at(-1)?.eventToFirstFeedbackMs).toBe(90);
+    engine.dispose();
+  });
+
+  it('waits for every configured prelight target before reporting convergence', async () => {
+    const { clock, adapter, engine } = setup({
+      convergenceTimeoutMs: 3_000,
+      prelight: {
+        targets: {
+          'lighting.ceiling': { power: true },
+          'lighting.desk': { power: true },
+        },
+      },
+    });
+    adapter.feedbackDelayMs = 1_000;
+    const work = engine.handleEvent({
+      type: 'presence.prelight',
+      active: true,
+      source: 'stl27l',
+      localReceivedMonotonicAt: clock.monotonicNow(),
+    });
+    await flushMicrotasks();
+    expect(adapter.dispatched).toHaveLength(2);
+
+    clock.advanceBy(100);
+    adapter.externalChange(
+      'lighting.desk',
+      { power: true },
+      {
+        actor: { type: 'home_assistant' },
+        source: 'home_assistant.state_changed',
+      },
+    );
+    await flushMicrotasks();
+    const timing = engine.state.timings.at(-1);
+    expect(timing?.feedbackObservedAt).toBeDefined();
+    expect(timing?.fullConvergenceAt).toBeUndefined();
+    expect(timing?.eventToFullConvergenceMs).toBeUndefined();
+
+    clock.advanceBy(100);
+    adapter.externalChange(
+      'lighting.ceiling',
+      { power: true },
+      {
+        actor: { type: 'home_assistant' },
+        source: 'home_assistant.state_changed',
+      },
+    );
+    await flushMicrotasks();
+    expect(engine.state.timings.at(-1)?.eventToFullConvergenceMs).toBe(200);
+
+    clock.advanceBy(800);
+    await flushMicrotasks();
+    await work;
+    engine.dispose();
+  });
+
+  it('completes confirmed-empty timing from later asynchronous feedback for all lights', async () => {
+    const { clock, adapter, engine } = setup({ convergenceTimeoutMs: 2_000 });
+    adapter.ignoreNextForTargets.add('lighting.ceiling');
+    adapter.ignoreNextForTargets.add('lighting.desk');
+
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+    });
+    let timing = engine.state.timings.at(-1);
+    expect(timing?.commandDispatchedAt).toBeDefined();
+    expect(timing?.feedbackObservedAt).toBeUndefined();
+    expect(timing?.fullConvergenceAt).toBeUndefined();
+
+    adapter.externalChange(
+      'lighting.ceiling',
+      { power: false },
+      {
+        actor: { type: 'home_assistant' },
+        source: 'home_assistant.state_changed',
+      },
+    );
+    await flushMicrotasks();
+    expect(engine.state.timings.at(-1)?.fullConvergenceAt).toBeUndefined();
+
+    clock.advanceBy(25);
+    adapter.externalChange(
+      'lighting.desk',
+      { power: false },
+      {
+        actor: { type: 'home_assistant' },
+        source: 'home_assistant.state_changed',
+      },
+    );
+    await flushMicrotasks();
+    timing = engine.state.timings.at(-1);
+    expect(timing?.feedbackObservedAt).toBeDefined();
+    expect(timing?.fullConvergenceAt).toBe(clock.now());
+    expect(timing?.eventToFullConvergenceMs).toBe(25);
+    engine.dispose();
+  });
+
+  it('carries an occupied event through its scheduled convergence retry', async () => {
+    const { clock, adapter, engine } = setup({
+      retryDelayMs: 100,
+      convergenceTimeoutMs: 1_000,
+    });
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    await engine.activateScene('scene.cozy', user);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      localReceivedMonotonicAt: clock.monotonicNow(),
+    });
+    const timing = engine.state.timings.at(-1);
+    expect(timing?.commandDispatchedAt).toBeUndefined();
+
+    clock.advanceBy(100);
+    await flushMicrotasks();
+    expect(
+      adapter.dispatched.filter(
+        (command) => command.target === 'lighting.desk',
+      ),
+    ).toHaveLength(2);
+    expect(timing?.eventToFirstDispatchMs).toBe(100);
+    expect(timing?.eventToFirstFeedbackMs).toBe(100);
+    expect(timing?.eventToFullConvergenceMs).toBe(100);
+    engine.dispose();
+  });
+
+  it('still degrades and cancels an occupied command at the convergence deadline after timing expires', async () => {
+    const { clock, adapter, engine } = setup({
+      retryDelayMs: 1_000,
+      convergenceTimeoutMs: 1_000,
+    });
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    await engine.activateScene('scene.cozy', user);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+    });
+    const timing = engine.state.timings.at(-1);
+    const command = engine.state.commands.find(
+      (entry) => entry.target === 'lighting.desk' && entry.status === 'pending',
+    );
+    expect(command).toBeDefined();
+
+    clock.advanceBy(1_000);
+    await flushMicrotasks();
+
+    expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
+      'degraded',
+    );
+    expect(
+      engine.state.commands.find((entry) => entry.id === command?.id)?.status,
+    ).toBe('cancelled');
+    expect(timing?.fullConvergenceAt).toBeUndefined();
+    expect(timing?.eventToFullConvergenceMs).toBeUndefined();
+    engine.dispose();
+  });
+
+  it('drops fast-path feedback correlation after its convergence timeout', async () => {
+    const { clock, adapter, engine } = setup({
+      convergenceTimeoutMs: 100,
+      prelight: { targets: { 'lighting.desk': { power: true } } },
+    });
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    await engine.handleEvent({
+      type: 'presence.prelight',
+      active: true,
+      source: 'stl27l',
+    });
+    const timing = engine.state.timings.at(-1);
+    expect(timing?.eventToFirstDispatchMs).toBe(0);
+
+    clock.advanceBy(100);
+    adapter.externalChange('lighting.desk', { power: true });
+    await flushMicrotasks();
+    expect(timing?.feedbackObservedAt).toBeUndefined();
+    expect(timing?.fullConvergenceAt).toBeUndefined();
+    engine.dispose();
+  });
+
+  it('drops fast-path feedback correlation after an adapter dispatch failure', async () => {
+    const { adapter, engine } = setup({
+      prelight: { targets: { 'lighting.desk': { power: true } } },
+    });
+    adapter.setAvailable(false);
+    await engine.handleEvent({
+      type: 'presence.prelight',
+      active: true,
+      source: 'stl27l',
+    });
+    const timing = engine.state.timings.at(-1);
+    expect(timing?.eventToFirstDispatchMs).toBe(0);
+    expect(engine.state.commands.at(-1)?.status).toBe('failed');
+
+    adapter.setAvailable(true);
+    adapter.externalChange('lighting.desk', { power: true });
+    expect(timing?.feedbackObservedAt).toBeUndefined();
+    expect(timing?.fullConvergenceAt).toBeUndefined();
+    engine.dispose();
+  });
+
+  it('drops prelight correlation when occupied presence cancels the prelight', async () => {
+    const { clock, adapter, engine } = setup({
+      prelight: { targets: { 'lighting.desk': { power: true } } },
+    });
+    adapter.feedbackDelayMs = 100;
+    const prelightWork = engine.handleEvent({
+      type: 'presence.prelight',
+      active: true,
+      source: 'stl27l',
+    });
+    await flushMicrotasks();
+    const prelightTiming = engine.state.timings.at(-1);
+
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+    });
+    clock.advanceBy(100);
+    await flushMicrotasks();
+    await prelightWork;
+
+    expect(prelightTiming?.feedbackObservedAt).toBeUndefined();
+    expect(prelightTiming?.fullConvergenceAt).toBeUndefined();
+    engine.dispose();
+  });
+
+  it('drops an unfinished presence correlation when a new scene supersedes it', async () => {
+    const { clock, adapter, engine } = setup({
+      retryDelayMs: 500,
+      convergenceTimeoutMs: 2_000,
+    });
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    await engine.activateScene('scene.cozy', user);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+    });
+    const presenceTiming = engine.state.timings.at(-1);
+    expect(presenceTiming?.eventToFirstDispatchMs).toBeUndefined();
+
+    await engine.activateScene('scene.movie', user);
+    clock.advanceBy(500);
+    await flushMicrotasks();
+    expect(presenceTiming?.eventToFirstDispatchMs).toBeUndefined();
+    expect(presenceTiming?.feedbackObservedAt).toBeUndefined();
+    expect(presenceTiming?.fullConvergenceAt).toBeUndefined();
+    engine.dispose();
+  });
+
   it('turns an external brightness change into a property override only', async () => {
     const { adapter, engine } = setup();
     await engine.activateScene('scene.cozy', user);
@@ -340,6 +671,108 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
+  it('expires continuity on time while unknown and publishes the cleared state', async () => {
+    const { clock, engine } = setup({ continuityMs: 1_000 });
+    await engine.activateScene('scene.cozy', user);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+    });
+    const expiration = engine.state.presence.continuityExpiresAt;
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'unknown',
+    });
+    const snapshot = engine.stream.resume(null, engine.state);
+    expect(snapshot.kind).toBe('snapshot');
+    if (snapshot.kind !== 'snapshot')
+      throw new Error('Expected state snapshot');
+
+    const updates: Parameters<typeof applyStateUpdate>[1][] = [];
+    const unsubscribe = engine.stream.subscribe((update) =>
+      updates.push(update),
+    );
+    clock.advanceBy(1_000);
+
+    expect(engine.state.presence.state).toBe('unknown');
+    expect(expiration).toBe(2_000);
+    expect(engine.state.presence.continuityExpiresAt).toBeNull();
+    expect(engine.state.lighting.currentScene).toBeNull();
+    expect(
+      Object.values(engine.state.lighting.devices).every(
+        (device) =>
+          Object.keys(device.baselineDesired).length === 0 &&
+          Object.keys(device.effectiveDesired).length === 0 &&
+          Object.keys(device.ownership).length === 0,
+      ),
+    ).toBe(true);
+    const expiryUpdate = updates.find((update) =>
+      update.patch.diagnostics?.some(
+        (diagnostic) => diagnostic.kind === 'continuity.expired',
+      ),
+    );
+    expect(expiryUpdate?.domains).toEqual(
+      expect.arrayContaining([
+        'presence',
+        'lighting',
+        'commands',
+        'diagnostics',
+      ]),
+    );
+    expect(
+      expiryUpdate && applyStateUpdate(snapshot.state, expiryUpdate),
+    ).toEqual(engine.state);
+
+    unsubscribe();
+    engine.dispose();
+  });
+
+  it('cancels the continuity expiry when occupied returns before the deadline', async () => {
+    const { clock, adapter, engine } = setup({ continuityMs: 1_000 });
+    await engine.activateScene('scene.cozy', user);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+    });
+    clock.advanceBy(999);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    clock.advanceBy(1);
+
+    expect(engine.state.lighting.currentScene).toBe('scene.cozy');
+    expect(engine.state.presence.continuityExpiresAt).toBeNull();
+    expect(adapter.observed.get('lighting.ceiling')?.power).toBe(true);
+    expect(
+      engine.state.diagnostics.some(
+        (entry) => entry.kind === 'continuity.expired',
+      ),
+    ).toBe(false);
+    engine.dispose();
+  });
+
+  it('cancels the continuity expiry when the engine is disposed', async () => {
+    const { clock, engine } = setup({ continuityMs: 1_000 });
+    await engine.activateScene('scene.cozy', user);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+    });
+    const revision = engine.state.revision;
+    engine.dispose();
+    clock.advanceBy(1_000);
+
+    expect(engine.state.revision).toBe(revision);
+    expect(engine.state.lighting.currentScene).toBe('scene.cozy');
+    expect(
+      engine.state.diagnostics.some(
+        (entry) => entry.kind === 'continuity.expired',
+      ),
+    ).toBe(false);
+  });
+
   it('does not shut off the room or create a new visit for occupied-to-unknown recovery', async () => {
     const { adapter, engine } = setup();
     await engine.activateScene('scene.cozy', user);
@@ -372,7 +805,7 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
-  it('expires remembered state only after confirmed absence exceeds continuity', async () => {
+  it('expires remembered state exactly at the continuity deadline', async () => {
     const { clock, adapter, engine } = setup({ continuityMs: 1_000 });
     await engine.activateScene('scene.cozy', user);
     await engine.handlePresence({
@@ -386,6 +819,11 @@ describe('Lugn deterministic lighting slice', () => {
     });
     expect(engine.state.lighting.currentScene).toBeNull();
     expect(adapter.observed.get('lighting.ceiling')?.power).toBe(false);
+    expect(
+      engine.state.diagnostics.some(
+        (entry) => entry.kind === 'continuity.expired',
+      ),
+    ).toBe(true);
     engine.dispose();
   });
 

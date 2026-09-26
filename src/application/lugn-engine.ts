@@ -97,6 +97,10 @@ type IntentProvenance = {
   requestId?: string;
   reason: string;
 };
+type ScheduledRetry = {
+  handle: TimerHandle;
+  fastPathEventId?: string;
+};
 
 export class LugnEngine {
   readonly stream: StateEventStream;
@@ -117,10 +121,20 @@ export class LugnEngine {
   private nextDiagnosticId = 0;
   private nextEventId = 0;
   private readonly unsubscribers: Array<() => void> = [];
-  private readonly retryTimers = new Map<string, TimerHandle>();
+  private readonly retryTimers = new Map<string, ScheduledRetry>();
+  private continuityTimer: TimerHandle | undefined;
+  private continuityTimerGeneration = 0;
   private readonly convergenceStartedAt = new Map<number, number>();
   private readonly intentByRevision = new Map<number, IntentProvenance>();
   private readonly fastPathEventByCommand = new Map<string, string>();
+  private readonly fastPathMonotonicOrigins = new Map<string, number>();
+  private readonly fastPathTimeoutTimers = new Map<string, TimerHandle>();
+  private readonly fastPathPrelightExpectedValues = new Map<
+    string,
+    Readonly<Record<string, LightingValues>>
+  >();
+  private activePrelightFastPathEventId: string | undefined;
+  private confirmedEmptyFastPathEventId: string | undefined;
   private prelightActive = false;
   private prelightTimer: TimerHandle | undefined;
   private prelightSnapshot = new Map<string, LightingValues>();
@@ -365,6 +379,7 @@ export class LugnEngine {
       undefined,
       new Map([[target, new Set(Object.keys(values))]]),
     );
+    this.terminateAllFastPathEvents();
     const source = provenance.source ?? 'capability';
     const reason = provenance.reason ?? 'Explicit lighting adjustment';
     this.ledger.supersedePending(
@@ -448,25 +463,31 @@ export class LugnEngine {
     const receivedAt = this.clock.now();
     const previous = this.state.presence.state;
     const prelightWasActive = this.prelightActive;
+    const createsEmptyTiming =
+      normalizedEvent.presence === 'confirmed_empty' &&
+      (previous !== 'confirmed_empty' || prelightWasActive);
     if (
       normalizedEvent.presence === 'confirmed_empty' ||
       normalizedEvent.presence === 'occupied'
     )
       this.clearPrelight();
+    if (normalizedEvent.presence === 'occupied' || createsEmptyTiming)
+      this.terminateAllFastPathEvents();
     this.state.presence.state = normalizedEvent.presence;
     if (normalizedEvent.personCount !== undefined)
       this.state.presence.personCount = normalizedEvent.personCount;
-    if (
-      normalizedEvent.presence === 'confirmed_empty' &&
-      (previous !== 'confirmed_empty' || prelightWasActive)
-    ) {
+    if (createsEmptyTiming) {
       const fastPathEventId = `presence-${++this.nextEventId}`;
-      this.state.timings.push({
-        eventId: fastPathEventId,
-        eventReceivedAt: receivedAt,
-        decisionCompletedAt: this.clock.now(),
-      });
+      this.confirmedEmptyFastPathEventId = fastPathEventId;
+      this.state.timings.push(
+        this.createFastPathTiming(
+          fastPathEventId,
+          receivedAt,
+          normalizedEvent.localReceivedMonotonicAt,
+        ),
+      );
       this.state.presence.continuityExpiresAt = receivedAt + this.continuityMs;
+      this.scheduleContinuityExpiry(this.state.presence.continuityExpiresAt);
       this.cancelRetryTimers();
       this.ledger.supersedePending('Room became confirmed empty');
       this.addDiagnostic(
@@ -495,13 +516,7 @@ export class LugnEngine {
           },
         ),
       );
-      const timing = this.state.timings.find(
-        (entry) => entry.eventId === fastPathEventId,
-      );
-      const lightsAreOff = Object.values(this.state.lighting.devices).every(
-        (device) => device.observed.power === false,
-      );
-      if (timing && lightsAreOff) timing.fullConvergenceAt = this.clock.now();
+      this.tryCompleteConfirmedEmptyFastPath();
       this.publish(['commands', 'diagnostics', 'timings']);
       return;
     }
@@ -517,6 +532,7 @@ export class LugnEngine {
     if (normalizedEvent.presence === 'occupied') {
       const expiry = this.state.presence.continuityExpiresAt;
       const withinContinuity = expiry !== null && receivedAt < expiry;
+      this.cancelContinuityTimer();
       if (expiry !== null && receivedAt >= expiry) this.expireContinuity();
       const returned = withinContinuity;
       this.state.presence.continuityExpiresAt = null;
@@ -527,11 +543,12 @@ export class LugnEngine {
           : 'Room is occupied',
         { restoredContinuity: returned },
       );
-      const timing: FastPathTiming = {
-        eventId: `presence-${++this.nextEventId}`,
-        eventReceivedAt: receivedAt,
-        decisionCompletedAt: this.clock.now(),
-      };
+      const eventId = `presence-${++this.nextEventId}`;
+      const timing = this.createFastPathTiming(
+        eventId,
+        receivedAt,
+        normalizedEvent.localReceivedMonotonicAt,
+      );
       this.state.timings.push(timing);
       this.publish(['presence', 'diagnostics', 'timings']);
       await this.reconcileScene(
@@ -561,14 +578,22 @@ export class LugnEngine {
       return;
     }
 
+    this.terminateAllFastPathEvents();
     this.prelightActive = true;
     const eventId = `prelight-${++this.nextEventId}`;
+    this.activePrelightFastPathEventId = eventId;
     const receivedAt = this.clock.now();
-    this.state.timings.push({
+    this.state.timings.push(
+      this.createFastPathTiming(
+        eventId,
+        receivedAt,
+        normalizedEvent.localReceivedMonotonicAt,
+      ),
+    );
+    this.fastPathPrelightExpectedValues.set(
       eventId,
-      eventReceivedAt: receivedAt,
-      decisionCompletedAt: this.clock.now(),
-    });
+      structuredClone(this.prelightTargets),
+    );
     this.prelightSnapshot = new Map();
     const dispatches: Promise<void>[] = [];
     for (const [target, values] of Object.entries(this.prelightTargets)) {
@@ -601,6 +626,7 @@ export class LugnEngine {
       void this.finishPrelight(this.state.presence.state !== 'occupied');
     }, this.prelightMaxDurationMs);
     await Promise.all(dispatches);
+    this.tryCompletePrelightFastPath(eventId);
   }
 
   async reconcileScene(
@@ -612,6 +638,17 @@ export class LugnEngine {
       this.state.presence.state === 'confirmed_empty'
     )
       return;
+    const retryEventId = this.retryTimers.get(
+      String(revision),
+    )?.fastPathEventId;
+    const candidateEventId =
+      eventId && this.fastPathMonotonicOrigins.has(eventId)
+        ? eventId
+        : retryEventId;
+    const timingEventId =
+      candidateEventId && this.fastPathMonotonicOrigins.has(candidateEventId)
+        ? candidateEventId
+        : undefined;
     const startedAt =
       this.convergenceStartedAt.get(revision) ?? this.clock.now();
     this.convergenceStartedAt.set(revision, startedAt);
@@ -661,7 +698,7 @@ export class LugnEngine {
           intent.reason,
           intent.actor,
           intent.requestId,
-          eventId,
+          timingEventId,
         ),
       );
     }
@@ -680,11 +717,13 @@ export class LugnEngine {
         'Effective lighting state matches observed state',
         { revision },
       );
-      if (eventId) {
-        const timing = this.state.timings.find(
-          (candidate) => candidate.eventId === eventId,
+      if (timingEventId && this.isFastPathEventConverged(timingEventId)) {
+        this.recordFastPathStage(
+          timingEventId,
+          'fullConvergenceAt',
+          'eventToFullConvergenceMs',
         );
-        if (timing) timing.fullConvergenceAt = this.clock.now();
+        this.terminateFastPathEvent(timingEventId);
       }
       this.publish(['lighting', 'commands', 'diagnostics', 'timings']);
       return;
@@ -694,16 +733,23 @@ export class LugnEngine {
         0,
         this.convergenceTimeoutMs - (this.clock.now() - startedAt),
       );
-      this.scheduleRetry(revision, Math.min(this.retryDelayMs, remaining));
+      this.scheduleRetry(
+        revision,
+        Math.min(this.retryDelayMs, remaining),
+        timingEventId,
+      );
     } else {
       this.clearRetryTimer(revision);
+      if (timingEventId) this.terminateFastPathEvent(timingEventId);
     }
     this.publish(['lighting', 'commands', 'diagnostics']);
   }
 
   dispose(): void {
     this.cancelRetryTimers();
+    this.cancelContinuityTimer();
     this.clearPrelight();
+    this.terminateAllFastPathEvents();
     this.musicController.dispose();
     for (const handle of this.switchFeedbackTimers.values())
       this.clock.clearTimeout(handle);
@@ -780,6 +826,9 @@ export class LugnEngine {
     this.prelightTimer = undefined;
     this.prelightActive = false;
     this.prelightSnapshot.clear();
+    if (this.activePrelightFastPathEventId)
+      this.terminateFastPathEvent(this.activePrelightFastPathEventId);
+    this.activePrelightFastPathEventId = undefined;
   }
 
   private async finishPrelight(
@@ -792,6 +841,9 @@ export class LugnEngine {
       this.clock.clearTimeout(this.prelightTimer);
     this.prelightTimer = undefined;
     this.prelightActive = false;
+    if (this.activePrelightFastPathEventId)
+      this.terminateFastPathEvent(this.activePrelightFastPathEventId);
+    this.activePrelightFastPathEventId = undefined;
     const snapshot = this.prelightSnapshot;
     this.prelightSnapshot = new Map();
     if (!restore) return;
@@ -832,6 +884,7 @@ export class LugnEngine {
   }
 
   private beginScene(scene: LightingScene, intent: IntentProvenance): void {
+    this.terminateAllFastPathEvents();
     const priorRevision = this.state.lighting.sceneRevision;
     this.clearRetryTimer(priorRevision);
     this.ledger.supersedePending(
@@ -888,13 +941,13 @@ export class LugnEngine {
     });
     this.state.commands = this.ledger.records;
     this.publish(['commands']);
-    if (eventId) {
+    if (eventId && this.fastPathMonotonicOrigins.has(eventId)) {
       this.fastPathEventByCommand.set(command.id, eventId);
-      const timing = this.state.timings.find(
-        (entry) => entry.eventId === eventId,
+      this.recordFastPathStage(
+        eventId,
+        'commandDispatchedAt',
+        'eventToFirstDispatchMs',
       );
-      if (timing && timing.commandDispatchedAt === undefined)
-        timing.commandDispatchedAt = this.clock.now();
       this.publish(['timings']);
     }
     try {
@@ -909,6 +962,7 @@ export class LugnEngine {
         commandId: command.id,
         error: command.diagnosticReason,
       });
+      if (eventId) this.terminateFastPathEvent(eventId);
       this.publish(['commands', 'lighting', 'diagnostics']);
     }
   }
@@ -917,6 +971,9 @@ export class LugnEngine {
     const device = this.state.lighting.devices[observation.target];
     if (!device) return;
     const feedbackTime = this.clock.now();
+    let fastPathEventId = observation.commandId
+      ? this.fastPathEventByCommand.get(observation.commandId)
+      : undefined;
     for (const property of LightingProperties) {
       const value = observation.values[property];
       if (value === undefined) continue;
@@ -929,11 +986,14 @@ export class LugnEngine {
         feedbackTime,
         observation.commandId,
       );
+      if (command && !fastPathEventId)
+        fastPathEventId = this.fastPathEventByCommand.get(command.id);
       if (
         !command &&
         previouslyObserved !== undefined &&
         previouslyObserved !== value
       ) {
+        this.terminateAllFastPathEvents();
         Object.assign(device.effectiveDesired, { [property]: value });
         device.ownership[property] = {
           kind: 'override',
@@ -964,14 +1024,16 @@ export class LugnEngine {
         );
       }
     }
-    const fastPathEventId = observation.commandId
-      ? this.fastPathEventByCommand.get(observation.commandId)
-      : undefined;
-    const timing = fastPathEventId
-      ? this.state.timings.find((entry) => entry.eventId === fastPathEventId)
-      : undefined;
-    if (timing && timing.feedbackObservedAt === undefined)
-      timing.feedbackObservedAt = feedbackTime;
+    if (fastPathEventId) {
+      this.recordFastPathStage(
+        fastPathEventId,
+        'feedbackObservedAt',
+        'eventToFirstFeedbackMs',
+        feedbackTime,
+      );
+      this.tryCompletePrelightFastPath(fastPathEventId);
+    }
+    this.tryCompleteConfirmedEmptyFastPath();
     const isStaleCommand =
       observation.commandId !== undefined &&
       observation.commandId !== this.latestCommandId(observation.target);
@@ -985,12 +1047,9 @@ export class LugnEngine {
     if (this.state.presence.state !== 'confirmed_empty') {
       void this.reconcileScene(
         this.state.lighting.sceneRevision,
-        timing?.eventId,
+        fastPathEventId,
       );
     } else if (isStaleCommand && observation.values.power === true) {
-      const emptyTiming = [...this.state.timings]
-        .reverse()
-        .find((entry) => entry.commandDispatchedAt !== undefined);
       void this.dispatch(
         observation.target,
         { power: false },
@@ -999,7 +1058,7 @@ export class LugnEngine {
         'Reassert physical off after stale command feedback',
         systemActor,
         undefined,
-        emptyTiming?.eventId,
+        this.confirmedEmptyFastPathEventId,
       );
     }
   }
@@ -1011,6 +1070,7 @@ export class LugnEngine {
   }
 
   private expireContinuity(): void {
+    this.cancelContinuityTimer();
     this.state.lighting.currentScene = null;
     this.state.lighting.sceneRevision += 1;
     this.ledger.cancelRevision(
@@ -1028,6 +1088,171 @@ export class LugnEngine {
       'Remembered scene and lighting overrides expired after confirmed absence',
       {},
     );
+    this.publish(['presence', 'lighting', 'commands', 'diagnostics']);
+  }
+
+  private createFastPathTiming(
+    eventId: string,
+    eventReceivedAt: number,
+    localReceivedMonotonicAt?: number,
+  ): FastPathTiming {
+    const monotonicOrigin =
+      localReceivedMonotonicAt !== undefined &&
+      Number.isFinite(localReceivedMonotonicAt) &&
+      localReceivedMonotonicAt >= 0
+        ? localReceivedMonotonicAt
+        : this.clock.monotonicNow();
+    this.fastPathMonotonicOrigins.set(eventId, monotonicOrigin);
+    const timeout = this.clock.setTimeout(() => {
+      this.fastPathTimeoutTimers.delete(eventId);
+      this.terminateFastPathEvent(eventId);
+    }, this.convergenceTimeoutMs);
+    this.fastPathTimeoutTimers.set(eventId, timeout);
+
+    return {
+      eventId,
+      eventReceivedAt,
+      decisionCompletedAt: this.clock.now(),
+      eventToDecisionMs: this.elapsedSince(monotonicOrigin),
+    };
+  }
+
+  private recordFastPathStage(
+    eventId: string,
+    wallField:
+      'commandDispatchedAt' | 'feedbackObservedAt' | 'fullConvergenceAt',
+    elapsedField:
+      | 'eventToFirstDispatchMs'
+      | 'eventToFirstFeedbackMs'
+      | 'eventToFullConvergenceMs',
+    wallAt = this.clock.now(),
+  ): void {
+    const timing = this.state.timings.find(
+      (entry) => entry.eventId === eventId,
+    );
+    if (!timing || !this.fastPathMonotonicOrigins.has(eventId)) return;
+
+    if (timing[wallField] === undefined) timing[wallField] = wallAt;
+    if (timing[elapsedField] === undefined) {
+      const origin = this.fastPathMonotonicOrigins.get(eventId);
+      if (origin !== undefined)
+        timing[elapsedField] = this.elapsedSince(origin);
+    }
+  }
+
+  private elapsedSince(monotonicOrigin: number): number {
+    return Math.max(0, this.clock.monotonicNow() - monotonicOrigin);
+  }
+
+  private isFastPathEventConverged(eventId: string): boolean {
+    const expected = this.fastPathPrelightExpectedValues.get(eventId);
+    if (expected) {
+      return Object.entries(expected).every(([target, values]) => {
+        const observed = this.state.lighting.devices[target]?.observed;
+        if (!observed) return false;
+        return LightingProperties.every((property) => {
+          const value = values[property];
+          return value === undefined || observed[property] === value;
+        });
+      });
+    }
+    return true;
+  }
+
+  private tryCompletePrelightFastPath(eventId: string | undefined): void {
+    if (!eventId || !this.fastPathPrelightExpectedValues.has(eventId)) return;
+    if (!this.isFastPathEventConverged(eventId)) return;
+    this.recordFastPathStage(
+      eventId,
+      'fullConvergenceAt',
+      'eventToFullConvergenceMs',
+    );
+    this.terminateFastPathEvent(eventId);
+  }
+
+  private tryCompleteConfirmedEmptyFastPath(): void {
+    const eventId = this.confirmedEmptyFastPathEventId;
+    if (!eventId) return;
+    const lightsAreOff = Object.values(this.state.lighting.devices).every(
+      (device) => device.observed.power === false,
+    );
+    if (!lightsAreOff) return;
+    this.recordFastPathStage(
+      eventId,
+      'fullConvergenceAt',
+      'eventToFullConvergenceMs',
+    );
+    this.terminateFastPathEvent(eventId);
+  }
+
+  private terminateFastPathEvent(eventId: string): void {
+    this.fastPathMonotonicOrigins.delete(eventId);
+    const timeout = this.fastPathTimeoutTimers.get(eventId);
+    if (timeout !== undefined) this.clock.clearTimeout(timeout);
+    this.fastPathTimeoutTimers.delete(eventId);
+    this.fastPathPrelightExpectedValues.delete(eventId);
+    if (this.activePrelightFastPathEventId === eventId)
+      this.activePrelightFastPathEventId = undefined;
+    if (this.confirmedEmptyFastPathEventId === eventId)
+      this.confirmedEmptyFastPathEventId = undefined;
+    for (const [commandId, mappedEventId] of this.fastPathEventByCommand) {
+      if (mappedEventId === eventId)
+        this.fastPathEventByCommand.delete(commandId);
+    }
+    for (const [revision, retry] of this.retryTimers) {
+      if (retry.fastPathEventId === eventId)
+        this.retryTimers.set(revision, { handle: retry.handle });
+    }
+  }
+
+  private terminateAllFastPathEvents(): void {
+    const eventIds = new Set([
+      ...this.fastPathMonotonicOrigins.keys(),
+      ...this.fastPathEventByCommand.values(),
+      ...this.fastPathPrelightExpectedValues.keys(),
+      ...[...this.retryTimers.values()]
+        .map((retry) => retry.fastPathEventId)
+        .filter((eventId): eventId is string => eventId !== undefined),
+      ...(this.activePrelightFastPathEventId === undefined
+        ? []
+        : [this.activePrelightFastPathEventId]),
+      ...(this.confirmedEmptyFastPathEventId === undefined
+        ? []
+        : [this.confirmedEmptyFastPathEventId]),
+    ]);
+    for (const eventId of eventIds) this.terminateFastPathEvent(eventId);
+  }
+
+  private scheduleContinuityExpiry(expiresAt: number): void {
+    this.cancelContinuityTimer();
+    const generation = this.continuityTimerGeneration;
+    this.continuityTimer = this.clock.setTimeout(
+      () => this.handleContinuityExpiry(generation, expiresAt),
+      Math.max(0, expiresAt - this.clock.now()),
+    );
+  }
+
+  private handleContinuityExpiry(generation: number, expiresAt: number): void {
+    if (generation !== this.continuityTimerGeneration) return;
+    this.continuityTimer = undefined;
+    if (this.state.presence.continuityExpiresAt !== expiresAt) return;
+
+    const remainingMs = expiresAt - this.clock.now();
+    if (remainingMs > 0) {
+      this.continuityTimer = this.clock.setTimeout(
+        () => this.handleContinuityExpiry(generation, expiresAt),
+        remainingMs,
+      );
+      return;
+    }
+    this.expireContinuity();
+  }
+
+  private cancelContinuityTimer(): void {
+    this.continuityTimerGeneration += 1;
+    if (this.continuityTimer !== undefined)
+      this.clock.clearTimeout(this.continuityTimer);
+    this.continuityTimer = undefined;
   }
 
   private requireDevice(target: string): DeviceRuntime {
@@ -1080,25 +1305,40 @@ export class LugnEngine {
     });
   }
 
-  private scheduleRetry(revision: number, delayMs: number): void {
+  private scheduleRetry(
+    revision: number,
+    delayMs: number,
+    fastPathEventId?: string,
+  ): void {
     this.clearRetryTimer(revision);
     const handle = this.clock.setTimeout(() => {
-      this.retryTimers.delete(String(revision));
-      void this.reconcileScene(revision);
+      const key = String(revision);
+      const retry = this.retryTimers.get(key);
+      if (!retry || retry.handle !== handle) return;
+      this.retryTimers.delete(key);
+      const fastPathEventId =
+        retry.fastPathEventId &&
+        this.fastPathMonotonicOrigins.has(retry.fastPathEventId)
+          ? retry.fastPathEventId
+          : undefined;
+      void this.reconcileScene(revision, fastPathEventId);
     }, delayMs);
-    this.retryTimers.set(String(revision), handle);
+    this.retryTimers.set(String(revision), {
+      handle,
+      ...(fastPathEventId === undefined ? {} : { fastPathEventId }),
+    });
   }
 
   private clearRetryTimer(revision: number): void {
     const key = String(revision);
-    const handle = this.retryTimers.get(key);
-    if (handle !== undefined) this.clock.clearTimeout(handle);
+    const retry = this.retryTimers.get(key);
+    if (retry !== undefined) this.clock.clearTimeout(retry.handle);
     this.retryTimers.delete(key);
   }
 
   private cancelRetryTimers(): void {
-    for (const handle of this.retryTimers.values())
-      this.clock.clearTimeout(handle);
+    for (const retry of this.retryTimers.values())
+      this.clock.clearTimeout(retry.handle);
     this.retryTimers.clear();
   }
 }

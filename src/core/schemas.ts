@@ -161,6 +161,8 @@ export const PresenceEventSchema = z.object({
   personCount: z.number().int().nonnegative().nullable().optional(),
   occurredAt: z.number().nonnegative().optional(),
   source: z.string().optional(),
+  /** Local process receipt metadata; never populated from the sensor payload. */
+  localReceivedMonotonicAt: z.number().finite().nonnegative().optional(),
 });
 export type PresenceEvent = z.infer<typeof PresenceEventSchema>;
 
@@ -170,6 +172,8 @@ export const PrelightEventSchema = z.object({
   active: z.boolean(),
   occurredAt: z.number().nonnegative().optional(),
   source: z.string().optional(),
+  /** Local process receipt metadata; never populated from the sensor payload. */
+  localReceivedMonotonicAt: z.number().finite().nonnegative().optional(),
 });
 export type PrelightEvent = z.infer<typeof PrelightEventSchema>;
 
@@ -254,6 +258,10 @@ export const FastPathTimingSchema = z.object({
   commandDispatchedAt: z.number().nonnegative().optional(),
   feedbackObservedAt: z.number().nonnegative().optional(),
   fullConvergenceAt: z.number().nonnegative().optional(),
+  eventToDecisionMs: z.number().finite().nonnegative().optional(),
+  eventToFirstDispatchMs: z.number().finite().nonnegative().optional(),
+  eventToFirstFeedbackMs: z.number().finite().nonnegative().optional(),
+  eventToFullConvergenceMs: z.number().finite().nonnegative().optional(),
 });
 export type FastPathTiming = z.infer<typeof FastPathTimingSchema>;
 

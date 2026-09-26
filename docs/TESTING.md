@@ -28,7 +28,7 @@ Core scenarios:
 
 ### Long absence
 
-Same setup, but advance the clock past configured expiry and verify the appropriate remembered state is cleared.
+Same setup, but advance the clock to configured expiry while presence is `unknown`. Verify remembered scene/overrides are cleared and a state-stream update is published; also verify an early occupied return cancels expiry.
 
 ### Presence uncertainty
 

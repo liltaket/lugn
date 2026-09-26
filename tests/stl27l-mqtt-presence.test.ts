@@ -4,6 +4,7 @@ import {
   type Stl27lMqttMessageMetadata,
   type Stl27lPresenceMqttSubscriber,
 } from '../src/adapters/stl27l-mqtt-presence.js';
+import { PresenceEventIngress } from '../src/adapters/presence-event-ingress.js';
 import { FakeClock } from '../src/core/clock.js';
 import type { PresenceInputEvent } from '../src/core/schemas.js';
 
@@ -142,6 +143,28 @@ describe('STL27L MQTT presence adapter', () => {
 
     publishSnapshot(subscriber, clock, { count: 0 });
     expectLatestPresence(events, 'confirmed_empty', 0);
+  });
+
+  it('captures MQTT receipt locally before normalization and preserves it through ingress', async () => {
+    const { clock, events, subscriber } = setup();
+    publishAvailability(subscriber, 'online');
+    clock.advanceBy(37);
+
+    publishSnapshot(subscriber, clock, { count: 1 });
+    const event = [...events]
+      .reverse()
+      .find((candidate) => candidate.type === 'presence.changed');
+    expect(event?.localReceivedMonotonicAt).toBe(clock.monotonicNow());
+    expect(event?.occurredAt).toBe(clock.now());
+
+    const forwarded: PresenceInputEvent[] = [];
+    const ingress = new PresenceEventIngress(async (normalized) => {
+      forwarded.push(normalized);
+    });
+    await ingress.accept(event);
+
+    expect(forwarded).toEqual([event]);
+    expect(forwarded[0]?.localReceivedMonotonicAt).toBe(37);
   });
 
   it('fails closed for non-CERTAIN, offline, and disconnected sensor states', () => {

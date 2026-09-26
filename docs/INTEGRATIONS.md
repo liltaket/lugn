@@ -74,6 +74,8 @@ The sensor service publishes preview transitions immediately and also republishe
 
 This is a direct event path from the sensor-processing service to Lugn through the existing MQTT broker. It does not read the STL27L UART itself. The sensor service owns its serial reader, packet parser, calibration, tracking, and early-approach criteria; duplicating those in Lugn would create a second perception pipeline.
 
+Fast-path timing records include elapsed milliseconds from local MQTT callback receipt to the engine decision, first command dispatch, first feedback attributable to a Lugn command, and full convergence. Elapsed values use a monotonic clock and remain separate from wall-clock timestamps. They measure only the Lugn process after MQTT delivery; measuring sensor publication, broker/network delay, or physical light response requires live instrumentation at those boundaries.
+
 ## WiiM
 
 Important capabilities:

@@ -2,18 +2,21 @@ export type TimerHandle = ReturnType<typeof setTimeout>;
 
 export interface Clock {
   now(): number;
+  monotonicNow(): number;
   setTimeout(callback: () => void, delayMs: number): TimerHandle;
   clearTimeout(handle: TimerHandle): void;
 }
 
 export const systemClock: Clock = {
   now: () => Date.now(),
+  monotonicNow: () => performance.now(),
   setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
   clearTimeout: (handle) => clearTimeout(handle),
 };
 
 export class FakeClock implements Clock {
   private currentTime: number;
+  private currentMonotonicTime = 0;
   private nextId = 1;
   private readonly timers = new Map<
     number,
@@ -26,6 +29,10 @@ export class FakeClock implements Clock {
 
   now(): number {
     return this.currentTime;
+  }
+
+  monotonicNow(): number {
+    return this.currentMonotonicTime;
   }
 
   setTimeout(callback: () => void, delayMs: number): TimerHandle {
@@ -50,9 +57,11 @@ export class FakeClock implements Clock {
       if (!next) break;
       const [id, timer] = next;
       this.timers.delete(id);
+      this.currentMonotonicTime += timer.at - this.currentTime;
       this.currentTime = timer.at;
       timer.callback();
     }
+    this.currentMonotonicTime += target - this.currentTime;
     this.currentTime = target;
   }
 

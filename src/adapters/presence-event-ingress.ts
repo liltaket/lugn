@@ -11,6 +11,14 @@ export class PresenceEventIngress {
 
   accept(input: unknown): Promise<void> {
     const event = PresenceInputEventSchema.parse(input);
+    if (
+      event.localReceivedMonotonicAt !== undefined &&
+      event.source !== 'stl27l'
+    ) {
+      throw new Error(
+        'Local MQTT receive timing is only valid for STL27L events',
+      );
+    }
     return this.handle(event);
   }
 }

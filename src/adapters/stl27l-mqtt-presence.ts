@@ -141,18 +141,22 @@ export class Stl27lMqttPresenceAdapter {
     payload: unknown,
     metadata: Stl27lMqttMessageMetadata,
   ): void {
+    // Capture on callback entry so JSON decoding and normalization are included
+    // in the local event-to-decision measurement.
+    const localReceivedMonotonicAt = this.clock.monotonicNow();
     if (topic === `${this.baseTopic}/snapshot`) {
-      this.receiveSnapshot(payload, metadata);
+      this.receiveSnapshot(payload, metadata, localReceivedMonotonicAt);
     } else if (topic === `${this.baseTopic}/availability`) {
-      this.receiveAvailability(payload);
+      this.receiveAvailability(payload, localReceivedMonotonicAt);
     } else if (topic === `${this.baseTopic}/preview`) {
-      this.receivePreview(payload, metadata);
+      this.receivePreview(payload, metadata, localReceivedMonotonicAt);
     }
   }
 
   private receiveSnapshot(
     payload: unknown,
     metadata: Stl27lMqttMessageMetadata,
+    localReceivedMonotonicAt: number,
   ): void {
     const snapshot = decodeSnapshot(payload);
     this.clearExpiryTimer();
@@ -160,7 +164,7 @@ export class Stl27lMqttPresenceAdapter {
     if (!snapshot) {
       this.snapshot = undefined;
       this.snapshotReceivedAt = undefined;
-      this.recomputePresence();
+      this.recomputePresence(localReceivedMonotonicAt);
       return;
     }
 
@@ -172,16 +176,19 @@ export class Stl27lMqttPresenceAdapter {
       // A retained packet only proves that the broker has cached a value.
       this.snapshotReceivedAt = undefined;
     }
-    this.recomputePresence();
+    this.recomputePresence(localReceivedMonotonicAt);
   }
 
-  private receiveAvailability(payload: unknown): void {
+  private receiveAvailability(
+    payload: unknown,
+    localReceivedMonotonicAt: number,
+  ): void {
     const state = decodeText(payload);
     if (state !== 'online' && state !== 'offline') {
       this.sensorOnline = false;
       this.invalidateSnapshotFreshness();
       this.lastPreviewActive = undefined;
-      this.recomputePresence();
+      this.recomputePresence(localReceivedMonotonicAt);
       return;
     }
 
@@ -190,7 +197,7 @@ export class Stl27lMqttPresenceAdapter {
       this.invalidateSnapshotFreshness();
       this.lastPreviewActive = undefined;
     }
-    this.recomputePresence();
+    this.recomputePresence(localReceivedMonotonicAt);
   }
 
   private invalidateSnapshotFreshness(): void {
@@ -201,6 +208,7 @@ export class Stl27lMqttPresenceAdapter {
   private receivePreview(
     payload: unknown,
     metadata: Stl27lMqttMessageMetadata,
+    localReceivedMonotonicAt: number,
   ): void {
     if (metadata?.retain !== false) return;
     const state = decodeText(payload);
@@ -214,10 +222,11 @@ export class Stl27lMqttPresenceAdapter {
       active,
       occurredAt: this.clock.now(),
       source: 'stl27l',
+      localReceivedMonotonicAt,
     });
   }
 
-  private recomputePresence(): void {
+  private recomputePresence(localReceivedMonotonicAt?: number): void {
     const fresh =
       this.brokerConnected === true &&
       this.sensorOnline &&
@@ -226,7 +235,10 @@ export class Stl27lMqttPresenceAdapter {
       this.clock.now() - this.snapshotReceivedAt < this.maxAgeMs;
 
     if (!fresh || !this.snapshot || this.snapshot.quality !== 'CERTAIN') {
-      this.emitPresence({ presence: 'unknown', personCount: null });
+      this.emitPresence(
+        { presence: 'unknown', personCount: null },
+        localReceivedMonotonicAt,
+      );
       return;
     }
 
@@ -234,10 +246,14 @@ export class Stl27lMqttPresenceAdapter {
       this.snapshot.count > 0
         ? { presence: 'occupied', personCount: this.snapshot.count }
         : { presence: 'confirmed_empty', personCount: 0 },
+      localReceivedMonotonicAt,
     );
   }
 
-  private emitPresence(normalized: NormalizedPresence): void {
+  private emitPresence(
+    normalized: NormalizedPresence,
+    localReceivedMonotonicAt?: number,
+  ): void {
     const key = `${normalized.presence}:${normalized.personCount ?? 'null'}`;
     if (key === this.lastPresenceKey) return;
     this.lastPresenceKey = key;
@@ -247,6 +263,9 @@ export class Stl27lMqttPresenceAdapter {
       personCount: normalized.personCount,
       occurredAt: this.clock.now(),
       source: 'stl27l',
+      ...(localReceivedMonotonicAt === undefined
+        ? {}
+        : { localReceivedMonotonicAt }),
     });
   }
 
