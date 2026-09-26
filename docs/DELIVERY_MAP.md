@@ -49,7 +49,12 @@ authorization to connect to them.
   confirmed empty. Offline, stale, malformed, or non-CERTAIN data maps to
   unknown. Do not age by snapshot `updated_at`: the source preserves the time
   of the last ledger change across heartbeats. `/preview` remains a separate
-  non-retained prelight hint. See [sensor integration contract](INTEGRATIONS.md).
+  non-retained prelight hint. The current Room Engine source also consumes
+  `bruno/doorway` directly, confirming Lugn can avoid an HA sensor-entity hop.
+  A read-only MQTT handshake reached the documented broker endpoint but an
+  anonymous connection was refused as not authorized; no topics or payloads
+  were read. This does not prove the tracked endpoint is the live deployment.
+  See [sensor integration contract](INTEGRATIONS.md).
 
 ### Runnable host and configuration contract
 
@@ -106,8 +111,10 @@ authorization to connect to them.
   feedback on Bruno's actual broker, Home Assistant, sensor, and lights?
 - Depends on: implementation, user-provided endpoint/entity configuration,
   and explicit authorization to connect to those live systems.
-- Status: pending those deployment details and live-connection authorization;
-  no live endpoints or devices have been contacted.
+- Status: pending current MQTT credentials, HA URL/entity mappings, deployment
+  host, and live-control authorization. A read-only MQTT login attempt was
+  denied; no sensor data, HA state, or device feedback has been observed, and
+  no command or physical actuation was performed.
 
 ## Not yet specified
 
