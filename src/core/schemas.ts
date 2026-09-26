@@ -57,6 +57,21 @@ export const PresenceEventSchema = z.object({
 });
 export type PresenceEvent = z.infer<typeof PresenceEventSchema>;
 
+/** A temporary entry approach signal. It does not assert room occupancy. */
+export const PrelightEventSchema = z.object({
+  type: z.literal('presence.prelight'),
+  active: z.boolean(),
+  occurredAt: z.number().nonnegative().optional(),
+  source: z.string().optional(),
+});
+export type PrelightEvent = z.infer<typeof PrelightEventSchema>;
+
+export const PresenceInputEventSchema = z.union([
+  PresenceEventSchema,
+  PrelightEventSchema,
+]);
+export type PresenceInputEvent = z.infer<typeof PresenceInputEventSchema>;
+
 export const SceneSchema = z.object({
   id: z.string().regex(/^scene\.[a-z0-9][a-z0-9._-]*$/),
   name: z.string().min(1),

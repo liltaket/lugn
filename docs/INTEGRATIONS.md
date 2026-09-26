@@ -33,7 +33,21 @@ Trajectory should be treated as experimental context, not a core dependency.
 
 `PresenceEventIngress` validates normalized `presence.changed` events before forwarding them to the engine. The sensor-specific bridge must map its own protocol into `occupied`, `confirmed_empty`, or `unknown`; unavailable, startup, or tracking-loss states must not be mapped to confirmed empty. Raw LiDAR processing remains outside Lugn core.
 
-The repository does not yet define an STL27L wire protocol or representative payload. A device-specific bridge needs that contract before it can be implemented safely.
+`Stl27lPreviewMqttAdapter` can subscribe directly to the existing STL27L service's MQTT preview state, without routing presence through Home Assistant. Its default topic is `bruno/doorway/preview`, with exact `ON`/`OFF` payloads at QoS 0. The adapter emits a distinct `presence.prelight` event; it never changes occupancy. The host supplies its MQTT subscriber, and `PresenceEventIngress` can forward both normalized occupancy and prelight events to `LugnEngine.handleEvent`.
+
+This preview topic carries no confirmed occupancy or empty state. Those still need a separate normalized sensor source. A host can wire the preview adapter to the common ingress like this:
+
+```ts
+const ingress = new PresenceEventIngress((event) => engine.handleEvent(event));
+const preview = new Stl27lPreviewMqttAdapter(mqttSubscriber, (event) => {
+  void ingress.accept(event);
+});
+preview.start();
+```
+
+The sensor service publishes preview transitions immediately and also republishes state periodically. The preview topic is non-retained, so a disconnected subscriber may miss a transition. The adapter filters duplicate states, and the engine bounds a configured prelight overlay with `prelight.maxDurationMs` (default 5 seconds; allowed 1–30 seconds). Configure `prelight.targets` with the small set of lights and values useful for entry. When preview ends before occupancy is confirmed, known prior values are restored; occupied and confirmed-empty events take over the lighting path.
+
+This is a direct event path from the sensor-processing service to Lugn through the existing MQTT broker. It does not read the STL27L UART itself. The sensor service owns its serial reader, packet parser, calibration, tracking, and early-approach criteria; duplicating those in Lugn would create a second perception pipeline.
 
 ## WiiM
 

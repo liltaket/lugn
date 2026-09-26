@@ -7,7 +7,9 @@ import type { Clock, TimerHandle } from '../core/clock.js';
 import { StateEventStream } from '../core/event-stream.js';
 import {
   LightingProperties,
+  LightingValuesSchema,
   PresenceEventSchema,
+  PrelightEventSchema,
   RoomStateSchema,
   SceneSchema,
   SemanticLightingIdSchema,
@@ -17,6 +19,8 @@ import {
   type LightingScene,
   type LightingValues,
   type PresenceEvent,
+  type PresenceInputEvent,
+  type PrelightEvent,
   type RoomState,
   type StateUpdate,
 } from '../core/schemas.js';
@@ -31,6 +35,10 @@ export type EngineOptions = {
   commandAttributionWindowMs?: number;
   adapter?: LightingAdapter;
   stateHistoryLimit?: number;
+  prelight?: {
+    targets: Record<string, LightingValues>;
+    maxDurationMs?: number;
+  };
 };
 
 const systemActor: Actor = { type: 'automation', id: 'lugn.core' };
@@ -79,6 +87,8 @@ export class LugnEngine {
   private readonly convergenceTimeoutMs: number;
   private readonly retryDelayMs: number;
   private readonly continuityMs: number;
+  private readonly prelightTargets: Readonly<Record<string, LightingValues>>;
+  private readonly prelightMaxDurationMs: number;
   private nextDiagnosticId = 0;
   private nextEventId = 0;
   private readonly unsubscribers: Array<() => void> = [];
@@ -86,6 +96,9 @@ export class LugnEngine {
   private readonly convergenceStartedAt = new Map<number, number>();
   private readonly intentByRevision = new Map<number, IntentProvenance>();
   private readonly fastPathEventByCommand = new Map<string, string>();
+  private prelightActive = false;
+  private prelightTimer?: TimerHandle;
+  private prelightSnapshot = new Map<string, LightingValues>();
 
   constructor(
     private readonly clock: Clock,
@@ -94,6 +107,21 @@ export class LugnEngine {
     this.convergenceTimeoutMs = options.convergenceTimeoutMs ?? 60_000;
     this.retryDelayMs = options.retryDelayMs ?? 2_000;
     this.continuityMs = options.continuityMs ?? 20 * 60_000;
+    this.prelightTargets = Object.fromEntries(
+      Object.entries(options.prelight?.targets ?? {}).map(
+        ([target, values]) => [
+          SemanticLightingIdSchema.parse(target),
+          LightingValuesSchema.parse(values),
+        ],
+      ),
+    );
+    this.prelightMaxDurationMs = options.prelight?.maxDurationMs ?? 5_000;
+    if (
+      !Number.isFinite(this.prelightMaxDurationMs) ||
+      this.prelightMaxDurationMs < 1_000 ||
+      this.prelightMaxDurationMs > 30_000
+    )
+      throw new Error('prelight.maxDurationMs must be between 1000 and 30000');
     this.adapter = options.adapter ?? new SimulatedLightingAdapter(clock);
     this.stream = new StateEventStream(options.stateHistoryLimit);
     this.ledger = new CommandLedger(clock, options.commandAttributionWindowMs);
@@ -115,6 +143,11 @@ export class LugnEngine {
         availability: 'available',
       };
     }
+    for (const target of Object.keys(this.prelightTargets))
+      if (!devices[target])
+        throw new Error(
+          `Prelight target is not a configured device: ${target}`,
+        );
     this.state = {
       revision: 0,
       updatedAt: clock.now(),
@@ -150,6 +183,7 @@ export class LugnEngine {
   ): Promise<number> {
     const scene = this.scenes.get(sceneId);
     if (!scene) throw new Error(`Unknown scene: ${sceneId}`);
+    await this.finishPrelight(true, scene);
     this.beginScene(scene, {
       actor,
       source,
@@ -181,6 +215,11 @@ export class LugnEngine {
     },
   ): Promise<void> {
     const device = this.requireDevice(target);
+    await this.finishPrelight(
+      true,
+      undefined,
+      new Map([[target, new Set(Object.keys(values))]]),
+    );
     const source = provenance.source ?? 'capability';
     const reason = provenance.reason ?? 'Explicit lighting adjustment';
     this.ledger.supersedePending(
@@ -263,12 +302,18 @@ export class LugnEngine {
     const normalizedEvent = PresenceEventSchema.parse(event);
     const receivedAt = this.clock.now();
     const previous = this.state.presence.state;
+    const prelightWasActive = this.prelightActive;
+    if (
+      normalizedEvent.presence === 'confirmed_empty' ||
+      normalizedEvent.presence === 'occupied'
+    )
+      this.clearPrelight();
     this.state.presence.state = normalizedEvent.presence;
     if (normalizedEvent.personCount !== undefined)
       this.state.presence.personCount = normalizedEvent.personCount;
     if (
       normalizedEvent.presence === 'confirmed_empty' &&
-      previous !== 'confirmed_empty'
+      (previous !== 'confirmed_empty' || prelightWasActive)
     ) {
       const fastPathEventId = `presence-${++this.nextEventId}`;
       this.state.timings.push({
@@ -291,7 +336,7 @@ export class LugnEngine {
       await Promise.all(
         Object.entries(this.state.lighting.devices).map(
           async ([target, device]) => {
-            if (device.observed.power === false) return;
+            if (device.observed.power === false && !prelightWasActive) return;
             await this.dispatch(
               target,
               { power: false },
@@ -351,6 +396,66 @@ export class LugnEngine {
       return;
     }
     this.publish(['presence']);
+  }
+
+  async handleEvent(event: PresenceInputEvent): Promise<void> {
+    const normalizedEvent = PrelightEventSchema.safeParse(event);
+    if (normalizedEvent.success) {
+      await this.handlePrelight(normalizedEvent.data);
+      return;
+    }
+    await this.handlePresence(PresenceEventSchema.parse(event));
+  }
+
+  async handlePrelight(event: PrelightEvent): Promise<void> {
+    const normalizedEvent = PrelightEventSchema.parse(event);
+    if (normalizedEvent.active === this.prelightActive) return;
+
+    if (!normalizedEvent.active) {
+      await this.finishPrelight(this.state.presence.state !== 'occupied');
+      return;
+    }
+
+    this.prelightActive = true;
+    const eventId = `prelight-${++this.nextEventId}`;
+    const receivedAt = this.clock.now();
+    this.state.timings.push({
+      eventId,
+      eventReceivedAt: receivedAt,
+      decisionCompletedAt: this.clock.now(),
+    });
+    this.prelightSnapshot = new Map();
+    const dispatches: Promise<void>[] = [];
+    for (const [target, values] of Object.entries(this.prelightTargets)) {
+      const device = this.requireDevice(target);
+      const snapshot = { ...device.observed, ...device.effectiveDesired };
+      this.prelightSnapshot.set(target, snapshot);
+      dispatches.push(
+        this.dispatch(
+          target,
+          values,
+          this.state.lighting.sceneRevision,
+          normalizedEvent.source ?? 'prelight',
+          'Possible entry: temporary prelight',
+          systemActor,
+          undefined,
+          eventId,
+        ),
+      );
+    }
+    this.addDiagnostic(
+      'presence.prelight',
+      'Possible entry; temporary prelight dispatched',
+      {
+        source: normalizedEvent.source,
+        targets: Object.keys(this.prelightTargets),
+      },
+    );
+    this.publish(['diagnostics', 'timings']);
+    this.prelightTimer = this.clock.setTimeout(() => {
+      void this.finishPrelight(this.state.presence.state !== 'occupied');
+    }, this.prelightMaxDurationMs);
+    await Promise.all(dispatches);
   }
 
   async reconcileScene(
@@ -453,7 +558,65 @@ export class LugnEngine {
 
   dispose(): void {
     this.cancelRetryTimers();
+    this.clearPrelight();
     for (const unsubscribe of this.unsubscribers) unsubscribe();
+  }
+
+  private clearPrelight(): void {
+    if (this.prelightTimer !== undefined)
+      this.clock.clearTimeout(this.prelightTimer);
+    this.prelightTimer = undefined;
+    this.prelightActive = false;
+    this.prelightSnapshot.clear();
+  }
+
+  private async finishPrelight(
+    restore: boolean,
+    scene?: LightingScene,
+    excludedProperties: Map<string, Set<string>> = new Map(),
+  ): Promise<void> {
+    if (!this.prelightActive) return;
+    if (this.prelightTimer !== undefined)
+      this.clock.clearTimeout(this.prelightTimer);
+    this.prelightTimer = undefined;
+    this.prelightActive = false;
+    const snapshot = this.prelightSnapshot;
+    this.prelightSnapshot = new Map();
+    if (!restore) return;
+
+    const dispatches: Promise<void>[] = [];
+    for (const [target, previousValues] of snapshot) {
+      const device = this.state.lighting.devices[target];
+      if (!device) continue;
+      const values: LightingValues = {};
+      const excluded = excludedProperties.get(target) ?? new Set<string>();
+      const sceneValues = scene?.lighting[target] ?? {};
+      const prelightValues = this.prelightTargets[target] ?? {};
+      for (const property of LightingProperties) {
+        if (
+          excluded.has(property) ||
+          sceneValues[property] !== undefined ||
+          previousValues[property] === undefined
+        )
+          continue;
+        const current = device.observed[property];
+        if (current !== undefined && current !== prelightValues[property])
+          continue;
+        Object.assign(values, { [property]: previousValues[property] });
+      }
+      if (Object.keys(values).length > 0)
+        dispatches.push(
+          this.dispatch(
+            target,
+            values,
+            this.state.lighting.sceneRevision,
+            'prelight.restore',
+            'Prelight ended before confirmed entry; restoring prior observed intent',
+            systemActor,
+          ),
+        );
+    }
+    await Promise.all(dispatches);
   }
 
   private beginScene(scene: LightingScene, intent: IntentProvenance): void {
