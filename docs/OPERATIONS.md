@@ -65,7 +65,14 @@ already exists. It creates an empty `$HOME/.config/lugn/lugn.env` with mode
 `NAME=value` per line. Keep both files private. The installer prints the
 resolved paths when it finishes. Edit the config with the actual Home
 Assistant URL/entity IDs and the sensor's MQTT URL/topic before starting the
-service. Then enable and start it:
+service. Validate the config and secrets without contacting any service:
+
+```sh
+node --env-file="$HOME/.config/lugn/lugn.env" \
+  dist/runtime/config-check.js "$HOME/.config/lugn/config.json"
+```
+
+When the checker reports a valid configuration, enable and start Lugn:
 
 ```sh
 systemctl --user enable --now lugn.service

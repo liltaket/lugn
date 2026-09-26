@@ -28,6 +28,15 @@ npm run build
 
 The core is also available as a library at `src/index.ts`; deterministic tests use simulated adapters and a fake clock. Copy and configure `config.example.json`, provide the named secret environment variables, then run `npm start` to launch the local service.
 
+Before starting Lugn, check the configuration without contacting Home Assistant, MQTT, or any device:
+
+```sh
+npm run config:check
+npm run config:check -- ./path/to/config.json
+```
+
+With no path argument, the checker uses `LUGN_CONFIG_PATH` when set, otherwise `config.json`. Required secrets must already be present in the checker's process environment; it does not load `.env` files. The check reports only configured light, switch, and media target counts plus whether MQTT is enabled. It never prints secret values, hostnames, or entity IDs.
+
 ## Core principles
 
 - **Instant where latency matters.** Presence-triggered lighting gets a dedicated fast path.
