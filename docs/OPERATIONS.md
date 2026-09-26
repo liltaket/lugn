@@ -46,6 +46,40 @@ Set `LUGN_CONFIG_PATH` to use a config file elsewhere, or pass a file path to
 `SIGTERM` by closing HTTP, MQTT, and Home Assistant WebSocket connections.
 Startup and operational logs omit tokens and raw broker/HA errors.
 
+## Keep Lugn running with systemd
+
+On Linux hosts with systemd, the repository includes a user-service installer.
+It does not use `sudo`, connect to any configured service, or start Lugn during
+installation. Build Lugn first, then run:
+
+```sh
+npm ci
+npm run build
+./deploy/install-user-service.sh
+```
+
+The installer writes a user unit under `$HOME/.config/systemd/user/`, and
+creates `$HOME/.config/lugn/config.json` from the example only when no config
+already exists. It creates an empty `$HOME/.config/lugn/lugn.env` with mode
+`0600`; put the secret values referenced by the config there, one
+`NAME=value` per line. Keep both files private. The installer prints the
+resolved paths when it finishes. Edit the config with the actual Home
+Assistant URL/entity IDs and the sensor's MQTT URL/topic before starting the
+service. Then enable and start it:
+
+```sh
+systemctl --user enable --now lugn.service
+systemctl --user status lugn.service
+journalctl --user -u lugn.service -f
+```
+
+A user service starts while the account's systemd user manager is running. For
+automatic startup after a reboot before that user logs in, the host
+administrator must enable lingering for the account using
+`loginctl enable-linger <user>`. The service runs as the installing user and
+keeps the HTTP API bound to loopback. Re-run the installer after moving the
+checkout or changing the Node.js executable path.
+
 ## HTTP API
 
 When `bearerTokenEnv` is set, send the matching bearer token to all routes,
