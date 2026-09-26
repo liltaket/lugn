@@ -10,9 +10,9 @@ The long-term goal is a room that can increasingly understand context and infer 
 
 ## Status
 
-**Foundation implementation.**
+**Connectable local runtime.**
 
-The repository contains the design contract and the first deterministic vertical slice: typed domain state, simulated lighting, property ownership, scene convergence, continuity, a command ledger, capabilities, and revisioned state updates. It does not connect to physical devices or persist state yet.
+The repository contains a deterministic room engine and a configurable Node.js runtime with a local HTTP capability API. It connects to Home Assistant lights, switches and media players, and consumes normalized STL27L occupancy and preview events over MQTT. See [Running Lugn](docs/OPERATIONS.md) for configuration and startup. Live devices have not been verified; state persistence and a web UI are still pending.
 
 No runtime AI is planned for the first version.
 
@@ -26,7 +26,7 @@ npm run check
 npm run build
 ```
 
-The core is a library at `src/index.ts`; tests drive the simulated adapter with a fake clock. There is no HTTP server, UI, or real device adapter in this slice.
+The core is also available as a library at `src/index.ts`; deterministic tests use simulated adapters and a fake clock. Copy and configure `config.example.json`, provide the named secret environment variables, then run `npm start` to launch the local service.
 
 ## Core principles
 
@@ -78,6 +78,7 @@ Future intelligence should sit above the same capability API used by the UI and 
 
 ## Documentation
 
+- [Running Lugn](docs/OPERATIONS.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Behavior model](docs/BEHAVIOR.md)
 - [Presence and continuity](docs/PRESENCE.md)

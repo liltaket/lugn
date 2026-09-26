@@ -88,9 +88,9 @@ export class HomeAssistantWebSocketTransport {
   private reconnectAttempt = 0;
   private active = false;
   private generation = 0;
-  private socket?: HomeAssistantSocket;
-  private reconnectTimer?: TimerHandle;
-  private subscriptionId?: number;
+  private socket: HomeAssistantSocket | undefined;
+  private reconnectTimer: TimerHandle | undefined;
+  private subscriptionId: number | undefined;
   private _status: HomeAssistantConnectionStatus = 'stopped';
 
   constructor(

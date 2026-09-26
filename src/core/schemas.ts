@@ -48,6 +48,113 @@ export const SemanticLightingIdSchema = z
   .string()
   .regex(/^lighting\.[a-z0-9][a-z0-9._-]*$/);
 
+export const SemanticSwitchIdSchema = z
+  .string()
+  .regex(/^switch\.[a-z0-9][a-z0-9._-]*$/);
+
+export const SwitchCommandStatusSchema = z.enum([
+  'pending',
+  'confirmed',
+  'unconfirmed',
+  'superseded',
+  'failed',
+]);
+export const SwitchCommandRecordSchema = z.object({
+  id: z.string(),
+  target: SemanticSwitchIdSchema,
+  requested: z.boolean(),
+  issuedAt: z.number().nonnegative(),
+  status: SwitchCommandStatusSchema,
+  provenance: ProvenanceSchema,
+  acceptedAt: z.number().nonnegative().optional(),
+  confirmedAt: z.number().nonnegative().optional(),
+  diagnosticReason: z.string().optional(),
+});
+export type SwitchCommandRecord = z.infer<typeof SwitchCommandRecordSchema>;
+
+export const DeviceSwitchStateSchema = z.object({
+  observed: z.boolean().nullable(),
+  requested: z.boolean().nullable(),
+  availability: z.enum(['available', 'unavailable']),
+  observedAt: z.number().nonnegative().nullable(),
+  observedProvenance: ProvenanceSchema.nullable(),
+  requestedProvenance: ProvenanceSchema.nullable(),
+  latestCommandId: z.string().nullable(),
+});
+export type DeviceSwitchState = z.infer<typeof DeviceSwitchStateSchema>;
+
+export const SwitchStateSchema = z.object({
+  devices: z.record(SemanticSwitchIdSchema, DeviceSwitchStateSchema),
+  commands: z.array(SwitchCommandRecordSchema),
+});
+
+export const SemanticMusicIdSchema = z
+  .string()
+  .regex(/^music\.[a-z0-9][a-z0-9._-]*$/);
+export const MusicRequestSchema = z.discriminatedUnion('property', [
+  z
+    .object({
+      property: z.literal('playback'),
+      value: z.enum(['playing', 'paused']),
+    })
+    .strict(),
+  z
+    .object({ property: z.literal('volume'), value: z.number().min(0).max(1) })
+    .strict(),
+  z
+    .object({ property: z.literal('source'), value: z.string().min(1) })
+    .strict(),
+]);
+export type MusicRequest = z.infer<typeof MusicRequestSchema>;
+export const MusicObservationValuesSchema = z
+  .object({
+    playback: z.enum(['playing', 'paused', 'idle', 'off', 'unknown']),
+    volume: z.number().min(0).max(1).nullable(),
+    source: z.string().nullable(),
+    title: z.string().nullable(),
+  })
+  .strict();
+export type MusicObservationValues = z.infer<
+  typeof MusicObservationValuesSchema
+>;
+export const MusicCommandStatusSchema = z.enum([
+  'pending',
+  'confirmed',
+  'unconfirmed',
+  'superseded',
+  'failed',
+]);
+export const MusicCommandRecordSchema = z.object({
+  id: z.string(),
+  target: SemanticMusicIdSchema,
+  requested: MusicRequestSchema,
+  issuedAt: z.number().nonnegative(),
+  status: MusicCommandStatusSchema,
+  provenance: ProvenanceSchema,
+  acceptedAt: z.number().nonnegative().optional(),
+  confirmedAt: z.number().nonnegative().optional(),
+  diagnosticReason: z.string().optional(),
+});
+export type MusicCommandRecord = z.infer<typeof MusicCommandRecordSchema>;
+export const DeviceMusicStateSchema = z.object({
+  observed: MusicObservationValuesSchema,
+  requested: z.object({
+    playback: z.enum(['playing', 'paused']).optional(),
+    volume: z.number().min(0).max(1).optional(),
+    source: z.string().optional(),
+  }),
+  availability: z.enum(['available', 'unavailable']),
+  observedAt: z.number().nonnegative().nullable(),
+  observedProvenance: ProvenanceSchema.nullable(),
+  allowedSources: z.array(z.string().min(1)),
+});
+export type DeviceMusicState = z.infer<typeof DeviceMusicStateSchema>;
+export const MusicStateSchema = z.object({
+  devices: z.record(SemanticMusicIdSchema, DeviceMusicStateSchema),
+  commands: z.array(MusicCommandRecordSchema),
+});
+export type MusicState = z.infer<typeof MusicStateSchema>;
+
 export const PresenceEventSchema = z.object({
   type: z.literal('presence.changed'),
   presence: PresenceSchema,
@@ -163,6 +270,8 @@ export const RoomStateSchema = z.object({
     sceneRevision: z.number().int().nonnegative(),
     devices: z.record(z.string(), DeviceLightingStateSchema),
   }),
+  switches: SwitchStateSchema,
+  music: MusicStateSchema,
   commands: z.array(CommandRecordSchema),
   diagnostics: z.array(DiagnosticSchema),
   timings: z.array(FastPathTimingSchema),
@@ -173,11 +282,21 @@ export const StateUpdateSchema = z.object({
   revision: z.number().int().positive(),
   at: z.number().nonnegative(),
   domains: z.array(
-    z.enum(['presence', 'lighting', 'commands', 'diagnostics', 'timings']),
+    z.enum([
+      'presence',
+      'lighting',
+      'switches',
+      'music',
+      'commands',
+      'diagnostics',
+      'timings',
+    ]),
   ),
   patch: z.object({
     presence: RoomStateSchema.shape.presence.optional(),
     lighting: RoomStateSchema.shape.lighting.optional(),
+    switches: RoomStateSchema.shape.switches.optional(),
+    music: RoomStateSchema.shape.music.optional(),
     commands: RoomStateSchema.shape.commands.optional(),
     diagnostics: RoomStateSchema.shape.diagnostics.optional(),
     timings: RoomStateSchema.shape.timings.optional(),

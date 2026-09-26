@@ -2,6 +2,35 @@
 
 Music should be helpful and contextual without fighting direct WiiM control.
 
+## Implemented Home Assistant bridge
+
+The local runtime can map multiple semantic `music.*` targets to explicitly
+configured Home Assistant `media_player.*` entities. This supports a WiiM when
+its Home Assistant integration exposes the required services and attributes.
+Direct WiiM transport remains pending.
+
+The implemented capabilities are `music.getState`, `music.play`, `music.pause`,
+`music.setVolume` (0..1), and `music.selectSource`. Source names must appear in
+the target's configured `sources` allowlist; copy their exact spelling from the
+entity's Home Assistant `source_list`. An empty allowlist disables source changes.
+The bridge uses the fixed media player services documented by
+[Home Assistant](https://www.home-assistant.io/integrations/media_player/).
+
+Observed playback, volume, source, media title and availability remain separate
+from requested values. The initial REST snapshot and later WebSocket events
+provide observations. Each request records its provenance and status. HTTP
+acceptance leaves it `pending`; a new matching HA observation within 10 seconds
+marks it `confirmed`; timeout marks it `unconfirmed`; dispatch failure records
+`failed`. Newer requests supersede pending requests for the same target and
+property. Independent playback, volume and source requests can coexist.
+
+Volume matching allows a difference of 0.005 in HA's 0..1 scale. Cached observations
+from before a request cannot confirm it. Matching only proves HA reported the
+expected state; an external action to the same value can also satisfy it. The
+observation keeps its HA provenance, and no volume change creates manual ownership.
+There are no retries, presets, fades, presence-driven playback or source automation
+in this bridge. The design sections below describe future behavior.
+
 ## First-class concepts
 
 The model should distinguish at least:

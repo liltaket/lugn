@@ -26,8 +26,8 @@ const DEFAULT_TOPIC = 'bruno/doorway/preview';
  */
 export class Stl27lPreviewMqttAdapter {
   private readonly topic: string;
-  private unsubscribe?: () => void;
-  private lastActive?: boolean;
+  private unsubscribe: (() => void) | undefined;
+  private lastActive: boolean | undefined;
 
   constructor(
     private readonly subscriber: MqttSubscriber,

@@ -1,8 +1,19 @@
+import { MusicController, type MusicOptions } from './music-controller.js';
+import type {
+  MusicCommandRecord,
+  MusicRequest,
+  DeviceMusicState,
+} from '../core/schemas.js';
 import {
   SimulatedLightingAdapter,
   type LightingAdapter,
   type LightingObservation,
 } from '../adapters/simulated-lighting.js';
+import {
+  SimulatedSwitchAdapter,
+  type SwitchAdapter,
+  type SwitchObservation,
+} from '../adapters/simulated-switch.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
 import { StateEventStream } from '../core/event-stream.js';
 import {
@@ -13,6 +24,11 @@ import {
   RoomStateSchema,
   SceneSchema,
   SemanticLightingIdSchema,
+  SemanticSwitchIdSchema,
+  ProvenanceSchema,
+  type DeviceSwitchState,
+  type Provenance,
+  type SwitchCommandRecord,
   type Actor,
   type Diagnostic,
   type FastPathTiming,
@@ -34,6 +50,10 @@ export type EngineOptions = {
   continuityMs?: number;
   commandAttributionWindowMs?: number;
   adapter?: LightingAdapter;
+  switchDeviceIds?: string[];
+  switchAdapter?: SwitchAdapter;
+  switchFeedbackTimeoutMs?: number;
+  music?: MusicOptions;
   stateHistoryLimit?: number;
   prelight?: {
     targets: Record<string, LightingValues>;
@@ -82,11 +102,16 @@ export class LugnEngine {
   readonly stream: StateEventStream;
   readonly ledger: CommandLedger;
   readonly adapter: LightingAdapter;
+  readonly switchAdapter: SwitchAdapter;
   readonly scenes: ReadonlyMap<string, LightingScene>;
   readonly state: RoomState;
+  private readonly musicController: MusicController;
   private readonly convergenceTimeoutMs: number;
   private readonly retryDelayMs: number;
   private readonly continuityMs: number;
+  private readonly switchFeedbackTimeoutMs: number;
+  private readonly switchFeedbackTimers = new Map<string, TimerHandle>();
+  private nextSwitchCommandId = 0;
   private readonly prelightTargets: Readonly<Record<string, LightingValues>>;
   private readonly prelightMaxDurationMs: number;
   private nextDiagnosticId = 0;
@@ -97,7 +122,7 @@ export class LugnEngine {
   private readonly intentByRevision = new Map<number, IntentProvenance>();
   private readonly fastPathEventByCommand = new Map<string, string>();
   private prelightActive = false;
-  private prelightTimer?: TimerHandle;
+  private prelightTimer: TimerHandle | undefined;
   private prelightSnapshot = new Map<string, LightingValues>();
 
   constructor(
@@ -107,6 +132,13 @@ export class LugnEngine {
     this.convergenceTimeoutMs = options.convergenceTimeoutMs ?? 60_000;
     this.retryDelayMs = options.retryDelayMs ?? 2_000;
     this.continuityMs = options.continuityMs ?? 20 * 60_000;
+    this.switchFeedbackTimeoutMs = options.switchFeedbackTimeoutMs ?? 10_000;
+    if (
+      !Number.isFinite(this.switchFeedbackTimeoutMs) ||
+      this.switchFeedbackTimeoutMs < 1 ||
+      this.switchFeedbackTimeoutMs > 60_000
+    )
+      throw new Error('switchFeedbackTimeoutMs must be between 1 and 60000');
     this.prelightTargets = Object.fromEntries(
       Object.entries(options.prelight?.targets ?? {}).map(
         ([target, values]) => [
@@ -123,6 +155,8 @@ export class LugnEngine {
     )
       throw new Error('prelight.maxDurationMs must be between 1000 and 30000');
     this.adapter = options.adapter ?? new SimulatedLightingAdapter(clock);
+    this.switchAdapter =
+      options.switchAdapter ?? new SimulatedSwitchAdapter(clock);
     this.stream = new StateEventStream(options.stateHistoryLimit);
     this.ledger = new CommandLedger(clock, options.commandAttributionWindowMs);
     const scenes = (options.scenes ?? defaultScenes).map((scene) =>
@@ -148,6 +182,24 @@ export class LugnEngine {
         throw new Error(
           `Prelight target is not a configured device: ${target}`,
         );
+    const switches: Record<string, DeviceSwitchState> = {};
+    for (const id of options.switchDeviceIds ?? []) {
+      const target = SemanticSwitchIdSchema.parse(id);
+      if (switches[target])
+        throw new Error(`Duplicate semantic switch: ${target}`);
+      switches[target] = {
+        observed: null,
+        requested: null,
+        availability: 'unavailable',
+        observedAt: null,
+        observedProvenance: null,
+        requestedProvenance: null,
+        latestCommandId: null,
+      };
+    }
+    this.musicController = new MusicController(clock, options.music ?? {}, () =>
+      this.publish(['music']),
+    );
     this.state = {
       revision: 0,
       updatedAt: clock.now(),
@@ -157,6 +209,8 @@ export class LugnEngine {
         continuityExpiresAt: null,
       },
       lighting: { currentScene: null, sceneRevision: 0, devices },
+      switches: { devices: switches, commands: [] },
+      music: this.musicController.state,
       commands: this.ledger.records,
       diagnostics: [],
       timings: [],
@@ -165,14 +219,105 @@ export class LugnEngine {
       this.adapter.subscribe((observation) =>
         this.handleObservation(observation),
       ),
+      this.switchAdapter.subscribe((observation) =>
+        this.handleSwitchObservation(observation),
+      ),
     );
     this.publish([
       'presence',
       'lighting',
+      'switches',
+      'music',
       'commands',
       'diagnostics',
       'timings',
     ]);
+  }
+
+  getMusicState(target: string): DeviceMusicState {
+    return this.musicController.getState(target);
+  }
+
+  requestMusic(
+    target: string,
+    requested: MusicRequest,
+    provenance: Provenance,
+  ): Promise<MusicCommandRecord> {
+    return this.musicController.request(target, requested, provenance);
+  }
+
+  getSwitchState(target: string): DeviceSwitchState {
+    return structuredClone(this.requireSwitch(target));
+  }
+
+  async setSwitch(
+    target: string,
+    state: boolean,
+    provenance: Provenance,
+  ): Promise<SwitchCommandRecord> {
+    const device = this.requireSwitch(target);
+    if (typeof state !== 'boolean')
+      throw new Error('Switch state must be a boolean');
+    const normalizedProvenance = ProvenanceSchema.parse(provenance);
+    for (const prior of this.state.switches.commands) {
+      if (prior.target === target && prior.status === 'pending') {
+        prior.status = 'superseded';
+        this.clearSwitchFeedbackTimer(prior.id);
+      }
+    }
+    const command: SwitchCommandRecord = {
+      id: `switch-command-${++this.nextSwitchCommandId}`,
+      target,
+      requested: state,
+      issuedAt: this.clock.now(),
+      status: 'pending',
+      provenance: {
+        ...normalizedProvenance,
+        source: normalizedProvenance.source ?? 'capability',
+        reason: normalizedProvenance.reason ?? 'Explicit switch adjustment',
+      },
+    };
+    device.requested = state;
+    device.requestedProvenance = structuredClone(command.provenance);
+    device.latestCommandId = command.id;
+    this.state.switches.commands.push(command);
+    this.switchFeedbackTimers.set(
+      command.id,
+      this.clock.setTimeout(() => {
+        this.switchFeedbackTimers.delete(command.id);
+        if (command.status !== 'pending') return;
+        command.status = 'unconfirmed';
+        command.diagnosticReason = 'No matching switch feedback before timeout';
+        this.addDiagnostic(
+          'switch.unconfirmed',
+          `Switch command for ${target} was not confirmed before timeout`,
+          { commandId: command.id, target },
+        );
+        this.publish(['switches', 'diagnostics']);
+      }, this.switchFeedbackTimeoutMs),
+    );
+    this.publish(['switches']);
+    try {
+      await this.switchAdapter.dispatch({ id: command.id, target, state });
+      command.acceptedAt = this.clock.now();
+    } catch {
+      // Adapters may include tokens in thrown request errors. Keep diagnostics fixed.
+      if (command.status === 'pending' || command.status === 'unconfirmed') {
+        command.status = 'failed';
+        command.diagnosticReason =
+          'Switch adapter rejected or failed the request';
+        this.clearSwitchFeedbackTimer(command.id);
+      }
+      this.addDiagnostic(
+        'switch.failed',
+        `Switch command for ${target} failed`,
+        { commandId: command.id, target },
+      );
+      this.publish(['switches', 'diagnostics']);
+      throw new Error(`Switch command failed for ${target}`);
+    }
+    this.publish(['switches']);
+    return structuredClone(command);
   }
 
   async activateScene(
@@ -183,7 +328,7 @@ export class LugnEngine {
   ): Promise<number> {
     const scene = this.scenes.get(sceneId);
     if (!scene) throw new Error(`Unknown scene: ${sceneId}`);
-    await this.finishPrelight(true, scene);
+    if (this.prelightActive) await this.finishPrelight(true, scene);
     this.beginScene(scene, {
       actor,
       source,
@@ -559,7 +704,74 @@ export class LugnEngine {
   dispose(): void {
     this.cancelRetryTimers();
     this.clearPrelight();
+    this.musicController.dispose();
+    for (const handle of this.switchFeedbackTimers.values())
+      this.clock.clearTimeout(handle);
+    this.switchFeedbackTimers.clear();
     for (const unsubscribe of this.unsubscribers) unsubscribe();
+  }
+
+  private requireSwitch(target: string): DeviceSwitchState {
+    SemanticSwitchIdSchema.parse(target);
+    const device = this.state.switches.devices[target];
+    if (!device) throw new Error(`Unknown semantic switch: ${target}`);
+    return device;
+  }
+
+  private clearSwitchFeedbackTimer(id: string): void {
+    const timer = this.switchFeedbackTimers.get(id);
+    if (timer !== undefined) this.clock.clearTimeout(timer);
+    this.switchFeedbackTimers.delete(id);
+  }
+
+  private handleSwitchObservation(observation: SwitchObservation): void {
+    const device = this.state.switches.devices[observation.target];
+    if (!device) return;
+    const now = this.clock.now();
+    if (
+      !Number.isFinite(observation.observedAt) ||
+      observation.observedAt < 0 ||
+      observation.observedAt > now ||
+      (device.observedAt !== null && observation.observedAt < device.observedAt)
+    )
+      return;
+    device.availability =
+      observation.available && typeof observation.state === 'boolean'
+        ? 'available'
+        : 'unavailable';
+    device.observed =
+      device.availability === 'available' ? observation.state : null;
+    device.observedAt = observation.observedAt;
+    const command = this.state.switches.commands.find(
+      (candidate) => candidate.id === device.latestCommandId,
+    );
+    const matches =
+      command?.status === 'pending' &&
+      command.requested === device.observed &&
+      device.availability === 'available' &&
+      observation.observedAt >= command.issuedAt &&
+      now - command.issuedAt < this.switchFeedbackTimeoutMs &&
+      (observation.commandId === undefined ||
+        observation.commandId === command.id);
+    if (matches && command) {
+      command.status = 'confirmed';
+      command.confirmedAt = observation.observedAt;
+      device.observedProvenance = structuredClone(command.provenance);
+      this.clearSwitchFeedbackTimer(command.id);
+      this.addDiagnostic(
+        'switch.confirmed',
+        `Switch command for ${observation.target} confirmed by feedback`,
+        { commandId: command.id, target: observation.target },
+      );
+    } else {
+      device.observedProvenance = ProvenanceSchema.parse(
+        observation.provenance ?? {
+          actor: { type: 'home_assistant' },
+          source: 'external_observation',
+        },
+      );
+    }
+    this.publish(['switches', 'diagnostics']);
   }
 
   private clearPrelight(): void {
@@ -841,7 +1053,13 @@ export class LugnEngine {
 
   private publish(
     domains: Array<
-      'presence' | 'lighting' | 'commands' | 'diagnostics' | 'timings'
+      | 'presence'
+      | 'lighting'
+      | 'switches'
+      | 'music'
+      | 'commands'
+      | 'diagnostics'
+      | 'timings'
     >,
   ): void {
     this.state.commands = this.ledger.records;

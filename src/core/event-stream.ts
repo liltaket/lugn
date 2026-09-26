@@ -62,11 +62,21 @@ export function applyStateUpdate(
   state: RoomState,
   update: StateUpdate,
 ): RoomState {
-  const { presence, lighting, commands, diagnostics, timings } = update.patch;
+  const {
+    presence,
+    lighting,
+    switches,
+    music,
+    commands,
+    diagnostics,
+    timings,
+  } = update.patch;
   return {
     ...structuredClone(state),
     ...(presence === undefined ? {} : { presence: structuredClone(presence) }),
     ...(lighting === undefined ? {} : { lighting: structuredClone(lighting) }),
+    ...(switches === undefined ? {} : { switches: structuredClone(switches) }),
+    ...(music === undefined ? {} : { music: structuredClone(music) }),
     ...(commands === undefined ? {} : { commands: structuredClone(commands) }),
     ...(diagnostics === undefined
       ? {}

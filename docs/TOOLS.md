@@ -68,6 +68,52 @@ Names are illustrative; the concrete API should be designed before implementatio
 
 ## Typed schemas
 
+### Implemented music capabilities
+
+| Capability           | Input                                         |
+| -------------------- | --------------------------------------------- |
+| `music.getState`     | `{ target: "music.room" }`                    |
+| `music.play`         | `{ target: "music.room" }`                    |
+| `music.pause`        | `{ target: "music.room" }`                    |
+| `music.setVolume`    | `{ target: "music.room", volume: 0.35 }`      |
+| `music.selectSource` | `{ target: "music.room", source: "Optical" }` |
+
+All reject unconfigured semantic targets and extra arguments. Volume uses HA's
+0..1 scale; source must appear in that target's configured allowlist.
+`music.getState` returns `{ device }`; actions return
+`{ accepted: true, commandId, status }`. `accepted` means dispatch acceptance.
+`room.getState` includes `music.devices` and `music.commands`, and the `music`
+domain participates in revisioned state replay. See [Music](MUSIC.md) for
+confirmation, timeout and per-property supersession semantics.
+
+### Implemented switch capabilities
+
+`switch.getState({ target: "switch.desk" })` reads one configured semantic
+switch. `switch.set({ target: "switch.desk", state: true })` requests on;
+`state: false` requests off. Both reject targets outside the configured switch
+map. Additional arguments and arbitrary Home Assistant services are rejected.
+
+An action returns `{ accepted: true, commandId, status }` after the adapter
+accepts the request. `accepted` describes dispatch acceptance. The switch
+command remains `pending` until matching state feedback arrives within
+`switchFeedbackTimeoutMs` (10 seconds by default, configurable up to 60 seconds).
+Feedback marks the command `confirmed`; timeout marks it `unconfirmed`.
+Dispatch failure rejects the capability and records `failed`; a newer request
+marks an earlier pending command `superseded`. There are no automatic retries.
+
+`room.getState` includes `switches.devices` and `switches.commands`. Each device
+keeps `observed` and `requested` separately, with independent provenance and
+availability. A manual external change updates the observed value without
+silently changing the earlier request or sending a restoring command. An
+unknown or unavailable observation clears the current observed value to `null`.
+Presence and lighting scenes never operate switches.
+
+Home Assistant switch feedback has no Lugn command ID. Attribution therefore
+uses a matching configured target/value within the bounded confirmation window.
+A simultaneous external change to the same value can satisfy that match. A
+confirmation proves Home Assistant reported the state; it does not prove a
+physical device or attached load changed beyond Home Assistant's observation.
+
 Every tool should have:
 
 - stable name

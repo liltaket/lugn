@@ -437,7 +437,7 @@ describe('Lugn deterministic lighting slice', () => {
         { sceneId: 'missing' },
         { actor: user },
       ),
-    ).rejects.toThrow('Unknown scene');
+    ).rejects.toThrow('scene_not_found');
     await expect(
       capabilities.invoke(
         'lighting.set',
