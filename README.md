@@ -10,11 +10,23 @@ The long-term goal is a room that can increasingly understand context and infer 
 
 ## Status
 
-**Design / pre-implementation.**
+**Foundation implementation.**
 
-This repository currently documents the behavior, architecture, interfaces, and MVP before implementation starts. The intention is to make the core contracts clear enough that implementation can proceed without repeatedly redesigning the system.
+The repository contains the design contract and the first deterministic vertical slice: typed domain state, simulated lighting, property ownership, scene convergence, continuity, a command ledger, capabilities, and revisioned state updates. It does not connect to physical devices or persist state yet.
 
 No runtime AI is planned for the first version.
+
+## Development
+
+Requires Node.js 22 or newer.
+
+```sh
+npm install
+npm run check
+npm run build
+```
+
+The core is a library at `src/index.ts`; tests drive the simulated adapter with a fake clock. There is no HTTP server, UI, or real device adapter in this slice.
 
 ## Core principles
 
