@@ -1,0 +1,69 @@
+{
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "bearerTokenEnv": "LUGN_API_TOKEN"
+  },
+  "homeAssistant": {
+    "baseUrl": "http://homeassistant.local:8123",
+    "tokenEnv": "HOME_ASSISTANT_TOKEN",
+    "entities": {
+      "lighting.ceiling": "light.living_room_ceiling",
+      "lighting.desk": "light.living_room_desk"
+    },
+    "switches": {},
+    "music": {}
+  },
+  "mqtt": {
+    "url": "mqtt://mqtt.local:1883",
+    "usernameEnv": "MQTT_USERNAME",
+    "passwordEnv": "MQTT_PASSWORD",
+    "clientId": "lugn-controller",
+    "baseTopic": "bruno/doorway",
+    "maxAgeMs": 7000
+  },
+  "prelight": {
+    "targets": {
+      "lighting.ceiling": {
+        "power": true,
+        "brightness": 55,
+        "colorTemperature": 2700
+      }
+    },
+    "maxDurationMs": 5000
+  },
+  "scenes": [
+    {
+      "id": "scene.cozy",
+      "name": "Cozy",
+      "lighting": {
+        "lighting.ceiling": {
+          "power": true,
+          "brightness": 60,
+          "colorTemperature": 2400
+        },
+        "lighting.desk": {
+          "power": true,
+          "brightness": 30,
+          "colorTemperature": 2400
+        }
+      }
+    },
+    {
+      "id": "scene.movie",
+      "name": "Movie",
+      "lighting": {
+        "lighting.ceiling": {
+          "power": true,
+          "brightness": 18,
+          "colorTemperature": 2200
+        },
+        "lighting.desk": {
+          "power": false,
+          "brightness": 0,
+          "colorTemperature": 2200
+        }
+      }
+    }
+  ]
+}
