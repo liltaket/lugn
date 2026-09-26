@@ -102,8 +102,14 @@ authorization to connect to them.
   stay bounded over long runtimes without misclassifying delayed device
   feedback as a manual override?
 - Depends on: command attribution and state-stream contracts.
-- Status: open; pending commands must remain attributable, and any archived
-  command IDs need explicit treatment before old ledger records can be pruned.
+- Status: resolved for the in-memory runtime. Lighting/switch commands retain
+  all pending records plus the newest 256 terminal records; music retains all
+  pending plus newest 128 terminal records; diagnostics/timings retain the
+  newest 256. Unconfirmed lighting commands become terminal after the existing
+  60-second convergence timeout, switches after 10 seconds, and music after 10
+  seconds. Retired lighting IDs remain recognizable for the process lifetime
+  without retaining every record. Runtime state is not persisted across restart.
+  See [operator guide](OPERATIONS.md) for these limits and restart behavior.
 
 ### Live integration acceptance
 

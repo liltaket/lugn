@@ -16,6 +16,8 @@ import {
   type Provenance,
 } from '../core/schemas.js';
 
+const MAX_RETAINED_TERMINAL_COMMANDS = 128;
+
 export type MusicOptions = {
   targets?: Record<string, string[]>;
   adapter?: MusicAdapter;
@@ -89,6 +91,7 @@ export class MusicController {
       !device.allowedSources.includes(requested.value)
     )
       throw new Error(`Source is not allowed for ${target}`);
+    const supersededIds = new Set<string>();
     for (const prior of this.state.commands) {
       if (
         prior.target === target &&
@@ -96,9 +99,11 @@ export class MusicController {
         prior.status === 'pending'
       ) {
         prior.status = 'superseded';
-        this.clearTimer(prior.id);
+        this.releaseTracking(prior.id);
+        supersededIds.add(prior.id);
       }
     }
+    this.pruneHistory(supersededIds);
     const command: MusicCommandRecord = {
       id: `music-command-${++this.nextCommandId}`,
       target,
@@ -121,25 +126,33 @@ export class MusicController {
         if (command.status !== 'pending') return;
         command.status = 'unconfirmed';
         command.diagnosticReason = 'No matching music feedback before timeout';
+        this.issuedSequence.delete(command.id);
+        this.pruneHistory(new Set([command.id]));
         this.publish();
       }, this.timeoutMs),
     );
     this.publish();
+    let confirmedFromDispatch = false;
     try {
       await this.adapter.dispatch({ id: command.id, target, requested });
       command.acceptedAt = this.clock.now();
       const observation = this.lastObservations.get(target);
-      if (observation) this.confirm(command, observation);
+      if (observation)
+        confirmedFromDispatch = this.confirm(command, observation);
     } catch {
       if (command.status === 'pending' || command.status === 'unconfirmed') {
         command.status = 'failed';
         command.diagnosticReason =
           'Music adapter rejected or failed the request';
-        this.clearTimer(command.id);
+        this.releaseTracking(command.id);
+        this.pruneHistory(new Set([command.id]));
       }
       this.publish();
       throw new Error(`Music command failed for ${target}`);
     }
+    this.pruneHistory(
+      confirmedFromDispatch ? new Set([command.id]) : undefined,
+    );
     this.publish();
     return structuredClone(command);
   }
@@ -147,6 +160,7 @@ export class MusicController {
     this.unsubscribe();
     for (const timer of this.timers.values()) this.clock.clearTimeout(timer);
     this.timers.clear();
+    this.issuedSequence.clear();
   }
   private requireTarget(target: string): DeviceMusicState {
     SemanticMusicIdSchema.parse(target);
@@ -158,6 +172,47 @@ export class MusicController {
     const timer = this.timers.get(id);
     if (timer !== undefined) this.clock.clearTimeout(timer);
     this.timers.delete(id);
+  }
+  private releaseTracking(id: string): void {
+    this.clearTimer(id);
+    this.issuedSequence.delete(id);
+  }
+  private pruneHistory(protectedIds: ReadonlySet<string> = new Set()): void {
+    let terminalCount = this.state.commands.reduce(
+      (count, command) => count + (command.status === 'pending' ? 0 : 1),
+      0,
+    );
+    for (
+      let index = 0;
+      terminalCount > MAX_RETAINED_TERMINAL_COMMANDS &&
+      index < this.state.commands.length;
+    ) {
+      const command = this.state.commands[index];
+      if (
+        command &&
+        command.status !== 'pending' &&
+        !protectedIds.has(command.id)
+      ) {
+        this.state.commands.splice(index, 1);
+        this.releaseTracking(command.id);
+        terminalCount -= 1;
+      } else {
+        index += 1;
+      }
+    }
+    // A completion can arrive for a command that was old but still pending.
+    // If every retained terminal was protected in this batch, enforce the cap
+    // by dropping the oldest terminal record as a last resort.
+    for (let index = 0; terminalCount > MAX_RETAINED_TERMINAL_COMMANDS;) {
+      const command = this.state.commands[index];
+      if (command && command.status !== 'pending') {
+        this.state.commands.splice(index, 1);
+        this.releaseTracking(command.id);
+        terminalCount -= 1;
+      } else {
+        index += 1;
+      }
+    }
   }
   private observe(observation: MusicObservation): void {
     const device = this.state.devices[observation.target];
@@ -184,15 +239,20 @@ export class MusicController {
       (this.observedSequence.get(observation.target) ?? 0) + 1,
     );
     this.lastObservations.set(observation.target, structuredClone(observation));
-    for (const command of this.state.commands)
-      if (command.target === observation.target)
-        this.confirm(command, observation);
+    const confirmedIds = new Set<string>();
+    for (const command of [...this.state.commands])
+      if (
+        command.target === observation.target &&
+        this.confirm(command, observation)
+      )
+        confirmedIds.add(command.id);
+    this.pruneHistory(confirmedIds);
     this.publish();
   }
   private confirm(
     command: MusicCommandRecord,
     observation: MusicObservation,
-  ): void {
+  ): boolean {
     if (
       command.status !== 'pending' ||
       command.acceptedAt === undefined ||
@@ -204,7 +264,7 @@ export class MusicController {
       (observation.commandId !== undefined &&
         observation.commandId !== command.id)
     )
-      return;
+      return false;
     const { property, value } = command.requested;
     const actual = observation.values[property];
     const matches =
@@ -212,11 +272,12 @@ export class MusicController {
         ? typeof actual === 'number' &&
           Math.abs(actual - Number(value)) <= 0.005 + Number.EPSILON
         : actual === value;
-    if (!matches) return;
+    if (!matches) return false;
     command.status = 'confirmed';
     command.confirmedAt = observation.observedAt;
     command.diagnosticReason =
       'Matching Home Assistant observation; attribution is not guaranteed';
-    this.clearTimer(command.id);
+    this.releaseTracking(command.id);
+    return true;
   }
 }

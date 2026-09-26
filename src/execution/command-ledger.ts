@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Clock } from '../core/clock.js';
 import type {
   CommandRecord,
@@ -5,15 +6,60 @@ import type {
   LightingValues,
 } from '../core/schemas.js';
 
-let sequence = 0;
-
 export class CommandLedger {
   readonly records: CommandRecord[] = [];
+  private readonly idPrefix = `cmd-${randomUUID()}-`;
+  private sequence = 0;
+  private readonly latestIdByTarget = new Map<string, string>();
 
   constructor(
     private readonly clock: Clock,
     private readonly attributionWindowMs = 60_000,
-  ) {}
+    private readonly terminalHistoryLimit = 256,
+  ) {
+    if (!Number.isSafeInteger(terminalHistoryLimit) || terminalHistoryLimit < 1)
+      throw new Error('terminalHistoryLimit must be a positive safe integer');
+  }
+
+  /** IDs are opaque and belong to this ledger instance, including retired records. */
+  isKnownCommandId(commandId: string): boolean {
+    if (!commandId.startsWith(this.idPrefix)) return false;
+    const suffix = commandId.slice(this.idPrefix.length);
+    const sequence = Number(suffix);
+    return (
+      Number.isSafeInteger(sequence) &&
+      sequence > 0 &&
+      sequence <= this.sequence &&
+      String(sequence) === suffix
+    );
+  }
+
+  latestCommandId(target: string): string | undefined {
+    return this.latestIdByTarget.get(target);
+  }
+
+  /** Keep every pending record and the newest terminal records in issue order. */
+  pruneTerminalRecords(): boolean {
+    let retainedTerminal = 0;
+    const retained = this.records.filter(
+      (record) => record.status === 'pending',
+    );
+    for (let index = this.records.length - 1; index >= 0; index -= 1) {
+      const record = this.records[index]!;
+      if (
+        record.status !== 'pending' &&
+        retainedTerminal < this.terminalHistoryLimit
+      ) {
+        retained.push(record);
+        retainedTerminal += 1;
+      }
+    }
+    if (retained.length === this.records.length) return false;
+    const keep = new Set(retained);
+    const ordered = this.records.filter((record) => keep.has(record));
+    this.records.splice(0, this.records.length, ...ordered);
+    return true;
+  }
 
   issue(
     input: Omit<
@@ -23,12 +69,14 @@ export class CommandLedger {
   ): CommandRecord {
     const record: CommandRecord = {
       ...input,
-      id: `cmd-${++sequence}`,
+      id: `${this.idPrefix}${++this.sequence}`,
       issuedAt: this.clock.now(),
       status: 'pending',
       confirmedProperties: [],
     };
     this.records.push(record);
+    this.latestIdByTarget.set(record.target, record.id);
+    this.pruneTerminalRecords();
     return record;
   }
 
@@ -42,6 +90,7 @@ export class CommandLedger {
         command.diagnosticReason = reason;
       }
     }
+    this.pruneTerminalRecords();
   }
 
   cancelRevision(revision: number, reason: string): void {
@@ -51,6 +100,7 @@ export class CommandLedger {
         command.diagnosticReason = reason;
       }
     }
+    this.pruneTerminalRecords();
   }
 
   cancel(commandId: string, reason: string): boolean {
@@ -60,6 +110,7 @@ export class CommandLedger {
     if (!command || command.status !== 'pending') return false;
     command.status = 'cancelled';
     command.diagnosticReason = reason;
+    this.pruneTerminalRecords();
     return true;
   }
 
@@ -70,6 +121,7 @@ export class CommandLedger {
     if (!command || command.status !== 'pending') return false;
     command.status = 'invalidated';
     command.diagnosticReason = reason;
+    this.pruneTerminalRecords();
     return true;
   }
 
@@ -106,6 +158,7 @@ export class CommandLedger {
       command.confirmedAt = now;
       command.diagnosticReason = 'All requested properties observed';
     }
+    this.pruneTerminalRecords();
     return command;
   }
 

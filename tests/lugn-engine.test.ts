@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SimulatedLightingAdapter } from '../src/adapters/simulated-lighting.js';
+import { SimulatedSwitchAdapter } from '../src/adapters/simulated-switch.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { FakeClock } from '../src/core/clock.js';
@@ -19,6 +20,132 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('Lugn deterministic lighting slice', () => {
+  it('terminalizes unresolved prelight commands at their feedback deadline and clears timers on dispose', async () => {
+    const { clock, adapter, engine } = setup({
+      convergenceTimeoutMs: 3_000,
+      prelight: {
+        targets: { 'lighting.desk': { power: true } },
+        maxDurationMs: 1_000,
+      },
+    });
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    const command = engine.state.commands[0]!;
+    expect(command.status).toBe('pending');
+    clock.advanceBy(2_999);
+    await flushMicrotasks();
+    expect(command.status).toBe('pending');
+    clock.advanceBy(1);
+    await flushMicrotasks();
+    expect(command.status).toBe('cancelled');
+    expect(command.diagnosticReason).toBe(
+      'No matching lighting feedback before command timeout',
+    );
+    expect(
+      engine.state.diagnostics.some(
+        (entry) =>
+          entry.kind === 'command.unconfirmed' &&
+          entry.details['commandId'] === command.id,
+      ),
+    ).toBe(true);
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    expect(clock.pendingTimers()).toBeGreaterThan(0);
+    engine.dispose();
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it('bounds terminal lighting history and keeps retired explicit feedback from changing current intent', async () => {
+    const { adapter, engine } = setup({ stateHistoryLimit: 2 });
+    await engine.activateScene('scene.cozy', user);
+    const retired = adapter.dispatched.find(
+      (command) => command.target === 'lighting.desk',
+    )!;
+    for (let index = 0; index < 140; index += 1)
+      await engine.activateScene(
+        index % 2 === 0 ? 'scene.cozy' : 'scene.movie',
+        user,
+      );
+    expect(engine.state.commands).toHaveLength(256);
+    expect(
+      engine.state.commands.some((command) => command.id === retired.id),
+    ).toBe(false);
+    const before = structuredClone(
+      engine.state.lighting.devices['lighting.desk']!,
+    );
+    await adapter.dispatch(retired);
+    await flushMicrotasks();
+    const after = engine.state.lighting.devices['lighting.desk']!;
+    expect(after.effectiveDesired).toEqual(before.effectiveDesired);
+    expect(after.ownership).toEqual(before.ownership);
+    expect(after.observed).toEqual(before.effectiveDesired);
+    expect(
+      engine.state.diagnostics.some(
+        (entry) => entry.kind === 'command.stale_feedback',
+      ),
+    ).toBe(true);
+    await adapter.dispatch({
+      id: 'external-unknown',
+      target: 'lighting.desk',
+      values: { brightness: 7 },
+    });
+    await flushMicrotasks();
+    expect(after.effectiveDesired.brightness).toBe(7);
+    expect(after.ownership.brightness?.kind).toBe('override');
+    engine.dispose();
+  });
+
+  it('keeps diagnostics and timings bounded and publishes replayable eviction updates', async () => {
+    const { engine } = setup({ stateHistoryLimit: 2 });
+    let rebuilt = structuredClone(engine.state);
+    const unsubscribe = engine.stream.subscribe((update) => {
+      rebuilt = applyStateUpdate(rebuilt, update);
+    });
+    for (let index = 0; index < 300; index += 1)
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+      });
+    expect(engine.state.timings).toHaveLength(256);
+    expect(engine.state.timings[0]?.eventId).toBe('presence-45');
+    expect(engine.state.timings.at(-1)?.eventId).toBe('presence-300');
+    expect(engine.state.diagnostics).toHaveLength(256);
+    expect(engine.state.diagnostics[0]!.id).toBeGreaterThan(0);
+    expect(rebuilt).toEqual(engine.state);
+    unsubscribe();
+    engine.dispose();
+  });
+
+  it('bounds switch terminal history and retains older pending feedback attribution', async () => {
+    const clock = new FakeClock(1_000);
+    const switchAdapter = new SimulatedSwitchAdapter(clock);
+    const engine = new LugnEngine(clock, {
+      switchAdapter,
+      switchDeviceIds: ['switch.fan', 'switch.socket'],
+      stateHistoryLimit: 2,
+    });
+    switchAdapter.feedbackEnabled = false;
+    const pending = await engine.setSwitch('switch.fan', true, { actor: user });
+    switchAdapter.feedbackEnabled = true;
+    for (let index = 0; index < 300; index += 1)
+      await engine.setSwitch('switch.socket', index % 2 === 0, { actor: user });
+    expect(engine.state.switches.commands).toHaveLength(257);
+    expect(
+      engine.state.switches.commands.find(
+        (command) => command.id === pending.id,
+      )?.status,
+    ).toBe('pending');
+    switchAdapter.observe('switch.fan', true);
+    expect(engine.state.switches.commands).toHaveLength(256);
+    expect(
+      engine.state.switches.devices['switch.fan']!.observedProvenance?.actor,
+    ).toEqual(user);
+    expect(engine.state.switches.devices['switch.fan']!.latestCommandId).toBe(
+      pending.id,
+    );
+    engine.dispose();
+  });
+
   it('converges Cozy and sends no duplicate commands at steady state', async () => {
     const { adapter, engine } = setup();
     await engine.activateScene('scene.cozy', user);

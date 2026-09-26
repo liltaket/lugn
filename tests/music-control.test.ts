@@ -3,6 +3,7 @@ import { HomeAssistantMusicAdapter } from '../src/adapters/home-assistant-music.
 import { SimulatedMusicAdapter } from '../src/adapters/simulated-music.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
+import { MusicController } from '../src/application/music-controller.js';
 import { FakeClock } from '../src/core/clock.js';
 import { applyStateUpdate } from '../src/core/event-stream.js';
 
@@ -30,6 +31,13 @@ function setup() {
     },
   });
   return { clock, adapter, engine, registry: new CapabilityRegistry(engine) };
+}
+
+function controllerInternals(controller: MusicController) {
+  return controller as unknown as {
+    issuedSequence: Map<string, number>;
+    timers: Map<string, unknown>;
+  };
 }
 
 describe('semantic music control', () => {
@@ -173,6 +181,145 @@ describe('semantic music control', () => {
       ),
     ).rejects.toThrow('target_not_configured');
     engine.dispose();
+  });
+
+  it('retains only the newest 128 terminal commands', async () => {
+    const clock = new FakeClock();
+    const adapter = new SimulatedMusicAdapter(clock);
+    const controller = new MusicController(
+      clock,
+      { targets: { 'music.room': [] }, adapter },
+      () => {},
+    );
+
+    for (let index = 1; index <= 130; index += 1) {
+      const volume = index % 2 === 0 ? 0.4 : 0.3;
+      await controller.request(
+        'music.room',
+        { property: 'volume', value: volume },
+        actor,
+      );
+      adapter.observe('music.room', { ...values, volume });
+    }
+
+    expect(controller.state.commands).toHaveLength(128);
+    expect(controller.state.commands[0]?.id).toBe('music-command-3');
+    expect(controller.state.commands.at(-1)?.id).toBe('music-command-130');
+    expect(
+      controller.state.commands.every(({ status }) => status === 'confirmed'),
+    ).toBe(true);
+    expect(clock.pendingTimers()).toBe(0);
+    expect(controllerInternals(controller).issuedSequence.size).toBe(0);
+    controller.dispose();
+  });
+
+  it('keeps a pending command attributable while pruning terminal history', async () => {
+    const clock = new FakeClock();
+    const adapter = new SimulatedMusicAdapter(clock);
+    const controller = new MusicController(
+      clock,
+      { targets: { 'music.room': [], 'music.desk': [] }, adapter },
+      () => {},
+    );
+
+    const pending = await controller.request(
+      'music.room',
+      { property: 'volume', value: 0.7 },
+      actor,
+    );
+    for (let index = 1; index <= 130; index += 1) {
+      const playback = index % 2 === 0 ? 'paused' : 'playing';
+      await controller.request(
+        'music.desk',
+        { property: 'playback', value: playback },
+        actor,
+      );
+      adapter.observe('music.desk', { ...values, playback });
+    }
+
+    const pendingRecord = controller.state.commands.find(
+      ({ id }) => id === pending.id,
+    );
+    expect(pendingRecord?.status).toBe('pending');
+    expect(controllerInternals(controller).issuedSequence.has(pending.id)).toBe(
+      true,
+    );
+    expect(controllerInternals(controller).timers.has(pending.id)).toBe(true);
+    expect(
+      controller.state.commands.filter(({ status }) => status !== 'pending'),
+    ).toHaveLength(128);
+
+    adapter.observe('music.room', { ...values, volume: 0.7 });
+
+    expect(pendingRecord?.status).toBe('confirmed');
+    expect(controller.state.commands).toContain(pendingRecord);
+    expect(controller.state.commands).toHaveLength(128);
+    expect(controllerInternals(controller).issuedSequence.has(pending.id)).toBe(
+      false,
+    );
+    expect(controllerInternals(controller).timers.has(pending.id)).toBe(false);
+    expect(clock.pendingTimers()).toBe(0);
+    controller.dispose();
+  });
+
+  it('cleans command tracking after timeout, failure, supersession and disposal', async () => {
+    const clock = new FakeClock();
+    const adapter = new SimulatedMusicAdapter(clock);
+    const controller = new MusicController(
+      clock,
+      {
+        targets: { 'music.room': ['Optical', 'Bluetooth'] },
+        adapter,
+        feedbackTimeoutMs: 100,
+      },
+      () => {},
+    );
+    const internals = controllerInternals(controller);
+
+    await controller.request(
+      'music.room',
+      { property: 'volume', value: 0.3 },
+      actor,
+    );
+    clock.advanceBy(100);
+    expect(controller.state.commands[0]?.status).toBe('unconfirmed');
+    expect(internals.issuedSequence.size).toBe(0);
+    expect(internals.timers.size).toBe(0);
+
+    vi.spyOn(adapter, 'dispatch').mockRejectedValueOnce(
+      new Error('private-token'),
+    );
+    await expect(
+      controller.request(
+        'music.room',
+        { property: 'playback', value: 'playing' },
+        actor,
+      ),
+    ).rejects.toThrow('Music command failed');
+    expect(controller.state.commands.at(-1)?.status).toBe('failed');
+    expect(internals.issuedSequence.size).toBe(0);
+    expect(internals.timers.size).toBe(0);
+
+    const superseded = await controller.request(
+      'music.room',
+      { property: 'source', value: 'Optical' },
+      actor,
+    );
+    const current = await controller.request(
+      'music.room',
+      { property: 'source', value: 'Bluetooth' },
+      actor,
+    );
+    expect(
+      controller.state.commands.find(({ id }) => id === superseded.id)?.status,
+    ).toBe('superseded');
+    expect(internals.issuedSequence.size).toBe(1);
+    expect(internals.issuedSequence.has(current.id)).toBe(true);
+    expect(internals.timers.size).toBe(1);
+    controller.dispose();
+    expect(internals.issuedSequence.size).toBe(0);
+    expect(internals.timers.size).toBe(0);
+    expect(clock.pendingTimers()).toBe(0);
   });
 });
 

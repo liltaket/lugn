@@ -102,6 +102,8 @@ type ScheduledRetry = {
   fastPathEventId?: string;
 };
 
+const runtimeHistoryLimit = 256;
+
 export class LugnEngine {
   readonly stream: StateEventStream;
   readonly ledger: CommandLedger;
@@ -114,6 +116,7 @@ export class LugnEngine {
   private readonly retryDelayMs: number;
   private readonly continuityMs: number;
   private readonly switchFeedbackTimeoutMs: number;
+  private readonly lightingFeedbackTimers = new Map<string, TimerHandle>();
   private readonly switchFeedbackTimers = new Map<string, TimerHandle>();
   private nextSwitchCommandId = 0;
   private readonly prelightTargets: Readonly<Record<string, LightingValues>>;
@@ -751,6 +754,9 @@ export class LugnEngine {
     this.clearPrelight();
     this.terminateAllFastPathEvents();
     this.musicController.dispose();
+    for (const handle of this.lightingFeedbackTimers.values())
+      this.clock.clearTimeout(handle);
+    this.lightingFeedbackTimers.clear();
     for (const handle of this.switchFeedbackTimers.values())
       this.clock.clearTimeout(handle);
     this.switchFeedbackTimers.clear();
@@ -939,6 +945,25 @@ export class LugnEngine {
       reason,
       actor,
     });
+    this.lightingFeedbackTimers.set(
+      command.id,
+      this.clock.setTimeout(() => {
+        this.lightingFeedbackTimers.delete(command.id);
+        if (
+          !this.ledger.cancel(
+            command.id,
+            'No matching lighting feedback before command timeout',
+          )
+        )
+          return;
+        this.addDiagnostic(
+          'command.unconfirmed',
+          `Lighting command for ${target} was not confirmed before timeout`,
+          { commandId: command.id, target },
+        );
+        this.publish(['commands', 'diagnostics']);
+      }, this.convergenceTimeoutMs),
+    );
     this.state.commands = this.ledger.records;
     this.publish(['commands']);
     if (eventId && this.fastPathMonotonicOrigins.has(eventId)) {
@@ -990,6 +1015,10 @@ export class LugnEngine {
         fastPathEventId = this.fastPathEventByCommand.get(command.id);
       if (
         !command &&
+        !(
+          observation.commandId &&
+          this.ledger.isKnownCommandId(observation.commandId)
+        ) &&
         previouslyObserved !== undefined &&
         previouslyObserved !== value
       ) {
@@ -1064,9 +1093,7 @@ export class LugnEngine {
   }
 
   private latestCommandId(target: string): string | undefined {
-    return [...this.ledger.records]
-      .reverse()
-      .find((command) => command.target === target)?.id;
+    return this.ledger.latestCommandId(target);
   }
 
   private expireContinuity(): void {
@@ -1274,6 +1301,11 @@ export class LugnEngine {
       details,
     };
     this.state.diagnostics.push(record);
+    if (this.state.diagnostics.length > runtimeHistoryLimit)
+      this.state.diagnostics.splice(
+        0,
+        this.state.diagnostics.length - runtimeHistoryLimit,
+      );
   }
 
   private publish(
@@ -1287,6 +1319,48 @@ export class LugnEngine {
       | 'timings'
     >,
   ): void {
+    const pendingLightingIds = new Set(
+      this.ledger.records
+        .filter((command) => command.status === 'pending')
+        .map((command) => command.id),
+    );
+    for (const [commandId, timer] of this.lightingFeedbackTimers) {
+      if (!pendingLightingIds.has(commandId)) {
+        this.clock.clearTimeout(timer);
+        this.lightingFeedbackTimers.delete(commandId);
+      }
+    }
+    if (this.ledger.pruneTerminalRecords() && !domains.includes('commands'))
+      domains.push('commands');
+    let remainingTerminalSwitches = runtimeHistoryLimit;
+    const retainedSwitchCommands = [...this.state.switches.commands]
+      .reverse()
+      .filter((command) => {
+        if (command.status === 'pending') return true;
+        if (remainingTerminalSwitches === 0) return false;
+        remainingTerminalSwitches -= 1;
+        return true;
+      })
+      .reverse();
+    if (retainedSwitchCommands.length !== this.state.switches.commands.length) {
+      this.state.switches.commands = retainedSwitchCommands;
+      if (!domains.includes('switches')) domains.push('switches');
+    }
+    if (this.state.timings.length > runtimeHistoryLimit) {
+      const retired = this.state.timings.splice(
+        0,
+        this.state.timings.length - runtimeHistoryLimit,
+      );
+      for (const timing of retired) this.terminateFastPathEvent(timing.eventId);
+      if (!domains.includes('timings')) domains.push('timings');
+    }
+    // Only the current revision can reconcile. Older async continuations are guarded.
+    for (const revision of this.convergenceStartedAt.keys())
+      if (revision !== this.state.lighting.sceneRevision)
+        this.convergenceStartedAt.delete(revision);
+    for (const revision of this.intentByRevision.keys())
+      if (revision !== this.state.lighting.sceneRevision)
+        this.intentByRevision.delete(revision);
     this.state.commands = this.ledger.records;
     this.state.revision += 1;
     this.state.updatedAt = this.clock.now();

@@ -211,3 +211,21 @@ initial query fails, Lugn stays available and waits for WebSocket observations.
   confirmed.
 - No live Home Assistant, MQTT broker, or STL27L device is contacted by the
   build command.
+
+## Runtime history and restarts
+
+The in-memory state stream retains the newest 256 timing and diagnostic
+records. Lighting and switch ledgers retain every pending command plus the
+newest 256 terminal commands; the music ledger retains every pending command
+plus the newest 128 terminal commands. Old terminal records are pruned as new
+commands finish. Pending lighting commands without matching feedback are
+terminalized after the 60-second convergence timeout; switch and music
+feedback time out after 10 seconds. These limits keep the runtime bounded in
+normal operation while leaving active commands attributable until feedback or
+timeout.
+
+Runtime command history and command-ID attribution are not persisted. Restart
+does not replay old physical commands; the new process seeds fresh Home
+Assistant observations and starts with a new in-memory ledger. Back up the
+installation config and secret file separately; the runtime state stream is
+diagnostic history, not durable storage.
