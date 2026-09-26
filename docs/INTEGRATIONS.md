@@ -15,7 +15,7 @@ Expected uses include:
 
 Core decisions should live in Lugn rather than being duplicated in a large set of Home Assistant automations.
 
-The first code adapter uses caller-supplied mappings from Lugn semantic light IDs to Home Assistant light entities. It sends light service requests through the REST API and accepts `state_changed` event payloads from a host-provided WebSocket transport. The adapter does not choose entity IDs, load credentials, open a network connection, or manage WebSocket reconnects; those belong to the hosting application. No live Home Assistant instance has been configured or verified.
+The first code adapter uses caller-supplied mappings from Lugn semantic light IDs to Home Assistant light entities. It sends light service requests through the REST API. `HomeAssistantWebSocketTransport` handles WebSocket authentication, `state_changed` subscription, and bounded reconnects; the host supplies credentials and forwards its events to the lighting adapter. Socket creation and HTTP fetch are injectable. No live Home Assistant instance has been configured or verified.
 
 ## STL27L / presence sensor
 
@@ -32,6 +32,8 @@ Expected normalized outputs may include:
 Trajectory should be treated as experimental context, not a core dependency.
 
 `PresenceEventIngress` validates normalized `presence.changed` events before forwarding them to the engine. The sensor-specific bridge must map its own protocol into `occupied`, `confirmed_empty`, or `unknown`; unavailable, startup, or tracking-loss states must not be mapped to confirmed empty. Raw LiDAR processing remains outside Lugn core.
+
+The repository does not yet define an STL27L wire protocol or representative payload. A device-specific bridge needs that contract before it can be implemented safely.
 
 ## WiiM
 

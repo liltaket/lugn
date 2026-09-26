@@ -1,5 +1,6 @@
 export * from './adapters/simulated-lighting.js';
 export * from './adapters/home-assistant-lighting.js';
+export * from './adapters/home-assistant-websocket.js';
 export * from './adapters/presence-event-ingress.js';
 export * from './application/capabilities.js';
 export * from './application/lugn-engine.js';
