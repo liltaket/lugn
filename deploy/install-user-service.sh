@@ -25,7 +25,7 @@ systemctl --user show-environment >/dev/null 2>&1 || fail 'systemd --user is una
 command -v node >/dev/null 2>&1 || fail 'Node.js 22 or newer is required.'
 node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' || fail 'Node.js 22 or newer is required.'
 node_path="$(command -v node)"
-[[ -x "$repo_dir/dist/runtime/main.js" ]] || fail 'Build Lugn first with npm ci && npm run build.'
+[[ -f "$repo_dir/dist/runtime/main.js" ]] || fail 'Build Lugn first with npm ci && npm run build.'
 [[ -f "$repo_dir/config.example.json" ]] || fail 'config.example.json was not found in the repository.'
 
 for path in "$config_home" "$config_root" "$systemd_root" "$unit_dir"; do
