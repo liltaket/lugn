@@ -444,9 +444,11 @@ function mountClerkSignIn() {
   try {
     clerkClient.mountSignIn(clerkSignInTarget, {
       routing: 'hash',
-      withSignUp: false,
+      withSignUp: true,
       fallbackRedirectUrl: '/ui/',
       forceRedirectUrl: '/ui/',
+      signUpFallbackRedirectUrl: '/ui/',
+      signUpForceRedirectUrl: '/ui/',
       appearance: {
         variables: {
           colorPrimary: '#d2d59a',
