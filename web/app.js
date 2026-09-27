@@ -334,7 +334,9 @@ async function invokeCapability(capability, input, actionKey) {
       throw new Error('Begäran kunde inte skickas. Försök igen.');
     }
     setActionMessage(
-      'Begäran skickad. Lampornas rapporterade läge visar om ändringen har nått fram.',
+      overview?.state?.presence?.state === 'confirmed_empty'
+        ? 'Önskat läge sparat. Lamporna hålls släckta tills rummet blir upptaget.'
+        : 'Begäran skickad. Lampornas rapporterade läge visar om ändringen har nått fram.',
     );
     await refreshOverview();
   } catch (error) {
@@ -365,8 +367,10 @@ function render() {
   showDashboard();
   renderRoomStatus(overview);
   renderScenes(overview);
-  renderLights(overview.state?.lighting?.devices ?? {});
-  renderMappingSummary(overview.state?.lighting?.devices ?? {});
+  const devices = overview.state?.lighting?.devices ?? {};
+  const presenceState = overview.state?.presence?.state ?? 'unknown';
+  renderLights(devices, presenceState);
+  renderMappingSummary(devices, presenceState);
   renderUpdatedAt(overview.state?.updatedAt);
   actionStatus.textContent = actionMessage;
   actionStatus.dataset.tone = actionTone;
@@ -408,7 +412,8 @@ function renderRoomStatus(data) {
     const count = presence.personCount;
     presenceDetail.textContent = `${count} ${count === 1 ? 'person' : 'personer'} registrerade`;
   } else if (presence.state === 'confirmed_empty') {
-    presenceDetail.textContent = 'Närvarosensorn bekräftar att rummet är tomt';
+    presenceDetail.textContent =
+      'Rummet är tomt. Lamporna hålls släckta; vald scen återupptas vid nästa besök.';
   } else {
     presenceDetail.textContent = 'Lugn inväntar en säker närvarosignal';
   }
@@ -500,7 +505,7 @@ function renderScenes(data) {
   }
 }
 
-function renderLights(devices) {
+function renderLights(devices, presenceState) {
   lightList.replaceChildren();
   const entries = Object.entries(devices).sort(([a], [b]) =>
     a.localeCompare(b),
@@ -512,11 +517,11 @@ function renderLights(devices) {
     return;
   }
   for (const [target, device] of entries) {
-    lightList.append(renderLight(target, device));
+    lightList.append(renderLight(target, device, presenceState));
   }
 }
 
-function renderLight(target, device) {
+function renderLight(target, device, presenceState) {
   const article = node('article', 'light-row');
   const identity = node('div', 'light-identity');
   identity.append(node('h3', '', displayTarget(target)));
@@ -524,7 +529,7 @@ function renderLight(target, device) {
   const badges = node('div', 'light-badges');
   const availability = availabilityStatus(device.availability);
   badges.append(stateChip(availability.label, availability.tone));
-  const convergence = convergenceStatus(device);
+  const convergence = convergenceStatus(device, presenceState);
   badges.append(stateChip(convergence.label, convergence.tone));
   identity.append(badges);
   article.append(identity);
@@ -698,7 +703,21 @@ function stateChip(label, tone) {
   return chip;
 }
 
-function renderMappingSummary(devices) {
+function renderMappingSummary(devices, presenceState) {
+  if (presenceState === 'confirmed_empty') {
+    const values = Object.values(devices);
+    const unavailable = values.filter(
+      (device) => device.availability === 'unavailable',
+    ).length;
+    const degraded = values.filter(
+      (device) => device.availability === 'degraded',
+    ).length;
+    const parts = ['Lamporna hålls släckta medan rummet är tomt'];
+    if (unavailable) parts.push(`${unavailable} otillgängliga`);
+    if (degraded) parts.push(`${degraded} med degraderad status`);
+    mappingSummary.textContent = parts.join(' · ');
+    return;
+  }
   const counts = {
     aligned: 0,
     waiting: 0,
@@ -808,11 +827,18 @@ function availabilityStatus(availability) {
   return statuses[availability] ?? { label: 'Status okänd', tone: 'neutral' };
 }
 
-function convergenceStatus(device) {
+function convergenceStatus(device, presenceState) {
   if (device.availability === 'unavailable')
     return { label: 'Ingen aktuell återrapportering', tone: 'bad' };
   if (device.availability === 'degraded')
     return { label: 'Återrapportering begränsad', tone: 'warn' };
+  if (presenceState === 'confirmed_empty') {
+    if (device.observed?.power === false)
+      return { label: 'Av enligt tomt-rum-läge', tone: 'neutral' };
+    if (device.observed?.power === true)
+      return { label: 'Väntar på avstängning', tone: 'warn' };
+    return { label: 'Inväntar avstängningsrapport', tone: 'warn' };
+  }
   const desired = device.effectiveDesired ?? {};
   const properties = Object.keys(desired);
   if (properties.length === 0)
