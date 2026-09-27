@@ -104,7 +104,8 @@ authorization to connect to them.
 - Depends on: command attribution and state-stream contracts.
 - Status: resolved for the in-memory runtime. Lighting/switch commands retain
   all pending records plus the newest 256 terminal records; music retains all
-  pending plus newest 128 terminal records; diagnostics/timings retain the
+  pending plus up to 128 terminal records, protecting a just-completed pending
+  command while pruning the oldest other terminal record; diagnostics/timings retain the
   newest 256. Unconfirmed lighting commands become terminal after the existing
   60-second convergence timeout, switches after 10 seconds, and music after 10
   seconds. Retired lighting IDs remain recognizable for the process lifetime
@@ -117,15 +118,20 @@ authorization to connect to them.
   feedback on Bruno's actual broker, Home Assistant, sensor, and lights?
 - Depends on: implementation, user-provided endpoint/entity configuration,
   and explicit authorization to connect to those live systems.
-- Status: pending current MQTT credentials, HA URL/entity mappings, deployment
-  host, and live-control authorization. A read-only MQTT login attempt was
-  denied; no sensor data, HA state, or device feedback has been observed, and
-  no command or physical actuation was performed.
+- Status: the current LAN endpoint is now identified read-only:
+  `homeassistant.local` resolves and responds as Home Assistant (`/api` returns
+  401 without a bearer token), and its MQTT port accepts TCP but an anonymous
+  MQTT handshake returns not-authorized. The configured sensor topic is known,
+  but no topic was subscribed and no sensor payload was read. Live acceptance
+  still needs HA and MQTT credentials, current entity mappings, a chosen
+  deployment host, and a bounded physical feedback check. No device command or
+  physical actuation has been performed.
 
 ## Not yet specified
 
 - Deployment host and service manager.
-- Broker address/credentials and the sensor repo's current deployment settings.
+- HA and broker credentials, plus confirmation of current sensor deployment
+  settings.
 - Which HA entities represent the multiple lights and the next non-light system.
 - Whether the desired final surface is CLI/service only or also a UI/API.
 

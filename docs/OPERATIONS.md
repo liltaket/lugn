@@ -46,6 +46,25 @@ Set `LUGN_CONFIG_PATH` to use a config file elsewhere, or pass a file path to
 `SIGTERM` by closing HTTP, MQTT, and Home Assistant WebSocket connections.
 Startup and operational logs omit tokens and raw broker/HA errors.
 
+## Discover Home Assistant mappings
+
+Use the read-only discovery command to find current `light.*`, `switch.*`, and
+`media_player.*` IDs before editing the mappings. The media-player list includes
+`source_list`; current states and media titles are not printed. It makes one
+Home Assistant `GET /api/states` request and does not call device services:
+
+```sh
+npm run build
+node --env-file=/secure/path/lugn.env dist/runtime/ha-discover.js \
+  --url http://homeassistant.local:8123
+```
+
+The environment file should define `HOME_ASSISTANT_TOKEN`; the URL can also
+come from `HOME_ASSISTANT_URL`. Keep the token in the environment file or a
+secret manager rather than a command-line argument. The example URL was
+verified on this host as a Home Assistant endpoint, but change it if Lugn runs
+on a different network or installation.
+
 ## Keep Lugn running with systemd
 
 On Linux hosts with systemd, the repository includes a user-service installer.
@@ -217,8 +236,10 @@ initial query fails, Lugn stays available and waits for WebSocket observations.
 The in-memory state stream retains the newest 256 timing and diagnostic
 records. Lighting and switch ledgers retain every pending command plus the
 newest 256 terminal commands; the music ledger retains every pending command
-plus the newest 128 terminal commands. Old terminal records are pruned as new
-commands finish. Pending lighting commands without matching feedback are
+plus up to 128 terminal commands. A command that has just completed after
+remaining pending is preserved while the oldest other terminal record is
+pruned. Old terminal records are pruned as new commands finish. Pending
+lighting commands without matching feedback are
 terminalized after the 60-second convergence timeout; switch and music
 feedback time out after 10 seconds. These limits keep the runtime bounded in
 normal operation while leaving active commands attributable until feedback or

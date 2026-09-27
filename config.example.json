@@ -15,7 +15,7 @@
     "music": {}
   },
   "mqtt": {
-    "url": "mqtt://mqtt.local:1883",
+    "url": "mqtt://homeassistant.local:1883",
     "usernameEnv": "MQTT_USERNAME",
     "passwordEnv": "MQTT_PASSWORD",
     "clientId": "lugn-controller",
