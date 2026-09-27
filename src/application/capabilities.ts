@@ -1,8 +1,10 @@
 import { z } from 'zod';
+import type { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
 import {
   DeviceLightingStateSchema,
   DeviceSwitchStateSchema,
   DeviceMusicStateSchema,
+  SemanticButtonIdSchema,
   SemanticMusicIdSchema,
   MusicCommandStatusSchema,
   LightingValuesSchema,
@@ -28,6 +30,7 @@ const GetSwitchInput = z.object({ target: SemanticSwitchIdSchema }).strict();
 const SetSwitchInput = z
   .object({ target: SemanticSwitchIdSchema, state: z.boolean() })
   .strict();
+const PressButtonInput = z.object({ target: SemanticButtonIdSchema }).strict();
 
 const GetMusicInput = z.object({ target: SemanticMusicIdSchema }).strict();
 const VolumeMusicInput = z
@@ -72,6 +75,10 @@ export const CapabilitySchemas = {
       commandId: z.string(),
       status: SwitchCommandStatusSchema,
     }),
+  },
+  'button.press': {
+    input: PressButtonInput,
+    output: z.object({ accepted: z.literal(true) }),
   },
   'room.getState': {
     input: EmptyInput,
@@ -118,7 +125,12 @@ export type CapabilityInvocation = {
 };
 
 export class CapabilityRegistry {
-  constructor(private readonly engine: LugnEngine) {}
+  constructor(
+    private readonly engine: LugnEngine,
+    private readonly adapters: {
+      buttonAdapter?: HomeAssistantButtonAdapter;
+    } = {},
+  ) {}
 
   async invoke<Name extends CapabilityName>(
     name: Name,
@@ -205,6 +217,15 @@ export class CapabilityRegistry {
           commandId: command.id,
           status: command.status,
         };
+        break;
+      }
+      case 'button.press': {
+        const input = PressButtonInput.parse(rawInput);
+        const adapter = this.adapters.buttonAdapter;
+        if (!adapter?.hasTarget(input.target))
+          throw new CapabilityInputError('target_not_configured');
+        await adapter.press(input.target);
+        output = { accepted: true };
         break;
       }
       case 'room.getState':

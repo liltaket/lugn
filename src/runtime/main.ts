@@ -1,4 +1,5 @@
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
+import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
 import { pathToFileURL } from 'node:url';
 import { HomeAssistantLightingAdapter } from '../adapters/home-assistant-lighting.js';
 import { HomeAssistantSwitchAdapter } from '../adapters/home-assistant-switch.js';
@@ -39,6 +40,17 @@ export async function startRuntime(configPath?: string): Promise<LugnRuntime> {
     homeAssistantFetch,
     systemClock,
   );
+  const homeAssistantButton =
+    Object.keys(config.homeAssistant.buttons).length > 0
+      ? new HomeAssistantButtonAdapter(
+          {
+            baseUrl: config.homeAssistant.baseUrl,
+            token: config.homeAssistant.token,
+            entities: config.homeAssistant.buttons,
+          },
+          homeAssistantFetch,
+        )
+      : undefined;
   const homeAssistantSwitch =
     Object.keys(config.homeAssistant.switches).length > 0
       ? new HomeAssistantSwitchAdapter(
@@ -87,7 +99,11 @@ export async function startRuntime(configPath?: string): Promise<LugnRuntime> {
         }),
     ...(config.scenes === undefined ? {} : { scenes: config.scenes }),
   });
-  const capabilities = new CapabilityRegistry(engine);
+  const capabilities = new CapabilityRegistry(engine, {
+    ...(homeAssistantButton === undefined
+      ? {}
+      : { buttonAdapter: homeAssistantButton }),
+  });
   const homeAssistantSocket = new HomeAssistantWebSocketTransport(
     {
       baseUrl: config.homeAssistant.baseUrl,

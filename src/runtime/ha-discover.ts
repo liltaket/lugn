@@ -3,9 +3,10 @@ import { fileURLToPath } from 'node:url';
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const ENTITY_ID_SHAPE = /^[a-z0-9_]+\.[a-z0-9_]+$/;
-const CANDIDATE_ENTITY_ID = /^(light|switch|media_player)\.[a-z0-9_]+$/;
+const CANDIDATE_ENTITY_ID = /^(button|light|switch|media_player)\.[a-z0-9_]+$/;
 
 export type HomeAssistantCandidates = {
+  button: string[];
   light: string[];
   switch: string[];
   media_player: Array<{ entity_id: string; source_list: string[] }>;
@@ -72,6 +73,7 @@ export function parseCandidates(payload: unknown): HomeAssistantCandidates {
   }
 
   const candidates: HomeAssistantCandidates = {
+    button: [],
     light: [],
     switch: [],
     media_player: [],
@@ -102,6 +104,7 @@ export function parseCandidates(payload: unknown): HomeAssistantCandidates {
 
     const domain = entityId.slice(0, entityId.indexOf('.'));
     if (
+      domain !== 'button' &&
       domain !== 'light' &&
       domain !== 'switch' &&
       domain !== 'media_player'
@@ -132,9 +135,15 @@ export function parseCandidates(payload: unknown): HomeAssistantCandidates {
       continue;
     }
 
+    if (domain === 'button') {
+      candidates.button.push(entityId);
+      continue;
+    }
+
     candidates[domain].push(entityId);
   }
 
+  candidates.button.sort();
   candidates.light.sort();
   candidates.switch.sort();
   candidates.media_player.sort((left, right) =>
@@ -205,7 +214,7 @@ const HELP_TEXT = [
   'Reads Home Assistant entity IDs using GET /api/states.',
   'HOME_ASSISTANT_URL and HOME_ASSISTANT_TOKEN provide the URL and token.',
   'The URL may be overridden with --url. Keep the token in the environment.',
-  'Output includes candidate light, switch, and media_player IDs; media players include source_list.',
+  'Output includes candidate button, light, switch, and media_player IDs; media players include source_list.',
 ].join('\n');
 
 export function isDirectExecution(

@@ -24,6 +24,7 @@ const sensorSnapshot = JSON.stringify({
 });
 
 const stateList = [
+  { entity_id: 'button.pc_lock', state: 'unknown', attributes: {} },
   { entity_id: 'light.desk', state: 'on', attributes: {} },
   { entity_id: 'switch.desk', state: 'off', attributes: {} },
   {
@@ -40,6 +41,7 @@ function runtimeConfig(withMqtt = true): RuntimeConfig {
       baseUrl: 'http://private-host.test:8123',
       token: secret,
       entities: { 'lighting.desk': 'light.desk' },
+      buttons: { 'button.pc_lock': 'button.pc_lock' },
       switches: { 'switch.desk': 'switch.desk' },
       music: {
         'music.room': { entityId: 'media_player.room', sources: ['Spotify'] },
@@ -160,7 +162,7 @@ describe('read-only preflight', () => {
       `Bearer ${secret}`,
     );
     expect(output).toEqual([
-      'Home Assistant: authenticated; entities 2/3 present, 1 missing\n' +
+      'Home Assistant: authenticated; entities 2/4 present, 2 missing\n' +
         'MQTT: not configured\n' +
         'STL27L feed: not configured',
     ]);
@@ -197,8 +199,8 @@ describe('read-only preflight', () => {
     expect(report).toEqual({
       homeAssistant: {
         status: 'authenticated',
-        configuredEntities: 3,
-        presentEntities: 3,
+        configuredEntities: 4,
+        presentEntities: 4,
         missingEntities: 0,
       },
       mqtt: { broker: 'connected', sensor: 'fresh' },
@@ -246,7 +248,7 @@ describe('read-only preflight', () => {
     });
     expect(unauthorized.homeAssistant).toEqual({
       status: 'authentication_failed',
-      configuredEntities: 3,
+      configuredEntities: 4,
     });
 
     const transportFailure = await runRuntimePreflight(runtimeConfig(false), {
@@ -256,7 +258,7 @@ describe('read-only preflight', () => {
     });
     expect(transportFailure.homeAssistant).toEqual({
       status: 'unavailable',
-      configuredEntities: 3,
+      configuredEntities: 4,
     });
   });
 

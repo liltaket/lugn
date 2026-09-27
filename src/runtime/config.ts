@@ -1,4 +1,5 @@
 import { HomeAssistantMusicMappingsSchema } from '../adapters/home-assistant-music.js';
+import { HomeAssistantButtonMappingsSchema } from '../adapters/home-assistant-button.js';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { defaultScenes } from '../application/lugn-engine.js';
@@ -44,6 +45,7 @@ const HomeAssistantConfigSchema = z
       SemanticLightingIdSchema,
       z.string().regex(/^light\.[a-z0-9_]+$/),
     ),
+    buttons: HomeAssistantButtonMappingsSchema.default({}),
     music: HomeAssistantMusicMappingsSchema.default({}),
     switches: z
       .record(SemanticSwitchIdSchema, z.string().regex(/^switch\.[a-z0-9_]+$/))
@@ -159,6 +161,7 @@ export type RuntimeConfig = {
     baseUrl: string;
     token: string;
     entities: Record<string, string>;
+    buttons: Record<string, string>;
     switches: Record<string, string>;
     music: Record<string, { entityId: string; sources: string[] }>;
   };
@@ -251,6 +254,7 @@ export function loadRuntimeConfig(
       baseUrl: fileConfig.homeAssistant.baseUrl.replace(/\/+$/, ''),
       token: homeAssistantToken,
       entities: fileConfig.homeAssistant.entities,
+      buttons: fileConfig.homeAssistant.buttons,
       switches: fileConfig.homeAssistant.switches,
       music: fileConfig.homeAssistant.music,
     },

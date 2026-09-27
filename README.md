@@ -12,7 +12,7 @@ The long-term goal is a room that can increasingly understand context and infer 
 
 **Connectable local runtime.**
 
-The repository contains a deterministic room engine and a configurable Node.js runtime with a local HTTP capability API. It connects to Home Assistant lights, switches and media players, and consumes normalized STL27L occupancy and preview events over MQTT. See [Running Lugn](docs/OPERATIONS.md) for configuration and startup. Live devices have not been verified; state persistence and a web UI are still pending.
+The repository contains a deterministic room engine and a configurable Node.js runtime with a local HTTP capability API. It connects to Home Assistant lights, switches, media players, and explicitly mapped button entities, and consumes normalized STL27L occupancy and preview events over MQTT. See [Running Lugn](docs/OPERATIONS.md) for configuration and startup. Live devices have not been verified; state persistence and a web UI are still pending.
 
 No runtime AI is planned for the first version.
 

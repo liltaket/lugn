@@ -11,6 +11,7 @@
       "lighting.ceiling": "light.living_room_ceiling",
       "lighting.desk": "light.living_room_desk"
     },
+    "buttons": {},
     "switches": {},
     "music": {}
   },

@@ -21,6 +21,7 @@ describe('runtime configuration cross references', () => {
     scenes: [],
   };
   it('defaults absent music mappings to empty and resolves configured music sources', () => {
+    expect(loadConfig(minimal).homeAssistant.buttons).toEqual({});
     expect(loadConfig(minimal).homeAssistant.music).toEqual({});
     expect(
       loadConfig({
@@ -38,6 +39,30 @@ describe('runtime configuration cross references', () => {
     ).toEqual({
       'music.room': { entityId: 'media_player.room', sources: ['Optical'] },
     });
+  });
+  it('resolves distinct configured semantic buttons', () => {
+    expect(
+      loadConfig({
+        ...minimal,
+        homeAssistant: {
+          ...minimal.homeAssistant,
+          buttons: { 'button.pc_lock': 'button.pc_lock' },
+        },
+      }).homeAssistant.buttons,
+    ).toEqual({ 'button.pc_lock': 'button.pc_lock' });
+
+    for (const buttons of [
+      { 'button.a': 'button.same', 'button.b': 'button.same' },
+      { 'button.a': 'switch.same' },
+      { 'switch.a': 'button.same' },
+    ]) {
+      expect(() =>
+        loadConfig({
+          ...minimal,
+          homeAssistant: { ...minimal.homeAssistant, buttons },
+        }),
+      ).toThrow('Invalid configuration');
+    }
   });
   it('rejects duplicate media mappings and duplicate or empty sources', () => {
     for (const music of [

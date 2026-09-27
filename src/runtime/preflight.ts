@@ -77,6 +77,7 @@ async function checkHomeAssistant(
   fetcher: typeof fetch,
 ): Promise<HomeAssistantPreflight> {
   const configuredEntityIds = [
+    ...Object.values(config.homeAssistant.buttons),
     ...Object.values(config.homeAssistant.entities),
     ...Object.values(config.homeAssistant.switches),
     ...Object.values(config.homeAssistant.music).map(
@@ -92,6 +93,7 @@ async function checkHomeAssistant(
       fetcher,
     );
     const availableEntityIds = new Set([
+      ...candidates.button,
       ...candidates.light,
       ...candidates.switch,
       ...candidates.media_player.map((candidate) => candidate.entity_id),

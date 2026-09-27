@@ -114,6 +114,22 @@ A simultaneous external change to the same value can satisfy that match. A
 confirmation proves Home Assistant reported the state; it does not prove a
 physical device or attached load changed beyond Home Assistant's observation.
 
+### Implemented button capability
+
+`button.press({ target: "button.pc_lock" })` invokes one explicitly configured
+semantic target. `homeAssistant.buttons` maps that semantic ID to a distinct
+Home Assistant `button.*` entity. Unmapped targets and extra arguments are
+rejected. The capability always invokes the fixed Home Assistant
+`button.press` service; callers cannot provide an entity ID or select arbitrary
+Home Assistant services.
+
+The result is `{ accepted: true }` only after Home Assistant accepts the
+service request. Button entities provide no completion feedback through this
+capability, so acceptance does not establish that the physical device completed
+the action. Button presses currently bypass the engine command ledger and do
+not receive a command ID or retained per-command status. See [Running Lugn](OPERATIONS.md#home-assistant-buttons)
+for configuration, discovery, preflight, and an HTTP example.
+
 Every tool should have:
 
 - stable name

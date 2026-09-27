@@ -52,6 +52,10 @@ export const SemanticSwitchIdSchema = z
   .string()
   .regex(/^switch\.[a-z0-9][a-z0-9._-]*$/);
 
+export const SemanticButtonIdSchema = z
+  .string()
+  .regex(/^button\.[a-z0-9][a-z0-9._-]*$/);
+
 export const SwitchCommandStatusSchema = z.enum([
   'pending',
   'confirmed',

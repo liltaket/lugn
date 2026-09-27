@@ -35,6 +35,24 @@ confirmation is missing. Switches are controlled through explicit typed
 capabilities; presence and lighting scenes do not change them. See
 [TOOLS.md](TOOLS.md) for confirmation and provenance semantics.
 
+### Configured buttons
+
+`homeAssistant.buttons` is an explicit semantic allowlist from Lugn IDs such as
+`button.pc_lock` to Home Assistant `button.*` entities. The runtime exposes
+only `button.press({ target })` for these mappings and dispatches the fixed
+Home Assistant `button.press` service with the configured entity ID. Entity IDs
+and service names are not accepted as capability inputs, and there is no
+arbitrary Home Assistant service-call capability. Empty mappings leave this
+capability without any invokable target.
+
+The read-only discovery command lists button entity IDs, while commissioning
+preflight checks that configured button entities are present. Neither operation
+presses a button. A successful capability result means Home Assistant accepted
+the request; this adapter has no button completion feedback and cannot confirm
+that a device carried it out. This uses entities already exposed through Home
+Assistant; it is not a separate native Windows or HASS.Agent adapter. See
+[Running Lugn](OPERATIONS.md#home-assistant-buttons) for setup and use.
+
 ## STL27L / presence sensor
 
 Expected normalized outputs may include:

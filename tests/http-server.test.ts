@@ -1,5 +1,6 @@
 import { createServer, type AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
+import { HomeAssistantButtonAdapter } from '../src/adapters/home-assistant-button.js';
 import { SimulatedLightingAdapter } from '../src/adapters/simulated-lighting.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
@@ -105,6 +106,105 @@ describe('local capability HTTP API', () => {
     expect(await unconfiguredTarget.json()).toEqual({
       error: 'target_not_configured',
     });
+  });
+
+  it('routes button.press only through the configured Home Assistant mapping', async () => {
+    const port = await findAvailablePort();
+    const clock = new FakeClock();
+    const lightingAdapter = new SimulatedLightingAdapter(clock);
+    engine = new LugnEngine(clock, {
+      deviceIds: ['lighting.ceiling'],
+      scenes: [],
+      adapter: lightingAdapter,
+    });
+
+    const buttonRequests: Array<{ url: string; init?: RequestInit }> = [];
+    const buttonAdapter = new HomeAssistantButtonAdapter(
+      {
+        baseUrl: 'http://home-assistant.test:8123',
+        token: 'ha-test-token',
+        entities: { 'button.office_pc_lock': 'button.pc_lock' },
+      },
+      async (input, init) => {
+        buttonRequests.push({
+          url: String(input),
+          ...(init === undefined ? {} : { init }),
+        });
+        return new Response(null, { status: 200 });
+      },
+    );
+
+    server = new LugnHttpServer({
+      host: '127.0.0.1',
+      port,
+      bearerToken: 'local-test-token',
+      engine,
+      capabilities: new CapabilityRegistry(engine, { buttonAdapter }),
+      integrations: () => ({ home_assistant: 'connected' }),
+    });
+    await server.start();
+
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const headers = {
+      Authorization: 'Bearer local-test-token',
+      'Content-Type': 'application/json',
+    };
+    const mapped = await fetch(`${baseUrl}/capabilities/button.press`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: { target: 'button.office_pc_lock' },
+        requestId: 'button-http-test-1',
+      }),
+    });
+
+    expect(mapped.status).toBe(200);
+    expect(await mapped.json()).toEqual({ accepted: true });
+    expect(buttonRequests).toHaveLength(1);
+    expect(buttonRequests[0]?.url).toBe(
+      'http://home-assistant.test:8123/api/services/button/press',
+    );
+    expect(buttonRequests[0]?.init?.method).toBe('POST');
+    expect(buttonRequests[0]?.init?.headers).toMatchObject({
+      Authorization: 'Bearer ha-test-token',
+    });
+    expect(buttonRequests[0]?.init?.body).toBe(
+      JSON.stringify({ entity_id: 'button.pc_lock' }),
+    );
+
+    const unmapped = await fetch(`${baseUrl}/capabilities/button.press`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ input: { target: 'button.unmapped' } }),
+    });
+    expect(unmapped.status).toBe(400);
+    expect(await unmapped.json()).toEqual({ error: 'target_not_configured' });
+
+    const malformed = await fetch(`${baseUrl}/capabilities/button.press`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ input: { target: 'light.office_pc_lock' } }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({
+      error: 'invalid_capability_input',
+    });
+
+    const extraInput = await fetch(`${baseUrl}/capabilities/button.press`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: {
+          target: 'button.office_pc_lock',
+          service: 'homeassistant.turn_off',
+        },
+      }),
+    });
+    expect(extraInput.status).toBe(400);
+    expect(await extraInput.json()).toMatchObject({
+      error: 'invalid_capability_input',
+    });
+    expect(buttonRequests).toHaveLength(1);
   });
 });
 

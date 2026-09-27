@@ -37,6 +37,7 @@ describe('Home Assistant discovery', () => {
 
   it('returns sorted candidate IDs and only media source lists', () => {
     const candidates = parseCandidates([
+      { entity_id: 'button.pc_lock', state: 'unknown', attributes: {} },
       {
         entity_id: 'light.zed',
         state: 'on',
@@ -57,6 +58,7 @@ describe('Home Assistant discovery', () => {
     ]);
 
     expect(candidates).toEqual({
+      button: ['button.pc_lock'],
       light: ['light.arbeitszimmer', 'light.zed'],
       switch: ['switch.desk'],
       media_player: [
@@ -82,6 +84,7 @@ describe('Home Assistant discovery', () => {
     await expect(
       discoverHomeAssistant('http://ha.test:8123/ha/', token, fetcher),
     ).resolves.toEqual({
+      button: [],
       light: ['light.desk'],
       switch: [],
       media_player: [],

@@ -9,15 +9,19 @@ the sensor's serial port or implement another LiDAR tracker.
 
 - Node.js 22 or newer.
 - A Home Assistant URL and long-lived access token.
+- Optional semantic buttons mapped to Home Assistant `button.*` entities.
 - Optional semantic switches mapped to Home Assistant `switch.*` entities.
 - Optional semantic music targets mapped to Home Assistant `media_player.*` entities.
 - An MQTT broker reachable from the host running Lugn when using STL27L events.
 - Semantic light IDs mapped to Home Assistant `light.*` entities.
 
-Copy `config.example.json` to `config.json` and edit its URLs, topic, light
-entity IDs, scenes, and prelight values for your installation. The JSON file
-contains environment variable names for secrets, never secret values. Keep the
-installation's `config.json` out of source control.
+Copy `config.example.json` to `config.json` and edit its URLs, topic, light,
+button, switch and media entity IDs, scenes, and prelight values for your
+installation. Keep `homeAssistant.buttons` empty if no button actions are
+needed. Otherwise, map each semantic button ID to one `button.*` entity you
+deliberately want Lugn to invoke; see [Home Assistant buttons](#home-assistant-buttons).
+The JSON file contains environment variable names for secrets, never secret
+values. Keep the installation's `config.json` out of source control.
 
 Provide the referenced environment variables in the service manager or shell.
 For example, use your secret manager or a protected service environment to set
@@ -57,10 +61,11 @@ Startup and operational logs omit tokens and raw broker/HA errors.
 
 ## Discover Home Assistant mappings
 
-Use the read-only discovery command to find current `light.*`, `switch.*`, and
-`media_player.*` IDs before editing the mappings. The media-player list includes
-`source_list`; current states and media titles are not printed. It makes one
-Home Assistant `GET /api/states` request and does not call device services:
+Use the read-only discovery command to find current `button.*`, `light.*`,
+`switch.*`, and `media_player.*` IDs before editing the mappings. The
+media-player list includes `source_list`; current states and media titles are
+not printed. It makes one Home Assistant `GET /api/states` request and does not
+call device services:
 
 ```sh
 npm run build
@@ -87,8 +92,8 @@ node --env-file=/secure/path/lugn.env dist/runtime/preflight.js \
 
 `npm run preflight -- [config-path]` builds and runs the same command. It makes
 one authenticated Home Assistant `GET /api/states` request and checks that all
-configured light, switch, and media-player entities are present. If MQTT is
-configured, it connects to the broker and uses the runtime STL27L presence
+configured button, light, switch, and media-player entities are present. If
+MQTT is configured, it connects to the broker and uses the runtime STL27L presence
 adapter to verify an online sensor with a fresh, live, non-retained snapshot of
 `CERTAIN` quality. It subscribes read-only to the configured snapshot,
 availability, and preview topics; it never publishes MQTT messages or invokes
@@ -171,6 +176,37 @@ registered typed operations. `POST /capabilities/<name>` validates its `input`
 with the same schema used by the in-process capability registry. Invalid
 requests return `400`; unknown operations return `404`. There is no arbitrary
 Home Assistant service-call endpoint.
+
+### Home Assistant buttons
+
+Button actions are opt-in. Add a semantic ID and its exact Home Assistant
+`button.*` entity under `homeAssistant.buttons`; the example configuration
+leaves this mapping empty by default:
+
+```json
+"buttons": {
+  "button.pc_lock": "button.desktop_lock"
+}
+```
+
+The read-only discovery command lists available button entity IDs, and
+commissioning preflight checks that every configured button entity exists. To
+invoke a mapped target, call the fixed `button.press` capability:
+
+```sh
+curl -sS -X POST \
+  -H "Authorization: Bearer $LUGN_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":{"target":"button.pc_lock"}}' \
+  http://127.0.0.1:8787/capabilities/button.press
+```
+
+The input accepts only the semantic target. The adapter sends Home Assistant's
+fixed `button.press` service for the entity in the configured allowlist; callers
+cannot supply an entity ID or choose an arbitrary service. A response of
+`{"accepted":true}` means Home Assistant accepted the request. Button entities
+have no completion feedback here, so this does not prove that a device finished
+the action or changed physical state. Map only deliberate button actions.
 
 Optional switch entities are configured under `homeAssistant.switches`, keyed
 by Lugn IDs such as `switch.desk_power`. Only configured switches are

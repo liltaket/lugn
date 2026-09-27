@@ -33,6 +33,14 @@ Likely configuration areas include:
 - convergence/retry policies
 - diagnostics settings
 
+The current runtime's `homeAssistant.buttons` map is opt-in and defaults to
+empty. It maps each semantic button ID to one Home Assistant `button.*` entity;
+the same entity cannot be assigned to multiple semantic IDs. The runtime
+exposes only the typed `button.press` action for mapped targets. Discovery is
+read-only, and preflight checks configured mappings without invoking them. See
+[Running Lugn](OPERATIONS.md#home-assistant-buttons) for the config shape and
+commissioning commands.
+
 ## UI and structured representation
 
 The UI and configuration files/API should represent the same underlying schema.
