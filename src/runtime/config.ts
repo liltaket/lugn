@@ -151,6 +151,17 @@ const FileConfigSchema = z
     }
   });
 
+/** Validates an in-memory configuration with the same strict schema as the runtime. */
+export function validateRuntimeFileConfig(value: unknown): void {
+  const parsed = FileConfigSchema.safeParse(value);
+  if (!parsed.success) {
+    const problems = parsed.error.issues
+      .map((issue) => `${issue.path.join('.') || 'config'}: ${issue.message}`)
+      .join('; ');
+    throw new RuntimeConfigError(`Invalid configuration: ${problems}`);
+  }
+}
+
 export type RuntimeConfig = {
   http: {
     host: string;
@@ -274,7 +285,18 @@ function requireEnvironmentValue(
       `Required environment variable is missing: ${name}`,
     );
   }
-  return value;
+  if (!name.endsWith('_B64')) return value;
+
+  const decoded = Buffer.from(value, 'base64url').toString('utf8');
+  if (
+    decoded.includes('\u0000') ||
+    Buffer.from(decoded, 'utf8').toString('base64url') !== value
+  ) {
+    throw new RuntimeConfigError(
+      `Required environment variable has invalid base64url encoding: ${name}`,
+    );
+  }
+  return decoded;
 }
 
 function isLoopbackBindHost(host: string): boolean {

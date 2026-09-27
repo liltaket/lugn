@@ -31,6 +31,44 @@ anonymous access, remove both MQTT credential references from the config.
 For a local checkout, a repo-root `lugn.env` is git-ignored; keep it mode
 `0600` and never commit it.
 
+## Interactive first-run setup
+
+Run the commissioning wizard in a local terminal or interactive SSH session:
+
+```sh
+npm run onboard
+```
+
+It uses `$HOME/.config/lugn/config.json` when that installed config already
+exists. Otherwise it writes `config.json` and `lugn.env` in the current
+repository. Pass both output paths explicitly when needed:
+
+```sh
+npm run onboard -- /path/to/config.json /path/to/lugn.env
+```
+
+The wizard asks for the Home Assistant URL and a long-lived token, then makes
+one read-only `GET /api/states` request and offers currently discovered light
+IDs with Home Assistant friendly names when available. Display labels have
+terminal control characters removed; the stable entity ID remains visible for
+each choice. It also asks for the MQTT broker URL and STL27L base
+topic, optional broker credentials, and optional brief entry-light targets
+with a conservative brightness default. Color temperature is only applied if
+you keep the default or enter a value; choose `skip` for lights that do not
+support it. The wizard creates a separate random token for Lugn's loopback
+HTTP API.
+
+Secrets are entered without terminal echo. The wizard stores their base64url
+encoding in environment variables ending in `_B64`, so Node and systemd read
+the same one-line values even when a broker password contains punctuation.
+This is encoding, not encryption; the config and secret files are written with
+mode `0600`. The runtime decodes only environment references whose names end
+in `_B64`, while existing plain environment variable names continue to work.
+The wizard refuses symbolic-link targets and asks before replacing existing
+files. It does not call Home Assistant services, publish MQTT, enable systemd,
+or start Lugn. After setup, run the read-only preflight command printed by the
+wizard and review the generated mapping before enabling the service.
+
 The HTTP listener defaults to `127.0.0.1:8787` and only accepts loopback bind
 addresses. Lugn's listener is plain HTTP. For remote access, keep the Lugn
 listener on loopback and use a TLS-terminating reverse proxy on a trusted

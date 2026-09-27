@@ -120,12 +120,51 @@ describe('runtime configuration cross references', () => {
       }),
     ).toThrow(/Scene target lighting\.desk.*Prelight target lighting\.desk/);
   });
+
+  it('decodes canonical base64url secret references and rejects malformed values without echoing them', () => {
+    const secret = `a token with 'quotes" and backtick\n?`;
+    const base64Config = {
+      ...minimal,
+      homeAssistant: { ...minimal.homeAssistant, tokenEnv: 'HA_TOKEN_B64' },
+    };
+    const validEnvironment = {
+      HA_TOKEN_B64: Buffer.from(secret, 'utf8').toString('base64url'),
+    };
+    expect(loadConfig(base64Config, validEnvironment).homeAssistant.token).toBe(
+      secret,
+    );
+
+    const missingError = captureConfigError(() => loadConfig(base64Config, {}));
+    expect(missingError.message).toContain('HA_TOKEN_B64');
+    expect(missingError.message).not.toContain(secret);
+
+    for (const malformed of ['%%%invalid', 'abc=', 'not-base64!']) {
+      const error = captureConfigError(() =>
+        loadConfig(base64Config, { HA_TOKEN_B64: malformed }),
+      );
+      expect(error.message).toContain('invalid base64url encoding');
+      expect(error.message).not.toContain(malformed);
+    }
+  });
 });
 
-function loadConfig(config: unknown): ReturnType<typeof loadRuntimeConfig> {
+function loadConfig(
+  config: unknown,
+  environment: NodeJS.ProcessEnv = { HA_TOKEN: 'deterministic-test-token' },
+): ReturnType<typeof loadRuntimeConfig> {
   const directory = mkdtempSync(join(tmpdir(), 'lugn-runtime-config-'));
   temporaryDirectories.push(directory);
   const path = join(directory, 'config.json');
   writeFileSync(path, JSON.stringify(config), 'utf8');
-  return loadRuntimeConfig(path, { HA_TOKEN: 'deterministic-test-token' });
+  return loadRuntimeConfig(path, environment);
+}
+
+function captureConfigError(action: () => unknown): Error {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof Error) return error;
+    throw error;
+  }
+  throw new Error('expected config load to fail');
 }

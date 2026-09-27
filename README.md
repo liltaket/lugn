@@ -28,6 +28,8 @@ npm run build
 
 The core is also available as a library at `src/index.ts`; deterministic tests use simulated adapters and a fake clock. Copy and configure `config.example.json`, provide the named secret environment variables, then run `npm start` to launch the local service.
 
+For interactive first-time setup, run `npm run onboard`. The wizard discovers current Home Assistant lights, lets you assign semantic IDs, configures the STL27L MQTT feed and optional entry lighting, and stores credentials in a protected local env file. It does not send device commands or start Lugn. See [Running Lugn](docs/OPERATIONS.md#interactive-first-run-setup).
+
 Before starting Lugn, check the configuration without contacting Home Assistant, MQTT, or any device:
 
 ```sh
