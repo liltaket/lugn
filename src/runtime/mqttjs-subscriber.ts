@@ -17,6 +17,8 @@ export type MqttSubscriberConfig = {
   username?: string;
   password?: string;
   clientId?: string;
+  connectTimeoutMs?: number;
+  reconnectPeriodMs?: number;
 };
 
 export type MqttSubscriberStatus =
@@ -67,8 +69,8 @@ export class MqttJsSubscriber implements PresenceMqttSubscriber {
     try {
       const client = connect(this.config.url, {
         clean: true,
-        connectTimeout: 10_000,
-        reconnectPeriod: 1_000,
+        connectTimeout: this.config.connectTimeoutMs ?? 10_000,
+        reconnectPeriod: this.config.reconnectPeriodMs ?? 1_000,
         reconnectOnConnackError: true,
         resubscribe: false,
         ...(this.config.clientId === undefined

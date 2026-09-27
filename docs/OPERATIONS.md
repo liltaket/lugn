@@ -74,6 +74,33 @@ secret manager rather than a command-line argument. The example URL was
 verified on this host as a Home Assistant endpoint, but change it if Lugn runs
 on a different network or installation.
 
+## Read-only commissioning preflight
+
+Before starting Lugn, run the preflight with the same protected environment and
+configuration that the service will use:
+
+```sh
+node --env-file=./lugn.env dist/runtime/preflight.js
+node --env-file=/secure/path/lugn.env dist/runtime/preflight.js \
+  /secure/path/config.json
+```
+
+`npm run preflight -- [config-path]` builds and runs the same command. It makes
+one authenticated Home Assistant `GET /api/states` request and checks that all
+configured light, switch, and media-player entities are present. If MQTT is
+configured, it connects to the broker and uses the runtime STL27L presence
+adapter to verify an online sensor with a fresh, live, non-retained snapshot of
+`CERTAIN` quality. It subscribes read-only to the configured snapshot,
+availability, and preview topics; it never publishes MQTT messages or invokes
+Home Assistant services. MQTT is reported as not configured when absent.
+
+Output contains only categorical results and entity counts. It omits
+credentials, URLs, hostnames, entity IDs, media titles, sensor payloads, and
+raw external errors. MQTT checks are bounded; the connection is closed after a
+fresh result, a connection error, disconnection, or timeout. A fresh feed proves
+that the configured sensor contract is reaching Lugn at preflight time; it
+does not prove physical light response or ongoing service health.
+
 ## Keep Lugn running with systemd
 
 On Linux hosts with systemd, the repository includes a user-service installer.
