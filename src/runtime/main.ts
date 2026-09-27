@@ -13,7 +13,7 @@ import {
   type Stl27lPresenceMqttSubscriber,
 } from '../adapters/stl27l-mqtt-presence.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
-import { LugnEngine } from '../application/lugn-engine.js';
+import { defaultScenes, LugnEngine } from '../application/lugn-engine.js';
 import { systemClock } from '../core/clock.js';
 import { LugnHttpServer } from './http-server.js';
 import {
@@ -22,6 +22,7 @@ import {
   type MqttSubscriberStatus,
 } from './mqttjs-subscriber.js';
 import { loadRuntimeConfig, RuntimeConfigError } from './config.js';
+import { LightingIntentStore } from './lighting-intent-store.js';
 
 export type LugnRuntime = {
   engine: LugnEngine;
@@ -43,6 +44,8 @@ export type LugnRuntimeDependencies = {
     onError: () => void,
   ) => RuntimeMqttSubscriber;
   createHomeAssistantSocket?: HomeAssistantSocketFactory;
+  /** Test seam for keeping runtime integration state inside a temporary directory. */
+  lightingIntentPath?: string;
 };
 
 /** Starts the local Lugn host and its configured Home Assistant/MQTT links. */
@@ -59,6 +62,14 @@ export async function startRuntime(
       ...init,
       signal: init?.signal ?? AbortSignal.timeout(10_000),
     });
+  const lightingIntentPath =
+    dependencies.lightingIntentPath ?? config.statePath;
+  const configuredScenes = config.scenes ?? defaultScenes;
+  const restoredLightingIntent = await LightingIntentStore.load(
+    lightingIntentPath,
+    Object.keys(config.homeAssistant.entities),
+    configuredScenes,
+  );
   const homeAssistantLighting = new HomeAssistantLightingAdapter(
     {
       baseUrl: config.homeAssistant.baseUrl,
@@ -129,7 +140,12 @@ export async function startRuntime(
           switchAdapter: homeAssistantSwitch,
         }),
     ...(config.scenes === undefined ? {} : { scenes: config.scenes }),
+    ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
   });
+  const lightingIntentStore = new LightingIntentStore(
+    lightingIntentPath,
+    engine,
+  );
   const capabilities = new CapabilityRegistry(engine, {
     ...(homeAssistantButton === undefined
       ? {}
@@ -219,6 +235,7 @@ export async function startRuntime(
     sensorAdapter?.stop();
     unsubscribeMqttStatus?.();
     homeAssistantSocket.stop();
+    await lightingIntentStore.stop().catch(() => undefined);
     engine.dispose();
     await mqttSubscriber?.stop();
     throw error;
@@ -234,8 +251,15 @@ export async function startRuntime(
       sensorAdapter?.stop();
       unsubscribeMqttStatus?.();
       homeAssistantSocket.stop();
-      engine.dispose();
-      await mqttSubscriber?.stop();
+      try {
+        await mqttSubscriber?.stop();
+      } finally {
+        try {
+          await lightingIntentStore.stop();
+        } finally {
+          engine.dispose();
+        }
+      }
     },
   };
 }

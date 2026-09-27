@@ -37,6 +37,7 @@ const stateList = [
 function runtimeConfig(withMqtt = true, clientId?: string): RuntimeConfig {
   return {
     http: { host: '127.0.0.1', port: 8787 },
+    statePath: '/tmp/lugn-state/lighting-intent.json',
     homeAssistant: {
       baseUrl: 'http://private-host.test:8123',
       token: secret,

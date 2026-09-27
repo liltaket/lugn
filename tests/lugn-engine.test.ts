@@ -20,6 +20,49 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('Lugn deterministic lighting slice', () => {
+  it('does not dispatch corrective off for stale feedback while restored intent awaits occupancy', () => {
+    const scene = {
+      id: 'scene.everyday',
+      name: 'Everyday',
+      lighting: { 'lighting.ceiling': { power: true as const } },
+    };
+    const { clock, adapter, engine } = setup({
+      deviceIds: ['lighting.ceiling'],
+      scenes: [scene],
+      restoredLightingIntent: {
+        currentScene: scene.id,
+        sceneRevision: 1,
+        continuityExpiresAt: null,
+        devices: {
+          'lighting.ceiling': {
+            baselineDesired: { power: true },
+            effectiveDesired: { power: true },
+            ownership: { power: { kind: 'scene', revision: 1 } },
+          },
+        },
+      },
+    });
+
+    const internals = engine as unknown as {
+      handleObservation(observation: {
+        target: string;
+        values: { power: boolean };
+        commandId: string;
+        observedAt: number;
+      }): void;
+    };
+    internals.handleObservation({
+      target: 'lighting.ceiling',
+      values: { power: true },
+      commandId: 'stale-command-from-before-restart',
+      observedAt: clock.now(),
+    });
+
+    expect(engine.state.presence.state).toBe('unknown');
+    expect(adapter.dispatched).toEqual([]);
+    engine.dispose();
+  });
+
   it('selects a configured default scene at startup but applies it only after confirmed occupancy', async () => {
     const scene = {
       id: 'scene.everyday',

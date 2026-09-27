@@ -48,6 +48,16 @@ alone do not turn lights on. A confirmed empty event continues to apply the
 normal physical-off policy; a live preview may also apply configured prelight.
 The onboarding wizard sets its generated `scene.everyday` as the default.
 
+The runtime stores versioned lighting intent in
+`$HOME/.local/state/lugn/lighting-intent.json` by default. `statePath` in
+`config.json` or `LUGN_STATE_PATH` in `lugn.env` may select another direct-child
+file under `$HOME/.local/state/lugn/`. The file contains the selected scene, logical
+baseline/effective values, property ownership, and the absolute continuity
+expiry. It never contains sensor presence, observed device values, pending
+commands, or command history. Writes are atomic and restricted to mode `0600`.
+The systemd installer grants the service write access only to that state
+directory.
+
 ## UI and structured representation
 
 The UI and configuration files/API should represent the same underlying schema.
@@ -82,10 +92,15 @@ Do not blindly resume stale pending commands from before a crash/restart.
 
 On startup:
 
-1. restore durable logical state;
-2. invalidate or carefully classify old pending physical commands;
-3. obtain fresh observations;
-4. reconcile desired state with reality.
+1. restore durable logical lighting intent and its absolute continuity expiry;
+2. start with unknown presence and no prior observations or command ledger;
+3. obtain fresh Home Assistant observations without issuing commands;
+4. reconcile restored intent on the next confirmed occupancy, unless its
+   continuity expiry has elapsed.
+
+A confirmed-empty sensor heartbeat immediately after restart still switches
+lights off but does not extend a restored continuity deadline. Corrupt,
+unsupported, or device/scene-mismatched state is ignored safely.
 
 ## History and diagnostics
 

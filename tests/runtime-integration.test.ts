@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -183,6 +183,7 @@ describe('composed runtime integration', () => {
       homeAssistantFetch,
       createMqttSubscriber: () => mqtt,
       createHomeAssistantSocket: () => new InertHomeAssistantSocket(),
+      lightingIntentPath: join(directory, 'state', 'lighting-intent.json'),
     });
 
     let runtime: Awaited<ReturnType<typeof startRuntime>> | undefined;
@@ -289,6 +290,7 @@ describe('composed runtime integration', () => {
       homeAssistantFetch,
       createMqttSubscriber: () => mqtt,
       createHomeAssistantSocket: () => new InertHomeAssistantSocket(),
+      lightingIntentPath: join(directory, 'state', 'lighting-intent.json'),
     });
 
     try {
@@ -319,6 +321,94 @@ describe('composed runtime integration', () => {
         requests.find(({ url }) => url.includes('/api/services/'))?.url,
       ).toBe('http://home-assistant.invalid:8123/api/services/light/turn_on');
       expect(runtime.engine.state.presence.state).toBe('occupied');
+    } finally {
+      await runtime.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('hydrates logical intent before HA seeding and waits for confirmed occupancy', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'lugn-runtime-'));
+    const port = await findEphemeralLoopbackPort();
+    vi.stubEnv('LUGN_TEST_HA_TOKEN', 'test-ha-token');
+    const configPath = join(directory, 'runtime.json');
+    const statePath = join(directory, 'state', 'lighting-intent.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        http: { host: '127.0.0.1', port },
+        homeAssistant: {
+          baseUrl: 'http://home-assistant.invalid:8123',
+          tokenEnv: 'LUGN_TEST_HA_TOKEN',
+          entities: { 'lighting.entry': 'light.entry' },
+        },
+        scenes: [
+          {
+            id: 'scene.everyday',
+            name: 'Everyday',
+            lighting: { 'lighting.entry': { power: true } },
+          },
+        ],
+        defaultSceneId: 'scene.everyday',
+      }),
+      'utf8',
+    );
+    await mkdir(join(directory, 'state'), { recursive: true });
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        intent: {
+          currentScene: 'scene.everyday',
+          sceneRevision: 1,
+          continuityExpiresAt: null,
+          devices: {
+            'lighting.entry': {
+              baselineDesired: { power: true },
+              effectiveDesired: { power: true },
+              ownership: { power: { kind: 'scene', revision: 1 } },
+            },
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    const serviceCalls: string[] = [];
+    const runtime = await startRuntime(configPath, {
+      homeAssistantFetch: async (input) => {
+        const url = String(input);
+        if (url.endsWith('/api/states'))
+          return Response.json([
+            { entity_id: 'light.entry', state: 'off', attributes: {} },
+          ]);
+        serviceCalls.push(url);
+        return new Response(null, { status: 200 });
+      },
+      createHomeAssistantSocket: () => new InertHomeAssistantSocket(),
+      lightingIntentPath: statePath,
+    });
+
+    try {
+      expect(runtime.engine.state.lighting.currentScene).toBe('scene.everyday');
+      expect(runtime.engine.state.presence.state).toBe('unknown');
+      expect(runtime.engine.state.commands).toEqual([]);
+      expect(serviceCalls).toEqual([]);
+
+      await runtime.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'unknown',
+      });
+      expect(serviceCalls).toEqual([]);
+
+      await runtime.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+      });
+      expect(serviceCalls).toEqual([
+        'http://home-assistant.invalid:8123/api/services/light/turn_on',
+      ]);
+      expect(runtime.engine.state.commands).toHaveLength(1);
     } finally {
       await runtime.stop();
       await rm(directory, { recursive: true, force: true });
@@ -374,6 +464,7 @@ describe('composed runtime integration', () => {
       homeAssistantFetch,
       createMqttSubscriber: () => mqtt,
       createHomeAssistantSocket: () => new InertHomeAssistantSocket(),
+      lightingIntentPath: join(directory, 'state', 'lighting-intent.json'),
     });
 
     try {

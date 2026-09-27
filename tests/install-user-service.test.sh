@@ -10,6 +10,7 @@ home="$fixture_root/home %h with spaces"
 bin="$fixture_root/node \$bin %u with spaces"
 installer="$repo/deploy/install-user-service.sh"
 unit_file="$home/.config/systemd/user/lugn.service"
+state_root="$home/.local/state/lugn"
 
 mkdir -p "$repo/deploy" "$repo/dist/runtime" "$home" "$bin"
 cp "$repo_root/deploy/install-user-service.sh" "$installer"
@@ -52,6 +53,7 @@ environment="$home/.config/lugn/lugn.env"
 unit_has_line "WorkingDirectory=$(escape_spaces_and_specifiers "$repo_dir")"
 unit_has_line "EnvironmentFile=$(escape_spaces_and_specifiers "$environment")"
 unit_has_line "ExecStart=:$(escape_spaces_and_specifiers "$bin/node") $(escape_spaces_and_specifiers "$repo_dir/dist/runtime/main.js") $(escape_spaces_and_specifiers "$config")"
+unit_has_line "ReadWritePaths=$(escape_spaces_and_specifiers "$state_root")"
 
 if /usr/bin/grep -Eq '^(WorkingDirectory|EnvironmentFile|ExecStart)="/' "$unit_file"; then
   printf 'Path values must not be wrapped in quotes.\n' >&2

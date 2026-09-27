@@ -23,6 +23,7 @@ import {
   PrelightEventSchema,
   RoomStateSchema,
   SceneSchema,
+  LightingIntentSnapshotSchema,
   SemanticLightingIdSchema,
   SemanticSwitchIdSchema,
   ProvenanceSchema,
@@ -33,6 +34,7 @@ import {
   type Diagnostic,
   type FastPathTiming,
   type LightingScene,
+  type LightingIntentSnapshot,
   type LightingValues,
   type PresenceEvent,
   type PresenceInputEvent,
@@ -46,6 +48,7 @@ export type EngineOptions = {
   deviceIds?: string[];
   scenes?: LightingScene[];
   defaultSceneId?: string;
+  restoredLightingIntent?: LightingIntentSnapshot;
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
   continuityMs?: number;
@@ -143,6 +146,9 @@ export class LugnEngine {
   private prelightActive = false;
   private prelightTimer: TimerHandle | undefined;
   private prelightSnapshot = new Map<string, LightingValues>();
+  private restoredIntentAwaitingOccupancy = false;
+  private restoredContinuityPending = false;
+  private suppressInitialEmptyContinuity = false;
 
   constructor(
     private readonly clock: Clock,
@@ -182,6 +188,16 @@ export class LugnEngine {
       SceneSchema.parse(scene),
     );
     this.scenes = new Map(scenes.map((scene) => [scene.id, scene]));
+    const restoredIntent =
+      options.restoredLightingIntent === undefined
+        ? undefined
+        : LightingIntentSnapshotSchema.parse(options.restoredLightingIntent);
+    if (
+      restoredIntent &&
+      restoredIntent.currentScene !== null &&
+      !this.scenes.has(restoredIntent.currentScene)
+    )
+      throw new Error(`Unknown restored scene: ${restoredIntent.currentScene}`);
     if (options.defaultSceneId !== undefined) {
       this.defaultSceneOnOccupancy = this.scenes.get(options.defaultSceneId);
       if (!this.defaultSceneOnOccupancy)
@@ -206,6 +222,53 @@ export class LugnEngine {
         throw new Error(
           `Prelight target is not a configured device: ${target}`,
         );
+    if (
+      restoredIntent &&
+      Object.keys(restoredIntent.devices).sort().join('\0') !==
+        Object.keys(devices).sort().join('\0')
+    )
+      throw new Error('Restored lighting devices do not match engine devices');
+    const restoredContinuityExpired =
+      restoredIntent?.continuityExpiresAt !== null &&
+      restoredIntent?.continuityExpiresAt !== undefined &&
+      restoredIntent.continuityExpiresAt <= clock.now();
+    const hasRestoredIntent =
+      restoredIntent !== undefined &&
+      !restoredContinuityExpired &&
+      ((restoredIntent.sceneRevision > 0 &&
+        restoredIntent.currentScene !== null) ||
+        Object.values(restoredIntent.devices).some(
+          (device) =>
+            Object.keys(device.baselineDesired).length > 0 ||
+            Object.keys(device.effectiveDesired).length > 0 ||
+            Object.keys(device.ownership).length > 0,
+        ));
+    if (hasRestoredIntent) this.restoredIntentAwaitingOccupancy = true;
+    this.restoredContinuityPending =
+      restoredIntent !== undefined &&
+      !restoredContinuityExpired &&
+      restoredIntent.continuityExpiresAt !== null;
+    this.suppressInitialEmptyContinuity = restoredContinuityExpired;
+    if (restoredIntent && !restoredContinuityExpired) {
+      for (const [target, intent] of Object.entries(restoredIntent.devices)) {
+        const device = devices[target];
+        if (!device)
+          throw new Error(`Unknown restored lighting device: ${target}`);
+        if (
+          Object.values(intent.ownership).some(
+            (ownership) =>
+              ownership.kind === 'scene' &&
+              ownership.revision > restoredIntent.sceneRevision,
+          )
+        )
+          throw new Error('Restored ownership exceeds its scene revision');
+        if (hasRestoredIntent) {
+          device.baselineDesired = { ...intent.baselineDesired };
+          device.effectiveDesired = { ...intent.effectiveDesired };
+          device.ownership = structuredClone(intent.ownership);
+        }
+      }
+    }
     const switches: Record<string, DeviceSwitchState> = {};
     for (const id of options.switchDeviceIds ?? []) {
       const target = SemanticSwitchIdSchema.parse(id);
@@ -230,11 +293,21 @@ export class LugnEngine {
       presence: {
         state: 'unknown',
         personCount: null,
-        continuityExpiresAt: null,
+        continuityExpiresAt:
+          restoredContinuityExpired || restoredIntent === undefined
+            ? null
+            : restoredIntent.continuityExpiresAt,
       },
       lighting: {
-        currentScene: this.defaultSceneOnOccupancy?.id ?? null,
-        sceneRevision: 0,
+        currentScene: hasRestoredIntent
+          ? restoredIntent.currentScene
+          : (this.defaultSceneOnOccupancy?.id ?? null),
+        sceneRevision:
+          restoredIntent === undefined
+            ? 0
+            : restoredContinuityExpired
+              ? restoredIntent.sceneRevision + 1
+              : restoredIntent.sceneRevision,
         devices,
       },
       switches: { devices: switches, commands: [] },
@@ -251,6 +324,12 @@ export class LugnEngine {
         this.handleSwitchObservation(observation),
       ),
     );
+    if (
+      !restoredContinuityExpired &&
+      restoredIntent?.continuityExpiresAt !== null &&
+      restoredIntent?.continuityExpiresAt !== undefined
+    )
+      this.scheduleContinuityExpiry(restoredIntent.continuityExpiresAt);
     this.publish([
       'presence',
       'lighting',
@@ -264,6 +343,14 @@ export class LugnEngine {
 
   getMusicState(target: string): DeviceMusicState {
     return this.musicController.getState(target);
+  }
+
+  /** True while the configured default is waiting for the first confirmed entry. */
+  get defaultScenePending(): boolean {
+    return (
+      this.defaultSceneOnOccupancy !== undefined &&
+      !this.restoredIntentAwaitingOccupancy
+    );
   }
 
   requestMusic(
@@ -465,11 +552,14 @@ export class LugnEngine {
     );
     this.addDiagnostic(
       'device.available',
-      `${target} is available again; reconciling current desired state`,
+      this.restoredIntentAwaitingOccupancy
+        ? `${target} is available again; restored intent waits for confirmed occupancy`
+        : `${target} is available again; reconciling current desired state`,
       { target },
     );
     this.publish(['lighting', 'diagnostics']);
-    await this.reconcileScene(this.state.lighting.sceneRevision);
+    if (!this.restoredIntentAwaitingOccupancy)
+      await this.reconcileScene(this.state.lighting.sceneRevision);
   }
 
   async handlePresence(event: PresenceEvent): Promise<void> {
@@ -500,8 +590,18 @@ export class LugnEngine {
           normalizedEvent.localReceivedMonotonicAt,
         ),
       );
-      this.state.presence.continuityExpiresAt = receivedAt + this.continuityMs;
-      this.scheduleContinuityExpiry(this.state.presence.continuityExpiresAt);
+      const keepRestoredExpiry =
+        this.restoredContinuityPending &&
+        this.state.presence.continuityExpiresAt !== null;
+      if (this.suppressInitialEmptyContinuity) {
+        this.state.presence.continuityExpiresAt = null;
+        this.suppressInitialEmptyContinuity = false;
+      } else if (!keepRestoredExpiry) {
+        this.state.presence.continuityExpiresAt =
+          receivedAt + this.continuityMs;
+        this.scheduleContinuityExpiry(this.state.presence.continuityExpiresAt);
+      }
+      this.restoredContinuityPending = false;
       this.cancelRetryTimers();
       this.ledger.supersedePending('Room became confirmed empty');
       this.addDiagnostic(
@@ -544,6 +644,8 @@ export class LugnEngine {
       return;
     }
     if (normalizedEvent.presence === 'occupied') {
+      this.suppressInitialEmptyContinuity = false;
+      this.restoredContinuityPending = false;
       const expiry = this.state.presence.continuityExpiresAt;
       const withinContinuity = expiry !== null && receivedAt < expiry;
       this.cancelContinuityTimer();
@@ -551,13 +653,16 @@ export class LugnEngine {
       const returned = withinContinuity;
       this.state.presence.continuityExpiresAt = null;
       const defaultScene = this.defaultSceneOnOccupancy;
-      if (defaultScene) {
+      if (defaultScene && !this.restoredIntentAwaitingOccupancy) {
         this.defaultSceneOnOccupancy = undefined;
         this.beginScene(defaultScene, {
           actor: systemActor,
           source: 'presence',
           reason: 'Configured default scene activated on confirmed occupancy',
         });
+      } else if (this.restoredIntentAwaitingOccupancy) {
+        this.defaultSceneOnOccupancy = undefined;
+        this.restoredIntentAwaitingOccupancy = false;
       }
       this.addDiagnostic(
         returned ? 'presence.returned' : 'presence.occupied',
@@ -911,6 +1016,7 @@ export class LugnEngine {
 
   private beginScene(scene: LightingScene, intent: IntentProvenance): void {
     this.defaultSceneOnOccupancy = undefined;
+    this.restoredIntentAwaitingOccupancy = false;
     this.terminateAllFastPathEvents();
     const priorRevision = this.state.lighting.sceneRevision;
     this.clearRetryTimer(priorRevision);
@@ -1094,12 +1200,19 @@ export class LugnEngine {
         { commandId: observation.commandId },
       );
     this.publish(['lighting', 'commands', 'diagnostics', 'timings']);
-    if (this.state.presence.state !== 'confirmed_empty') {
+    if (
+      this.state.presence.state !== 'confirmed_empty' &&
+      !this.restoredIntentAwaitingOccupancy
+    ) {
       void this.reconcileScene(
         this.state.lighting.sceneRevision,
         fastPathEventId,
       );
-    } else if (isStaleCommand && observation.values.power === true) {
+    } else if (
+      this.state.presence.state === 'confirmed_empty' &&
+      isStaleCommand &&
+      observation.values.power === true
+    ) {
       void this.dispatch(
         observation.target,
         { power: false },
@@ -1118,7 +1231,11 @@ export class LugnEngine {
   }
 
   private expireContinuity(): void {
+    if (this.state.presence.state === 'unknown')
+      this.suppressInitialEmptyContinuity = true;
     this.cancelContinuityTimer();
+    this.restoredContinuityPending = false;
+    this.restoredIntentAwaitingOccupancy = false;
     this.state.lighting.currentScene = null;
     this.state.lighting.sceneRevision += 1;
     this.ledger.cancelRevision(

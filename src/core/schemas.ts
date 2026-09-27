@@ -218,6 +218,52 @@ export const DeviceLightingStateSchema = z.object({
 });
 export type DeviceLightingState = z.infer<typeof DeviceLightingStateSchema>;
 
+const PersistedLightingOwnershipSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('scene'),
+      revision: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('override'),
+      actor: ActorSchema.strict(),
+      source: z.string().optional(),
+      reason: z.string(),
+      createdAt: z.number().finite().nonnegative(),
+    })
+    .strict(),
+]);
+
+/** The durable subset of lighting state. Observations and commands are excluded. */
+export const LightingIntentSnapshotSchema = z
+  .object({
+    currentScene: z
+      .string()
+      .regex(/^scene\.[a-z0-9][a-z0-9._-]*$/)
+      .nullable(),
+    sceneRevision: z.number().int().nonnegative(),
+    continuityExpiresAt: z.number().finite().nonnegative().nullable(),
+    devices: z.record(
+      SemanticLightingIdSchema,
+      z
+        .object({
+          baselineDesired: LightingValuesSchema.strict(),
+          effectiveDesired: LightingValuesSchema.strict(),
+          ownership: z.partialRecord(
+            LightingPropertySchema,
+            PersistedLightingOwnershipSchema,
+          ),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type LightingIntentSnapshot = z.infer<
+  typeof LightingIntentSnapshotSchema
+>;
+
 export const CommandStatusSchema = z.enum([
   'pending',
   'confirmed',

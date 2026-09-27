@@ -81,6 +81,8 @@ The architecture should make those additions clean later.
 ### Persistence
 
 - logical state and config survive restart
+- restore lighting intent only after confirmed occupancy; never replay an old
+  sensor presence, observation, command ledger entry, or pending command
 - stale device commands are not blindly replayed
 
 ## Useful but non-blocking

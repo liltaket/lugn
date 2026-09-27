@@ -9,6 +9,7 @@ home_dir="${HOME:?HOME must be set}"
 }
 config_home="$home_dir/.config"
 config_root="$config_home/lugn"
+state_root="$home_dir/.local/state/lugn"
 systemd_root="$config_home/systemd"
 unit_dir="$systemd_root/user"
 config_file="$config_root/config.json"
@@ -28,10 +29,10 @@ node_path="$(command -v node)"
 [[ -f "$repo_dir/dist/runtime/main.js" ]] || fail 'Build Lugn first with npm ci && npm run build.'
 [[ -f "$repo_dir/config.example.json" ]] || fail 'config.example.json was not found in the repository.'
 
-for path in "$config_home" "$config_root" "$systemd_root" "$unit_dir"; do
+for path in "$config_home" "$config_root" "$home_dir/.local" "$home_dir/.local/state" "$state_root" "$systemd_root" "$unit_dir"; do
   [[ ! -L "$path" ]] || fail "$path must not be a symbolic link."
 done
-install -d -m 700 "$config_root" "$unit_dir"
+install -d -m 700 "$config_root" "$state_root" "$unit_dir"
 for path in "$config_file" "$environment_file" "$unit_file"; do
   [[ ! -L "$path" ]] || fail "$path must not be a symbolic link."
   if [[ -e "$path" && ! -f "$path" ]]; then
@@ -91,6 +92,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
+ReadWritePaths=$(systemd_path_value "$state_root")
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ExecStart=:$(systemd_path_value "$node_path") $(systemd_path_value "$repo_dir/dist/runtime/main.js") $(systemd_path_value "$config_file")
 Restart=on-failure

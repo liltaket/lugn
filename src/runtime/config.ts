@@ -1,6 +1,8 @@
 import { HomeAssistantMusicMappingsSchema } from '../adapters/home-assistant-music.js';
 import { HomeAssistantButtonMappingsSchema } from '../adapters/home-assistant-button.js';
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { defaultScenes } from '../application/lugn-engine.js';
 import {
@@ -116,6 +118,7 @@ const FileConfigSchema = z
       .default({ targets: {}, maxDurationMs: 5_000 }),
     scenes: z.array(SceneSchema).optional(),
     defaultSceneId: z.string().min(1).optional(),
+    statePath: z.string().min(1).optional(),
   })
   .strict()
   .superRefine((config, context) => {
@@ -201,6 +204,7 @@ export type RuntimeConfig = {
   };
   scenes?: LightingScene[];
   defaultSceneId?: string;
+  statePath: string;
 };
 
 export class RuntimeConfigError extends Error {
@@ -247,6 +251,28 @@ export function loadRuntimeConfig(
     );
   }
 
+  const stateDirectory = resolve(homedir(), '.local', 'state', 'lugn');
+  const requestedStatePath =
+    fileConfig.statePath ?? environment['LUGN_STATE_PATH'];
+  if (requestedStatePath !== undefined && !isAbsolute(requestedStatePath)) {
+    throw new RuntimeConfigError('statePath must be an absolute path');
+  }
+  const statePath = resolve(
+    requestedStatePath ?? join(stateDirectory, 'lighting-intent.json'),
+  );
+  const statePathRelative = relative(stateDirectory, statePath);
+  if (
+    statePathRelative === '' ||
+    statePathRelative === '..' ||
+    statePathRelative.startsWith(`..${sep}`) ||
+    dirname(statePath) !== stateDirectory
+  ) {
+    throw new RuntimeConfigError(
+      `statePath must be a direct child of the writable Lugn state directory ${stateDirectory}`,
+    );
+  }
+  validateStateDirectoryAncestors(homedir());
+
   let mqtt: RuntimeConfig['mqtt'];
   if (fileConfig.mqtt) {
     const username = fileConfig.mqtt.usernameEnv
@@ -287,7 +313,37 @@ export function loadRuntimeConfig(
     ...(fileConfig.defaultSceneId === undefined
       ? {}
       : { defaultSceneId: fileConfig.defaultSceneId }),
+    statePath,
   };
+}
+
+/** Reject symlinked state-directory ancestors so lexical containment is real. */
+export function validateStateDirectoryAncestors(homeDirectory: string): void {
+  for (const directory of [
+    join(homeDirectory, '.local'),
+    join(homeDirectory, '.local', 'state'),
+    join(homeDirectory, '.local', 'state', 'lugn'),
+  ]) {
+    try {
+      const info = lstatSync(directory);
+      if (info.isSymbolicLink() || !info.isDirectory())
+        throw new RuntimeConfigError(
+          `Lugn state directory ancestor must be a regular directory: ${directory}`,
+        );
+    } catch (error) {
+      if (error instanceof RuntimeConfigError) throw error;
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'ENOENT'
+      )
+        continue;
+      throw new RuntimeConfigError(
+        'Could not safely inspect the Lugn state directory',
+      );
+    }
+  }
 }
 
 function requireEnvironmentValue(

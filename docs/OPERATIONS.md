@@ -163,7 +163,11 @@ already exists. It creates an empty `$HOME/.config/lugn/lugn.env` with mode
 `NAME=value` per line. Keep both files private. The installer prints the
 resolved paths when it finishes. Edit the config with the actual Home
 Assistant URL/entity IDs and the sensor's MQTT URL/topic before starting the
-service. Validate the config and secrets without contacting any service:
+service. It also creates `$HOME/.local/state/lugn/` for the durable lighting
+intent file and grants the service write access only to that directory. The
+optional `statePath` config field or `LUGN_STATE_PATH` environment variable
+must name a direct child of this directory. Validate the config and secrets without
+contacting any service:
 
 ```sh
 node --env-file="$HOME/.config/lugn/lugn.env" \
@@ -355,8 +359,12 @@ feedback time out after 10 seconds. These limits keep the runtime bounded in
 normal operation while leaving active commands attributable until feedback or
 timeout.
 
-Runtime command history and command-ID attribution are not persisted. Restart
-does not replay old physical commands; the new process seeds fresh Home
-Assistant observations and starts with a new in-memory ledger. Back up the
-installation config and secret file separately; the runtime state stream is
-diagnostic history, not durable storage.
+Runtime command history, command-ID attribution, Home Assistant observations,
+sensor presence, diagnostics, and timing records are not persisted. The
+separate lighting-intent file retains only the selected scene, logical desired
+values, manual property ownership, and absolute continuity expiry. Restart does
+not replay old physical commands; the new process starts with unknown presence,
+seeds fresh Home Assistant observations, and waits for confirmed occupancy
+before reconverging saved intent. Back up the installation config and secret
+file separately; the runtime state stream is diagnostic history, not durable
+storage.

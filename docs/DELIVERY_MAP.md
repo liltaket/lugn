@@ -109,8 +109,11 @@ authorization to connect to them.
   newest 256. Unconfirmed lighting commands become terminal after the existing
   60-second convergence timeout, switches after 10 seconds, and music after 10
   seconds. Retired lighting IDs remain recognizable for the process lifetime
-  without retaining every record. Runtime state is not persisted across restart.
-  See [operator guide](OPERATIONS.md) for these limits and restart behavior.
+  without retaining every record. Only logical lighting intent and continuity
+  expiry persist across restart; observations, presence, command ledgers,
+  diagnostics, timing, switches, and music remain in memory. Old physical
+  commands are never replayed. See [configuration](CONFIGURATION.md) and the
+  [operator guide](OPERATIONS.md) for persistence and restart behavior.
 
 ### Live integration acceptance
 

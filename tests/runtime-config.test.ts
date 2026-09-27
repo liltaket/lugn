@@ -1,8 +1,17 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadRuntimeConfig } from '../src/runtime/config.js';
+import {
+  loadRuntimeConfig,
+  validateStateDirectoryAncestors,
+} from '../src/runtime/config.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -144,6 +153,44 @@ describe('runtime configuration cross references', () => {
       }),
     ).toThrow('defaultSceneId: Default scene scene.missing is not configured');
     expect(loadConfig(minimal).defaultSceneId).toBeUndefined();
+  });
+
+  it('keeps persisted state inside the service writable state directory', () => {
+    const stateDirectory = join(homedir(), '.local', 'state', 'lugn');
+    expect(loadConfig(minimal).statePath).toBe(
+      join(stateDirectory, 'lighting-intent.json'),
+    );
+    const customPath = join(stateDirectory, 'custom.json');
+    expect(loadConfig({ ...minimal, statePath: customPath }).statePath).toBe(
+      customPath,
+    );
+    expect(
+      loadConfig(minimal, {
+        HA_TOKEN: 'deterministic-test-token',
+        LUGN_STATE_PATH: customPath,
+      }).statePath,
+    ).toBe(customPath);
+
+    for (const statePath of [
+      join(tmpdir(), 'outside.json'),
+      join(stateDirectory, 'nested', 'lighting-intent.json'),
+      'relative.json',
+    ])
+      expect(() => loadConfig({ ...minimal, statePath })).toThrow(
+        'statePath must be',
+      );
+  });
+
+  it('rejects symlinked state directory ancestors', () => {
+    const homeDirectory = mkdtempSync(join(tmpdir(), 'lugn-state-home-'));
+    temporaryDirectories.push(homeDirectory);
+    const outside = join(homeDirectory, 'outside');
+    mkdirSync(outside);
+    symlinkSync(outside, join(homeDirectory, '.local'), 'dir');
+
+    expect(() => validateStateDirectoryAncestors(homeDirectory)).toThrow(
+      'must be a regular directory',
+    );
   });
 
   it('decodes canonical base64url secret references and rejects malformed values without echoing them', () => {
