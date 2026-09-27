@@ -3,7 +3,10 @@ import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js
 import { pathToFileURL } from 'node:url';
 import { HomeAssistantLightingAdapter } from '../adapters/home-assistant-lighting.js';
 import { HomeAssistantSwitchAdapter } from '../adapters/home-assistant-switch.js';
-import { HomeAssistantWebSocketTransport } from '../adapters/home-assistant-websocket.js';
+import {
+  HomeAssistantWebSocketTransport,
+  type HomeAssistantSocketFactory,
+} from '../adapters/home-assistant-websocket.js';
 import { PresenceEventIngress } from '../adapters/presence-event-ingress.js';
 import {
   Stl27lMqttPresenceAdapter,
@@ -13,7 +16,11 @@ import { CapabilityRegistry } from '../application/capabilities.js';
 import { LugnEngine } from '../application/lugn-engine.js';
 import { systemClock } from '../core/clock.js';
 import { LugnHttpServer } from './http-server.js';
-import { MqttJsSubscriber } from './mqttjs-subscriber.js';
+import {
+  MqttJsSubscriber,
+  type MqttSubscriberConfig,
+  type MqttSubscriberStatus,
+} from './mqttjs-subscriber.js';
 import { loadRuntimeConfig, RuntimeConfigError } from './config.js';
 
 export type LugnRuntime = {
@@ -21,13 +28,34 @@ export type LugnRuntime = {
   stop(): Promise<void>;
 };
 
+type RuntimeMqttSubscriber = Stl27lPresenceMqttSubscriber & {
+  readonly status: MqttSubscriberStatus;
+  onStatus(listener: (status: MqttSubscriberStatus) => void): () => void;
+  start(): void;
+  stop(): Promise<void>;
+};
+
+/** Optional transport factories keep the composed runtime deterministic in tests. */
+export type LugnRuntimeDependencies = {
+  homeAssistantFetch?: typeof fetch;
+  createMqttSubscriber?: (
+    config: MqttSubscriberConfig,
+    onError: () => void,
+  ) => RuntimeMqttSubscriber;
+  createHomeAssistantSocket?: HomeAssistantSocketFactory;
+};
+
 /** Starts the local Lugn host and its configured Home Assistant/MQTT links. */
-export async function startRuntime(configPath?: string): Promise<LugnRuntime> {
+export async function startRuntime(
+  configPath?: string,
+  dependencies: LugnRuntimeDependencies = {},
+): Promise<LugnRuntime> {
   const config = configPath
     ? loadRuntimeConfig(configPath)
     : loadRuntimeConfig();
+  const fetchTransport = dependencies.homeAssistantFetch ?? fetch;
   const homeAssistantFetch: typeof fetch = (input, init) =>
-    fetch(input, {
+    fetchTransport(input, {
       ...init,
       signal: init?.signal ?? AbortSignal.timeout(10_000),
     });
@@ -114,27 +142,32 @@ export async function startRuntime(configPath?: string): Promise<LugnRuntime> {
       homeAssistantSwitch?.acceptStateChangedEvent(event);
       homeAssistantMusic?.acceptStateChangedEvent(event);
     },
+    dependencies.createHomeAssistantSocket === undefined
+      ? {}
+      : { createSocket: dependencies.createHomeAssistantSocket },
   );
-  let mqttSubscriber: MqttJsSubscriber | undefined;
+  let mqttSubscriber: RuntimeMqttSubscriber | undefined;
   let sensorAdapter: Stl27lMqttPresenceAdapter | undefined;
   let unsubscribeMqttStatus: (() => void) | undefined;
 
   if (config.mqtt) {
-    mqttSubscriber = new MqttJsSubscriber(
-      {
-        url: config.mqtt.url,
-        ...(config.mqtt.username === undefined
-          ? {}
-          : { username: config.mqtt.username }),
-        ...(config.mqtt.password === undefined
-          ? {}
-          : { password: config.mqtt.password }),
-        ...(config.mqtt.clientId === undefined
-          ? {}
-          : { clientId: config.mqtt.clientId }),
-      },
-      () => console.warn('[lugn] MQTT operation failed'),
-    );
+    const mqttConfig: MqttSubscriberConfig = {
+      url: config.mqtt.url,
+      ...(config.mqtt.username === undefined
+        ? {}
+        : { username: config.mqtt.username }),
+      ...(config.mqtt.password === undefined
+        ? {}
+        : { password: config.mqtt.password }),
+      ...(config.mqtt.clientId === undefined
+        ? {}
+        : { clientId: config.mqtt.clientId }),
+    };
+    mqttSubscriber = (
+      dependencies.createMqttSubscriber ??
+      ((subscriberConfig, onError) =>
+        new MqttJsSubscriber(subscriberConfig, onError))
+    )(mqttConfig, () => console.warn('[lugn] MQTT operation failed'));
     const ingress = new PresenceEventIngress((event) =>
       engine.handleEvent(event),
     );
@@ -175,6 +208,7 @@ export async function startRuntime(configPath?: string): Promise<LugnRuntime> {
       homeAssistantLighting,
       homeAssistantSwitch,
       homeAssistantMusic,
+      homeAssistantFetch,
     );
     homeAssistantSocket.start();
     await http.start();
@@ -209,9 +243,10 @@ async function seedHomeAssistantObservations(
   lightingAdapter: HomeAssistantLightingAdapter,
   switchAdapter?: HomeAssistantSwitchAdapter,
   musicAdapter?: HomeAssistantMusicAdapter,
+  fetcher: typeof fetch = fetch,
 ): Promise<void> {
   try {
-    const response = await fetch(`${baseUrl}/api/states`, {
+    const response = await fetcher(`${baseUrl}/api/states`, {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/json',
