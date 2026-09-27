@@ -44,12 +44,13 @@ export function clerkFrontendApiOrigin(publishableKey: string): string {
   return origin.origin;
 }
 
-/** Verifies a Clerk session JWT and returns its subject only for allowed users. */
+/** Verifies a Clerk session JWT and checks its subject against the configured policy. */
 export async function verifyClerkSessionToken(
   sessionToken: string,
   options: {
     secretKey: string;
     allowedUserIds: readonly string[];
+    allowAnyUser: boolean;
     authorizedParty: string;
   },
 ): Promise<ClerkSessionVerification> {
@@ -71,7 +72,8 @@ export async function verifyClerkSessionToken(
     }
 
     return {
-      status: options.allowedUserIds.includes(payload.sub)
+      status:
+        options.allowAnyUser || options.allowedUserIds.includes(payload.sub)
         ? 'authorized'
         : 'forbidden',
       sid: payload.sid,

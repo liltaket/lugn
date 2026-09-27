@@ -221,6 +221,7 @@ export type RuntimeConfig = {
       publishableKey: string;
       secretKey: string;
       allowedUserIds: string[];
+      allowAnyUser: boolean;
     };
   };
   homeAssistant: {
@@ -387,13 +388,15 @@ function loadClerkConfig(
     environment,
   );
   const allowedUserIds = allowedUserIdsValue.split(',').map((id) => id.trim());
+  const allowAnyUser = allowedUserIds.length === 1 && allowedUserIds[0] === '*';
   if (
-    allowedUserIds.length === 0 ||
-    allowedUserIds.some((id) => !/^user_[A-Za-z0-9]{1,120}$/.test(id)) ||
-    new Set(allowedUserIds).size !== allowedUserIds.length
+    (!allowAnyUser &&
+      (allowedUserIds.length === 0 ||
+        allowedUserIds.some((id) => !/^user_[A-Za-z0-9]{1,120}$/.test(id)) ||
+        new Set(allowedUserIds).size !== allowedUserIds.length))
   ) {
     throw new RuntimeConfigError(
-      `Required environment variable must be a comma-separated list of unique Clerk user IDs: ${config.allowedUserIdsEnv}`,
+      `Required environment variable must be '*' or a comma-separated list of unique Clerk user IDs: ${config.allowedUserIdsEnv}`,
     );
   }
 
@@ -416,7 +419,7 @@ function loadClerkConfig(
     );
   }
 
-  return { publishableKey, secretKey, allowedUserIds };
+  return { publishableKey, secretKey, allowedUserIds, allowAnyUser };
 }
 
 /** Reject symlinked state-directory ancestors so lexical containment is real. */

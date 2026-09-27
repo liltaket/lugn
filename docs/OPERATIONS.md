@@ -202,15 +202,15 @@ Then visit `http://127.0.0.1:8787/ui/`. Once the Clerk settings below are
 configured, the panel shows Clerk sign-in. Without them, the panel retains its
 token-login mode. Keep the API bearer token for machine clients only.
 
-Create a Clerk application and configure it for invite-only access. Add the
-exact panel origin used by the browser to the Clerk instance's allowed origins
-when required. Use development keys only for development; Clerk's development
+Create a Clerk application and set its sign-up mode to **Open** if anyone who
+can reach the panel should be able to create an account. Add the exact panel
+origin used by the browser to the Clerk instance's allowed origins when
+required. Use development keys only for development; Clerk's development
 instances are not intended for production workloads. Production keys require
 the application's configured domain and HTTPS.
 
 Add this block to `http` in `config.json`, using the environment variable names
-that hold your Clerk keys and allowlisted Clerk user IDs. Find each user ID in
-the Clerk Dashboard's user details; it starts with `user_`.
+that hold your Clerk keys and access policy.
 
 ```json
 {
@@ -225,9 +225,18 @@ the Clerk Dashboard's user details; it starts with `user_`.
 Set the referenced variables in `$HOME/.config/lugn/lugn.env`. Keep the Clerk
 secret key in that mode-0600 file; it is never sent to the browser. The
 `CLERK_SECRET_KEY_B64` value must be the key's base64url encoding, matching the
-other `_B64` values in this file. The allowlist is a comma-separated list of
-Clerk user IDs such as `user_example123`. Only listed IDs can create a panel
-session. Lugn continues to require `bearerTokenEnv` for its machine HTTP API.
+other `_B64` values in this file. Set `CLERK_ALLOWED_USER_IDS=*` to let any
+successfully authenticated account in this Clerk instance create a panel
+session. This works with Open sign-ups so anyone who can reach the panel can
+register and control Lugn. To restrict access later, replace `*` with a
+comma-separated list of Clerk user IDs such as `user_example123`. Lugn
+continues to require `bearerTokenEnv` for its machine HTTP API.
+
+The wildcard changes which Clerk users are authorized; it does not expose the
+panel to the network. Lugn still binds to loopback, validates Clerk sessions,
+and applies its origin and CSRF checks. A reverse proxy or tunnel that makes
+the panel reachable also makes it available to anyone who can sign in through
+the open Clerk instance.
 
 For a TLS reverse proxy, add its exact origin to `http.trustedOrigins` (for
 example, `https://lugn.example.org`) and keep `bearerTokenEnv` configured. The

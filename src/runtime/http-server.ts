@@ -55,6 +55,7 @@ export type LugnHttpServerOptions = {
     publishableKey: string;
     secretKey: string;
     allowedUserIds: string[];
+    allowAnyUser: boolean;
   };
 };
 
@@ -291,6 +292,7 @@ export class LugnHttpServer {
         const result = await verifyClerkSessionToken(parsed.data.sessionToken, {
           secretKey: this.options.clerk.secretKey,
           allowedUserIds: this.options.clerk.allowedUserIds,
+          allowAnyUser: this.options.clerk.allowAnyUser,
           authorizedParty,
         });
         if (result.status === 'invalid') {
