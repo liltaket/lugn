@@ -1,5 +1,5 @@
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const ENTITY_ID_SHAPE = /^[a-z0-9_]+\.[a-z0-9_]+$/;
@@ -208,6 +208,20 @@ const HELP_TEXT = [
   'Output includes candidate light, switch, and media_player IDs; media players include source_list.',
 ].join('\n');
 
+export function isDirectExecution(
+  executablePath: string | undefined,
+  moduleUrl: string,
+): boolean {
+  if (!executablePath) return false;
+  try {
+    return (
+      realpathSync(executablePath) === realpathSync(fileURLToPath(moduleUrl))
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function runHaDiscoverCli(
   args: string[],
   environment: NodeJS.ProcessEnv,
@@ -266,9 +280,6 @@ async function main(): Promise<void> {
   process.exitCode = exitCode;
 }
 
-if (
-  process.argv[1] &&
-  pathToFileURL(resolve(process.argv[1])).href === import.meta.url
-) {
+if (isDirectExecution(process.argv[1], import.meta.url)) {
   void main();
 }

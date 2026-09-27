@@ -1,6 +1,16 @@
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   discoverHomeAssistant,
+  isDirectExecution,
   parseCandidates,
   runHaDiscoverCli,
 } from '../src/runtime/ha-discover.js';
@@ -8,6 +18,23 @@ import {
 const token = 'test-secret-token';
 
 describe('Home Assistant discovery', () => {
+  it('recognizes absolute and symlinked executable paths by their real path', () => {
+    const directory = mkdtempSync(join('/tmp', 'lugn-ha-discover-path-'));
+    const scriptPath = join(directory, 'ha-discover.js');
+    const symlinkPath = join(directory, 'ha-discover-link.js');
+    try {
+      writeFileSync(scriptPath, '');
+      symlinkSync(scriptPath, symlinkPath);
+      const moduleUrl = pathToFileURL(realpathSync(scriptPath)).href;
+
+      expect(isDirectExecution(scriptPath, moduleUrl)).toBe(true);
+      expect(isDirectExecution(symlinkPath, moduleUrl)).toBe(true);
+      expect(isDirectExecution(undefined, moduleUrl)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('returns sorted candidate IDs and only media source lists', () => {
     const candidates = parseCandidates([
       {
