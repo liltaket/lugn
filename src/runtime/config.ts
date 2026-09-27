@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { defaultScenes } from '../application/lugn-engine.js';
+import { clerkFrontendApiOrigin } from './clerk-auth.js';
 import {
   SceneSchema,
   SemanticLightingIdSchema,
@@ -15,6 +16,13 @@ import {
 } from '../core/schemas.js';
 
 const EnvironmentNameSchema = z.string().regex(/^[A-Z_][A-Z0-9_]*$/);
+const ClerkConfigSchema = z
+  .object({
+    publishableKeyEnv: EnvironmentNameSchema,
+    secretKeyEnv: EnvironmentNameSchema,
+    allowedUserIdsEnv: EnvironmentNameSchema,
+  })
+  .strict();
 const TrustedOriginSchema = z
   .string()
   .url()
@@ -128,6 +136,7 @@ const FileConfigSchema = z
         port: z.number().int().min(1).max(65_535).default(8787),
         bearerTokenEnv: EnvironmentNameSchema.optional(),
         trustedOrigins: z.array(TrustedOriginSchema).max(8).default([]),
+        clerk: ClerkConfigSchema.optional(),
       })
       .strict()
       .default({ host: '127.0.0.1', port: 8787, trustedOrigins: [] }),
@@ -208,6 +217,11 @@ export type RuntimeConfig = {
     port: number;
     bearerToken?: string;
     trustedOrigins?: string[];
+    clerk?: {
+      publishableKey: string;
+      secretKey: string;
+      allowedUserIds: string[];
+    };
   };
   homeAssistant: {
     baseUrl: string;
@@ -271,6 +285,14 @@ export function loadRuntimeConfig(
   const apiToken = fileConfig.http.bearerTokenEnv
     ? requireEnvironmentValue(fileConfig.http.bearerTokenEnv, environment)
     : undefined;
+  if (fileConfig.http.clerk && apiToken === undefined) {
+    throw new RuntimeConfigError(
+      'http.clerk requires http.bearerTokenEnv to protect machine API routes',
+    );
+  }
+  const clerk = fileConfig.http.clerk
+    ? loadClerkConfig(fileConfig.http.clerk, environment)
+    : undefined;
   if (fileConfig.http.trustedOrigins.length > 0 && apiToken === undefined) {
     throw new RuntimeConfigError(
       'trustedOrigins requires an HTTP bearer token to protect the API',
@@ -331,6 +353,7 @@ export function loadRuntimeConfig(
       port: fileConfig.http.port,
       trustedOrigins: fileConfig.http.trustedOrigins,
       ...(apiToken === undefined ? {} : { bearerToken: apiToken }),
+      ...(clerk === undefined ? {} : { clerk }),
     },
     homeAssistant: {
       baseUrl: fileConfig.homeAssistant.baseUrl.replace(/\/+$/, ''),
@@ -348,6 +371,52 @@ export function loadRuntimeConfig(
       : { defaultSceneId: fileConfig.defaultSceneId }),
     statePath,
   };
+}
+
+function loadClerkConfig(
+  config: z.infer<typeof ClerkConfigSchema>,
+  environment: NodeJS.ProcessEnv,
+): NonNullable<RuntimeConfig['http']['clerk']> {
+  const publishableKey = requireEnvironmentValue(
+    config.publishableKeyEnv,
+    environment,
+  );
+  const secretKey = requireEnvironmentValue(config.secretKeyEnv, environment);
+  const allowedUserIdsValue = requireEnvironmentValue(
+    config.allowedUserIdsEnv,
+    environment,
+  );
+  const allowedUserIds = allowedUserIdsValue.split(',').map((id) => id.trim());
+  if (
+    allowedUserIds.length === 0 ||
+    allowedUserIds.some((id) => !/^user_[A-Za-z0-9]{1,120}$/.test(id)) ||
+    new Set(allowedUserIds).size !== allowedUserIds.length
+  ) {
+    throw new RuntimeConfigError(
+      `Required environment variable must be a comma-separated list of unique Clerk user IDs: ${config.allowedUserIdsEnv}`,
+    );
+  }
+
+  try {
+    clerkFrontendApiOrigin(publishableKey);
+  } catch {
+    throw new RuntimeConfigError(
+      `Required environment variable is not a valid Clerk publishable key: ${config.publishableKeyEnv}`,
+    );
+  }
+
+  const publishableKeyIsTest = publishableKey.startsWith('pk_test_');
+  const secretKeyIsTest = secretKey.startsWith('sk_test_');
+  if (
+    (!secretKeyIsTest && !secretKey.startsWith('sk_live_')) ||
+    publishableKeyIsTest !== secretKeyIsTest
+  ) {
+    throw new RuntimeConfigError(
+      `Required environment variable is not a valid Clerk secret key: ${config.secretKeyEnv}`,
+    );
+  }
+
+  return { publishableKey, secretKey, allowedUserIds };
 }
 
 /** Reject symlinked state-directory ancestors so lexical containment is real. */

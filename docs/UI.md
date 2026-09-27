@@ -9,11 +9,18 @@ a scene, toggle a mapped light, and adjust its brightness when the adapter
 reports that property. Command acceptance remains separate from device
 feedback.
 
-The panel uses a short-lived same-origin session created from the local API
-bearer token. The token is not embedded in frontend assets or saved by the
-browser. Keep the HTTP service on loopback and use an SSH tunnel for local
-operation, or configure the exact TLS proxy origin in `http.trustedOrigins`.
-The existing typed capabilities remain the only path to device commands.
+The panel uses Clerk for human sign-in. Lugn verifies the signed Clerk session
+token, checks the user against an explicit server-side user allowlist, and then
+creates a short-lived same-origin session with CSRF protection. The Clerk
+secret key is server-only. The API bearer token remains available for machine
+clients and does not sign humans into the panel. Keep the HTTP service on
+loopback and use an SSH tunnel for local operation, or configure the exact TLS
+proxy origin in `http.trustedOrigins`. The existing typed capabilities remain
+the only path to device commands.
+
+Configure the Clerk application for invite-only access. A Clerk account that
+isn't in Lugn's allowed user ID list cannot control the room even if it can
+authenticate successfully with Clerk.
 
 This first panel is for observing and tuning configured lights. Editing Home
 Assistant mappings and broader room systems remain future UI work.

@@ -17,13 +17,20 @@ import type {
   CapabilityRegistry,
 } from '../application/capabilities.js';
 import type { LugnEngine } from '../application/lugn-engine.js';
+import {
+  clerkFrontendApiOrigin,
+  verifyClerkSessionToken,
+} from './clerk-auth.js';
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const UI_SESSION_COOKIE = 'lugn_ui_session';
 const UI_SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;
 const MAX_UI_SESSIONS = 64;
 const MAX_UI_EVENT_STREAMS = 16;
-const UiSessionSchema = z.object({ token: z.string().max(4096) }).strict();
+const UiTokenSessionSchema = z.object({ token: z.string().max(4096) }).strict();
+const UiClerkSessionSchema = z
+  .object({ sessionToken: z.string().min(1).max(8192) })
+  .strict();
 const UiCapabilityRequestSchema = z
   .object({ input: z.unknown().optional() })
   .strict();
@@ -44,6 +51,11 @@ export type LugnHttpServerOptions = {
   integrations: () => Record<string, string>;
   webAssetsDirectory?: string;
   trustedOrigins?: string[];
+  clerk?: {
+    publishableKey: string;
+    secretKey: string;
+    allowedUserIds: string[];
+  };
 };
 
 /** Local HTTP surface for health, state inspection, and typed capabilities. */
@@ -51,13 +63,17 @@ export class LugnHttpServer {
   private server: Server | undefined;
   private readonly uiSessions = new Map<
     string,
-    { csrfToken: string; expiresAt: number }
+    { csrfToken: string; expiresAt: number; clerkSessionId?: string }
   >();
   private readonly uiEventStreams = new Map<ServerResponse, string>();
 
   constructor(private readonly options: LugnHttpServerOptions) {
     if (!isLoopbackBindHost(options.host))
       throw new Error('Lugn HTTP server only listens on loopback');
+    if (options.clerk && !options.bearerToken?.trim())
+      throw new Error(
+        'Clerk UI authentication requires a bearer token for machine API routes',
+      );
   }
 
   async start(): Promise<void> {
@@ -201,8 +217,7 @@ export class LugnHttpServer {
       response.writeHead(200, {
         'content-type': asset.contentType,
         'cache-control': 'no-cache',
-        'content-security-policy':
-          "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        'content-security-policy': this.uiContentSecurityPolicy(),
         'referrer-policy': 'no-referrer',
         'x-content-type-options': 'nosniff',
       });
@@ -218,12 +233,31 @@ export class LugnHttpServer {
     response: ServerResponse,
     pathname: string,
   ): Promise<boolean> {
+    if (request.method === 'GET' && pathname === '/ui/api/auth-config') {
+      if (this.options.clerk) {
+        sendJson(response, 200, {
+          provider: 'clerk',
+          publishableKey: this.options.clerk.publishableKey,
+        });
+      } else {
+        sendJson(response, 200, { provider: 'token' });
+      }
+      return true;
+    }
     if (request.method === 'GET' && pathname === '/ui/api/session') {
       const session = this.getUiSession(request);
       sendJson(response, 200, {
-        tokenRequired: this.options.bearerToken !== undefined,
+        provider: this.options.clerk ? 'clerk' : 'token',
+        tokenRequired:
+          this.options.clerk === undefined &&
+          this.options.bearerToken !== undefined,
         authenticated: session !== undefined,
-        ...(session === undefined ? {} : { csrfToken: session.csrfToken }),
+        ...(session === undefined
+          ? {}
+          : {
+              csrfToken: session.csrfToken,
+              expiresAt: session.expiresAt,
+            }),
       });
       return true;
     }
@@ -238,19 +272,85 @@ export class LugnHttpServer {
         });
         return true;
       }
-      const parsed = UiSessionSchema.safeParse(await readJsonBody(request));
-      if (!parsed.success) {
-        sendJson(response, 400, { error: 'invalid_request' });
-        return true;
+      const rawBody = await readJsonBody(request);
+      let clerkSession: { sid: string; exp: number } | undefined;
+      if (this.options.clerk) {
+        const parsed = UiClerkSessionSchema.safeParse(rawBody);
+        const originHeader = request.headers.origin;
+        if (!parsed.success || typeof originHeader !== 'string') {
+          sendJson(response, 400, { error: 'invalid_request' });
+          return true;
+        }
+        let authorizedParty: string;
+        try {
+          authorizedParty = new URL(originHeader).origin;
+        } catch {
+          sendJson(response, 403, { error: 'same_origin_required' });
+          return true;
+        }
+        const result = await verifyClerkSessionToken(parsed.data.sessionToken, {
+          secretKey: this.options.clerk.secretKey,
+          allowedUserIds: this.options.clerk.allowedUserIds,
+          authorizedParty,
+        });
+        if (result.status === 'invalid') {
+          sendJson(response, 401, { error: 'unauthorized' });
+          return true;
+        }
+        if (result.status === 'forbidden') {
+          sendJson(response, 403, { error: 'forbidden' });
+          return true;
+        }
+        clerkSession = { sid: result.sid, exp: result.exp };
+      } else {
+        const parsed = UiTokenSessionSchema.safeParse(rawBody);
+        if (!parsed.success) {
+          sendJson(response, 400, { error: 'invalid_request' });
+          return true;
+        }
+        if (
+          this.options.bearerToken !== undefined &&
+          !this.constantTimeEqual(parsed.data.token, this.options.bearerToken)
+        ) {
+          sendJson(response, 401, { error: 'unauthorized' });
+          return true;
+        }
       }
-      if (
-        this.options.bearerToken !== undefined &&
-        !this.constantTimeEqual(parsed.data.token, this.options.bearerToken)
-      ) {
+      this.pruneUiSessions();
+      const now = Date.now();
+      const expiresAt = Math.min(
+        now + UI_SESSION_MAX_AGE_MS,
+        clerkSession === undefined
+          ? Number.POSITIVE_INFINITY
+          : clerkSession.exp * 1000,
+      );
+      const cookieMaxAgeSeconds = Math.floor((expiresAt - now) / 1000);
+      if (expiresAt <= now || cookieMaxAgeSeconds < 1) {
         sendJson(response, 401, { error: 'unauthorized' });
         return true;
       }
-      this.pruneUiSessions();
+      const previousSessionId = this.getUiSessionId(request);
+      if (previousSessionId) {
+        const previousSession = this.uiSessions.get(previousSessionId);
+        if (
+          clerkSession !== undefined &&
+          previousSession?.clerkSessionId === clerkSession.sid
+        ) {
+          previousSession.expiresAt = expiresAt;
+          const secure = this.requestIsHttps(request) ? '; Secure' : '';
+          response.setHeader(
+            'set-cookie',
+            `${UI_SESSION_COOKIE}=${previousSessionId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${cookieMaxAgeSeconds}${secure}`,
+          );
+          sendJson(response, 200, {
+            csrfToken: previousSession.csrfToken,
+            expiresAt,
+          });
+          return true;
+        }
+        this.uiSessions.delete(previousSessionId);
+        this.closeUiEventStreams(previousSessionId);
+      }
       if (this.uiSessions.size >= MAX_UI_SESSIONS) {
         sendJson(response, 503, { error: 'too_many_sessions' });
         return true;
@@ -259,14 +359,17 @@ export class LugnHttpServer {
       const csrfToken = randomBytes(32).toString('base64url');
       this.uiSessions.set(sessionId, {
         csrfToken,
-        expiresAt: Date.now() + UI_SESSION_MAX_AGE_MS,
+        expiresAt,
+        ...(clerkSession === undefined
+          ? {}
+          : { clerkSessionId: clerkSession.sid }),
       });
       const secure = this.requestIsHttps(request) ? '; Secure' : '';
       response.setHeader(
         'set-cookie',
-        `${UI_SESSION_COOKIE}=${sessionId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${UI_SESSION_MAX_AGE_MS / 1000}${secure}`,
+        `${UI_SESSION_COOKIE}=${sessionId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${cookieMaxAgeSeconds}${secure}`,
       );
-      sendJson(response, 200, { csrfToken });
+      sendJson(response, 200, { csrfToken, expiresAt });
       return true;
     }
     if (request.method === 'DELETE' && pathname === '/ui/api/session') {
@@ -453,7 +556,9 @@ export class LugnHttpServer {
 
   private getUiSession(
     request: IncomingMessage,
-  ): { csrfToken: string; expiresAt: number } | undefined {
+  ):
+    | { csrfToken: string; expiresAt: number; clerkSessionId?: string }
+    | undefined {
     const sessionId = this.getUiSessionId(request);
     if (!sessionId) return undefined;
     const session = this.uiSessions.get(sessionId);
@@ -575,6 +680,37 @@ export class LugnHttpServer {
     } catch {
       return false;
     }
+  }
+
+  private uiContentSecurityPolicy(): string {
+    const clerk = this.options.clerk;
+    const frontendApi = clerk
+      ? ` ${clerkFrontendApiOrigin(clerk.publishableKey)}`
+      : '';
+    const clerkScripts = clerk
+      ? ' https://challenges.cloudflare.com https://*.protect.clerk.com'
+      : '';
+    const clerkConnect = clerk ? ' https://*.protect.clerk.com:*' : '';
+    const clerkFrames = clerk
+      ? ' https://challenges.cloudflare.com https://*.protect.clerk.com'
+      : '';
+    const clerkImages = clerk ? ' https://img.clerk.com' : '';
+    const clerkStyles = clerk ? " 'unsafe-inline'" : '';
+
+    return [
+      "default-src 'self'",
+      `script-src 'self'${frontendApi}${clerkScripts}`,
+      `style-src 'self'${clerkStyles}`,
+      `connect-src 'self'${frontendApi}${clerkConnect}`,
+      `img-src 'self' data:${clerkImages}`,
+      `font-src 'self' data:${frontendApi}`,
+      `frame-src 'self'${frontendApi}${clerkFrames}`,
+      "worker-src 'self' blob:",
+      "object-src 'none'",
+      "base-uri 'none'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join('; ');
   }
 
   private constantTimeEqual(left: string, right: string): boolean {

@@ -198,20 +198,36 @@ open an SSH tunnel to the Lugn host:
 ssh -N -L 8787:127.0.0.1:8787 <user>@<host>
 ```
 
-Then visit `http://127.0.0.1:8787/ui/`. When the API bearer token is configured,
-enter it in the panel to create a short-lived browser session. The browser does
-not save the token. To read the configured token on the Lugn host, run this
-command in a private terminal and paste its output only into the local panel:
+Then visit `http://127.0.0.1:8787/ui/`. Once the Clerk settings below are
+configured, the panel shows Clerk sign-in. Without them, the panel retains its
+token-login mode. Keep the API bearer token for machine clients only.
 
-```sh
-node --env-file="$HOME/.config/lugn/lugn.env" -e '
-const fs = require("node:fs");
-const config = JSON.parse(fs.readFileSync(process.env.HOME + "/.config/lugn/config.json", "utf8"));
-const name = config.http.bearerTokenEnv;
-const value = process.env[name];
-process.stdout.write(name.endsWith("_B64") ? Buffer.from(value, "base64url").toString("utf8") : value);
-'
+Create a Clerk application and configure it for invite-only access. Add the
+exact panel origin used by the browser to the Clerk instance's allowed origins
+when required. Use development keys only for development; Clerk's development
+instances are not intended for production workloads. Production keys require
+the application's configured domain and HTTPS.
+
+Add this block to `http` in `config.json`, using the environment variable names
+that hold your Clerk keys and allowlisted Clerk user IDs. Find each user ID in
+the Clerk Dashboard's user details; it starts with `user_`.
+
+```json
+{
+  "clerk": {
+    "publishableKeyEnv": "CLERK_PUBLISHABLE_KEY",
+    "secretKeyEnv": "CLERK_SECRET_KEY_B64",
+    "allowedUserIdsEnv": "CLERK_ALLOWED_USER_IDS"
+  }
+}
 ```
+
+Set the referenced variables in `$HOME/.config/lugn/lugn.env`. Keep the Clerk
+secret key in that mode-0600 file; it is never sent to the browser. The
+`CLERK_SECRET_KEY_B64` value must be the key's base64url encoding, matching the
+other `_B64` values in this file. The allowlist is a comma-separated list of
+Clerk user IDs such as `user_example123`. Only listed IDs can create a panel
+session. Lugn continues to require `bearerTokenEnv` for its machine HTTP API.
 
 For a TLS reverse proxy, add its exact origin to `http.trustedOrigins` (for
 example, `https://lugn.example.org`) and keep `bearerTokenEnv` configured. The

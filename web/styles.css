@@ -194,6 +194,48 @@ a:focus-visible {
   gap: 10px;
 }
 
+.login-initial-status {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.clerk-login {
+  min-width: 0;
+}
+
+.clerk-sign-in {
+  display: flex;
+  min-width: 0;
+  justify-content: center;
+}
+
+.clerk-sign-in > * {
+  max-width: 100%;
+}
+
+.clerk-root-box,
+.clerk-card-box {
+  width: 100%;
+}
+
+.clerk-card-box {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.clerk-status {
+  margin: 0 0 16px;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.login-error {
+  margin-top: 14px;
+}
+
 .login-form label {
   font-size: 14px;
   font-weight: 650;

@@ -7,6 +7,13 @@ const tokenInput = document.getElementById('api-token');
 const tokenHelp = document.getElementById('token-help');
 const loginError = document.getElementById('login-error');
 const loginSubmit = document.getElementById('login-submit');
+const loginTitle = document.getElementById('login-title');
+const loginDescription = document.getElementById('login-description');
+const loginInitialStatus = document.getElementById('login-initial-status');
+const clerkLogin = document.getElementById('clerk-login');
+const clerkStatus = document.getElementById('clerk-status');
+const clerkSignInTarget = document.getElementById('clerk-sign-in');
+const clerkRetry = document.getElementById('clerk-retry');
 const logoutButton = document.getElementById('logout-button');
 const liveStatus = document.getElementById('live-status');
 const liveStatusLabel = document.getElementById('live-status-label');
@@ -27,6 +34,22 @@ const actionStatus = document.getElementById('action-status');
 
 let csrfToken = null;
 let tokenRequired = true;
+let authProvider = 'token';
+let authConfigLoaded = false;
+let clerkPublishableKey = null;
+let clerkClient = null;
+let clerkLoadPromise = null;
+let clerkSignInMounted = false;
+let clerkListener = null;
+let clerkHandshakeReady = false;
+let clerkExchangeInProgress = false;
+let clerkSessionExchangeSuppressed = false;
+let clerkSignOutPending = false;
+let clerkAccountRejected = false;
+let sessionExpiresAt = null;
+let sessionRenewTimer = null;
+let sessionRenewInProgress = false;
+let sessionRenewDone = null;
 let overview = null;
 let eventSource = null;
 let pollTimer = null;
@@ -35,6 +58,7 @@ let actionTone = 'neutral';
 const pendingActions = new Set();
 
 class SessionExpiredError extends Error {}
+class ClerkAuthorizationError extends Error {}
 
 tokenHelp.textContent =
   'Öppna tunneln från din dator med ssh -N -L 8787:127.0.0.1:8787 <user>@<host> och besök http://127.0.0.1:8787/ui/. Hämta token på Lugn-värden enligt docs/OPERATIONS.md, i ett privat terminalfönster, och klistra in den bara här.';
@@ -46,6 +70,18 @@ loginForm.addEventListener('submit', (event) => {
 
 logoutButton.addEventListener('click', () => {
   void endSession();
+});
+
+clerkRetry.addEventListener('click', () => {
+  if (clerkSignOutPending) {
+    void retryClerkSignOut();
+  } else if (clerkAccountRejected) {
+    void switchClerkAccount();
+  } else if (clerkClient?.session) {
+    void exchangeClerkSession(false);
+  } else {
+    void restoreSessionOnStartup();
+  }
 });
 
 reapplyButton.addEventListener('click', () => {
@@ -71,6 +107,19 @@ function setLoginError(message) {
   loginError.hidden = !message;
 }
 
+function updateLoginPresentation() {
+  const isClerk = authProvider === 'clerk';
+  loginInitialStatus.hidden = authConfigLoaded;
+  loginForm.hidden = !authConfigLoaded || isClerk;
+  clerkLogin.hidden = !authConfigLoaded || !isClerk;
+  tokenHelp.hidden = isClerk;
+  loginTitle.textContent = isClerk ? 'Logga in till Lugn' : 'Anslut till Lugn';
+  loginDescription.textContent = isClerk
+    ? 'Använd ditt Lugn-konto för att se och styra rummets belysning.'
+    : 'Logga in för att se rummets lampor och styra deras önskade läge.';
+  tokenInput.required = !isClerk && tokenRequired;
+}
+
 function setActionMessage(message, tone = 'neutral') {
   actionMessage = message;
   actionTone = tone;
@@ -78,7 +127,42 @@ function setActionMessage(message, tone = 'neutral') {
   actionStatus.dataset.tone = tone;
 }
 
+function clearSessionRenewal() {
+  if (sessionRenewTimer !== null) window.clearTimeout(sessionRenewTimer);
+  sessionRenewTimer = null;
+  sessionExpiresAt = null;
+}
+
+function parseSessionExpiry(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function scheduleSessionRenewal(expiresAt) {
+  if (sessionRenewTimer !== null) window.clearTimeout(sessionRenewTimer);
+  sessionRenewTimer = null;
+  sessionExpiresAt = parseSessionExpiry(expiresAt);
+  if (authProvider !== 'clerk' || sessionExpiresAt === null) return;
+
+  const renewIn = Math.max(1000, sessionExpiresAt - Date.now() - 20_000);
+  sessionRenewTimer = window.setTimeout(() => {
+    sessionRenewTimer = null;
+    void renewClerkSession();
+  }, renewIn);
+}
+
+function scheduleRenewalRetry() {
+  if (sessionRenewTimer !== null) window.clearTimeout(sessionRenewTimer);
+  if (sessionExpiresAt === null) return;
+  const untilExpiry = sessionExpiresAt - Date.now();
+  const retryIn = Math.max(1000, Math.min(10_000, untilExpiry - 5000));
+  sessionRenewTimer = window.setTimeout(() => {
+    sessionRenewTimer = null;
+    void renewClerkSession();
+  }, retryIn);
+}
+
 function showLogin(message = '') {
+  clearSessionRenewal();
   stopLiveUpdates();
   csrfToken = null;
   overview = null;
@@ -86,9 +170,31 @@ function showLogin(message = '') {
   dashboardView.hidden = true;
   loginView.hidden = false;
   logoutButton.hidden = true;
+  tokenInput.disabled = authProvider === 'clerk';
+  loginSubmit.disabled = authProvider === 'clerk';
+  loginSubmit.textContent = 'Anslut';
   tokenInput.value = '';
-  tokenInput.required = tokenRequired;
+  updateLoginPresentation();
   setLoginError(message);
+  if (authProvider === 'clerk') {
+    if (clerkSignOutPending) {
+      clerkStatus.textContent =
+        'Lugn-sessionen är avslutad. Logga ut från Clerk för att slutföra.';
+      clerkStatus.hidden = false;
+      clerkSignInTarget.hidden = true;
+      clerkRetry.hidden = false;
+    } else if (clerkClient?.session) {
+      clerkStatus.textContent = 'Slutför inloggningen till Lugn.';
+      clerkStatus.hidden = false;
+      clerkSignInTarget.hidden = true;
+      clerkRetry.hidden = true;
+    } else {
+      clerkStatus.hidden = true;
+      clerkSignInTarget.hidden = false;
+      clerkRetry.hidden = true;
+      mountClerkSignIn();
+    }
+  }
   setLiveStatus('Inte ansluten');
 }
 
@@ -96,23 +202,39 @@ function showDashboard() {
   loginView.hidden = true;
   dashboardView.hidden = false;
   logoutButton.hidden = false;
+  logoutButton.disabled = false;
+  if (clerkSignInMounted) {
+    clerkClient?.unmountSignIn?.(clerkSignInTarget);
+    clerkSignInMounted = false;
+  }
 }
 
 async function createSession() {
+  if (authProvider !== 'token') return;
   const token = tokenInput.value;
   if (tokenRequired && !token) return;
 
   await startSession(token, false);
 }
 
-async function startSession(token, automatic) {
-  if (tokenRequired && !token) return;
+async function startSession(credential, automatic) {
+  if (authProvider === 'token' && tokenRequired && !credential) return;
 
   loginSubmit.disabled = true;
   loginSubmit.textContent = 'Ansluter…';
-  tokenInput.disabled = true;
+  tokenInput.disabled = authProvider === 'clerk';
   setLoginError('');
   setLiveStatus('Skapar session', 'warn');
+  if (authProvider === 'clerk') {
+    clerkStatus.textContent = 'Verifierar inloggningen med Lugn…';
+    clerkStatus.hidden = false;
+    clerkSignInTarget.hidden = true;
+    clerkRetry.hidden = true;
+    if (clerkSignInMounted) {
+      clerkClient?.unmountSignIn?.(clerkSignInTarget);
+      clerkSignInMounted = false;
+    }
+  }
 
   try {
     const response = await fetch(`${API_ROOT}/session`, {
@@ -120,9 +242,19 @@ async function startSession(token, automatic) {
       credentials: 'same-origin',
       cache: 'no-store',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token }),
+      body: JSON.stringify(
+        authProvider === 'clerk'
+          ? { sessionToken: credential }
+          : { token: credential },
+      ),
     });
     if (!response.ok) {
+      if (response.status === 401 && authProvider === 'clerk')
+        throw new Error('Clerk-sessionen kunde inte verifieras. Försök igen.');
+      if (response.status === 403 && authProvider === 'clerk') {
+        clerkAccountRejected = true;
+        throw new Error('Det här Clerk-kontot har inte åtkomst till Lugn.');
+      }
       if (response.status === 401 || response.status === 403)
         throw new Error('Kontrollera token och försök igen.');
       throw new Error('Sessionen kunde inte skapas. Försök igen.');
@@ -131,10 +263,14 @@ async function startSession(token, automatic) {
     const result = await response.json();
     if (typeof result?.csrfToken !== 'string' || result.csrfToken.length === 0)
       throw new Error('Servern gav ingen giltig session. Försök igen.');
+    const expiresAt = parseSessionExpiry(result.expiresAt);
+    if (authProvider === 'clerk' && expiresAt === null)
+      throw new Error('Servern gav ingen giltig sluttid för sessionen.');
 
     csrfToken = result.csrfToken;
+    clerkAccountRejected = false;
     tokenInput.value = '';
-    await openDashboard(result.csrfToken);
+    await openDashboard(result.csrfToken, expiresAt);
   } catch (error) {
     csrfToken = null;
     tokenInput.value = '';
@@ -145,13 +281,336 @@ async function startSession(token, automatic) {
     } else {
       setLoginError('Sessionen kunde inte skapas. Försök igen.');
     }
-    if (automatic && !tokenRequired)
+    if (automatic && !tokenRequired && authProvider === 'token')
       setLoginError('Den lokala sessionen kunde inte skapas. Försök igen.');
+    if (authProvider === 'clerk') {
+      clerkStatus.hidden = true;
+      clerkSignInTarget.hidden = true;
+      clerkRetry.hidden = true;
+      if (clerkClient?.session) {
+        clerkRetry.textContent = clerkAccountRejected
+          ? 'Byt Clerk-konto'
+          : 'Försök igen';
+        clerkRetry.hidden = false;
+      } else clerkSignInTarget.hidden = false;
+    }
     setLiveStatus('Inte ansluten', 'bad');
   } finally {
-    tokenInput.disabled = false;
-    loginSubmit.disabled = false;
+    tokenInput.disabled = authProvider === 'clerk';
+    loginSubmit.disabled = authProvider === 'clerk';
     loginSubmit.textContent = 'Anslut';
+  }
+}
+
+async function fetchAuthConfiguration() {
+  const response = await fetch(`${API_ROOT}/auth-config`, {
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { accept: 'application/json' },
+  });
+  // Permit an older Lugn release to keep using its token-based login.
+  if (response.status === 404) return { provider: 'token' };
+  if (!response.ok)
+    throw new Error('Inloggningsinställningar kunde inte hämtas.');
+
+  const config = await response.json();
+  if (config?.provider === 'token') return { provider: 'token' };
+  if (
+    config?.provider === 'clerk' &&
+    typeof config.publishableKey === 'string'
+  ) {
+    return {
+      provider: 'clerk',
+      publishableKey: config.publishableKey,
+    };
+  }
+  throw new Error('Servern returnerade ogiltiga inloggningsinställningar.');
+}
+
+function clerkFrontendOrigin(publishableKey) {
+  const match = /^(pk_(?:test|live)_)([A-Za-z0-9_-]+={0,2})$/.exec(
+    publishableKey,
+  );
+  if (!match) throw new Error('Clerk-nyckeln har ett ogiltigt format.');
+
+  const encoded = match[2]
+    .replace(/=+$/, '')
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
+  const padded = encoded + '='.repeat((4 - (encoded.length % 4)) % 4);
+  const decoded = window.atob(padded);
+  if (!decoded.endsWith('$'))
+    throw new Error('Clerk-nyckeln saknar en giltig frontend-adress.');
+
+  const frontendHost = decoded.slice(0, -1);
+  if (
+    frontendHost.length > 253 ||
+    frontendHost !== frontendHost.toLowerCase() ||
+    !frontendHost.includes('.') ||
+    frontendHost
+      .split('.')
+      .some(
+        (label) =>
+          label.length === 0 ||
+          label.length > 63 ||
+          !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
+      )
+  )
+    throw new Error('Clerk-nyckeln innehåller en ogiltig frontend-adress.');
+
+  const frontendUrl = new URL(`https://${frontendHost}`);
+  if (frontendUrl.hostname !== frontendHost || frontendUrl.port !== '')
+    throw new Error('Clerk-nyckeln innehåller en ogiltig frontend-adress.');
+  return frontendUrl.origin;
+}
+
+function loadClerkScript(url, publishableKey = null) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    const timeout = window.setTimeout(() => {
+      script.remove();
+      reject(new Error('Clerk tog för lång tid att ladda.'));
+    }, 30000);
+
+    script.async = true;
+    script.crossOrigin = 'anonymous';
+    script.referrerPolicy = 'strict-origin-when-cross-origin';
+    script.src = url;
+    if (publishableKey)
+      script.setAttribute('data-clerk-publishable-key', publishableKey);
+    script.addEventListener(
+      'load',
+      () => {
+        window.clearTimeout(timeout);
+        resolve();
+      },
+      { once: true },
+    );
+    script.addEventListener(
+      'error',
+      () => {
+        window.clearTimeout(timeout);
+        script.remove();
+        reject(new Error('Clerk kunde inte laddas. Kontrollera anslutningen.'));
+      },
+      { once: true },
+    );
+    document.head.append(script);
+  });
+}
+
+async function initializeClerk(publishableKey) {
+  if (clerkClient) return clerkClient;
+  if (clerkLoadPromise) return clerkLoadPromise;
+  if (typeof publishableKey !== 'string' || publishableKey.length === 0)
+    throw new Error('Clerk saknar en publicerbar nyckel.');
+
+  clerkLoadPromise = (async () => {
+    const frontendOrigin = clerkFrontendOrigin(publishableKey);
+    await loadClerkScript(
+      `${frontendOrigin}/npm/@clerk/ui@1/dist/ui.browser.js`,
+    );
+    if (typeof window.__internal_ClerkUICtor !== 'function')
+      throw new Error('Clerks inloggningsgränssnitt kunde inte laddas.');
+    await loadClerkScript(
+      `${frontendOrigin}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`,
+      publishableKey,
+    );
+
+    const instance = window.Clerk;
+    if (
+      !instance ||
+      typeof instance.load !== 'function' ||
+      typeof instance.mountSignIn !== 'function' ||
+      typeof instance.addListener !== 'function'
+    ) {
+      throw new Error('Clerk kunde inte startas i den här webbläsaren.');
+    }
+
+    await instance.load({
+      ui: { ClerkUI: window.__internal_ClerkUICtor },
+    });
+    clerkClient = instance;
+    return instance;
+  })().catch((error) => {
+    clerkLoadPromise = null;
+    throw error;
+  });
+  return clerkLoadPromise;
+}
+
+function mountClerkSignIn() {
+  if (!clerkClient || clerkSignInMounted || clerkClient.session) return;
+  try {
+    clerkClient.mountSignIn(clerkSignInTarget, {
+      routing: 'hash',
+      withSignUp: false,
+      fallbackRedirectUrl: '/ui/',
+      forceRedirectUrl: '/ui/',
+      appearance: {
+        variables: {
+          colorPrimary: '#d2d59a',
+          colorBackground: '#222f2a',
+          colorText: '#f1f4ef',
+          colorTextSecondary: '#c0ccc4',
+          colorInputBackground: '#18221e',
+          colorInputText: '#f1f4ef',
+          colorDanger: '#edb4a8',
+          borderRadius: '8px',
+        },
+        elements: {
+          rootBox: 'clerk-root-box',
+          cardBox: 'clerk-card-box',
+        },
+      },
+    });
+    clerkSignInMounted = true;
+  } catch {
+    clerkStatus.textContent =
+      'Clerk kunde inte visa inloggningen. Försök igen.';
+    clerkStatus.hidden = false;
+    clerkSignInTarget.hidden = true;
+    clerkRetry.hidden = false;
+  }
+}
+
+function observeClerkSession() {
+  if (clerkListener || !clerkClient?.addListener) return;
+  clerkListener = clerkClient.addListener(
+    ({ session }) => {
+      if (!clerkHandshakeReady || clerkSessionExchangeSuppressed) return;
+      if (session === null && csrfToken) {
+        void endSession();
+        return;
+      }
+      if (!session || csrfToken || clerkExchangeInProgress) return;
+      void exchangeClerkSession(true);
+    },
+    { skipInitialEmit: true },
+  );
+}
+
+async function exchangeClerkSession(automatic) {
+  if (
+    clerkExchangeInProgress ||
+    clerkSessionExchangeSuppressed ||
+    !clerkClient?.session
+  ) {
+    return;
+  }
+  clerkExchangeInProgress = true;
+  try {
+    const sessionToken = await clerkClient.session.getToken();
+    if (!sessionToken)
+      throw new Error('Clerk gav ingen giltig session. Logga in igen.');
+    await startSession(sessionToken, automatic);
+  } catch (error) {
+    setLoginError(
+      error instanceof Error
+        ? error.message
+        : 'Clerk-sessionen kunde inte skickas till Lugn. Försök igen.',
+    );
+    clerkStatus.hidden = true;
+    clerkSignInTarget.hidden = true;
+    clerkRetry.hidden = false;
+    setLiveStatus('Inte ansluten', 'bad');
+  } finally {
+    clerkExchangeInProgress = false;
+  }
+}
+
+async function renewClerkSession() {
+  if (
+    sessionRenewInProgress ||
+    authProvider !== 'clerk' ||
+    !csrfToken ||
+    !clerkClient?.session
+  ) {
+    return;
+  }
+  sessionRenewInProgress = true;
+  let finishRenewal;
+  sessionRenewDone = new Promise((resolve) => {
+    finishRenewal = resolve;
+  });
+  const previousExpiry = sessionExpiresAt;
+  try {
+    const sessionToken = await clerkClient.session.getToken({
+      skipCache: true,
+    });
+    if (!sessionToken)
+      throw new ClerkAuthorizationError('Clerk-sessionen har gått ut.');
+
+    const response = await fetch(`${API_ROOT}/session`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionToken }),
+    });
+    if (response.status === 401 || response.status === 403)
+      throw new ClerkAuthorizationError('Clerk-sessionen kan inte verifieras.');
+    if (!response.ok) throw new Error('Lugn-sessionen kunde inte förnyas.');
+
+    const result = await response.json();
+    const expiresAt = parseSessionExpiry(result?.expiresAt);
+    if (typeof result?.csrfToken !== 'string' || expiresAt === null)
+      throw new Error('Lugn returnerade en ogiltig förnyad session.');
+
+    csrfToken = result.csrfToken;
+    scheduleSessionRenewal(expiresAt);
+    try {
+      overview = await fetchOverview();
+    } catch (error) {
+      if (error instanceof SessionExpiredError)
+        throw new ClerkAuthorizationError(
+          'Den förnyade sessionen kunde inte verifieras.',
+        );
+      throw error;
+    }
+    render();
+    startLiveUpdates();
+    if (
+      actionMessage ===
+      'Sessionen förnyas automatiskt. Återförsök väntar på anslutningen.'
+    ) {
+      setActionMessage('Sessionen är aktiv.');
+    }
+  } catch (error) {
+    const authorizationFailed = error instanceof ClerkAuthorizationError;
+    if (
+      !authorizationFailed &&
+      previousExpiry !== null &&
+      Date.now() + 5000 < sessionExpiresAt
+    ) {
+      setActionMessage(
+        'Sessionen förnyas automatiskt. Återförsök väntar på anslutningen.',
+        'warn',
+      );
+      scheduleRenewalRetry();
+      return;
+    }
+
+    const message = authorizationFailed
+      ? 'Clerk-sessionen kan inte längre verifieras. Logga in igen.'
+      : 'Lugn-sessionen hann gå ut innan den kunde förnyas. Logga in igen.';
+    clearSessionRenewal();
+    stopLiveUpdates();
+    csrfToken = null;
+    clerkSessionExchangeSuppressed = true;
+    try {
+      if (clerkClient?.session) await clerkClient.signOut();
+      clerkSignOutPending = false;
+      clerkSessionExchangeSuppressed = false;
+      showLogin(message);
+    } catch {
+      clerkSignOutPending = true;
+      showLogin(`${message} Logga också ut från Clerk för att fortsätta.`);
+    }
+  } finally {
+    sessionRenewInProgress = false;
+    finishRenewal();
+    sessionRenewDone = null;
   }
 }
 
@@ -161,6 +620,18 @@ async function restoreSessionOnStartup() {
   loginSubmit.textContent = 'Kontrollerar session…';
   setLiveStatus('Kontrollerar session', 'warn');
   try {
+    const authConfig = await fetchAuthConfiguration();
+    authConfigLoaded = true;
+    authProvider = authConfig.provider;
+    clerkPublishableKey = authConfig.publishableKey ?? null;
+    tokenRequired = true;
+    updateLoginPresentation();
+    if (authProvider === 'clerk') {
+      clerkStatus.textContent = 'Kontrollerar Lugn-sessionen…';
+      clerkStatus.hidden = false;
+      clerkSignInTarget.hidden = true;
+    }
+
     const response = await fetch(`${API_ROOT}/session`, {
       credentials: 'same-origin',
       cache: 'no-store',
@@ -170,12 +641,64 @@ async function restoreSessionOnStartup() {
     const session = await response.json();
     if (typeof session?.tokenRequired !== 'boolean')
       throw new Error('Sessionsstatus kunde inte tolkas.');
+    if (session.provider && session.provider !== authProvider)
+      throw new Error('Inloggningsläget ändrades. Ladda om sidan.');
 
     tokenRequired = session.tokenRequired;
-    tokenInput.required = tokenRequired;
-    tokenInput.disabled = false;
-    loginSubmit.disabled = false;
-    loginSubmit.textContent = 'Anslut';
+    updateLoginPresentation();
+
+    if (authProvider === 'clerk') {
+      if (session.authenticated === true) {
+        const expiresAt = parseSessionExpiry(session.expiresAt);
+        if (
+          typeof session.csrfToken !== 'string' ||
+          session.csrfToken.length === 0 ||
+          expiresAt === null
+        ) {
+          throw new Error('Servern returnerade en ogiltig Clerk-session.');
+        }
+        try {
+          await openDashboard(session.csrfToken, expiresAt);
+        } catch {
+          showLogin('Sessionen kunde inte återupptas. Logga in igen.');
+        }
+        void initializeClerk(clerkPublishableKey)
+          .then(() => {
+            observeClerkSession();
+            clerkHandshakeReady = true;
+            if (csrfToken && sessionExpiresAt !== null)
+              scheduleSessionRenewal(sessionExpiresAt);
+            else if (!csrfToken && clerkClient.session)
+              void exchangeClerkSession(true);
+            else if (!csrfToken) showLogin();
+          })
+          .catch(() => {
+            if (csrfToken) {
+              setActionMessage(
+                'Lugn-sessionen fungerar, men Clerk kunde inte ansluta. Kontrollera nätverket innan du loggar ut.',
+                'warn',
+              );
+            } else {
+              clerkStatus.textContent =
+                'Clerk kunde inte starta. Kontrollera anslutningen och försök igen.';
+              clerkStatus.hidden = false;
+              clerkSignInTarget.hidden = true;
+              clerkRetry.hidden = false;
+            }
+          });
+        return;
+      }
+
+      await initializeClerk(clerkPublishableKey);
+      observeClerkSession();
+      clerkHandshakeReady = true;
+      if (clerkClient.session) {
+        await exchangeClerkSession(true);
+      } else {
+        showLogin();
+      }
+      return;
+    }
 
     if (
       session.authenticated === true &&
@@ -183,7 +706,10 @@ async function restoreSessionOnStartup() {
       session.csrfToken.length > 0
     ) {
       try {
-        await openDashboard(session.csrfToken);
+        await openDashboard(
+          session.csrfToken,
+          parseSessionExpiry(session.expiresAt),
+        );
         return;
       } catch {
         showLogin('Sessionen kunde inte återupptas. Logga in igen.');
@@ -194,26 +720,55 @@ async function restoreSessionOnStartup() {
       await startSession('', true);
       return;
     }
-    setLiveStatus('Inloggning krävs');
-  } catch {
-    tokenRequired = true;
-    tokenInput.required = true;
     tokenInput.disabled = false;
     loginSubmit.disabled = false;
     loginSubmit.textContent = 'Anslut';
+    setLiveStatus('Inloggning krävs');
+  } catch (error) {
+    if (!authConfigLoaded) {
+      loginInitialStatus.textContent =
+        'Inloggningen kunde inte kontrolleras. Ladda om sidan och försök igen.';
+      loginInitialStatus.hidden = false;
+      loginForm.hidden = true;
+      clerkLogin.hidden = true;
+      setLoginError(
+        error instanceof Error
+          ? error.message
+          : 'Inloggningsinställningar kunde inte hämtas.',
+      );
+      setLiveStatus('Kan inte kontrollera inloggning', 'bad');
+      return;
+    }
+    updateLoginPresentation();
+    if (authProvider === 'clerk') {
+      clerkStatus.textContent =
+        'Clerk kunde inte starta. Kontrollera anslutningen och försök igen.';
+      clerkStatus.hidden = false;
+      clerkSignInTarget.hidden = true;
+      clerkRetry.hidden = false;
+    }
+    tokenRequired = true;
+    updateLoginPresentation();
+    tokenInput.disabled = authProvider === 'clerk';
+    loginSubmit.disabled = authProvider === 'clerk';
+    loginSubmit.textContent = 'Anslut';
     setLoginError(
-      'Sessionsstatus kunde inte hämtas. Kontrollera SSH-tunneln och försök ansluta igen.',
+      error instanceof Error
+        ? error.message
+        : 'Sessionsstatus kunde inte hämtas. Kontrollera SSH-tunneln och försök igen.',
     );
     setLiveStatus('Kan inte kontrollera session', 'bad');
   }
 }
 
-async function openDashboard(sessionCsrfToken) {
+async function openDashboard(sessionCsrfToken, expiresAt = null) {
   csrfToken = sessionCsrfToken;
+  scheduleSessionRenewal(expiresAt);
   try {
     overview = await fetchOverview();
   } catch (error) {
     csrfToken = null;
+    clearSessionRenewal();
     throw error;
   }
   showDashboard();
@@ -223,20 +778,101 @@ async function openDashboard(sessionCsrfToken) {
 }
 
 async function endSession() {
-  const headers = {};
-  if (csrfToken) headers['X-Lugn-CSRF'] = csrfToken;
+  logoutButton.disabled = true;
+  setActionMessage('Loggar ut…');
   try {
-    await fetch(`${API_ROOT}/session`, {
+    if (sessionRenewDone) await sessionRenewDone;
+    const headers = {};
+    if (csrfToken) headers['X-Lugn-CSRF'] = csrfToken;
+    const response = await fetch(`${API_ROOT}/session`, {
       method: 'DELETE',
       credentials: 'same-origin',
       cache: 'no-store',
       headers,
     });
-  } catch {
-    // Clear local controls even if the server is unreachable.
+    if (!response.ok && response.status !== 401)
+      throw new Error('Lugn-sessionen kunde inte avslutas. Försök igen.');
+    csrfToken = null;
+    clearSessionRenewal();
+
+    if (authProvider === 'clerk') {
+      clerkSessionExchangeSuppressed = true;
+      try {
+        await signOutOfClerk();
+      } catch {
+        clerkSignOutPending = true;
+        showLogin(
+          'Lugn-sessionen avslutades, men Clerk kunde inte loggas ut. Försök igen.',
+        );
+        return;
+      }
+    }
+
+    showLogin('Du har loggat ut.');
+  } catch (error) {
+    logoutButton.disabled = false;
+    setActionMessage(
+      error instanceof Error
+        ? error.message
+        : 'Utloggningen misslyckades. Försök igen.',
+      'bad',
+    );
   }
-  setLoginError('Du har loggat ut.');
-  showLogin('Du har loggat ut.');
+}
+
+async function signOutOfClerk() {
+  const clerk = await initializeClerk(clerkPublishableKey);
+  if (clerk.session) await clerk.signOut();
+  clerkSignOutPending = false;
+  clerkAccountRejected = false;
+  clerkSessionExchangeSuppressed = false;
+}
+
+async function switchClerkAccount() {
+  clerkRetry.disabled = true;
+  clerkRetry.textContent = 'Byter konto…';
+  try {
+    clerkSessionExchangeSuppressed = true;
+    await signOutOfClerk();
+    showLogin('Logga in med ett Clerk-konto som har åtkomst till Lugn.');
+  } catch {
+    clerkSignOutPending = true;
+    setLoginError(
+      'Clerk kunde inte logga ut. Kontrollera anslutningen och försök igen.',
+    );
+    clerkStatus.textContent = 'Utloggningen från Clerk väntar.';
+    clerkStatus.hidden = false;
+    clerkSignInTarget.hidden = true;
+    clerkRetry.hidden = false;
+  } finally {
+    clerkRetry.disabled = false;
+    if (clerkRetry.textContent === 'Byter konto…')
+      clerkRetry.textContent = 'Byt Clerk-konto';
+  }
+}
+
+async function retryClerkSignOut() {
+  if (!clerkSignOutPending) return;
+  clerkRetry.disabled = true;
+  clerkRetry.textContent = 'Loggar ut…';
+  setLoginError('');
+  clerkStatus.textContent = 'Loggar ut från Clerk…';
+  clerkStatus.hidden = false;
+  try {
+    await signOutOfClerk();
+    showLogin('Du har loggat ut.');
+  } catch {
+    setLoginError(
+      'Lugn-sessionen är avslutad, men Clerk kunde inte loggas ut. Kontrollera anslutningen och försök igen.',
+    );
+    clerkStatus.textContent = 'Utloggningen från Clerk väntar.';
+    clerkStatus.hidden = false;
+    clerkSignInTarget.hidden = true;
+    clerkRetry.hidden = false;
+  } finally {
+    clerkRetry.disabled = false;
+    clerkRetry.textContent = 'Försök igen';
+  }
 }
 
 async function fetchOverview() {
@@ -297,6 +933,10 @@ async function refreshOverview() {
     render();
   } catch (error) {
     if (error instanceof SessionExpiredError) {
+      if (authProvider === 'clerk' && clerkClient?.session) {
+        if (!sessionRenewInProgress) void renewClerkSession();
+        return;
+      }
       showLogin('Sessionen har gått ut. Logga in igen.');
       return;
     }
@@ -341,6 +981,14 @@ async function invokeCapability(capability, input, actionKey) {
     await refreshOverview();
   } catch (error) {
     if (error instanceof SessionExpiredError) {
+      if (authProvider === 'clerk' && clerkClient?.session) {
+        if (!sessionRenewInProgress) void renewClerkSession();
+        setActionMessage(
+          'Sessionen förnyas. Försök skicka ändringen igen när den är klar.',
+          'warn',
+        );
+        return;
+      }
       showLogin('Sessionen har gått ut. Logga in igen.');
       return;
     }
