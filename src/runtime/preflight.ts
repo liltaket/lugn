@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   Stl27lMqttPresenceAdapter,
   type Stl27lPresenceMqttSubscriber,
@@ -133,6 +134,10 @@ async function checkMqtt(
   if (!mqttConfig)
     return { broker: 'not_configured', sensor: 'not_configured' };
 
+  const probeConfig = {
+    ...mqttConfig,
+    clientId: createPreflightClientId(mqttConfig.clientId),
+  };
   let failed = false;
   let completeWait:
     | ((result: 'fresh' | 'disconnected' | 'error' | 'timeout') => void)
@@ -141,7 +146,7 @@ async function checkMqtt(
     dependencies.createMqttSubscriber ?? createDefaultMqttSubscriber;
   let subscriber: PreflightMqttSubscriber;
   try {
-    subscriber = createSubscriber(mqttConfig, () => {
+    subscriber = createSubscriber(probeConfig, () => {
       failed = true;
       completeWait?.('error');
     });
@@ -249,6 +254,17 @@ function createDefaultMqttSubscriber(
     },
     onError,
   );
+}
+
+/** Keep each read-only probe on its own broker connection. */
+function createPreflightClientId(
+  configuredClientId: string | undefined,
+): string {
+  const candidate = `lugn-preflight-${randomUUID()}`;
+
+  // Config accepts any ID up to 128 characters, including this candidate.
+  // Extend the probe ID on the exact-collision edge case.
+  return candidate === configuredClientId ? `${candidate}-probe` : candidate;
 }
 
 function parseArgs(
