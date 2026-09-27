@@ -24,6 +24,8 @@ For example, use your secret manager or a protected service environment to set
 `HOME_ASSISTANT_TOKEN`, `MQTT_USERNAME`, `MQTT_PASSWORD`, and
 `LUGN_API_TOKEN`. The API token should be a long random value. If MQTT uses
 anonymous access, remove both MQTT credential references from the config.
+For a local checkout, a repo-root `lugn.env` is git-ignored; keep it mode
+`0600` and never commit it.
 
 The HTTP listener defaults to `127.0.0.1:8787` and only accepts loopback bind
 addresses. Lugn's listener is plain HTTP. For remote access, keep the Lugn
@@ -39,6 +41,13 @@ From the repository root, after setting the environment variables:
 npm ci
 npm run build
 npm start
+```
+
+To load a protected repo-root `lugn.env` for a local run, use:
+
+```sh
+chmod 600 lugn.env
+node --env-file=./lugn.env dist/runtime/main.js
 ```
 
 Set `LUGN_CONFIG_PATH` to use a config file elsewhere, or pass a file path to
