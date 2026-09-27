@@ -15,6 +15,31 @@ import {
 } from '../core/schemas.js';
 
 const EnvironmentNameSchema = z.string().regex(/^[A-Z_][A-Z0-9_]*$/);
+const TrustedOriginSchema = z
+  .string()
+  .url()
+  .superRefine((value, context) => {
+    let origin: URL;
+    try {
+      origin = new URL(value);
+    } catch {
+      context.addIssue({
+        code: 'custom',
+        message: 'trustedOrigins entries must be valid HTTP or HTTPS origins',
+      });
+      return;
+    }
+    if (
+      (origin.protocol !== 'http:' && origin.protocol !== 'https:') ||
+      origin.origin !== value ||
+      origin.username ||
+      origin.password
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'trustedOrigins entries must be bare HTTP or HTTPS origins',
+      });
+  });
 
 const HomeAssistantConfigSchema = z
   .object({
@@ -102,9 +127,10 @@ const FileConfigSchema = z
         host: z.string().min(1).default('127.0.0.1'),
         port: z.number().int().min(1).max(65_535).default(8787),
         bearerTokenEnv: EnvironmentNameSchema.optional(),
+        trustedOrigins: z.array(TrustedOriginSchema).max(8).default([]),
       })
       .strict()
-      .default({ host: '127.0.0.1', port: 8787 }),
+      .default({ host: '127.0.0.1', port: 8787, trustedOrigins: [] }),
     homeAssistant: HomeAssistantConfigSchema,
     mqtt: MqttConfigSchema.optional(),
     prelight: z
@@ -181,6 +207,7 @@ export type RuntimeConfig = {
     host: string;
     port: number;
     bearerToken?: string;
+    trustedOrigins?: string[];
   };
   homeAssistant: {
     baseUrl: string;
@@ -244,6 +271,11 @@ export function loadRuntimeConfig(
   const apiToken = fileConfig.http.bearerTokenEnv
     ? requireEnvironmentValue(fileConfig.http.bearerTokenEnv, environment)
     : undefined;
+  if (fileConfig.http.trustedOrigins.length > 0 && apiToken === undefined) {
+    throw new RuntimeConfigError(
+      'trustedOrigins requires an HTTP bearer token to protect the API',
+    );
+  }
 
   if (!isLoopbackBindHost(fileConfig.http.host)) {
     throw new RuntimeConfigError(
@@ -297,6 +329,7 @@ export function loadRuntimeConfig(
     http: {
       host: fileConfig.http.host,
       port: fileConfig.http.port,
+      trustedOrigins: fileConfig.http.trustedOrigins,
       ...(apiToken === undefined ? {} : { bearerToken: apiToken }),
     },
     homeAssistant: {

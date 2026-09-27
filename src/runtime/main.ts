@@ -1,6 +1,7 @@
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
 import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
-import { pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HomeAssistantLightingAdapter } from '../adapters/home-assistant-lighting.js';
 import { HomeAssistantSwitchAdapter } from '../adapters/home-assistant-switch.js';
 import {
@@ -213,6 +214,7 @@ export async function startRuntime(
     ...config.http,
     engine,
     capabilities,
+    webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
     integrations: () => ({
       home_assistant: homeAssistantSocket.status,
       mqtt: mqttSubscriber?.status ?? 'not_configured',

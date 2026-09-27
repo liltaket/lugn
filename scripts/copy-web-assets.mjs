@@ -1,0 +1,14 @@
+import { cp, mkdir, rm } from 'node:fs/promises';
+
+await rm(new URL('../dist/web/', import.meta.url), {
+  recursive: true,
+  force: true,
+});
+await mkdir(new URL('../dist/web/', import.meta.url), { recursive: true });
+await cp(
+  new URL('../web/', import.meta.url),
+  new URL('../dist/web/', import.meta.url),
+  {
+    recursive: true,
+  },
+);

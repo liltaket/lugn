@@ -1,5 +1,23 @@
 # UI, Nest Hubs and DashCast
 
+## First operator panel
+
+The initial web surface is a focused lighting panel. It shows current presence,
+integration health, configured scenes, and every mapped light's availability,
+desired values, reported values, and ownership. Operators can select or reapply
+a scene, toggle a mapped light, and adjust its brightness when the adapter
+reports that property. Command acceptance remains separate from device
+feedback.
+
+The panel uses a short-lived same-origin session created from the local API
+bearer token. The token is not embedded in frontend assets or saved by the
+browser. Keep the HTTP service on loopback and use an SSH tunnel for local
+operation, or configure the exact TLS proxy origin in `http.trustedOrigins`.
+The existing typed capabilities remain the only path to device commands.
+
+This first panel is for observing and tuning configured lights. Editing Home
+Assistant mappings and broader room systems remain future UI work.
+
 ## Web application
 
 The web app is the primary human configuration surface.

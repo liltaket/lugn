@@ -155,6 +155,45 @@ describe('runtime configuration cross references', () => {
     expect(loadConfig(minimal).defaultSceneId).toBeUndefined();
   });
 
+  it('requires a bearer token for trusted proxy origins and accepts bare origins only', () => {
+    expect(loadConfig(minimal).http.trustedOrigins).toEqual([]);
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        http: { trustedOrigins: ['https://lugn.example.test'] },
+      }),
+    ).toThrow('trustedOrigins requires an HTTP bearer token');
+
+    expect(
+      loadConfig(
+        {
+          ...minimal,
+          http: {
+            bearerTokenEnv: 'API_TOKEN_B64',
+            trustedOrigins: [
+              'https://lugn.example.test',
+              'http://lugn.example.test',
+            ],
+          },
+        },
+        {
+          HA_TOKEN: 'ha-token',
+          API_TOKEN_B64: Buffer.from('api-token').toString('base64url'),
+        },
+      ).http.trustedOrigins,
+    ).toEqual(['https://lugn.example.test', 'http://lugn.example.test']);
+
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        http: {
+          bearerTokenEnv: 'API_TOKEN',
+          trustedOrigins: ['https://lugn.example.test/panel'],
+        },
+      }),
+    ).toThrow('Invalid configuration');
+  });
+
   it('keeps persisted state inside the service writable state directory', () => {
     const stateDirectory = join(homedir(), '.local', 'state', 'lugn');
     expect(loadConfig(minimal).statePath).toBe(

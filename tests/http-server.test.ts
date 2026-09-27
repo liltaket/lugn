@@ -206,6 +206,159 @@ describe('local capability HTTP API', () => {
     });
     expect(buttonRequests).toHaveLength(1);
   });
+
+  it('serves a same-origin UI session without exposing its bearer token to API calls', async () => {
+    const port = await findAvailablePort();
+    const clock = new FakeClock();
+    const adapter = new SimulatedLightingAdapter(clock);
+    engine = new LugnEngine(clock, {
+      deviceIds: ['lighting.ceiling'],
+      scenes: [],
+      adapter,
+    });
+    server = new LugnHttpServer({
+      host: '127.0.0.1',
+      port,
+      bearerToken: 'local-test-token',
+      engine,
+      capabilities: new CapabilityRegistry(engine),
+      integrations: () => ({ home_assistant: 'connected' }),
+    });
+    await server.start();
+
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const origin = baseUrl;
+    const page = await fetch(`${baseUrl}/ui/`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-security-policy')).toContain(
+      "script-src 'self'",
+    );
+    expect(await page.text()).toContain('<title>Lugn · Belysning</title>');
+    const frontend = await fetch(`${baseUrl}/ui/app.js`);
+    expect(frontend.status).toBe(200);
+    expect(await frontend.text()).not.toContain('local-test-token');
+
+    const sessionStatus = await fetch(`${baseUrl}/ui/api/session`);
+    expect(await sessionStatus.json()).toEqual({
+      tokenRequired: true,
+      authenticated: false,
+    });
+
+    const dnsRebindingAttempt = await fetch(`${baseUrl}/ui/api/session`, {
+      method: 'POST',
+      headers: {
+        Host: `attacker.example:${port}`,
+        Origin: `http://attacker.example:${port}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ token: '' }),
+    });
+    expect(dnsRebindingAttempt.status).toBe(403);
+
+    const crossOriginLogin = await fetch(`${baseUrl}/ui/api/session`, {
+      method: 'POST',
+      headers: {
+        Origin: 'http://attacker.example',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ token: 'local-test-token' }),
+    });
+    expect(crossOriginLogin.status).toBe(403);
+
+    const invalidLogin = await fetch(`${baseUrl}/ui/api/session`, {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: 'wrong-token' }),
+    });
+    expect(invalidLogin.status).toBe(401);
+
+    const login = await fetch(`${baseUrl}/ui/api/session`, {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: 'local-test-token' }),
+    });
+    expect(login.status).toBe(200);
+    const loginBody = (await login.json()) as { csrfToken: string };
+    const sessionCookie = login.headers
+      .get('set-cookie')
+      ?.match(/lugn_ui_session=([^;]+)/)?.[1];
+    expect(sessionCookie).toBeTruthy();
+    expect(login.headers.get('set-cookie')).toContain('HttpOnly');
+    expect(login.headers.get('set-cookie')).toContain('SameSite=Strict');
+
+    const overview = await fetch(`${baseUrl}/ui/api/overview`, {
+      headers: { Cookie: `lugn_ui_session=${sessionCookie}` },
+    });
+    expect(overview.status).toBe(200);
+    const overviewBody = (await overview.json()) as {
+      state: { presence: { state: string } };
+    };
+    expect(overviewBody.state.presence.state).toBe('unknown');
+
+    const missingCsrf = await fetch(
+      `${baseUrl}/ui/api/capabilities/lighting.set`,
+      {
+        method: 'POST',
+        headers: {
+          Origin: origin,
+          Cookie: `lugn_ui_session=${sessionCookie}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          input: { target: 'lighting.ceiling', values: { power: true } },
+        }),
+      },
+    );
+    expect(missingCsrf.status).toBe(403);
+    expect(adapter.dispatched).toHaveLength(0);
+
+    const nullInput = await fetch(
+      `${baseUrl}/ui/api/capabilities/lighting.reapplyScene`,
+      {
+        method: 'POST',
+        headers: {
+          Origin: origin,
+          Cookie: `lugn_ui_session=${sessionCookie}`,
+          'X-Lugn-CSRF': loginBody.csrfToken,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ input: null }),
+      },
+    );
+    expect(nullInput.status).toBe(400);
+    expect(adapter.dispatched).toHaveLength(0);
+
+    const setLight = await fetch(
+      `${baseUrl}/ui/api/capabilities/lighting.set`,
+      {
+        method: 'POST',
+        headers: {
+          Origin: origin,
+          Cookie: `lugn_ui_session=${sessionCookie}`,
+          'X-Lugn-CSRF': loginBody.csrfToken,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          input: { target: 'lighting.ceiling', values: { power: true } },
+        }),
+      },
+    );
+    expect(setLight.status).toBe(200);
+    expect(adapter.dispatched).toHaveLength(1);
+
+    const logout = await fetch(`${baseUrl}/ui/api/session`, {
+      method: 'DELETE',
+      headers: {
+        Origin: origin,
+        Cookie: `lugn_ui_session=${sessionCookie}`,
+      },
+    });
+    expect(logout.status).toBe(204);
+    const expired = await fetch(`${baseUrl}/ui/api/overview`, {
+      headers: { Cookie: `lugn_ui_session=${sessionCookie}` },
+    });
+    expect(expired.status).toBe(401);
+  });
 });
 
 async function findAvailablePort(): Promise<number> {

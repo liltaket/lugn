@@ -62,6 +62,12 @@ directory.
 
 The UI and configuration files/API should represent the same underlying schema.
 
+`http.trustedOrigins` defaults to an empty list. Direct requests must use a
+loopback host. If Lugn is behind a TLS-terminating reverse proxy, add the exact
+origin (scheme and host, without a path) and keep `bearerTokenEnv` configured;
+the proxy must preserve the external `Host` header. Other host/origin pairs
+are rejected to protect the loopback API against DNS rebinding.
+
 This allows:
 
 - ordinary users to configure visually;

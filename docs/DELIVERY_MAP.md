@@ -8,9 +8,9 @@ through an existing integration, and expose a safe path to additional system
 adapters. Document setup, credentials, health, shutdown, and what has and has
 not been verified against physical systems.
 
-This map tracks implementation toward a configurable local runtime. Live
-integration acceptance requires installation-specific endpoints and explicit
-authorization to connect to them.
+This map tracks implementation and commissioning toward a configurable local
+runtime. The first live deployment is running on the room host; remaining work
+is called out separately from observed software and device behavior.
 
 ## Notes
 
@@ -51,10 +51,10 @@ authorization to connect to them.
   of the last ledger change across heartbeats. `/preview` remains a separate
   non-retained prelight hint. The current Room Engine source also consumes
   `bruno/doorway` directly, confirming Lugn can avoid an HA sensor-entity hop.
-  A read-only MQTT handshake reached the documented broker endpoint but an
-  anonymous connection was refused as not authorized; no topics or payloads
-  were read. This does not prove the tracked endpoint is the live deployment.
-  See [sensor integration contract](INTEGRATIONS.md).
+  Live commissioning confirmed a fresh STL27L feed over MQTT and a Govee Local
+  dispatch about 13 ms after Lugn received a prelight event. This measures the
+  software dispatch path, not physical light response. See [sensor integration
+  contract](INTEGRATIONS.md).
 
 ### Runnable host and configuration contract
 
@@ -115,33 +115,39 @@ authorization to connect to them.
   commands are never replayed. See [configuration](CONFIGURATION.md) and the
   [operator guide](OPERATIONS.md) for persistence and restart behavior.
 
+### Room control panel
+
+- Question: How can an operator inspect presence, scene ownership, mapped
+  lights, and reported feedback while tuning devices?
+- Status: an authenticated local lighting panel uses same-origin sessions and
+  the existing typed capability API. It is served through the loopback runtime
+  and supports an SSH tunnel or an explicitly trusted TLS proxy origin.
+
 ### Live integration acceptance
 
 - Question: What evidence proves sensor-event-to-command latency and physical
   feedback on Bruno's actual broker, Home Assistant, sensor, and lights?
 - Depends on: implementation, user-provided endpoint/entity configuration,
   and explicit authorization to connect to those live systems.
-- Status: the current LAN endpoint is now identified read-only:
-  `homeassistant.local` resolves and responds as Home Assistant (`/api` returns
-  401 without a bearer token), and its MQTT port accepts TCP but an anonymous
-  MQTT handshake returns not-authorized. The configured sensor topic is known,
-  but no topic was subscribed and no sensor payload was read. Live acceptance
-  still needs HA and MQTT credentials, current entity mappings, a chosen
-  deployment host, and a bounded physical feedback check. No device command or
-  physical actuation has been performed.
+- Status: deployed and actively commissioned on BrunoCAM at
+  `616d74ea90269f30dbe3ccca1a365d46193c77bb`. Latest live health returned
+  Home Assistant and MQTT connected; the runtime reported confirmed occupancy,
+  `scene.everyday`, and eight mapped devices. The user observed that entering
+  the room turned on lighting. One HA feedback confirmation was present at the
+  latest check; two targets remain degraded and are listed in the Draft PR.
+  The deployment created a private intent file, but a second restart has not
+  yet been used as live proof of restoration. Automated tests cover the restart
+  safety contract. This is operator-reported evidence, not hardware sign-off.
 
 ## Not yet specified
 
-- Deployment host and service manager.
-- HA and broker credentials, plus confirmation of current sensor deployment
-  settings.
-- Which HA entities represent the multiple lights and the next non-light system.
-- Whether the desired final surface is CLI/service only or also a UI/API.
+- GUI-driven lighting mapping and scene tuning after the initial panel is
+  available.
+- The next non-light system and its device-specific behavior contract.
+- A second live restart observation to confirm persistence behavior on the
+  installed host.
 
 ## Out of scope
 
 - Porting raw STL27L UART parsing, calibration, or tracking into Lugn.
-- Deploying to a host, writing live HA configuration, or actuating physical
-  devices before the host/entity details and live-connection authorization are
-  established.
-- Claiming measured latency or physical success from unit or CI checks.
+- Claiming measured latency or physical success from unit or CI checks alone.

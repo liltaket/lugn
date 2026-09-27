@@ -189,6 +189,37 @@ administrator must enable lingering for the account using
 keeps the HTTP API bound to loopback. Re-run the installer after moving the
 checkout or changing the Node.js executable path.
 
+## Room control panel
+
+The loopback control panel is available at `/ui/`. From another computer,
+open an SSH tunnel to the Lugn host:
+
+```sh
+ssh -N -L 8787:127.0.0.1:8787 <user>@<host>
+```
+
+Then visit `http://127.0.0.1:8787/ui/`. When the API bearer token is configured,
+enter it in the panel to create a short-lived browser session. The browser does
+not save the token. To read the configured token on the Lugn host, run this
+command in a private terminal and paste its output only into the local panel:
+
+```sh
+node --env-file="$HOME/.config/lugn/lugn.env" -e '
+const fs = require("node:fs");
+const config = JSON.parse(fs.readFileSync(process.env.HOME + "/.config/lugn/config.json", "utf8"));
+const name = config.http.bearerTokenEnv;
+const value = process.env[name];
+process.stdout.write(name.endsWith("_B64") ? Buffer.from(value, "base64url").toString("utf8") : value);
+'
+```
+
+For a TLS reverse proxy, add its exact origin to `http.trustedOrigins` (for
+example, `https://lugn.example.org`) and keep `bearerTokenEnv` configured. The
+proxy must preserve that host when forwarding to loopback. Lugn rejects
+unconfigured hosts and cross-origin browser requests to prevent DNS rebinding.
+The panel shows reported state and command feedback; a dispatch alone does not
+prove a physical light changed.
+
 ## HTTP API
 
 When `bearerTokenEnv` is set, send the matching bearer token to all routes,

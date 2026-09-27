@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Överblick och styrning av Lugn-belysning."
+    />
+    <title>Lugn · Belysning</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+    <script type="module" src="/ui/app.js"></script>
+  </head>
+  <body>
+    <!--
+      THESIS: Tune mapped room lights by comparing Lugn's desired values with the latest device reports.
+      OWN-WORLD: A dim-room operator console in mineral green, soft ink, and restrained citron controls.
+      STORY: Confirm room and integration state, choose a scene, then inspect and adjust each configured light.
+      FIRST VIEWPORT: Service state first, scene buttons second, and the real configured light list directly below.
+      FORM: A responsive, single-route operations panel; every label and device row comes from the live API.
+    -->
+    <header class="topbar">
+      <a class="wordmark" href="/ui/" aria-label="Lugn belysning">
+        <span class="wordmark-mark" aria-hidden="true">L</span>
+        <span>Lugn</span>
+        <span class="wordmark-divider" aria-hidden="true"></span>
+        <span class="wordmark-section">Belysning</span>
+      </a>
+      <div class="topbar-actions">
+        <p class="live-status" id="live-status" data-tone="neutral">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="live-status-label">Inte ansluten</span>
+        </p>
+        <button
+          class="button button-quiet button-small"
+          id="logout-button"
+          type="button"
+          hidden
+        >
+          Logga ut
+        </button>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="login-view" id="login-view" aria-labelledby="login-title">
+        <div class="login-copy">
+          <p class="login-mark" aria-hidden="true">L</p>
+          <h1 id="login-title">Anslut till Lugn</h1>
+          <p>
+            Logga in för att se rummets lampor och styra deras önskade läge.
+          </p>
+        </div>
+        <form class="login-form" id="login-form">
+          <label for="api-token">Åtkomsttoken</label>
+          <input
+            id="api-token"
+            name="token"
+            type="password"
+            inputmode="text"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            required
+            aria-describedby="token-help login-error"
+          />
+          <p class="field-help" id="token-help">
+            Token används bara för att skapa en session och sparas inte i
+            webbläsaren.
+          </p>
+          <p class="form-error" id="login-error" role="alert" hidden></p>
+          <button
+            class="button button-primary login-submit"
+            id="login-submit"
+            type="submit"
+          >
+            Anslut
+          </button>
+        </form>
+      </section>
+
+      <section
+        class="dashboard"
+        id="dashboard-view"
+        aria-labelledby="page-title"
+        hidden
+      >
+        <header class="page-heading">
+          <div>
+            <h1 id="page-title">Belysning</h1>
+            <p>Se vad Lugn begär och vad lamporna senast rapporterade.</p>
+          </div>
+          <p class="updated-at" id="updated-at">Väntar på tillstånd</p>
+        </header>
+
+        <section class="system-panel" aria-label="Rums- och systemstatus">
+          <div
+            class="room-presence"
+            id="room-presence"
+            data-tone="neutral"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <span class="presence-indicator" aria-hidden="true"></span>
+            <div>
+              <p class="panel-label">Närvaro</p>
+              <h2 id="presence-title">Okänd</h2>
+              <p class="presence-detail" id="presence-detail">
+                Väntar på närvarostatus
+              </p>
+            </div>
+          </div>
+          <div class="integration-status">
+            <div class="integration-heading">
+              <div>
+                <p class="panel-label">System</p>
+                <h2 id="health-title">Anslutningar</h2>
+              </div>
+              <span
+                class="state-chip"
+                id="health-chip"
+                data-tone="neutral"
+                role="status"
+                aria-live="polite"
+                >Okänd</span
+              >
+            </div>
+            <ul class="integration-list" id="integration-list"></ul>
+          </div>
+        </section>
+
+        <div class="system-alert" id="system-alert" role="status" hidden></div>
+
+        <section class="scene-section" aria-labelledby="scenes-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="scenes-title">Ljusscener</h2>
+              <p id="scene-summary">Välj en scen för rummet.</p>
+            </div>
+            <button
+              class="button button-quiet button-small"
+              id="reapply-button"
+              type="button"
+              hidden
+            >
+              Tillämpa scenen igen
+            </button>
+          </div>
+          <div
+            class="scene-list"
+            id="scene-list"
+            aria-label="Tillgängliga ljusscener"
+          ></div>
+        </section>
+
+        <section class="lights-section" aria-labelledby="lights-title">
+          <div class="section-heading light-section-heading">
+            <div>
+              <h2 id="lights-title">Lampor</h2>
+              <p>
+                Önskat läge är Lugns mål. Rapporterat läge kommer från enheten.
+              </p>
+            </div>
+            <p class="mapping-summary" id="mapping-summary"></p>
+          </div>
+          <div class="light-list" id="light-list"></div>
+        </section>
+
+        <p
+          class="action-status"
+          id="action-status"
+          role="status"
+          aria-live="polite"
+        ></p>
+      </section>
+    </main>
+  </body>
+</html>

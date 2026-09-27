@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-web-assets.mjs",
     "start": "node dist/runtime/main.js",
     "config:check": "npm run build --silent && node dist/runtime/config-check.js",
     "ha:discover": "npm run build --silent && node dist/runtime/ha-discover.js",
