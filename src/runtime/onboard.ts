@@ -81,6 +81,7 @@ type CommissioningConfig = {
     name: string;
     lighting: Record<string, { power: true }>;
   }>;
+  defaultSceneId: 'scene.everyday';
 };
 
 const HELP_TEXT = [
@@ -326,6 +327,7 @@ export async function runOnboardingCli(
         : {}),
     },
     prelight: { targets: prelightTargets, maxDurationMs: 5000 },
+    defaultSceneId: 'scene.everyday',
     scenes: [
       {
         id: 'scene.everyday',
@@ -386,7 +388,7 @@ export async function runOnboardingCli(
     'The Lugn service was not started. Review the config before enabling it.',
   );
   io.writeLine(
-    'The generated Everyday scene turns mapped lights on at their last brightness; fast entry lighting uses the selected temporary brightness.',
+    'The generated Everyday scene is selected by default and applied on confirmed occupancy; fast entry lighting uses the selected temporary brightness.',
   );
   return 0;
 }

@@ -41,6 +41,13 @@ read-only, and preflight checks configured mappings without invoking them. See
 [Running Lugn](OPERATIONS.md#home-assistant-buttons) for the config shape and
 commissioning commands.
 
+`defaultSceneId` is optional and must name one of the configured scenes. When
+set, Lugn selects that scene during startup but waits for confirmed occupancy
+before applying its lighting values. Unknown presence and startup observations
+alone do not turn lights on. A confirmed empty event continues to apply the
+normal physical-off policy; a live preview may also apply configured prelight.
+The onboarding wizard sets its generated `scene.everyday` as the default.
+
 ## UI and structured representation
 
 The UI and configuration files/API should represent the same underlying schema.

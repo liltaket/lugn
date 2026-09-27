@@ -20,6 +20,44 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('Lugn deterministic lighting slice', () => {
+  it('selects a configured default scene at startup but applies it only after confirmed occupancy', async () => {
+    const scene = {
+      id: 'scene.everyday',
+      name: 'Everyday',
+      lighting: { 'lighting.ceiling': { power: true as const } },
+    };
+    const { adapter, engine } = setup({
+      deviceIds: ['lighting.ceiling'],
+      scenes: [scene],
+      defaultSceneId: scene.id,
+    });
+
+    expect(engine.state.lighting.currentScene).toBe(scene.id);
+    expect(
+      engine.state.lighting.devices['lighting.ceiling']?.effectiveDesired,
+    ).toEqual({});
+    expect(adapter.dispatched).toEqual([]);
+
+    adapter.externalChange('lighting.ceiling', { power: false });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'unknown',
+    });
+    expect(adapter.dispatched).toEqual([]);
+
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+    });
+    expect(adapter.dispatched).toHaveLength(1);
+    expect(adapter.dispatched[0]).toMatchObject({
+      target: 'lighting.ceiling',
+      values: { power: true },
+    });
+    expect(engine.state.lighting.currentScene).toBe(scene.id);
+    engine.dispose();
+  });
+
   it('terminalizes unresolved prelight commands at their feedback deadline and clears timers on dispose', async () => {
     const { clock, adapter, engine } = setup({
       convergenceTimeoutMs: 3_000,

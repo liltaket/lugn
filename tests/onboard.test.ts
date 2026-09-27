@@ -130,6 +130,7 @@ describe('interactive commissioning wizard', () => {
     const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
       homeAssistant: { entities: Record<string, string> };
       mqtt: { baseTopic: string; usernameEnv?: string; passwordEnv?: string };
+      defaultSceneId: string;
       prelight: {
         targets: Record<
           string,
@@ -142,6 +143,7 @@ describe('interactive commissioning wizard', () => {
       'lighting.ceiling': 'light.ceiling',
       'lighting.desk': 'light.desk',
     });
+    expect(config.defaultSceneId).toBe('scene.everyday');
     expect(config.mqtt).toMatchObject({
       baseTopic: 'bruno/doorway',
       usernameEnv: 'MQTT_USERNAME_B64',

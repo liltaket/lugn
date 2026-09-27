@@ -45,6 +45,7 @@ import { CommandLedger } from '../execution/command-ledger.js';
 export type EngineOptions = {
   deviceIds?: string[];
   scenes?: LightingScene[];
+  defaultSceneId?: string;
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
   continuityMs?: number;
@@ -121,6 +122,7 @@ export class LugnEngine {
   private nextSwitchCommandId = 0;
   private readonly prelightTargets: Readonly<Record<string, LightingValues>>;
   private readonly prelightMaxDurationMs: number;
+  private defaultSceneOnOccupancy: LightingScene | undefined;
   private nextDiagnosticId = 0;
   private nextEventId = 0;
   private readonly unsubscribers: Array<() => void> = [];
@@ -180,6 +182,11 @@ export class LugnEngine {
       SceneSchema.parse(scene),
     );
     this.scenes = new Map(scenes.map((scene) => [scene.id, scene]));
+    if (options.defaultSceneId !== undefined) {
+      this.defaultSceneOnOccupancy = this.scenes.get(options.defaultSceneId);
+      if (!this.defaultSceneOnOccupancy)
+        throw new Error(`Unknown default scene: ${options.defaultSceneId}`);
+    }
     const devices: Record<string, DeviceRuntime> = {};
     for (const id of options.deviceIds ?? [
       'lighting.ceiling',
@@ -225,7 +232,11 @@ export class LugnEngine {
         personCount: null,
         continuityExpiresAt: null,
       },
-      lighting: { currentScene: null, sceneRevision: 0, devices },
+      lighting: {
+        currentScene: this.defaultSceneOnOccupancy?.id ?? null,
+        sceneRevision: 0,
+        devices,
+      },
       switches: { devices: switches, commands: [] },
       music: this.musicController.state,
       commands: this.ledger.records,
@@ -539,6 +550,15 @@ export class LugnEngine {
       if (expiry !== null && receivedAt >= expiry) this.expireContinuity();
       const returned = withinContinuity;
       this.state.presence.continuityExpiresAt = null;
+      const defaultScene = this.defaultSceneOnOccupancy;
+      if (defaultScene) {
+        this.defaultSceneOnOccupancy = undefined;
+        this.beginScene(defaultScene, {
+          actor: systemActor,
+          source: 'presence',
+          reason: 'Configured default scene activated on confirmed occupancy',
+        });
+      }
       this.addDiagnostic(
         returned ? 'presence.returned' : 'presence.occupied',
         returned
@@ -890,6 +910,7 @@ export class LugnEngine {
   }
 
   private beginScene(scene: LightingScene, intent: IntentProvenance): void {
+    this.defaultSceneOnOccupancy = undefined;
     this.terminateAllFastPathEvents();
     const priorRevision = this.state.lighting.sceneRevision;
     this.clearRetryTimer(priorRevision);

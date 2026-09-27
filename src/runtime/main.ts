@@ -106,6 +106,9 @@ export async function startRuntime(
   const engine = new LugnEngine(systemClock, {
     adapter: homeAssistantLighting,
     deviceIds: Object.keys(config.homeAssistant.entities),
+    ...(config.defaultSceneId === undefined
+      ? {}
+      : { defaultSceneId: config.defaultSceneId }),
     prelight: config.prelight,
     ...(homeAssistantMusic === undefined
       ? {}
@@ -201,7 +204,6 @@ export async function startRuntime(
   });
 
   try {
-    if (mqttSubscriber) mqttSubscriber.start();
     await seedHomeAssistantObservations(
       config.homeAssistant.baseUrl,
       config.homeAssistant.token,
@@ -210,6 +212,7 @@ export async function startRuntime(
       homeAssistantMusic,
       homeAssistantFetch,
     );
+    if (mqttSubscriber) mqttSubscriber.start();
     homeAssistantSocket.start();
     await http.start();
   } catch (error) {

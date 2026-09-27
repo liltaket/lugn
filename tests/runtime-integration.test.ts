@@ -26,6 +26,7 @@ class FakeMqttSubscriber implements Stl27lPresenceMqttSubscriber {
     (status: MqttSubscriberStatus) => void
   >();
   status: MqttSubscriberStatus = 'stopped';
+  onStart: (() => void) | undefined;
 
   subscribe(
     topic: string,
@@ -49,6 +50,7 @@ class FakeMqttSubscriber implements Stl27lPresenceMqttSubscriber {
 
   start(): void {
     this.setStatus('connected');
+    this.onStart?.();
   }
 
   async stop(): Promise<void> {
@@ -93,6 +95,236 @@ afterEach(() => {
 });
 
 describe('composed runtime integration', () => {
+  it('seeds Home Assistant before MQTT startup processes cached and live occupancy', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'lugn-runtime-'));
+    const port = await findEphemeralLoopbackPort();
+    vi.stubEnv('LUGN_TEST_HA_TOKEN', 'test-ha-token');
+    const configPath = join(directory, 'runtime.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        http: { host: '127.0.0.1', port },
+        homeAssistant: {
+          baseUrl: 'http://home-assistant.invalid:8123',
+          tokenEnv: 'LUGN_TEST_HA_TOKEN',
+          entities: { 'lighting.entry': 'light.entry' },
+        },
+        mqtt: {
+          url: 'mqtt://mqtt.invalid:1883',
+          baseTopic: 'bruno/doorway',
+        },
+        scenes: [
+          {
+            id: 'scene.everyday',
+            name: 'Everyday',
+            lighting: { 'lighting.entry': { power: true } },
+          },
+        ],
+        defaultSceneId: 'scene.everyday',
+      }),
+      'utf8',
+    );
+
+    const mqtt = new FakeMqttSubscriber();
+    const mqttStarted = vi.fn();
+    mqtt.onStart = () => {
+      mqttStarted();
+      mqtt.publish('bruno/doorway/availability', 'online', true);
+      mqtt.publish(
+        'bruno/doorway/snapshot',
+        JSON.stringify({
+          schema_version: 1,
+          count: 1,
+          quality: 'CERTAIN',
+          confidence: 1,
+          updated_at: new Date().toISOString(),
+        }),
+        true,
+      );
+      // A live heartbeat establishes freshness and exposes the startup race.
+      mqtt.publish(
+        'bruno/doorway/snapshot',
+        JSON.stringify({
+          schema_version: 1,
+          count: 1,
+          quality: 'CERTAIN',
+          confidence: 1,
+          updated_at: new Date().toISOString(),
+        }),
+        false,
+      );
+    };
+
+    let signalStatesRequestStarted!: () => void;
+    const statesRequestStarted = new Promise<void>((resolve) => {
+      signalStatesRequestStarted = resolve;
+    });
+    let resolveStatesResponse!: (response: Response) => void;
+    const statesResponse = new Promise<Response>((resolve) => {
+      resolveStatesResponse = resolve;
+    });
+    let statesFullySeeded = false;
+    const serviceCallsBeforeSeed: string[] = [];
+    const serviceCalls: string[] = [];
+    const homeAssistantFetch: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/states')) {
+        signalStatesRequestStarted();
+        return statesResponse;
+      }
+      if (url.includes('/api/services/')) {
+        serviceCalls.push(url);
+        if (!statesFullySeeded) serviceCallsBeforeSeed.push(url);
+      }
+      return new Response(null, { status: 200 });
+    };
+
+    const startup = startRuntime(configPath, {
+      homeAssistantFetch,
+      createMqttSubscriber: () => mqtt,
+      createHomeAssistantSocket: () => new InertHomeAssistantSocket(),
+    });
+
+    let runtime: Awaited<ReturnType<typeof startRuntime>> | undefined;
+    try {
+      await statesRequestStarted;
+      expect(mqttStarted).not.toHaveBeenCalled();
+
+      const response = {
+        ok: true,
+        status: 200,
+        async json() {
+          const states = [
+            {
+              entity_id: 'light.entry',
+              state: 'off',
+              attributes: {},
+            },
+          ];
+          const iterate = states[Symbol.iterator].bind(states);
+          Object.defineProperty(states, Symbol.iterator, {
+            value: function* () {
+              yield* iterate();
+              statesFullySeeded = true;
+            },
+          });
+          return states;
+        },
+      } as unknown as Response;
+      resolveStatesResponse(response);
+
+      runtime = await startup;
+      expect(mqttStarted).toHaveBeenCalledTimes(1);
+      expect(statesFullySeeded).toBe(true);
+      expect(serviceCallsBeforeSeed).toEqual([]);
+      expect(serviceCalls).toEqual([
+        'http://home-assistant.invalid:8123/api/services/light/turn_on',
+      ]);
+      expect(
+        runtime.engine.state.lighting.devices['lighting.entry']?.observed.power,
+      ).toBe(false);
+      expect(runtime.engine.state.presence.state).toBe('occupied');
+    } finally {
+      resolveStatesResponse(new Response('[]'));
+      try {
+        if (runtime) await runtime.stop();
+        else
+          await startup.then(
+            (startedRuntime) => startedRuntime.stop(),
+            () => undefined,
+          );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('selects the configured default scene without startup commands and applies it on confirmed occupancy', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'lugn-runtime-'));
+    const port = await findEphemeralLoopbackPort();
+    vi.stubEnv('LUGN_TEST_HA_TOKEN', 'test-ha-token');
+    const configPath = join(directory, 'runtime.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        http: { host: '127.0.0.1', port },
+        homeAssistant: {
+          baseUrl: 'http://home-assistant.invalid:8123',
+          tokenEnv: 'LUGN_TEST_HA_TOKEN',
+          entities: { 'lighting.entry': 'light.entry' },
+        },
+        mqtt: {
+          url: 'mqtt://mqtt.invalid:1883',
+          baseTopic: 'bruno/doorway',
+        },
+        scenes: [
+          {
+            id: 'scene.everyday',
+            name: 'Everyday',
+            lighting: { 'lighting.entry': { power: true } },
+          },
+        ],
+        defaultSceneId: 'scene.everyday',
+      }),
+      'utf8',
+    );
+
+    const mqtt = new FakeMqttSubscriber();
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const homeAssistantFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      requests.push({ url, ...(init === undefined ? {} : { init }) });
+      return url.endsWith('/api/states')
+        ? Response.json([
+            {
+              entity_id: 'light.entry',
+              state: 'off',
+              attributes: {},
+            },
+          ])
+        : new Response(null, { status: 200 });
+    };
+
+    const runtime = await startRuntime(configPath, {
+      homeAssistantFetch,
+      createMqttSubscriber: () => mqtt,
+      createHomeAssistantSocket: () => new InertHomeAssistantSocket(),
+    });
+
+    try {
+      expect(runtime.engine.state.lighting.currentScene).toBe('scene.everyday');
+      expect(
+        requests.filter(({ url }) => url.includes('/api/services/')),
+      ).toEqual([]);
+
+      mqtt.publish('bruno/doorway/availability', 'online', true);
+      mqtt.publish(
+        'bruno/doorway/snapshot',
+        JSON.stringify({
+          schema_version: 1,
+          count: 1,
+          quality: 'CERTAIN',
+          confidence: 1,
+          updated_at: new Date().toISOString(),
+        }),
+        false,
+      );
+      await vi.waitFor(() => {
+        expect(
+          requests.filter(({ url }) => url.includes('/api/services/')),
+        ).toHaveLength(1);
+      });
+
+      expect(
+        requests.find(({ url }) => url.includes('/api/services/'))?.url,
+      ).toBe('http://home-assistant.invalid:8123/api/services/light/turn_on');
+      expect(runtime.engine.state.presence.state).toBe('occupied');
+    } finally {
+      await runtime.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('routes a live STL27L preview through prelight to the mapped HA light service', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'lugn-runtime-'));
     const port = await findEphemeralLoopbackPort();

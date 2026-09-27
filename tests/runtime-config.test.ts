@@ -121,6 +121,31 @@ describe('runtime configuration cross references', () => {
     ).toThrow(/Scene target lighting\.desk.*Prelight target lighting\.desk/);
   });
 
+  it('accepts only a configured default scene', () => {
+    const configuredScenes = [
+      {
+        id: 'scene.everyday',
+        name: 'Everyday',
+        lighting: { 'lighting.ceiling': { power: true } },
+      },
+    ];
+    expect(
+      loadConfig({
+        ...minimal,
+        scenes: configuredScenes,
+        defaultSceneId: 'scene.everyday',
+      }).defaultSceneId,
+    ).toBe('scene.everyday');
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        scenes: configuredScenes,
+        defaultSceneId: 'scene.missing',
+      }),
+    ).toThrow('defaultSceneId: Default scene scene.missing is not configured');
+    expect(loadConfig(minimal).defaultSceneId).toBeUndefined();
+  });
+
   it('decodes canonical base64url secret references and rejects malformed values without echoing them', () => {
     const secret = `a token with 'quotes" and backtick\n?`;
     const base64Config = {

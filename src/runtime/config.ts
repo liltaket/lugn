@@ -115,6 +115,7 @@ const FileConfigSchema = z
       .strict()
       .default({ targets: {}, maxDurationMs: 5_000 }),
     scenes: z.array(SceneSchema).optional(),
+    defaultSceneId: z.string().min(1).optional(),
   })
   .strict()
   .superRefine((config, context) => {
@@ -130,6 +131,16 @@ const FileConfigSchema = z
     }
 
     const scenes = config.scenes ?? defaultScenes;
+    if (
+      config.defaultSceneId !== undefined &&
+      !scenes.some((scene) => scene.id === config.defaultSceneId)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['defaultSceneId'],
+        message: `Default scene ${config.defaultSceneId} is not configured in scenes`,
+      });
+    }
     scenes.forEach((scene, sceneIndex) => {
       for (const target of Object.keys(scene.lighting)) {
         if (configuredLights.has(target)) continue;
@@ -189,6 +200,7 @@ export type RuntimeConfig = {
     maxDurationMs: number;
   };
   scenes?: LightingScene[];
+  defaultSceneId?: string;
 };
 
 export class RuntimeConfigError extends Error {
@@ -272,6 +284,9 @@ export function loadRuntimeConfig(
     ...(mqtt === undefined ? {} : { mqtt }),
     prelight: fileConfig.prelight,
     ...(fileConfig.scenes === undefined ? {} : { scenes: fileConfig.scenes }),
+    ...(fileConfig.defaultSceneId === undefined
+      ? {}
+      : { defaultSceneId: fileConfig.defaultSceneId }),
   };
 }
 
