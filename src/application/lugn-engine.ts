@@ -1,6 +1,8 @@
 import { MusicController, type MusicOptions } from './music-controller.js';
 import type {
   MusicCommandRecord,
+  MusicFadeRequest,
+  MusicFadeState,
   MusicRequest,
   DeviceMusicState,
 } from '../core/schemas.js';
@@ -359,6 +361,17 @@ export class LugnEngine {
     provenance: Provenance,
   ): Promise<MusicCommandRecord> {
     return this.musicController.request(target, requested, provenance);
+  }
+
+  startMusicFade(
+    request: MusicFadeRequest,
+    provenance: Provenance,
+  ): MusicFadeState {
+    return this.musicController.startFade(request, provenance);
+  }
+
+  cancelMusicFade(target: string): MusicFadeState | null {
+    return this.musicController.cancelFade(target);
   }
 
   getSwitchState(target: string): DeviceSwitchState {

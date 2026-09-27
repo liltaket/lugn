@@ -110,6 +110,14 @@ export const MusicRequestSchema = z.discriminatedUnion('property', [
     .strict(),
 ]);
 export type MusicRequest = z.infer<typeof MusicRequestSchema>;
+export const MusicFadeRequestSchema = z
+  .object({
+    target: SemanticMusicIdSchema,
+    volume: z.number().min(0).max(1),
+    durationMs: z.number().int().min(1_000).max(120_000),
+  })
+  .strict();
+export type MusicFadeRequest = z.infer<typeof MusicFadeRequestSchema>;
 export const MusicObservationValuesSchema = z
   .object({
     playback: z.enum(['playing', 'paused', 'idle', 'off', 'unknown']),
@@ -153,9 +161,34 @@ export const DeviceMusicStateSchema = z.object({
   allowedSources: z.array(z.string().min(1)),
 });
 export type DeviceMusicState = z.infer<typeof DeviceMusicStateSchema>;
+export const MusicFadeStatusSchema = z.enum([
+  'active',
+  'settling',
+  'completed',
+  'cancelled',
+  'interrupted',
+  'failed',
+  'unconfirmed',
+]);
+export const MusicFadeStateSchema = z.object({
+  id: z.string(),
+  target: SemanticMusicIdSchema,
+  startVolume: z.number().min(0).max(1),
+  targetVolume: z.number().min(0).max(1),
+  durationMs: z.number().int().positive(),
+  startedAt: z.number().nonnegative(),
+  expectedVolume: z.number().min(0).max(1),
+  observedVolume: z.number().min(0).max(1).nullable(),
+  issuedVolume: z.number().min(0).max(1).nullable(),
+  status: MusicFadeStatusSchema,
+  settlingUntil: z.number().nonnegative().optional(),
+  diagnosticReason: z.string().optional(),
+});
+export type MusicFadeState = z.infer<typeof MusicFadeStateSchema>;
 export const MusicStateSchema = z.object({
   devices: z.record(SemanticMusicIdSchema, DeviceMusicStateSchema),
   commands: z.array(MusicCommandRecordSchema),
+  fades: z.record(SemanticMusicIdSchema, MusicFadeStateSchema).default({}),
 });
 export type MusicState = z.infer<typeof MusicStateSchema>;
 

@@ -6,26 +6,26 @@
     <meta name="color-scheme" content="dark" />
     <meta
       name="description"
-      content="Överblick och styrning av Lugn-belysning."
+      content="Överblick och styrning av rummets belysning och musik."
     />
-    <title>Lugn · Belysning</title>
+    <title>Lugn · Rumskontroll</title>
     <link rel="stylesheet" href="/ui/styles.css" />
     <script type="module" src="/ui/app.js"></script>
   </head>
   <body>
     <!--
-      THESIS: Tune mapped room lights by comparing Lugn's desired values with the latest device reports.
+      THESIS: Tune room lights and music by comparing Lugn's requests with the latest device reports.
       OWN-WORLD: A dim-room operator console in mineral green, soft ink, and restrained citron controls.
-      STORY: Confirm room and integration state, choose a scene, then inspect and adjust each configured light.
-      FIRST VIEWPORT: Service state first, scene buttons second, and the real configured light list directly below.
+      STORY: Confirm room and integration state, choose a scene, then inspect and adjust configured lights and players.
+      FIRST VIEWPORT: Service state first, scene buttons next, then the configured music players and lights.
       FORM: A responsive, single-route operations panel; every label and device row comes from the live API.
     -->
     <header class="topbar">
-      <a class="wordmark" href="/ui/" aria-label="Lugn belysning">
+      <a class="wordmark" href="/ui/" aria-label="Lugn rumskontroll">
         <span class="wordmark-mark" aria-hidden="true">L</span>
         <span>Lugn</span>
         <span class="wordmark-divider" aria-hidden="true"></span>
-        <span class="wordmark-section">Belysning</span>
+        <span class="wordmark-section">Rumskontroll</span>
       </a>
       <div class="topbar-actions">
         <p class="live-status" id="live-status" data-tone="neutral">
@@ -114,8 +114,11 @@
       >
         <header class="page-heading">
           <div>
-            <h1 id="page-title">Belysning</h1>
-            <p>Se vad Lugn begär och vad lamporna senast rapporterade.</p>
+            <h1 id="page-title">Rumskontroll</h1>
+            <p>
+              Styr belysning och musik och jämför önskemål med enheternas
+              senaste rapporter.
+            </p>
           </div>
           <p class="updated-at" id="updated-at">Väntar på tillstånd</p>
         </header>
@@ -178,6 +181,19 @@
             id="scene-list"
             aria-label="Tillgängliga ljusscener"
           ></div>
+        </section>
+
+        <section class="music-section" aria-labelledby="music-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="music-title">Musik</h2>
+              <p>
+                Styr uppspelning, volym och källa. Rapporterat läge visar vad
+                spelaren senast skickade tillbaka.
+              </p>
+            </div>
+          </div>
+          <div class="music-list" id="music-list"></div>
         </section>
 
         <section class="lights-section" aria-labelledby="lights-title">

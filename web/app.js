@@ -29,6 +29,7 @@ const sceneSummary = document.getElementById('scene-summary');
 const sceneList = document.getElementById('scene-list');
 const reapplyButton = document.getElementById('reapply-button');
 const mappingSummary = document.getElementById('mapping-summary');
+const musicList = document.getElementById('music-list');
 const lightList = document.getElementById('light-list');
 const actionStatus = document.getElementById('action-status');
 
@@ -115,8 +116,8 @@ function updateLoginPresentation() {
   tokenHelp.hidden = isClerk;
   loginTitle.textContent = isClerk ? 'Logga in till Lugn' : 'Anslut till Lugn';
   loginDescription.textContent = isClerk
-    ? 'Använd ditt Lugn-konto för att se och styra rummets belysning.'
-    : 'Logga in för att se rummets lampor och styra deras önskade läge.';
+    ? 'Använd ditt Lugn-konto för att se och styra rummets belysning och musik.'
+    : 'Logga in för att se och styra rummets belysning och musik.';
   tokenInput.required = !isClerk && tokenRequired;
 }
 
@@ -948,8 +949,9 @@ async function refreshOverview() {
 
 async function invokeCapability(capability, input, actionKey) {
   if (!csrfToken || pendingActions.has(actionKey)) return;
+  const isMusic = capability.startsWith('music.');
   pendingActions.add(actionKey);
-  setActionMessage('Skickar begäran…');
+  setActionMessage(isMusic ? 'Skickar musikbegäran…' : 'Skickar begäran…');
   render();
 
   try {
@@ -969,16 +971,31 @@ async function invokeCapability(capability, input, actionKey) {
     if (response.status === 401 || response.status === 403)
       throw new SessionExpiredError('Sessionen har gått ut.');
     if (!response.ok) {
-      if (response.status === 400 || response.status === 404)
+      if (response.status === 400 || response.status === 404) {
+        const failure = await response.json().catch(() => ({}));
+        const musicErrors = {
+          music_state_unavailable:
+            'Spelaren måste rapportera en färsk volym innan en mjuk ändring kan börja.',
+          music_fade_duration_too_short:
+            'Välj en längre ändring för det här volymsteget.',
+          source_not_allowed: 'Den valda källan är inte tillåten för spelaren.',
+          target_not_configured: 'Spelaren är inte konfigurerad.',
+        };
         throw new Error(
-          'Begäran kunde inte användas. Kontrollera vald scen eller lampa.',
+          isMusic
+            ? (musicErrors[failure.error] ??
+                'Begäran kunde inte användas. Kontrollera spelaren och dess tillåtna källor.')
+            : 'Begäran kunde inte användas. Kontrollera vald scen eller lampa.',
         );
+      }
       throw new Error('Begäran kunde inte skickas. Försök igen.');
     }
     setActionMessage(
-      overview?.state?.presence?.state === 'confirmed_empty'
-        ? 'Önskat läge sparat. Lamporna hålls släckta tills rummet blir upptaget.'
-        : 'Begäran skickad. Lampornas rapporterade läge visar om ändringen har nått fram.',
+      isMusic
+        ? 'Musikbegäran skickad. Spelarens rapporterade läge visar om ändringen har nått fram.'
+        : overview?.state?.presence?.state === 'confirmed_empty'
+          ? 'Önskat läge sparat. Lamporna hålls släckta tills rummet blir upptaget.'
+          : 'Begäran skickad. Lampornas rapporterade läge visar om ändringen har nått fram.',
     );
     await refreshOverview();
   } catch (error) {
@@ -1017,6 +1034,8 @@ function render() {
   showDashboard();
   renderRoomStatus(overview);
   renderScenes(overview);
+  const music = overview.state?.music ?? {};
+  renderMusic(music.devices ?? {}, music.commands ?? [], music.fades ?? {});
   const devices = overview.state?.lighting?.devices ?? {};
   const presenceState = overview.state?.presence?.state ?? 'unknown';
   renderLights(devices, presenceState);
@@ -1042,9 +1061,9 @@ function restoreFocus(focusedKey, focusedValue) {
   ) {
     element.value = focusedValue;
     const output = element
-      .closest('.brightness-control')
-      ?.querySelector('.brightness-value');
-    if (output) output.textContent = `Nytt önskemål ${focusedValue}%`;
+      .closest('.brightness-control, .music-volume-control')
+      ?.querySelector('.brightness-value, .music-volume-preview');
+    if (output) output.textContent = `Nytt reglagevärde ${focusedValue}%`;
   }
 }
 
@@ -1153,6 +1172,362 @@ function renderScenes(data) {
     });
     sceneList.append(button);
   }
+}
+
+function renderMusic(devices, commands, fades = {}) {
+  musicList.replaceChildren();
+  const entries = Object.entries(devices).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  if (entries.length === 0) {
+    musicList.append(
+      node(
+        'p',
+        'empty-note',
+        'Ingen musikspelare är konfigurerad för Lugn ännu.',
+      ),
+    );
+    return;
+  }
+  for (const [target, device] of entries) {
+    musicList.append(
+      renderMusicPlayer(target, device, commands, fades[target]),
+    );
+  }
+}
+
+function renderMusicPlayer(target, device, commands, fade) {
+  const article = node('article', 'music-row');
+  const identity = node('div', 'music-identity');
+  identity.append(node('h3', '', displayMusicTarget(target)));
+  identity.append(node('code', '', target));
+  const availability = availabilityStatus(device.availability);
+  identity.append(stateChip(availability.label, availability.tone));
+  article.append(identity);
+
+  const observed = device.observed ?? {};
+  const readings = node('dl', 'music-readings');
+  appendReading(
+    readings,
+    'Rapporterad uppspelning',
+    musicPlaybackLabel(observed.playback),
+  );
+  appendReading(
+    readings,
+    'Nu spelas',
+    typeof observed.title === 'string' && observed.title.trim()
+      ? observed.title
+      : 'Ingen titel rapporterad',
+  );
+  appendReading(
+    readings,
+    'Rapporterad volym',
+    musicVolumeLabel(observed.volume),
+  );
+  appendReading(
+    readings,
+    'Rapporterad källa',
+    typeof observed.source === 'string' && observed.source
+      ? observed.source
+      : 'Okänd',
+  );
+  article.append(readings);
+
+  const controls = node('div', 'music-controls');
+  const unavailable = device.availability !== 'available';
+  const playbackCommand = latestMusicCommand(commands, target, 'playback');
+  const volumeCommand = latestMusicCommand(commands, target, 'volume');
+  const sourceCommand = latestMusicCommand(commands, target, 'source');
+  const playbackKey = `music:${target}:playback`;
+  const volumeKey = `music:${target}:volume`;
+  const sourceKey = `music:${target}:source`;
+
+  const playbackControl = node('div', 'music-control');
+  playbackControl.append(node('p', 'music-control-title', 'Uppspelning'));
+  const transport = node('div', 'music-transport');
+  const playButton = node('button', 'button button-quiet', 'Spela / återuppta');
+  playButton.type = 'button';
+  playButton.disabled =
+    unavailable || musicPropertyPending(playbackCommand, playbackKey);
+  playButton.setAttribute(
+    'aria-label',
+    `Spela eller återuppta ${displayMusicTarget(target)}`,
+  );
+  playButton.dataset.focusKey = `${playbackKey}:play`;
+  playButton.addEventListener('click', () => {
+    void invokeCapability('music.play', { target }, playbackKey);
+  });
+  const pauseButton = node('button', 'button button-quiet', 'Pausa');
+  pauseButton.type = 'button';
+  pauseButton.disabled =
+    unavailable || musicPropertyPending(playbackCommand, playbackKey);
+  pauseButton.setAttribute('aria-label', `Pausa ${displayMusicTarget(target)}`);
+  pauseButton.dataset.focusKey = `${playbackKey}:pause`;
+  pauseButton.addEventListener('click', () => {
+    void invokeCapability('music.pause', { target }, playbackKey);
+  });
+  transport.append(playButton, pauseButton);
+  playbackControl.append(transport);
+  playbackControl.append(
+    renderMusicRequest(device, 'playback', playbackCommand),
+  );
+  controls.append(playbackControl);
+
+  const volumeControl = node('div', 'music-control music-volume-control');
+  volumeControl.append(node('p', 'music-control-title', 'Volym'));
+  const volumeSlider = document.createElement('input');
+  volumeSlider.type = 'range';
+  volumeSlider.id = `music-volume-${target.replace(/[^a-zA-Z0-9_.-]/g, '-')}`;
+  volumeSlider.min = '0';
+  volumeSlider.max = '100';
+  volumeSlider.step = '1';
+  const requestedVolume = device.requested?.volume;
+  const initialVolume =
+    typeof requestedVolume === 'number' && Number.isFinite(requestedVolume)
+      ? requestedVolume
+      : typeof observed.volume === 'number' && Number.isFinite(observed.volume)
+        ? observed.volume
+        : 0;
+  volumeSlider.value = String(Math.round(initialVolume * 100));
+  volumeSlider.disabled =
+    unavailable || musicPropertyPending(volumeCommand, volumeKey);
+  volumeSlider.setAttribute(
+    'aria-label',
+    `Ställ volym för ${displayMusicTarget(target)}`,
+  );
+  volumeSlider.setAttribute('aria-valuetext', `${volumeSlider.value} procent`);
+  volumeSlider.dataset.focusKey = `${volumeKey}:slider`;
+  const volumePreview = node(
+    'output',
+    'music-volume-preview',
+    `Reglagevärde ${volumeSlider.value}%`,
+  );
+  volumePreview.htmlFor = volumeSlider.id;
+  volumeSlider.addEventListener('input', () => {
+    volumeSlider.setAttribute(
+      'aria-valuetext',
+      `${volumeSlider.value} procent`,
+    );
+    volumePreview.textContent = `Nytt reglagevärde ${volumeSlider.value}%`;
+  });
+  volumeControl.append(volumeSlider, volumePreview);
+  const volumeActions = node('div', 'music-transport');
+  const setVolumeButton = node('button', 'button button-quiet', 'Sätt direkt');
+  setVolumeButton.type = 'button';
+  setVolumeButton.disabled =
+    unavailable || musicPropertyPending(volumeCommand, volumeKey);
+  setVolumeButton.setAttribute(
+    'aria-label',
+    `Sätt volym direkt för ${displayMusicTarget(target)}`,
+  );
+  setVolumeButton.dataset.focusKey = `${volumeKey}:direct`;
+  setVolumeButton.addEventListener('click', () => {
+    void invokeCapability(
+      'music.setVolume',
+      { target, volume: Number(volumeSlider.value) / 100 },
+      volumeKey,
+    );
+  });
+  const fadeButton = node('button', 'button button-quiet', 'Mjuk ändring');
+  fadeButton.type = 'button';
+  fadeButton.disabled =
+    unavailable || musicPropertyPending(volumeCommand, volumeKey);
+  fadeButton.setAttribute(
+    'aria-label',
+    `Ändra volym mjukt för ${displayMusicTarget(target)}`,
+  );
+  fadeButton.dataset.focusKey = `${volumeKey}:fade`;
+  fadeButton.addEventListener('click', () => {
+    const targetVolume = Number(volumeSlider.value) / 100;
+    const observedVolume =
+      typeof observed.volume === 'number' ? observed.volume : targetVolume;
+    const durationMs = Math.max(
+      1000,
+      Math.ceil(Math.abs(targetVolume - observedVolume) / 0.02) * 250,
+    );
+    void invokeCapability(
+      'music.fadeVolume',
+      {
+        target,
+        volume: targetVolume,
+        durationMs,
+      },
+      volumeKey,
+    );
+  });
+  volumeActions.append(setVolumeButton, fadeButton);
+  volumeControl.append(volumeActions);
+  const fadeActive = fade?.status === 'active' || fade?.status === 'settling';
+  const fadeStatus = node('p', 'music-request');
+  if (fade) {
+    const statusLabels = {
+      active: 'Fade pågår',
+      settling: 'Fade klar, inväntar återrapportering',
+      completed: 'Fade klar',
+      cancelled: 'Fade avbruten',
+      interrupted: 'Fade stoppad av avvikande återrapportering',
+      failed: 'Fade misslyckades',
+    };
+    const diagnostic =
+      typeof fade.diagnosticReason === 'string' && fade.diagnosticReason
+        ? ` · ${fade.diagnosticReason}`
+        : '';
+    fadeStatus.textContent = `${statusLabels[fade.status] ?? 'Fade'} · ${musicVolumeLabel(fade.observedVolume)} rapporterat · ${musicVolumeLabel(fade.expectedVolume)} förväntat${diagnostic}`;
+    fadeStatus.dataset.tone =
+      fade.status === 'completed'
+        ? 'good'
+        : fade.status === 'failed' || fade.status === 'interrupted'
+          ? 'bad'
+          : fadeActive
+            ? 'warn'
+            : 'neutral';
+  } else {
+    fadeStatus.textContent = 'Ingen fade körs';
+  }
+  volumeControl.append(fadeStatus);
+  if (fadeActive) {
+    const cancelFadeButton = node(
+      'button',
+      'button button-quiet',
+      'Avbryt fade',
+    );
+    cancelFadeButton.type = 'button';
+    cancelFadeButton.setAttribute(
+      'aria-label',
+      `Avbryt volymfade för ${displayMusicTarget(target)}`,
+    );
+    cancelFadeButton.dataset.focusKey = `${volumeKey}:cancel-fade`;
+    cancelFadeButton.addEventListener('click', () => {
+      void invokeCapability(
+        'music.cancelFade',
+        { target },
+        `${volumeKey}:cancel`,
+      );
+    });
+    volumeControl.append(cancelFadeButton);
+  }
+  volumeControl.append(renderMusicRequest(device, 'volume', volumeCommand));
+  controls.append(volumeControl);
+
+  const sourceControl = node('div', 'music-control');
+  const sourceId = `music-source-${target.replace(/[^a-zA-Z0-9_.-]/g, '-')}`;
+  const sourceLabel = document.createElement('label');
+  sourceLabel.className = 'music-control-title';
+  sourceLabel.htmlFor = sourceId;
+  sourceLabel.textContent = 'Källa';
+  sourceControl.append(sourceLabel);
+  const sourceSelect = document.createElement('select');
+  sourceSelect.id = sourceId;
+  sourceSelect.dataset.focusKey = `${sourceKey}:select`;
+  sourceSelect.setAttribute(
+    'aria-label',
+    `Välj källa för ${displayMusicTarget(target)}`,
+  );
+  const allowedSources = Array.isArray(device.allowedSources)
+    ? device.allowedSources
+    : [];
+  const selectedSource = device.requested?.source ?? observed.source;
+  const selectedAllowedSource = allowedSources.includes(selectedSource)
+    ? selectedSource
+    : '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = allowedSources.length
+    ? 'Välj källa'
+    : 'Inga källor tillåtna';
+  placeholder.selected = !selectedAllowedSource;
+  sourceSelect.append(placeholder);
+  for (const source of allowedSources) {
+    const option = document.createElement('option');
+    option.value = source;
+    option.textContent = source;
+    option.selected = source === selectedAllowedSource;
+    sourceSelect.append(option);
+  }
+  sourceSelect.disabled =
+    unavailable ||
+    allowedSources.length === 0 ||
+    musicPropertyPending(sourceCommand, sourceKey);
+  sourceSelect.addEventListener('change', () => {
+    if (!sourceSelect.value) return;
+    void invokeCapability(
+      'music.selectSource',
+      { target, source: sourceSelect.value },
+      sourceKey,
+    );
+  });
+  sourceControl.append(sourceSelect);
+  sourceControl.append(renderMusicRequest(device, 'source', sourceCommand));
+  controls.append(sourceControl);
+  article.append(controls);
+  return article;
+}
+
+function latestMusicCommand(commands, target, property) {
+  return [...commands]
+    .reverse()
+    .find(
+      (command) =>
+        command.target === target && command.requested?.property === property,
+    );
+}
+
+function musicPropertyPending(command, actionKey) {
+  return pendingActions.has(actionKey) || command?.status === 'pending';
+}
+
+function renderMusicRequest(device, property, command) {
+  const requested = device.requested?.[property];
+  const line = node('p', 'music-request');
+  if (requested === undefined) {
+    line.textContent = 'Inget önskemål registrerat';
+    return line;
+  }
+
+  const requestedLabel =
+    property === 'playback'
+      ? requested === 'playing'
+        ? 'Spela'
+        : 'Pausa'
+      : property === 'volume'
+        ? musicVolumeLabel(requested)
+        : requested;
+  const status = command?.status ?? 'unknown';
+  const statusLabels = {
+    pending: 'Väntar på rapport',
+    confirmed: 'Bekräftad av rapport',
+    unconfirmed: 'Ingen bekräftelse',
+    superseded: 'Ersatt av ny begäran',
+    failed: 'Misslyckades',
+    unknown: 'Status saknas',
+  };
+  line.dataset.tone =
+    status === 'confirmed'
+      ? 'good'
+      : status === 'failed'
+        ? 'bad'
+        : status === 'pending' || status === 'unconfirmed'
+          ? 'warn'
+          : 'neutral';
+  line.textContent = `Lugn begär: ${requestedLabel} · ${statusLabels[status]}`;
+  return line;
+}
+
+function musicPlaybackLabel(playback) {
+  const labels = {
+    playing: 'Spelar',
+    paused: 'Pausad',
+    idle: 'Inaktiv',
+    off: 'Av',
+    unknown: 'Okänt',
+  };
+  return labels[playback] ?? 'Okänt';
+}
+
+function musicVolumeLabel(volume) {
+  return typeof volume === 'number' && Number.isFinite(volume)
+    ? `${Math.round(volume * 100)}%`
+    : 'Okänd';
 }
 
 function renderLights(devices, presenceState) {
@@ -1526,6 +1901,16 @@ function ownershipLabel(ownership = {}) {
 function displayTarget(target) {
   const label = target
     .replace(/^lighting\./, '')
+    .replace(/[._-]+/g, ' ')
+    .trim();
+  return label
+    ? label.replace(/^./, (letter) => letter.toLocaleUpperCase('sv-SE'))
+    : target;
+}
+
+function displayMusicTarget(target) {
+  const label = target
+    .replace(/^music\./, '')
     .replace(/[._-]+/g, ' ')
     .trim();
   return label

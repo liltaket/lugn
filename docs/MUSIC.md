@@ -10,10 +10,12 @@ its Home Assistant integration exposes the required services and attributes.
 Direct WiiM transport remains pending.
 
 The implemented capabilities are `music.getState`, `music.play`, `music.pause`,
-`music.setVolume` (0..1), and `music.selectSource`. Source names must appear in
-the target's configured `sources` allowlist; copy their exact spelling from the
-entity's Home Assistant `source_list`. An empty allowlist disables source changes.
-The bridge uses the fixed media player services documented by
+`music.setVolume` (0..1), `music.fadeVolume`, `music.cancelFade`, and
+`music.selectSource`. Fade requests use `{ target, volume, durationMs }`, with a
+1 second to 2 minute duration. Source names must appear in the target's
+configured `sources` allowlist; copy their exact spelling from the entity's
+Home Assistant `source_list`. An empty allowlist disables source changes. The
+bridge uses the fixed media player services documented by
 [Home Assistant](https://www.home-assistant.io/integrations/media_player/).
 
 Observed playback, volume, source, media title and availability remain separate
@@ -28,8 +30,29 @@ Volume matching allows a difference of 0.005 in HA's 0..1 scale. Cached observat
 from before a request cannot confirm it. Matching only proves HA reported the
 expected state; an external action to the same value can also satisfy it. The
 observation keeps its HA provenance, and no volume change creates manual ownership.
-There are no retries, presets, fades, presence-driven playback or source automation
+There are no retries, presets, presence-driven playback or source automation
 in this bridge. The design sections below describe future behavior.
+
+### Volume fades
+
+Fades require an available target and a volume observation no older than the
+command feedback timeout. The controller interpolates bounded steps (at most
+50, no faster than every 250 ms), sends each as a normal volume command, and
+waits for that command to be confirmed by the existing ledger before sending
+the next step. It stops if feedback leaves the expected segment, the target
+becomes unavailable, a direct volume request supersedes it, or feedback times
+out. A requested duration must allow at least 250 ms per 0.02 volume step (a
+full-scale fade therefore needs at least 12.5 seconds). Cancelling stops future
+steps; an already dispatched Home Assistant service call cannot be recalled.
+
+The latest fade is exposed at `music.fades[target]` with its start, target,
+nominal duration, expected/observed/last-issued volumes, status, settling end,
+and a diagnostic reason when it stops early. A completed fade remains in a
+2-second settling window before it is marked complete. That window tolerates
+late observations around the target, but a move outside the 0.02 tolerance
+marks the fade interrupted. An overall duration-plus-30-second deadline and
+the existing per-command timeout keep a stalled fade bounded. These tolerances
+are initial software defaults and need measurement against the real WiiM.
 
 ## First-class concepts
 

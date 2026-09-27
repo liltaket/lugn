@@ -360,7 +360,9 @@ curl -sS -X POST \
 ```
 
 Use `music.play` and `music.pause` with `{ "target": "music.room" }`, or
-`music.selectSource` with `{ "target": "music.room", "source": "Optical" }`.
+`music.selectSource` with a source from the target's configured allowlist.
+`music.fadeVolume` takes a target, 0..1 volume and duration in milliseconds;
+`music.cancelFade` stops future steps for that target.
 `music.getState` returns observed playback, volume, source, title, availability
 and requested values. Check the matching command in `/state` for
 `pending`, `confirmed`, `unconfirmed`, `superseded` or `failed`. Confirmation

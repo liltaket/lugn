@@ -4,6 +4,8 @@ import {
   DeviceLightingStateSchema,
   DeviceSwitchStateSchema,
   DeviceMusicStateSchema,
+  MusicFadeRequestSchema,
+  MusicFadeStateSchema,
   SemanticButtonIdSchema,
   SemanticMusicIdSchema,
   MusicCommandStatusSchema,
@@ -15,6 +17,10 @@ import {
 } from '../core/schemas.js';
 import type { ActorSchema } from '../core/schemas.js';
 import type { LugnEngine } from './lugn-engine.js';
+import {
+  MusicFadeDurationError,
+  MusicFadeUnavailableError,
+} from './music-controller.js';
 
 const EmptyInput = z.object({});
 const ActivateSceneInput = z.object({ sceneId: z.string() });
@@ -36,6 +42,7 @@ const GetMusicInput = z.object({ target: SemanticMusicIdSchema }).strict();
 const VolumeMusicInput = z
   .object({ target: SemanticMusicIdSchema, volume: z.number().min(0).max(1) })
   .strict();
+const FadeMusicInput = MusicFadeRequestSchema;
 const SourceMusicInput = z
   .object({ target: SemanticMusicIdSchema, source: z.string().min(1) })
   .strict();
@@ -48,7 +55,11 @@ const MusicCommandOutput = z.object({
 export class CapabilityInputError extends Error {
   constructor(
     readonly code:
-      'target_not_configured' | 'source_not_allowed' | 'scene_not_found',
+      | 'target_not_configured'
+      | 'source_not_allowed'
+      | 'scene_not_found'
+      | 'music_state_unavailable'
+      | 'music_fade_duration_too_short',
   ) {
     super(code);
     this.name = 'CapabilityInputError';
@@ -63,6 +74,20 @@ export const CapabilitySchemas = {
   'music.play': { input: GetMusicInput, output: MusicCommandOutput },
   'music.pause': { input: GetMusicInput, output: MusicCommandOutput },
   'music.setVolume': { input: VolumeMusicInput, output: MusicCommandOutput },
+  'music.fadeVolume': {
+    input: FadeMusicInput,
+    output: z.object({
+      accepted: z.literal(true),
+      fade: MusicFadeStateSchema,
+    }),
+  },
+  'music.cancelFade': {
+    input: GetMusicInput,
+    output: z.object({
+      cancelled: z.boolean(),
+      fade: MusicFadeStateSchema.nullable(),
+    }),
+  },
   'music.selectSource': { input: SourceMusicInput, output: MusicCommandOutput },
   'switch.getState': {
     input: GetSwitchInput,
@@ -178,6 +203,31 @@ export class CapabilityRegistry {
           commandId: command.id,
           status: command.status,
         };
+        break;
+      }
+      case 'music.fadeVolume': {
+        const input = FadeMusicInput.parse(rawInput);
+        getMusicTarget(this.engine, input.target);
+        try {
+          const fade = this.engine.startMusicFade(input, provenance);
+          output = { accepted: true, fade };
+        } catch (error) {
+          if (error instanceof MusicFadeUnavailableError)
+            throw new CapabilityInputError('music_state_unavailable');
+          if (error instanceof MusicFadeDurationError)
+            throw new CapabilityInputError('music_fade_duration_too_short');
+          throw error;
+        }
+        break;
+      }
+      case 'music.cancelFade': {
+        const input = GetMusicInput.parse(rawInput);
+        getMusicTarget(this.engine, input.target);
+        const before = this.engine.state.music.fades[input.target];
+        const cancelled =
+          before?.status === 'active' || before?.status === 'settling';
+        const fade = this.engine.cancelMusicFade(input.target);
+        output = { cancelled, fade };
         break;
       }
       case 'music.selectSource': {
