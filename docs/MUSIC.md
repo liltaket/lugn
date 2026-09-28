@@ -1,159 +1,101 @@
 # Music
 
-Music should be helpful and contextual without fighting direct WiiM control.
+Lugn controls configured Home Assistant `media_player.*` entities through
+explicit semantic targets such as `music.room`. It does not currently use a
+direct WiiM network protocol. Available operations depend on the HA integration
+behind the mapped entity.
 
-## Implemented Home Assistant bridge
+## Dashboard controls
 
-The local runtime can map multiple semantic `music.*` targets to explicitly
-configured Home Assistant `media_player.*` entities. This supports a WiiM when
-its Home Assistant integration exposes the required services and attributes.
-Direct WiiM transport remains pending.
+The custom room dashboard provides:
 
-The implemented capabilities are `music.getState`, `music.play`, `music.pause`,
-`music.setVolume` (0..1), and `music.selectSource`. Source names must appear in
-the target's configured `sources` allowlist; copy their exact spelling from the
-entity's Home Assistant `source_list`. An empty allowlist disables source changes.
-The bridge uses the fixed media player services documented by
-[Home Assistant](https://www.home-assistant.io/integrations/media_player/).
+- **Spotify DJ** — play configured preset 1.
+- **Optical** — play configured preset 4, useful for the optical input.
+- Play/pause.
+- Volume down/up in 5 percentage-point steps.
 
-Observed playback, volume, source, media title and availability remain separate
-from requested values. The initial REST snapshot and later WebSocket events
-provide observations. Each request records its provenance and status. HTTP
-acceptance leaves it `pending`; a new matching HA observation within 10 seconds
-marks it `confirmed`; timeout marks it `unconfirmed`; dispatch failure records
-`failed`. Newer requests supersede pending requests for the same target and
-property. Independent playback, volume and source requests can coexist.
+The preset numbers can be changed under each `homeAssistant.music` mapping.
+Each target can also have an allowlist of exact source names copied from its
+Home Assistant `source_list`. The dashboard targets the first configured music
+player and does not expose a source selector.
 
-Volume matching allows a difference of 0.005 in HA's 0..1 scale. Cached observations
-from before a request cannot confirm it. Matching only proves HA reported the
-expected state; an external action to the same value can also satisfy it. The
-observation keeps its HA provenance, and no volume change creates manual ownership.
-There are no retries, presets, fades, presence-driven playback or source automation
-in this bridge. The design sections below describe future behavior.
+Preset requests use Home Assistant's `media_player.play_media` service with
+`media_content_type: "music"` and the configured numeric preset ID. This is the
+format used by Home Assistant's built-in WiiM integration to start a stored
+preset.
 
-## First-class concepts
+These are explicit user actions. They remain available when HA reports the
+resident away; the away gate controls automatic music actions.
 
-The model should distinguish at least:
+## Automatic playback rules
 
-- playback
-- volume
-- source
-- preset / playback choice
+1. A confirmed room-empty transition pauses each configured player and records
+   whether it was playing so a short return can preserve continuity.
+2. A confirmed room-entry transition from `confirmed_empty`, before 23:00
+   Europe/Stockholm time, resumes the recent playing context when it is still
+   within 20 minutes. Otherwise, if nothing is playing, it starts Spotify DJ
+   preset 1.
+3. At or after 23:00, Lugn does not automatically start or resume playback.
+4. A Home Assistant `away` observation immediately pauses currently playing
+   music, prevents later presence-driven starts/resumes, and cancels automatic
+   volume adjustments. Returning to `home` while the room is occupied restores
+   volume policy, but does not itself start music.
+5. Home status `unknown` is not treated as away and therefore does not gate the
+   room-presence policy. It is shown separately on the dashboard.
 
-These can have different ownership.
+Manual play, pause and preset requests still work while away. A confirmed-empty
+room continues to pause music regardless of home status.
 
-Example:
+## Volume policy
 
-    playback = automation
-    volume   = user
-    source   = automation
+The automatic volume offset uses Europe/Stockholm local time and is applied
+while the room is occupied and the resident is not confirmed away:
 
-A user volume change should not necessarily disable pause-on-empty.
+| Time              |   Daily offset from baseline |
+| ----------------- | ---------------------------: |
+| 00:00             |        −15 percentage points |
+| 03:00             |       −7.5 percentage points |
+| 06:00–22:00       |                     0 points |
+| 23:00             |       −7.5 percentage points |
+| Approaching 00:00 | falls linearly to −15 points |
 
-## Presets are important
+The curve rises linearly from −15 points at midnight to baseline at 06:00, stays
+at baseline through 22:00, then falls linearly back to −15 points at midnight.
+When the sensor reports more than one person in the room, Lugn subtracts a
+further 10 points. These adjustments stack and the automatic result is clamped
+to 5–80%.
 
-WiiM presets are a useful first-class behavior because they can represent ready-to-play choices without Lugn having to directly source and construct playback every time.
+Dashboard volume changes set a new user baseline after accounting for the
+current automatic offset. Thus a manual `+` or `−` remains a five-point step
+even when the daily curve is active.
 
-Possible conceptual capabilities:
+The Hub volume panel distinguishes the observed player volume from Lugn's
+calculated target and shows whether Lugn currently applies the target or the
+volume is under manual control. It also shows the baseline source and active
+daily/person adjustments.
 
-- play preset
-- resume
-- play
-- pause
-- set volume
-- fade volume
-- set source
+## State and command confirmation
 
-Presets may point to things such as playlists or Spotify DJ, allowing varied playback without the room engine understanding the streaming service in detail.
+The runtime observes playback, volume, source, title and availability from the
+initial Home Assistant state query and later WebSocket updates. Service request
+acceptance is separate from observed state:
 
-## Optical / computer integration
+- matching new playback, volume or source feedback can confirm a command;
+- commands time out as unconfirmed when no matching observation arrives;
+- preset selection is never reported as confirmed because the HA media-player
+  state does not expose the selected WiiM preset;
+- a successful HA response does not prove that sound is physically audible.
 
-Automatic switch to Optical when the computer is being used is valuable.
+Each target must map to a distinct `media_player.*` entity. Preset IDs default
+to Spotify DJ `1` and Optical `4`; exact source names are allowlisted per
+target. The adapter uses fixed `media_player` services and does not accept an
+arbitrary entity ID or service call from a dashboard request.
 
-It must still respect explicit user choices.
+## Current limitations
 
-Example:
-
-    PC activity starts
-    -> automation chooses Optical
-
-    user later selects a WiiM preset
-    -> source/preset becomes externally owned
-    -> PC automation must not immediately switch back to Optical
-
-The exact reset/continuity policy for source ownership remains to be refined.
-
-## Autostart
-
-Music start should be event-driven rather than repeatedly polling "is music absent?"
-
-Typical rules:
-
-- first confirmed person entering may start/resume music;
-- last confirmed person leaving pauses immediately;
-- count changes such as 1 -> 2 do not create a new music session;
-- an allowed-time window can prevent late-night autostart;
-- crossing the end of that window should not stop already-playing music.
-
-Process restart or sensor reconnection must not look like a new room entry.
-
-## Continuity
-
-Short absence:
-
-- pause immediately on exit;
-- keep preset/source/volume context;
-- restore or resume on quick return when appropriate.
-
-Long absence:
-
-- selected music context can expire;
-- next visit may use normal autostart policy again.
-
-This prevents cases such as returning from a short bathroom break and having Spotify start over whatever computer media the user was just watching.
-
-## Fades must remain
-
-Volume fading is a desired feature.
-
-The attribution system must understand a fade as a trajectory rather than a single target.
-
-Conceptually, for a fade:
-
-    start = 30
-    target = 50
-    duration = 8 s
-    tolerance ≈ +/- 2
-    settling window = configurable
-
-During the fade:
-
-- values reasonably on the expected path are treated as self-generated feedback;
-- small quantization/timing differences are tolerated;
-- a strong move away from the expected trajectory may be interpreted as external/manual control;
-- before later fade steps, the engine should check whether the observed state still supports continuing.
-
-After the fade, a short settling period allows delayed device feedback without falsely creating an override.
-
-Exact tolerances and timing must be measured against real WiiM behavior rather than assumed permanently.
-
-## Command attribution
-
-The system should prefer, in order:
-
-1. explicit source/context IDs where an adapter provides them;
-2. matching against pending commands;
-3. expected trajectory and timing;
-4. tolerance for rounding/quantization.
-
-There is an unavoidable ambiguous case when a person manually selects exactly the value the automation was already about to choose. Without provenance from the device, perfect attribution is impossible.
-
-Design priority:
-
-> Avoid false manual overrides caused by Lugn's own commands, while still respecting clearly external changes.
-
-## Manual pause
-
-A manual pause should not be immediately undone by presence automation.
-
-The exact lifetime of playback ownership should be governed by continuity/reset policy rather than a single global passive flag.
+- Music control depends on Home Assistant exposing and supporting the needed
+  media-player service for the mapped device.
+- Preset request confirmation is unavailable from the current HA observations.
+- Direct WiiM transport and measured fade behavior are not implemented.
+- Automatic behavior is configured for the room-level policy; the dashboard
+  does not provide a player/source selector or an automation settings editor.

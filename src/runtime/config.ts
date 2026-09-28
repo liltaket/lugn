@@ -1,6 +1,10 @@
 import { HomeAssistantMusicMappingsSchema } from '../adapters/home-assistant-music.js';
+import { HomeAssistantEnvironmentMappingsSchema } from '../adapters/home-assistant-environment.js';
+import { HomeAssistantHomePresenceConfigSchema } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantButtonMappingsSchema } from '../adapters/home-assistant-button.js';
+import { HomeAssistantBilresaConfigSchema } from '../adapters/home-assistant-bilresa.js';
 import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { defaultScenes } from '../application/lugn-engine.js';
 import {
@@ -41,12 +45,24 @@ const HomeAssistantConfigSchema = z
       }
     }),
     tokenEnv: EnvironmentNameSchema,
+    homePresence: HomeAssistantHomePresenceConfigSchema.default({
+      entity: 'device_tracker.lustigkurre',
+    }),
     entities: z.record(
       SemanticLightingIdSchema,
       z.string().regex(/^light\.[a-z0-9_]+$/),
     ),
     buttons: HomeAssistantButtonMappingsSchema.default({}),
+    bilresa: HomeAssistantBilresaConfigSchema.default(
+      HomeAssistantBilresaConfigSchema.parse({}),
+    ),
     music: HomeAssistantMusicMappingsSchema.default({}),
+    environment: HomeAssistantEnvironmentMappingsSchema.default({
+      temperature: 'sensor.alpstuga_air_quality_monitor_temperatur',
+      humidity: 'sensor.alpstuga_air_quality_monitor_luftfuktighet',
+      co2: 'sensor.alpstuga_air_quality_monitor_koldioxid',
+      pm25: 'sensor.alpstuga_air_quality_monitor_pm25',
+    }),
     switches: z
       .record(SemanticSwitchIdSchema, z.string().regex(/^switch\.[a-z0-9_]+$/))
       .default({}),
@@ -93,6 +109,93 @@ const MqttConfigSchema = z
     }
   });
 
+const DisplayConfigSchema = z
+  .object({
+    host: z.string().min(1).default('0.0.0.0'),
+    port: z.number().int().min(1).max(65_535).default(8788),
+    publicUrl: z.string().superRefine((value, context) => {
+      let url: URL;
+      try {
+        url = new URL(value);
+      } catch {
+        context.addIssue({
+          code: 'custom',
+          message: 'publicUrl must be a valid URL',
+        });
+        return;
+      }
+      if (url.protocol !== 'http:') {
+        context.addIssue({
+          code: 'custom',
+          message: 'publicUrl must use HTTP on the trusted local network',
+        });
+      }
+      if (
+        url.username ||
+        url.password ||
+        url.pathname !== '/' ||
+        url.search ||
+        url.hash
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'publicUrl must contain only the local origin',
+        });
+      }
+    }),
+    hubs: z
+      .array(
+        z
+          .object({
+            id: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
+            role: z.enum(['bed', 'desk']),
+            castHost: z
+              .string()
+              .refine(
+                (value) => isIP(value) !== 0,
+                'castHost must be an IP address',
+              ),
+            tokenEnv: EnvironmentNameSchema,
+          })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict()
+  .superRefine((config, context) => {
+    const ids = new Set<string>();
+    for (const [index, hub] of config.hubs.entries()) {
+      if (ids.has(hub.id)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['hubs', index, 'id'],
+          message: 'Display IDs must be unique',
+        });
+      }
+      ids.add(hub.id);
+    }
+    let publicPort = '';
+    try {
+      publicPort = new URL(config.publicUrl).port;
+    } catch {
+      return;
+    }
+    if (!publicPort || Number(publicPort) !== config.port) {
+      context.addIssue({
+        code: 'custom',
+        path: ['port'],
+        message: 'port must match the port in publicUrl',
+      });
+    }
+    if (isLoopbackBindHost(config.host)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['host'],
+        message: 'display host must be reachable from the Nest Hubs',
+      });
+    }
+  });
+
 const FileConfigSchema = z
   .object({
     http: z
@@ -105,6 +208,7 @@ const FileConfigSchema = z
       .default({ host: '127.0.0.1', port: 8787 }),
     homeAssistant: HomeAssistantConfigSchema,
     mqtt: MqttConfigSchema.optional(),
+    display: DisplayConfigSchema.optional(),
     prelight: z
       .object({
         targets: z
@@ -151,6 +255,17 @@ const FileConfigSchema = z
     }
   });
 
+/** Validates an in-memory configuration with the same strict schema as the runtime. */
+export function validateRuntimeFileConfig(value: unknown): void {
+  const parsed = FileConfigSchema.safeParse(value);
+  if (!parsed.success) {
+    const problems = parsed.error.issues
+      .map((issue) => `${issue.path.join('.') || 'config'}: ${issue.message}`)
+      .join('; ');
+    throw new RuntimeConfigError(`Invalid configuration: ${problems}`);
+  }
+}
+
 export type RuntimeConfig = {
   http: {
     host: string;
@@ -160,10 +275,18 @@ export type RuntimeConfig = {
   homeAssistant: {
     baseUrl: string;
     token: string;
+    homePresence?: z.output<typeof HomeAssistantHomePresenceConfigSchema>;
     entities: Record<string, string>;
     buttons: Record<string, string>;
+    bilresa?: z.output<typeof HomeAssistantBilresaConfigSchema>;
     switches: Record<string, string>;
-    music: Record<string, { entityId: string; sources: string[] }>;
+    music: z.output<typeof HomeAssistantMusicMappingsSchema>;
+    environment: {
+      temperature: string;
+      humidity: string;
+      co2: string;
+      pm25: string;
+    };
   };
   mqtt?: {
     url: string;
@@ -172,6 +295,17 @@ export type RuntimeConfig = {
     clientId?: string;
     baseTopic: string;
     maxAgeMs: number;
+  };
+  display?: {
+    host: string;
+    port: number;
+    publicUrl: string;
+    hubs: Array<{
+      id: string;
+      role: 'bed' | 'desk';
+      castHost: string;
+      token: string;
+    }>;
   };
   prelight: {
     targets: Record<string, LightingValues>;
@@ -217,6 +351,19 @@ export function loadRuntimeConfig(
   const apiToken = fileConfig.http.bearerTokenEnv
     ? requireEnvironmentValue(fileConfig.http.bearerTokenEnv, environment)
     : undefined;
+  const display = fileConfig.display
+    ? {
+        host: fileConfig.display.host,
+        port: fileConfig.display.port,
+        publicUrl: fileConfig.display.publicUrl.replace(/\/+$/, ''),
+        hubs: fileConfig.display.hubs.map((hub) => ({
+          id: hub.id,
+          role: hub.role,
+          castHost: hub.castHost,
+          token: requireEnvironmentValue(hub.tokenEnv, environment),
+        })),
+      }
+    : undefined;
 
   if (!isLoopbackBindHost(fileConfig.http.host)) {
     throw new RuntimeConfigError(
@@ -253,12 +400,16 @@ export function loadRuntimeConfig(
     homeAssistant: {
       baseUrl: fileConfig.homeAssistant.baseUrl.replace(/\/+$/, ''),
       token: homeAssistantToken,
+      homePresence: fileConfig.homeAssistant.homePresence,
       entities: fileConfig.homeAssistant.entities,
       buttons: fileConfig.homeAssistant.buttons,
+      bilresa: fileConfig.homeAssistant.bilresa,
       switches: fileConfig.homeAssistant.switches,
       music: fileConfig.homeAssistant.music,
+      environment: fileConfig.homeAssistant.environment,
     },
     ...(mqtt === undefined ? {} : { mqtt }),
+    ...(display === undefined ? {} : { display }),
     prelight: fileConfig.prelight,
     ...(fileConfig.scenes === undefined ? {} : { scenes: fileConfig.scenes }),
   };
@@ -274,7 +425,18 @@ function requireEnvironmentValue(
       `Required environment variable is missing: ${name}`,
     );
   }
-  return value;
+  if (!name.endsWith('_B64')) return value;
+
+  const decoded = Buffer.from(value, 'base64url').toString('utf8');
+  if (
+    decoded.includes('\u0000') ||
+    Buffer.from(decoded, 'utf8').toString('base64url') !== value
+  ) {
+    throw new RuntimeConfigError(
+      `Required environment variable has invalid base64url encoding: ${name}`,
+    );
+  }
+  return decoded;
 }
 
 function isLoopbackBindHost(host: string): boolean {

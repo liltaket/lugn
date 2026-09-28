@@ -12,6 +12,11 @@ export type HomeAssistantCandidates = {
   media_player: Array<{ entity_id: string; source_list: string[] }>;
 };
 
+export type HomeAssistantLightChoice = {
+  entity_id: string;
+  friendly_name?: string;
+};
+
 type DiscoveryOptions = {
   url?: string;
   help?: boolean;
@@ -30,6 +35,33 @@ export async function discoverHomeAssistant(
   token: string,
   fetcher: typeof fetch = fetch,
 ): Promise<HomeAssistantCandidates> {
+  return parseCandidates(
+    await fetchHomeAssistantStateList(baseUrl, token, fetcher),
+  );
+}
+
+/** Reads the same state list as general discovery, returning safe labels for an interactive light picker. */
+export async function discoverHomeAssistantLightChoices(
+  baseUrl: string,
+  token: string,
+  fetcher: typeof fetch = fetch,
+): Promise<HomeAssistantLightChoice[]> {
+  const payload = await fetchHomeAssistantStateList(baseUrl, token, fetcher);
+  const candidates = parseCandidates(payload);
+  const friendlyNames = parseLightFriendlyNames(payload);
+  return candidates.light.map((entityId) => {
+    const friendlyName = friendlyNames.get(entityId);
+    return friendlyName
+      ? { entity_id: entityId, friendly_name: friendlyName }
+      : { entity_id: entityId };
+  });
+}
+
+async function fetchHomeAssistantStateList(
+  baseUrl: string,
+  token: string,
+  fetcher: typeof fetch,
+): Promise<unknown> {
   const endpoint = buildStatesUrl(baseUrl);
   if (!token.trim() || /[\r\n]/.test(token)) {
     throw new HaDiscoverError('A valid Home Assistant token is required.');
@@ -64,7 +96,7 @@ export async function discoverHomeAssistant(
     throw new HaDiscoverError('Home Assistant returned an invalid state list.');
   }
 
-  return parseCandidates(payload);
+  return payload;
 }
 
 export function parseCandidates(payload: unknown): HomeAssistantCandidates {
@@ -150,6 +182,36 @@ export function parseCandidates(payload: unknown): HomeAssistantCandidates {
     left.entity_id.localeCompare(right.entity_id),
   );
   return candidates;
+}
+
+function parseLightFriendlyNames(payload: unknown): Map<string, string> {
+  const names = new Map<string, string>();
+  if (!Array.isArray(payload)) return names;
+  for (const item of payload) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item))
+      continue;
+    const state = item as Record<string, unknown>;
+    const entityId = state['entity_id'];
+    const attributes = state['attributes'];
+    if (
+      typeof entityId !== 'string' ||
+      !entityId.startsWith('light.') ||
+      typeof attributes !== 'object' ||
+      attributes === null ||
+      Array.isArray(attributes)
+    ) {
+      continue;
+    }
+    const friendlyName = (attributes as Record<string, unknown>)[
+      'friendly_name'
+    ];
+    if (typeof friendlyName !== 'string') continue;
+    const safeName = [...friendlyName.replace(/[\p{Cc}\p{Cf}]/gu, '').trim()]
+      .slice(0, 80)
+      .join('');
+    if (safeName) names.set(entityId, safeName);
+  }
+  return names;
 }
 
 function buildStatesUrl(baseUrl: string): string {

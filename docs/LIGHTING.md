@@ -13,7 +13,49 @@ Lighting is one of Lugn's most latency-sensitive and user-visible domains.
 
 ## Scenes
 
-Initial known scene names may include:
+The runtime adds these room-wide presets for the configured light targets:
+
+| Preset      | Current behavior                                                               |
+| ----------- | ------------------------------------------------------------------------------ |
+| Helt släckt | All configured lights off.                                                     |
+| Mysljus     | Warm accent lights at low brightness (12%); ceiling light off.                 |
+| Vardagsljus | Warm accent lights at 55%; ceiling light off.                                  |
+| Filmkväll   | Warm accents at 6%; ceiling/front light/Cleverio bar off; monitor backlight on. |
+| Fokus       | All configured lights on at 100% and 4000 K.                                   |
+
+Map the WLED CCT white strip as a normal Home Assistant light, for example:
+
+```json
+"lighting.wled_cct": "light.wled_cct"
+```
+
+The built-in room presets include every configured light target, so the WLED
+strip follows the same scene at 0% for Helt släckt, 12% for Mysljus, 55% for
+Vardagsljus, 6% for Filmkväll, and 100% for Fokus. The WLED entity must expose
+color-temperature support in Home Assistant for its scene color temperature to
+be applied. Custom scenes should specify their own WLED brightness and color
+temperature when the strip should stay on.
+
+The dashboard presents these presets as its primary controls. Other scenes
+from configuration can still be exposed, but only the listed room presets
+have these built-in room-wide definitions.
+
+## Automatic entry policy
+
+Automatic occupied-entry scene reconciliation is suppressed during quiet hours
+(23:00–06:00) and when Home Assistant explicitly reports the resident away.
+Unknown home status does not count as away. Manual dashboard scene/light
+requests remain available while away. Confirmed-empty light-off remains active
+regardless of home status.
+
+Temporary prelight is suppressed when any configured light is already on, the
+current scene requests every configured light off, quiet hours are active, or
+the home-presence entity reports away. This prevents an entry hint from
+turning on additional lights when the room already has a usable scene.
+
+## Scene definitions
+
+Configured scene names may include:
 
 - Desk
 - Cozy

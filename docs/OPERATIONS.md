@@ -12,12 +12,15 @@ the sensor's serial port or implement another LiDAR tracker.
 - Optional semantic buttons mapped to Home Assistant `button.*` entities.
 - Optional semantic switches mapped to Home Assistant `switch.*` entities.
 - Optional semantic music targets mapped to Home Assistant `media_player.*` entities.
+- A Home Assistant `person.*` or `device_tracker.*` entity for home/away status.
 - An MQTT broker reachable from the host running Lugn when using STL27L events.
 - Semantic light IDs mapped to Home Assistant `light.*` entities.
 
 Copy `config.example.json` to `config.json` and edit its URLs, topic, light,
-button, switch and media entity IDs, scenes, and prelight values for your
-installation. Keep `homeAssistant.buttons` empty if no button actions are
+button, switch, media and home-presence entity IDs, scenes, and prelight values
+for your installation. The example home-presence entity is
+`device_tracker.lustigkurre`; replace it if another person or tracker represents
+the resident on your Home Assistant instance. Keep `homeAssistant.buttons` empty if no button actions are
 needed. Otherwise, map each semantic button ID to one `button.*` entity you
 deliberately want Lugn to invoke; see [Home Assistant buttons](#home-assistant-buttons).
 The JSON file contains environment variable names for secrets, never secret
@@ -31,11 +34,99 @@ anonymous access, remove both MQTT credential references from the config.
 For a local checkout, a repo-root `lugn.env` is git-ignored; keep it mode
 `0600` and never commit it.
 
+## Interactive first-run setup
+
+Run the commissioning wizard in a local terminal or interactive SSH session:
+
+```sh
+npm run onboard
+```
+
+It uses `$HOME/.config/lugn/config.json` when that installed config already
+exists. Otherwise it writes `config.json` and `lugn.env` in the current
+repository. Pass both output paths explicitly when needed:
+
+```sh
+npm run onboard -- /path/to/config.json /path/to/lugn.env
+```
+
+The wizard asks for the Home Assistant URL and a long-lived token, then makes
+one read-only `GET /api/states` request and offers currently discovered light
+IDs with Home Assistant friendly names when available. Display labels have
+terminal control characters removed; the stable entity ID remains visible for
+each choice. It also asks for the MQTT broker URL and STL27L base
+topic, optional broker credentials, and optional brief entry-light targets
+with a conservative brightness default. Color temperature is only applied if
+you keep the default or enter a value; choose `skip` for lights that do not
+support it. The wizard creates a separate random token for Lugn's loopback
+HTTP API.
+
+Secrets are entered without terminal echo. The wizard stores their base64url
+encoding in environment variables ending in `_B64`, so Node and systemd read
+the same one-line values even when a broker password contains punctuation.
+This is encoding, not encryption; the config and secret files are written with
+mode `0600`. The runtime decodes only environment references whose names end
+in `_B64`, while existing plain environment variable names continue to work.
+The wizard refuses symbolic-link targets and asks before replacing existing
+files. It does not call Home Assistant services, publish MQTT, enable systemd,
+or start Lugn. After setup, run the read-only preflight command printed by the
+wizard and review the generated mapping before enabling the service.
+
 The HTTP listener defaults to `127.0.0.1:8787` and only accepts loopback bind
 addresses. Lugn's listener is plain HTTP. For remote access, keep the Lugn
 listener on loopback and use a TLS-terminating reverse proxy on a trusted
 network; do not bind Lugn directly to a LAN address or forward this port to the
 public internet.
+
+## Lugn Nest Hub dashboards
+
+Nest Hubs use Lugn's separate custom dashboard server on port `8788`; this is
+not a Home Assistant dashboard. The regular bearer-protected API remains
+loopback-only on port `8787`. Each configured Hub gets its own random secret
+path token, stored in `lugn.env` through `tokenEnv`. Generate 32 random bytes,
+encode them as base64url, and set the resulting value in the protected
+environment file. Do not put the token in a query string or share it outside
+the trusted LAN.
+
+Add the following optional section to `config.json`, replacing the example
+addresses with the LAN IP for the host running Lugn and the current IPs of the
+Nest Hubs:
+
+```json
+"display": {
+  "host": "0.0.0.0",
+  "port": 8788,
+  "publicUrl": "http://192.168.10.132:8788",
+  "hubs": [
+    {
+      "id": "bed-hub",
+      "role": "bed",
+      "castHost": "192.168.10.102",
+      "tokenEnv": "LUGN_BED_HUB_TOKEN_B64"
+    },
+    {
+      "id": "desk-hub",
+      "role": "desk",
+      "castHost": "192.168.10.166",
+      "tokenEnv": "LUGN_DESK_HUB_TOKEN_B64"
+    }
+  ]
+}
+```
+
+The `publicUrl` must be reachable from each Hub, and its port must match the
+configured listener. Lugn connects directly to each configured Cast receiver
+on TCP port `8009`, launches DashCast, and opens that Hub's own Bed or Desk
+page. The Hub page sends scene and light actions through Lugn's capability
+registry. If another Cast app is active, Lugn yields. It restores its page only
+after the Hub stays idle for 90 seconds. DashCast confirms app control, not
+that the browser rendered the page; the dashboard reports that distinction.
+
+The display listener is the only Lugn service configured for LAN access. It
+accepts requests only for its configured host and per-Hub secret path, and its
+control POSTs require a same-origin browser request. Do not port-forward it to
+the public internet. A user-facing site and Clerk login remain on the regular
+web/API surface.
 
 ## Build and start
 
@@ -58,6 +149,21 @@ Set `LUGN_CONFIG_PATH` to use a config file elsewhere, or pass a file path to
 `npm start -- /path/to/config.json`. The service handles `SIGINT` and
 `SIGTERM` by closing HTTP, MQTT, and Home Assistant WebSocket connections.
 Startup and operational logs omit tokens and raw broker/HA errors.
+
+## Lighting intent persistence
+
+The runtime saves the selected scene, desired light values, manual property
+overrides, and confirmed-empty continuity deadline to
+`$XDG_STATE_HOME/lugn/lighting-intent.json`, or
+`~/.local/state/lugn/lighting-intent.json` when `XDG_STATE_HOME` is unset.
+Set `LUGN_LIGHTING_INTENT_PATH` to choose another path. The file and its
+directory are private to the service account. Writes are versioned and atomic.
+
+Physical observations, presence counts, command history, and pending commands
+are not restored. After restart, saved lighting intent is reconciled only when
+presence is confirmed occupied; a confirmed-empty event still turns lights off.
+Expired continuity is discarded. Music state and configuration are not part of
+this lighting-intent file.
 
 ## Discover Home Assistant mappings
 
@@ -250,8 +356,13 @@ names from its HA `source_list`:
 ```
 
 Replace these examples with actual installation entities and source names.
-The Home Assistant integration must support the requested action. Lugn neither
-creates a media integration nor automatically starts music on presence.
+The Home Assistant integration must support the requested action. Lugn does
+not create a media integration. With a configured player, it applies the
+automatic rules in [Music](MUSIC.md): pause on confirmed empty, short-context
+resume or Spotify DJ preset 1 on a qualifying entry before 23:00, no automatic
+start/resume at or after 23:00, and away-state suppression. The dashboard's
+playback and preset controls are explicit manual requests and remain enabled
+while away.
 
 ```sh
 curl -sS -X POST \
@@ -279,6 +390,10 @@ published by the sensor service. A stale/unavailable sensor does not become
 `confirmed_empty`; preview only requests a bounded prelight and never changes
 occupancy.
 
+Room occupancy is not the same as being home. The Home Assistant tracker
+configured under `homeAssistant.homePresence` supplies the separate home/away
+fact used to gate automatic lighting and music. See [Home and room presence](#home-and-room-presence).
+
 Set `prelight.targets` to the lights and values useful for a fast approach
 response. The preview may arrive before the full occupancy event. Its temporary
 lighting is bounded by `maxDurationMs` and then yields to a confirmed presence
@@ -286,8 +401,37 @@ or later explicit capability request. To disable prelight, use an empty
 `targets` object.
 
 Home Assistant's `/api/states` endpoint seeds initial observations at startup;
-the WebSocket subscription supplies later `state_changed` updates. If the
-initial query fails, Lugn stays available and waits for WebSocket observations.
+the WebSocket subscription supplies later `state_changed` updates. This
+includes the configured home-presence entity. If the initial query fails, Lugn
+stays available and waits for WebSocket observations.
+
+## Home and room presence
+
+Lugn keeps the sensor's room occupancy separate from the configured Home
+Assistant home-presence entity. The default in `config.example.json` is:
+
+```json
+"homePresence": {
+  "entity": "device_tracker.lustigkurre"
+}
+```
+
+The entity may be a `person.*` or `device_tracker.*`. HA state `home` maps to
+home; `unknown` and `unavailable` map to unknown; other named zones or
+`not_home` map to away. The dashboard shows the last observed home state.
+
+Only an explicit `away` state gates automatic room actions: it blocks
+presence-driven scene activation, temporary prelight, music start/resume and
+automatic volume changes. If music is already playing, an away update pauses
+it. A confirmed-empty room still turns lights off and pauses music. Unknown
+home status does not act as away, so a missing or unavailable tracker does not
+silently change room-presence policy. It is separately visible as “Hemstatus
+okänd” on the Hub page.
+
+Away gating does not disable explicit dashboard controls. The resident can
+still select a light preset or manually request music while away. The gate
+applies only to automatic actions; keep the dashboard on the trusted local
+network as described above.
 
 ## Operational boundaries
 

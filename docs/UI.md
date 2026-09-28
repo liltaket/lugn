@@ -1,133 +1,69 @@
 # UI, Nest Hubs and DashCast
 
-## Web application
+## Current Hub dashboard
 
-The web app is the primary human configuration surface.
+Lugn serves its own room dashboard for Nest Hubs. It is a custom Lugn page, not
+a Home Assistant dashboard. The layout is designed to fit the Hub screen
+without horizontal or vertical scrolling.
 
-Authentication for human web access should use **Clerk**.
+The primary controls are large room-light preset buttons:
 
-Clerk is not intended to authenticate devices, Home Assistant, MQTT sensors, or machine adapters. Machine trust must remain separate from user login.
+- Helt släckt
+- Mysljus
+- Vardagsljus
+- Filmkväll
+- Fokus
 
-## Daily room view
+The rest of the one-screen view shows:
 
-The everyday view should prioritize:
+- room occupancy and person count;
+- Home Assistant home/away status (`Hemma`, `Borta` or `Hemstatus okänd`);
+- local time and date;
+- temperature, humidity, CO₂ and PM2.5, with missing or stale values marked;
+- music playback/title and volume, with Spotify DJ and Optical preset buttons,
+  play/pause, and volume `−` / `+` controls in 5-point steps.
 
-- current scene
-- occupancy / person count
-- lighting controls
-- actual WiiM volume
-- playback
-- current preset/source
-- automation/ownership status
-- active routine
-- relevant computer state
-- clear warnings when a sensor/device is unavailable
+There are no individual light sliders or source selector on this Hub view.
+Home/away gates automatic lighting and music behavior only; the explicit
+preset, playback and volume controls remain available while away.
 
-Internal model parameters and deep diagnostics should not dominate the daily screen.
+## Hub roles and access
 
-## Explain ownership
+Each configured Hub has a role (`bed` or `desk`), a Cast receiver IP and a
+separate secret URL path. The dashboard listener is configured independently
+from the bearer-protected, loopback-only capability API. Keep the display
+listener on a trusted LAN and do not publish it to the internet.
 
-The UI should be able to say things such as:
+The custom dashboard does not use Clerk. Clerk is still planned for a future
+human-facing configuration website; Hub access currently uses per-Hub path
+tokens.
 
-    Cozy active
-    Desk light manually off
+See [Running Lugn](OPERATIONS.md#lugn-nest-hub-dashboards) for configuration,
+token setup, ports and receiver requirements.
 
-or:
+## DashCast lifecycle
 
-    Volume 37% - manually selected
+Lugn's DashCast manager connects to configured Cast receivers, launches the
+DashCast app and opens the Hub's own dashboard URL. It monitors Cast state and
+yields when another cast session is active. After the receiver is idle for 90
+seconds, Lugn may restore its dashboard.
 
-A detailed view may show:
+These are separate facts:
 
-    Cozy
-    ✓ ceiling: scene
-    ↳ desk: manual override (off)
-    ✓ strip: scene
+1. **DashCast control** — Lugn connected to the receiver and issued the app
+   launch request.
+2. **Dashboard fetch/render** — the browser on that receiver loaded and
+   rendered the page.
 
-This is more understandable than exposing internal passive-mode flags.
+The first does not prove the second. For a blank page or 503, check the affected
+Hub's fresh displayed error/poll, the display listener's reachability from
+that Hub, and its status on Lugn's dashboard. Do not diagnose receiver
+rendering only from an HTTP response on the Lugn host.
 
-## Two Nest Hub roles
+## Future web configuration
 
-The reference deployment has two useful display roles:
-
-### Bed Hub
-
-Prioritize:
-
-- Good Night / Good Morning
-- Sleep / Cozy
-- routine status
-- alarm/wake-related controls later
-- concise music status
-- relevant bedside prompts
-
-### Desk Hub
-
-Prioritize:
-
-- Desk / Focus / Gaming / Movie scenes
-- computer state
-- music
-- contextual suggestions
-- room status
-
-The same web application can render different priorities based on display identity/role.
-
-## DashCast management
-
-Lugn should actively manage the room dashboards on Nest Hubs through DashCast or an equivalent adapter.
-
-Conceptual desired state:
-
-    display: bed_hub
-    role: bed
-    desired_content: room_dashboard
-
-    display: desk_hub
-    role: desk
-    desired_content: room_dashboard
-
-The manager should be able to recover the dashboard when casting stops unexpectedly.
-
-## Respect external casting
-
-Dashboard ownership must not fight deliberate user casting.
-
-If a user casts other content:
-
-    external cast detected
-      -> dashboard temporarily yields
-
-When that external cast/session ends:
-
-    dashboard manager may restore Lugn
-
-The exact detection method depends on the available integration, but the behavioral contract is important.
-
-## Contextual prompts
-
-Prompts should appear on the relevant Hub and remain low-noise.
-
-Example:
-
-    "You seem to be playing. Use Gaming scene?"
-    [No] [Gaming]
-
-A negative response should suppress the same suggestion for the related session/context.
-
-## Environment area
-
-The UI should reserve a clean place for optional environmental data such as:
-
-- temperature
-- humidity
-- CO2
-- PM2.5
-- general air quality
-
-These sensors are not MVP-critical and the panel should gracefully hide missing values.
-
-## Realtime updates
-
-The UI should receive realtime state updates rather than relying on slow periodic full-state polling.
-
-WebSocket or SSE are both reasonable implementation options.
+A general daily web app and configuration editor are not part of the current
+Hub dashboard. Planned human login uses Clerk; device and Home Assistant
+connections continue to use their own machine credentials. Future settings can
+include scenes, home-presence mapping, music policy, routines, receiver roles
+and diagnostics, but should continue to use the typed Lugn capability layer.

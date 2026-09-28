@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   discoverHomeAssistant,
+  discoverHomeAssistantLightChoices,
   isDirectExecution,
   parseCandidates,
   runHaDiscoverCli,
@@ -98,6 +99,33 @@ describe('Home Assistant discovery', () => {
       Accept: 'application/json',
     });
     expect(requests[0]?.init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('provides terminal-safe friendly names for the interactive light picker only', async () => {
+    const requests: string[] = [];
+    const fetcher: typeof fetch = async (input) => {
+      requests.push(String(input));
+      return Response.json([
+        {
+          entity_id: 'light.desk',
+          state: 'on',
+          attributes: { friendly_name: 'Desk\u001b[2J\u202eLamp' },
+        },
+        {
+          entity_id: 'light.long_name',
+          state: 'off',
+          attributes: { friendly_name: 'A'.repeat(100) },
+        },
+      ]);
+    };
+
+    await expect(
+      discoverHomeAssistantLightChoices('http://ha.test:8123', token, fetcher),
+    ).resolves.toEqual([
+      { entity_id: 'light.desk', friendly_name: 'Desk[2JLamp' },
+      { entity_id: 'light.long_name', friendly_name: 'A'.repeat(80) },
+    ]);
+    expect(requests).toEqual(['http://ha.test:8123/api/states']);
   });
 
   it.each([

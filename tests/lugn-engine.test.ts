@@ -9,7 +9,7 @@ import { applyStateUpdate } from '../src/core/event-stream.js';
 const user = { type: 'user' as const, id: 'test-user' };
 
 function setup(options: ConstructorParameters<typeof LugnEngine>[1] = {}) {
-  const clock = new FakeClock(1_000);
+  const clock = new FakeClock(Date.parse('2026-09-28T12:00:00+02:00'));
   const adapter = new SimulatedLightingAdapter(clock);
   const engine = new LugnEngine(clock, { adapter, ...options });
   return { clock, adapter, engine };
@@ -20,6 +20,117 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('Lugn deterministic lighting slice', () => {
+  it('uses the selected scene as the prelight target and leaves excluded lights off', async () => {
+    const { adapter, engine } = setup({
+      deviceIds: ['lighting.ceiling', 'lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: {
+            'lighting.ceiling': { power: false },
+            'lighting.desk': {
+              power: true,
+              brightness: 24,
+              colorTemperature: 2400,
+            },
+          },
+        },
+      ],
+      prelight: {
+        targets: { 'lighting.ceiling': { power: true, brightness: 35 } },
+      },
+    });
+
+    await engine.activateScene('scene.cozy', user);
+    adapter.externalChange('lighting.ceiling', { power: false });
+    adapter.externalChange('lighting.desk', { power: false });
+    adapter.dispatched.length = 0;
+
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+
+    expect(adapter.dispatched).toEqual([
+      expect.objectContaining({
+        target: 'lighting.desk',
+        values: { power: true, brightness: 24, colorTemperature: 2400 },
+      }),
+    ]);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+    });
+    expect(adapter.observed.get('lighting.ceiling')?.power).toBe(false);
+    expect(adapter.observed.get('lighting.desk')?.power).toBe(true);
+    expect(
+      adapter.dispatched.some(
+        (command) =>
+          command.target === 'lighting.ceiling' &&
+          command.values.power === true,
+      ),
+    ).toBe(false);
+    engine.dispose();
+  });
+
+  it('uses Vardagsljus instead of the legacy static target when no scene is selected', async () => {
+    const { adapter, engine } = setup({
+      deviceIds: ['lighting.ceiling', 'lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.everyday_light',
+          name: 'Vardagsljus',
+          lighting: {
+            'lighting.ceiling': { power: false },
+            'lighting.desk': { power: true, brightness: 55 },
+          },
+        },
+      ],
+      prelight: {
+        targets: { 'lighting.ceiling': { power: true, brightness: 35 } },
+      },
+    });
+
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+
+    expect(adapter.dispatched).toEqual([
+      expect.objectContaining({
+        target: 'lighting.desk',
+        values: { power: true, brightness: 55 },
+      }),
+    ]);
+    engine.dispose();
+  });
+
+  it('restores a physically off light after an unconfirmed prelight timeout', async () => {
+    const { clock, adapter, engine } = setup({
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: { 'lighting.desk': { power: true, brightness: 24 } },
+        },
+      ],
+      prelight: {
+        targets: { 'lighting.desk': { power: true, brightness: 35 } },
+        maxDurationMs: 1_000,
+      },
+    });
+
+    await engine.activateScene('scene.cozy', user);
+    adapter.externalChange('lighting.desk', { power: false });
+    adapter.dispatched.length = 0;
+    adapter.ignoreNextForTargets.add('lighting.desk');
+
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    clock.advanceBy(1_000);
+    await flushMicrotasks();
+
+    expect(adapter.dispatched.at(-1)).toMatchObject({
+      target: 'lighting.desk',
+      values: { power: false },
+    });
+    engine.dispose();
+  });
+
   it('terminalizes unresolved prelight commands at their feedback deadline and clears timers on dispose', async () => {
     const { clock, adapter, engine } = setup({
       convergenceTimeoutMs: 3_000,
@@ -822,7 +933,7 @@ describe('Lugn deterministic lighting slice', () => {
     clock.advanceBy(1_000);
 
     expect(engine.state.presence.state).toBe('unknown');
-    expect(expiration).toBe(2_000);
+    expect(expiration).toBe(clock.now());
     expect(engine.state.presence.continuityExpiresAt).toBeNull();
     expect(engine.state.lighting.currentScene).toBeNull();
     expect(

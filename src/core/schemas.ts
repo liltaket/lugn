@@ -7,6 +7,9 @@ export const PresenceSchema = z.enum([
 ]);
 export type Presence = z.infer<typeof PresenceSchema>;
 
+export const HomePresenceSchema = z.enum(['home', 'away', 'unknown']);
+export type HomePresence = z.infer<typeof HomePresenceSchema>;
+
 export const ActorTypeSchema = z.enum([
   'user',
   'automation',
@@ -95,6 +98,7 @@ export const SwitchStateSchema = z.object({
 export const SemanticMusicIdSchema = z
   .string()
   .regex(/^music\.[a-z0-9][a-z0-9._-]*$/);
+export const MusicPresetSchema = z.enum(['spotify_dj', 'optical']);
 export const MusicRequestSchema = z.discriminatedUnion('property', [
   z
     .object({
@@ -107,6 +111,9 @@ export const MusicRequestSchema = z.discriminatedUnion('property', [
     .strict(),
   z
     .object({ property: z.literal('source'), value: z.string().min(1) })
+    .strict(),
+  z
+    .object({ property: z.literal('preset'), value: MusicPresetSchema })
     .strict(),
 ]);
 export type MusicRequest = z.infer<typeof MusicRequestSchema>;
@@ -146,6 +153,7 @@ export const DeviceMusicStateSchema = z.object({
     playback: z.enum(['playing', 'paused']).optional(),
     volume: z.number().min(0).max(1).optional(),
     source: z.string().optional(),
+    preset: MusicPresetSchema.optional(),
   }),
   availability: z.enum(['available', 'unavailable']),
   observedAt: z.number().nonnegative().nullable(),
@@ -208,6 +216,31 @@ export const OwnershipSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 export type Ownership = z.infer<typeof OwnershipSchema>;
+
+/** Durable lighting intent. Physical observations and command history stay ephemeral. */
+export const LightingIntentSnapshotSchema = z
+  .object({
+    currentScene: z
+      .string()
+      .regex(/^scene\.[a-z0-9][a-z0-9._-]*$/)
+      .nullable(),
+    sceneRevision: z.number().int().nonnegative(),
+    continuityExpiresAt: z.number().finite().nonnegative().nullable(),
+    devices: z.record(
+      SemanticLightingIdSchema,
+      z
+        .object({
+          baselineDesired: LightingValuesSchema.strict(),
+          effectiveDesired: LightingValuesSchema.strict(),
+          ownership: z.partialRecord(LightingPropertySchema, OwnershipSchema),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type LightingIntentSnapshot = z.infer<
+  typeof LightingIntentSnapshotSchema
+>;
 
 export const DeviceLightingStateSchema = z.object({
   observed: LightingValuesSchema,
@@ -276,6 +309,10 @@ export const RoomStateSchema = z.object({
     state: PresenceSchema,
     personCount: z.number().int().nonnegative().nullable(),
     continuityExpiresAt: z.number().nonnegative().nullable(),
+    home: z.object({
+      state: HomePresenceSchema,
+      observedAt: z.number().nonnegative().nullable(),
+    }),
   }),
   lighting: z.object({
     currentScene: z.string().nullable(),

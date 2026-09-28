@@ -15,6 +15,26 @@ export type LightingCommand = {
   values: LightingValues;
 };
 
+/** Delivery is unknown when a request may have reached a device without a usable reply. */
+export class LightingDeliveryUnknownError extends Error {
+  readonly deliveryOutcome = 'unknown';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'LightingDeliveryUnknownError';
+  }
+}
+
+export function isLightingDeliveryUnknownError(
+  error: unknown,
+): error is Error & { readonly deliveryOutcome: 'unknown' } {
+  return (
+    error instanceof Error &&
+    'deliveryOutcome' in error &&
+    error.deliveryOutcome === 'unknown'
+  );
+}
+
 export interface LightingAdapter {
   dispatch(command: LightingCommand): Promise<void>;
   subscribe(listener: (observation: LightingObservation) => void): () => void;

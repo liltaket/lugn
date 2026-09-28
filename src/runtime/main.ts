@@ -1,6 +1,12 @@
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
+import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
+import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
+import { HomeAssistantHomePresenceAdapter } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
 import { pathToFileURL } from 'node:url';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { DashCastAdapter } from '../adapters/dashcast.js';
 import { HomeAssistantLightingAdapter } from '../adapters/home-assistant-lighting.js';
 import { HomeAssistantSwitchAdapter } from '../adapters/home-assistant-switch.js';
 import {
@@ -13,8 +19,12 @@ import {
   type Stl27lPresenceMqttSubscriber,
 } from '../adapters/stl27l-mqtt-presence.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
-import { LugnEngine } from '../application/lugn-engine.js';
+import { withRoomPresets } from '../application/dashboard-scenes.js';
+import { defaultScenes, LugnEngine } from '../application/lugn-engine.js';
 import { systemClock } from '../core/clock.js';
+import { LugnDisplayServer } from './display-server.js';
+import { DashCastManager } from './dashcast-manager.js';
+import { LightingIntentStore } from './lighting-intent-store.js';
 import { LugnHttpServer } from './http-server.js';
 import {
   MqttJsSubscriber,
@@ -37,12 +47,14 @@ type RuntimeMqttSubscriber = Stl27lPresenceMqttSubscriber & {
 
 /** Optional transport factories keep the composed runtime deterministic in tests. */
 export type LugnRuntimeDependencies = {
+  lightingIntentPath?: string;
   homeAssistantFetch?: typeof fetch;
   createMqttSubscriber?: (
     config: MqttSubscriberConfig,
     onError: () => void,
   ) => RuntimeMqttSubscriber;
   createHomeAssistantSocket?: HomeAssistantSocketFactory;
+  createDashCastAdapter?: () => DashCastAdapter;
 };
 
 /** Starts the local Lugn host and its configured Home Assistant/MQTT links. */
@@ -103,9 +115,30 @@ export async function startRuntime(
           systemClock,
         )
       : undefined;
+  const homeAssistantEnvironment = new HomeAssistantEnvironmentAdapter(
+    config.homeAssistant.environment,
+    systemClock,
+  );
+  const deviceIds = Object.keys(config.homeAssistant.entities);
+  const scenes = withRoomPresets(config.scenes ?? defaultScenes, deviceIds);
+  const stateDirectory =
+    process.env['XDG_STATE_HOME'] ?? join(homedir(), '.local', 'state');
+  const lightingIntentPath =
+    dependencies.lightingIntentPath ??
+    process.env['LUGN_LIGHTING_INTENT_PATH'] ??
+    join(stateDirectory, 'lugn', 'lighting-intent.json');
+  const lightingIntentStore = new LightingIntentStore({
+    filePath: lightingIntentPath,
+    expectedDeviceIds: deviceIds,
+    knownSceneIds: scenes.map((scene) => scene.id),
+    onWarning: (message) => console.warn(`[lugn] ${message}`),
+  });
+  const restoredLightingIntent = await lightingIntentStore.load();
   const engine = new LugnEngine(systemClock, {
     adapter: homeAssistantLighting,
-    deviceIds: Object.keys(config.homeAssistant.entities),
+    deviceIds,
+    scenes,
+    ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
     prelight: config.prelight,
     ...(homeAssistantMusic === undefined
       ? {}
@@ -125,8 +158,26 @@ export async function startRuntime(
           switchDeviceIds: Object.keys(config.homeAssistant.switches),
           switchAdapter: homeAssistantSwitch,
         }),
-    ...(config.scenes === undefined ? {} : { scenes: config.scenes }),
   });
+  const homeAssistantHomePresence = new HomeAssistantHomePresenceAdapter(
+    config.homeAssistant.homePresence ?? {
+      entity: 'device_tracker.lustigkurre',
+    },
+    systemClock,
+    (state, observedAt) => {
+      void engine.handleHomePresence(state, observedAt);
+    },
+  );
+  const homeAssistantBilresa = new HomeAssistantBilresaAdapter(
+    config.homeAssistant.bilresa ?? {},
+    systemClock,
+    ({ button, gesture }) => {
+      void engine.handleBilresaPress(button, gesture).catch(() => {
+        console.warn('[lugn] BILRESA action could not be applied');
+      });
+    },
+  );
+  lightingIntentStore.start(engine);
   const capabilities = new CapabilityRegistry(engine, {
     ...(homeAssistantButton === undefined
       ? {}
@@ -141,6 +192,9 @@ export async function startRuntime(
       homeAssistantLighting.acceptStateChangedEvent(event);
       homeAssistantSwitch?.acceptStateChangedEvent(event);
       homeAssistantMusic?.acceptStateChangedEvent(event);
+      homeAssistantEnvironment.acceptStateChangedEvent(event);
+      homeAssistantHomePresence.acceptStateChangedEvent(event);
+      homeAssistantBilresa.acceptStateChangedFrame(event);
     },
     dependencies.createHomeAssistantSocket === undefined
       ? {}
@@ -199,6 +253,64 @@ export async function startRuntime(
       mqtt: mqttSubscriber?.status ?? 'not_configured',
     }),
   });
+  let castManager: DashCastManager | undefined;
+  let displayServer: LugnDisplayServer | undefined;
+  displayServer = config.display
+    ? new LugnDisplayServer({
+        host: config.display.host,
+        port: config.display.port,
+        allowedHosts: [new URL(config.display.publicUrl).host],
+        hubs: config.display.hubs.map(({ id, role, castHost, token }) => ({
+          id,
+          role,
+          castHost,
+          token,
+        })),
+        capabilities,
+        scenes: Array.from(engine.scenes.values()),
+        stateProvider: () => engine.state,
+        musicVolumePoliciesProvider: () =>
+          engine.getMusicVolumePolicySnapshots(),
+        environmentProvider: () => homeAssistantEnvironment.snapshot(),
+        castStatus: (hubId) => {
+          const lastHubPollAt = displayServer?.lastHubHeartbeatAt(hubId);
+          if (
+            lastHubPollAt !== undefined &&
+            Date.now() - lastHubPollAt < 12_000
+          ) {
+            return {
+              state: 'live',
+              message: 'Den här Hubben hämtar rumsstatus från Lugn.',
+            };
+          }
+          return (
+            castManager?.statusForHub(hubId) ?? {
+              state: 'starting',
+              message: 'Lugn ansluter till DashCast.',
+            }
+          );
+        },
+      })
+    : undefined;
+  castManager = config.display
+    ? new DashCastManager({
+        publicUrl: config.display.publicUrl,
+        hubs: config.display.hubs.map(({ id, castHost }) => ({
+          id,
+          castHost,
+        })),
+        dashboardPath: (hubId) => displayServer!.pathForHub(hubId),
+        dashboardActive: (hubId) => {
+          const lastHubPollAt = displayServer?.lastHubHeartbeatAt(hubId);
+          return (
+            lastHubPollAt !== undefined && Date.now() - lastHubPollAt < 12_000
+          );
+        },
+        ...(dependencies.createDashCastAdapter === undefined
+          ? {}
+          : { createAdapter: dependencies.createDashCastAdapter }),
+      })
+    : undefined;
 
   try {
     if (mqttSubscriber) mqttSubscriber.start();
@@ -208,14 +320,22 @@ export async function startRuntime(
       homeAssistantLighting,
       homeAssistantSwitch,
       homeAssistantMusic,
+      homeAssistantEnvironment,
+      homeAssistantHomePresence,
       homeAssistantFetch,
     );
     homeAssistantSocket.start();
     await http.start();
+    await displayServer?.start();
+    castManager?.start();
   } catch (error) {
+    await castManager?.stop();
+    await displayServer?.stop();
+    await http.stop();
     sensorAdapter?.stop();
     unsubscribeMqttStatus?.();
     homeAssistantSocket.stop();
+    await lightingIntentStore.stop();
     engine.dispose();
     await mqttSubscriber?.stop();
     throw error;
@@ -224,13 +344,21 @@ export async function startRuntime(
   console.info(
     `[lugn] listening at http://${config.http.host}:${config.http.port}`,
   );
+  if (config.display) {
+    console.info(
+      `[lugn] custom Nest display surface listening at http://${config.display.host}:${config.display.port} (${config.display.hubs.length} Hub${config.display.hubs.length === 1 ? '' : 's'} monitored via DashCast)`,
+    );
+  }
   return {
     engine,
     async stop() {
+      await castManager?.stop();
+      await displayServer?.stop();
       await http.stop();
       sensorAdapter?.stop();
       unsubscribeMqttStatus?.();
       homeAssistantSocket.stop();
+      await lightingIntentStore.stop();
       engine.dispose();
       await mqttSubscriber?.stop();
     },
@@ -243,6 +371,8 @@ async function seedHomeAssistantObservations(
   lightingAdapter: HomeAssistantLightingAdapter,
   switchAdapter?: HomeAssistantSwitchAdapter,
   musicAdapter?: HomeAssistantMusicAdapter,
+  environmentAdapter?: HomeAssistantEnvironmentAdapter,
+  homePresenceAdapter?: HomeAssistantHomePresenceAdapter,
   fetcher: typeof fetch = fetch,
 ): Promise<void> {
   try {
@@ -276,6 +406,8 @@ async function seedHomeAssistantObservations(
       });
       switchAdapter?.acceptState(candidate);
       musicAdapter?.acceptState(candidate);
+      environmentAdapter?.acceptState(candidate);
+      homePresenceAdapter?.acceptState(candidate);
     }
   } catch {
     console.warn(

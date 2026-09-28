@@ -4,10 +4,11 @@ import {
   SemanticLightingIdSchema,
   type LightingValues,
 } from '../core/schemas.js';
-import type {
-  LightingAdapter,
-  LightingCommand,
-  LightingObservation,
+import {
+  LightingDeliveryUnknownError,
+  type LightingAdapter,
+  type LightingCommand,
+  type LightingObservation,
 } from './simulated-lighting.js';
 
 const HomeAssistantEntityIdSchema = z.string().regex(/^light\.[a-z0-9_]+$/);
@@ -133,14 +134,14 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
         data['color_temp_kelvin'] = command.values.colorTemperature;
     }
 
-    const isCleverioOff =
+    const isUnreliableCleverioOff =
       entityId === 'light.cleverio_lb100' && service === 'turn_off';
-    const attempts = isCleverioOff ? 3 : 1;
+    const attempts = isUnreliableCleverioOff ? 3 : 1;
     let accepted = false;
-    let uncertainFailure = false;
+    let lastUncertainFailure: LightingDeliveryUnknownError | undefined;
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      let response: Response | undefined;
+      let response: Response;
       try {
         response = await this.transport(
           `${this.baseUrl}/api/services/light/${service}`,
@@ -155,38 +156,44 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
           },
         );
       } catch {
-        // The light may still receive a command when HA's reply is lost.
-        uncertainFailure = true;
-        if (!isCleverioOff)
-          throw new Error(
-            `Home Assistant light.${service} failed for ${command.target} (${entityId}): transport error`,
-          );
+        // A timeout can happen after the device received the command. For the
+        // unreliable Cleverio, send the remaining bounded off attempts anyway.
+        lastUncertainFailure = new LightingDeliveryUnknownError(
+          `Home Assistant light.${service} response was not received for ${command.target} (${entityId})`,
+        );
+        if (!isUnreliableCleverioOff) throw lastUncertainFailure;
+        continue;
       }
 
-      if (response?.ok) {
+      if (response.ok) {
         accepted = true;
-      } else if (response) {
-        const uncertain =
-          response.status === 408 ||
-          response.status === 425 ||
-          response.status === 429 ||
-          response.status >= 500;
-        if (!isCleverioOff || !uncertain)
-          throw new Error(
-            `Home Assistant light.${service} failed for ${command.target} (${entityId}): HTTP ${response.status}`,
-          );
-        uncertainFailure = true;
+      } else if (
+        response.status === 408 ||
+        response.status === 425 ||
+        response.status === 429 ||
+        response.status >= 500
+      ) {
+        lastUncertainFailure = new LightingDeliveryUnknownError(
+          `Home Assistant light.${service} returned HTTP ${response.status} for ${command.target} (${entityId})`,
+        );
+        if (!isUnreliableCleverioOff) throw lastUncertainFailure;
+      } else {
+        throw new Error(
+          `Home Assistant light.${service} failed for ${command.target} (${entityId}): HTTP ${response.status}`,
+        );
       }
 
-      if (isCleverioOff && attempt + 1 < attempts)
+      if (isUnreliableCleverioOff && attempt + 1 < attempts)
         await new Promise<void>((resolve) =>
           this.clock.setTimeout(resolve, 150),
         );
     }
 
-    // The Cleverio integration may execute an off command without a useful
-    // response. Complete three bounded sends before treating it as fire-and-forget.
-    if (!accepted && uncertainFailure && isCleverioOff) return;
+    // HA's Cleverio integration often accepts a service call without timely
+    // state feedback. The three idempotent off sends are deliberately
+    // fire-and-forget when all responses are ambiguous.
+    if (!accepted && lastUncertainFailure && !isUnreliableCleverioOff)
+      throw lastUncertainFailure;
   }
 
   subscribe(listener: (observation: LightingObservation) => void): () => void {

@@ -44,7 +44,17 @@ function runtimeConfig(withMqtt = true): RuntimeConfig {
       buttons: { 'button.pc_lock': 'button.pc_lock' },
       switches: { 'switch.desk': 'switch.desk' },
       music: {
-        'music.room': { entityId: 'media_player.room', sources: ['Spotify'] },
+        'music.room': {
+          entityId: 'media_player.room',
+          sources: ['Spotify'],
+          presets: { spotify_dj: 1, optical: 4 },
+        },
+      },
+      environment: {
+        temperature: 'sensor.temperature',
+        humidity: 'sensor.humidity',
+        co2: 'sensor.co2',
+        pm25: 'sensor.pm25',
       },
     },
     ...(withMqtt

@@ -46,12 +46,40 @@ if [[ ! -e "$environment_file" ]]; then
 fi
 chmod 600 "$config_file" "$environment_file"
 
-systemd_quote() {
+systemd_path() {
   local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  value="${value//%/%%}"
-  printf '"%s"' "$value"
+  local mode="${2:-path}"
+  local escaped=""
+  local character
+
+  [[ "$value" = /* ]] || fail 'systemd paths must be absolute.'
+
+  while [[ -n "$value" ]]; do
+    character="${value:0:1}"
+    value="${value:1}"
+    case "$character" in
+      ' ') escaped+='\\x20' ;;
+      $'\t') escaped+='\\x09' ;;
+      $'\n') escaped+='\\x0a' ;;
+      $'\r') escaped+='\\x0d' ;;
+      $'\v') escaped+='\\x0b' ;;
+      $'\f') escaped+='\\x0c' ;;
+      '\\') escaped+='\\x5c' ;;
+      '"') escaped+='\\x22' ;;
+      "'") escaped+='\\x27' ;;
+      '%') escaped+='%%' ;;
+      '$')
+        if [[ "$mode" = exec ]]; then
+          escaped+='$$'
+        else
+          escaped+='$'
+        fi
+        ;;
+      *) escaped+="$character" ;;
+    esac
+  done
+
+  printf '%s' "$escaped"
 }
 
 temporary_unit="$(mktemp "$unit_dir/.lugn.service.XXXXXX")"
@@ -63,15 +91,15 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=$(systemd_quote "$repo_dir")
-EnvironmentFile=$(systemd_quote "$environment_file")
+WorkingDirectory=$(systemd_path "$repo_dir")
+EnvironmentFile=$(systemd_path "$environment_file")
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ExecStart=$(systemd_quote "$node_path") $(systemd_quote "$repo_dir/dist/runtime/main.js") $(systemd_quote "$config_file")
+ExecStart=$(systemd_path "$node_path" exec) $(systemd_path "$repo_dir/dist/runtime/main.js" exec) $(systemd_path "$config_file" exec)
 Restart=on-failure
 RestartSec=3
 

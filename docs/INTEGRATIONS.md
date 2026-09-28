@@ -15,7 +15,32 @@ Expected uses include:
 
 Core decisions should live in Lugn rather than being duplicated in a large set of Home Assistant automations.
 
-The first code adapter uses caller-supplied mappings from Lugn semantic light IDs to Home Assistant light entities. It sends light service requests through the REST API. `HomeAssistantWebSocketTransport` handles WebSocket authentication, `state_changed` subscription, and bounded reconnects; the host supplies credentials and forwards its events to the lighting adapter. Socket creation and HTTP fetch are injectable. No live Home Assistant instance has been configured or verified.
+The runtime maps Lugn semantic light IDs to Home Assistant light entities and
+dispatches through the REST API. `HomeAssistantWebSocketTransport` handles
+authentication, `state_changed` subscription and bounded reconnects; the host
+supplies credentials and forwards events to the adapters. Startup also makes
+one read-only `/api/states` query to seed configured observations. Transport
+creation and HTTP fetch are injectable. A read-only check confirmed that the
+configured home-presence entity `device_tracker.lustigkurre` returned state
+`home` at the time of the check. This does not verify a future away transition,
+automatic response, or any physical device output.
+
+### Home and room presence
+
+`homeAssistant.homePresence.entity` accepts one `person.*` or
+`device_tracker.*` entity and defaults to `device_tracker.lustigkurre` in
+`config.example.json`. The Home Assistant REST state snapshot seeds the initial
+value; WebSocket `state_changed` events update it. `home` maps to home,
+`unknown` and `unavailable` map to unknown, and other named zones (including
+`not_home`) map to away.
+
+This state is separate from STL27L room occupancy. Explicit away suppresses
+automatic room-scene activation, prelight, music start/resume and automatic
+volume changes; it pauses music that is playing. Confirmed-empty light-off and
+music pause remain active. Unknown is displayed but does not count as away.
+Manual dashboard requests are still permitted while away. The room dashboard
+shows both statuses so that `room occupied` and `resident home` cannot be
+mistaken for the same signal.
 
 ### Configured switches
 
@@ -94,20 +119,21 @@ This is a direct event path from the sensor-processing service to Lugn through t
 
 Fast-path timing records include elapsed milliseconds from local MQTT callback receipt to the engine decision, first command dispatch, first feedback attributable to a Lugn command, and full convergence. Elapsed values use a monotonic clock and remain separate from wall-clock timestamps. They measure only the Lugn process after MQTT delivery; measuring sensor publication, broker/network delay, or physical light response requires live instrumentation at those boundaries.
 
-## WiiM
+## Music players / WiiM through Home Assistant
 
-Important capabilities:
+The implemented `HomeAssistantMusicAdapter` maps semantic `music.*` targets
+to distinct Home Assistant `media_player.*` entities. It dispatches fixed
+play, pause, set-volume, select-source and play-media services. Per-target
+source allowlists use exact names from the entity's `source_list`; Spotify DJ
+preset `1` and Optical preset `4` are the defaults and can be overridden in
+config. The Hub dashboard exposes those two preset actions, play/pause and
+5-point volume buttons, but no source selector.
 
-- playback
-- volume
-- fades
-- source
-- presets
-- observed state
-
-Presets should be first-class because they provide convenient preconfigured playback choices.
-
-Optical source switching for computer use is useful, subject to ownership/continuity rules.
+The `MusicAutomation` policy handles room-empty pause, short-context resume,
+entry autostart before 23:00, confirmed-away gating and the daily volume curve.
+See [Music](MUSIC.md) for exact behavior. The selected preset cannot be
+confirmed from current Home Assistant observations, and direct WiiM transport
+or measured fades are not implemented.
 
 ## HASS.Agent / Windows
 
@@ -155,34 +181,39 @@ Potential inhibit signals:
 
 ## IKEA BILRESA
 
-BILRESA remotes are input devices, not lighting-specific code.
+BILRESA button events come from Home Assistant `event.*` entities and enter
+Lugn through the same WebSocket `state_changed` stream as other observations.
+The four default entity IDs preserve the two event entities per physical button
+used by the previous Bruno Intelligence Engine; deployments can override those
+IDs in `homeAssistant.bilresa`.
 
-Conceptually:
+The room remote has these fixed, predictable actions:
 
-    button event
-      -> configurable binding
-      -> capability/tool call
+| Input                                   | Action                                                                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Button 1 short press (`multi_press_1`)  | Toggle between the active scene and **Helt släckt**.                                                                                 |
+| Button 1 double press (`multi_press_2`) | Restore the last non-off scene (or the first available room scene).                                                                  |
+| Button 1 long press (`long_press`)      | Toggle the configured **Sleep** scene; if none exists, toggle **Helt släckt** and the last scene.                                    |
+| Button 2 short press (`multi_press_1`)  | Toggle automatic music-volume adjustment, leaving playback controls and lighting alone.                                              |
+| Button 2 double press (`multi_press_2`) | Select **Helt släckt**.                                                                                                              |
+| Button 2 long press (`long_press`)      | Toggle **Bilresa**: turn lights off and pause automatic volume adjustment; repeat to restore the last scene and prior volume policy. |
 
-Bindings may be context-sensitive, but should remain predictable.
-
-A bedside remote can reasonably map the same stable button to:
-
-- Good Night during evening context
-- Good Morning during morning context
-- a normal scene outside those contexts
-
-The second remote can live near a desk or another useful control point.
-
-Basic music control does not need to consume BILRESA buttons when a dedicated WiiM remote already exists.
+The earlier global passive switch is intentionally narrowed: short press on
+button 2 affects automatic music volume only. Bilresa mode pauses that same
+volume policy while maintaining an explicit room-off scene, which keeps sensor
+reconciliation from lighting the room during sleep/away. A user-selected
+dashboard scene remains an explicit command. Remote commands are attributed to
+the physical remote in Lugn's command ledger.
 
 ## Nest Hubs / DashCast
 
-Two display roles are expected:
-
-- bedside
-- main desk
-
-DashCast management should keep the Lugn dashboard available while yielding to deliberate user casting.
+The runtime serves custom Bed and Desk room pages on a separate display
+listener and manages configured Cast receivers through DashCast. It yields to
+active external casting and can restore its page after 90 seconds idle. The
+Hub page is not a Home Assistant dashboard. DashCast app control is distinct
+from page fetch/render confirmation; receiver-side evidence is needed to
+verify what appeared on screen. Configuration and access boundaries are in
+[UI](UI.md) and [Operations](OPERATIONS.md#lugn-nest-hub-dashboards).
 
 ## Environmental sensors
 

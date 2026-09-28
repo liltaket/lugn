@@ -1,124 +1,85 @@
 # Configuration and persistence
 
-## Goals
+## Current configuration surface
 
-Configuration should be:
+The runtime reads a validated JSON configuration, usually copied from
+`config.example.json`. `npm run config:check` validates it without contacting
+Home Assistant, MQTT or a device. `npm run onboard` helps create an initial
+configuration and protected environment file. The full graphical
+configuration editor is future work; the custom Nest Hub dashboard is for
+room control rather than configuration.
 
-- human-editable through the web UI;
-- representable as validated structured data;
-- easy for developers to understand;
-- safe for authorized agents to modify through tools;
-- versioned and migratable;
-- persistent across restart.
+Current configuration covers:
 
-Avoid burying ordinary user behavior in hardcoded application logic.
+- Home Assistant URL/token environment name;
+- semantic light, switch, button and media-player mappings;
+- one Home Assistant home-presence `person.*` or `device_tracker.*` entity;
+- Home Assistant temperature, humidity, CO₂ and PM2.5 mappings;
+- MQTT connection, topic and freshness window for STL27L events;
+- prelight targets and duration;
+- scenes and optional Bed/Desk Hub roles, Cast receiver addresses and tokens.
 
-## Configuration domains
+The example uses `device_tracker.lustigkurre` for home presence. Change it to
+the correct entity for another installation. Explicit `away` gates automatic
+lighting and music actions; home status is separate from room occupancy. See
+[Presence](PRESENCE.md) for the behavior and [Operations](OPERATIONS.md) for
+the full config shape.
 
-Likely configuration areas include:
+Credentials are named in JSON but supplied through the process environment or
+a protected secret file. Never put credential values in checked-in config.
 
-- devices and semantic IDs
-- adapters
-- scenes
-- room presence behavior
-- continuity / decay policies
-- music presets
-- source switching
-- volume schedule
-- routines
-- BILRESA bindings
-- Hub roles
-- DashCast behavior
-- environment sensors
-- convergence/retry policies
-- diagnostics settings
+## Future configuration goals
 
-The current runtime's `homeAssistant.buttons` map is opt-in and defaults to
-empty. It maps each semantic button ID to one Home Assistant `button.*` entity;
-the same entity cannot be assigned to multiple semantic IDs. The runtime
-exposes only the typed `button.press` action for mapped targets. Discovery is
-read-only, and preflight checks configured mappings without invoking them. See
-[Running Lugn](OPERATIONS.md#home-assistant-buttons) for the config shape and
-commissioning commands.
+A future configuration UI should edit the same validated schema, while
+advanced users can inspect or export JSON. The current runtime does not yet
+offer visual editing for:
 
-## UI and structured representation
+- device and adapter mappings;
+- scenes and quiet-hour policy;
+- music preset IDs, sources, and volume schedule;
+- routines and advanced remote bindings (BILRESA button events are configured
+  under `homeAssistant.bilresa` in JSON);
+- Hub roles and DashCast behavior;
+- convergence, retry and diagnostic settings.
 
-The UI and configuration files/API should represent the same underlying schema.
+Avoid burying ordinary user behavior in hardcoded application logic as these
+settings expand.
 
-This allows:
+## BILRESA event entities
 
-- ordinary users to configure visually;
-- advanced users to inspect/export structured configuration;
-- future agents to create/update configuration through typed tools.
+The current BILRESA adapter reads Home Assistant `event.*` state changes. The
+default configuration uses the four entity IDs retained from the previous room
+engine; override `homeAssistant.bilresa.button1Entities` or
+`homeAssistant.bilresa.button2Entities` when Home Assistant uses different IDs.
+See [IKEA BILRESA](INTEGRATIONS.md#ikea-bilresa) for the gesture-to-room-action
+mapping.
 
-## Persistence principle
+## Persistence
 
-> A process restart should, as far as practical, not change the room's behavior.
+The runtime currently persists a smaller first slice: the selected lighting
+scene, desired lighting values, per-property ownership, and the confirmed-
+empty continuity deadline. The versioned snapshot is atomically written to a
+private JSON file under the service account's state directory. Device
+observations, current home/room presence, music context and pending commands
+are not restored. See [Lighting intent persistence](OPERATIONS.md#lighting-intent-persistence).
 
-Persist at least:
+On restart, saved lighting intent can be reconciled with newly observed device
+state. Stale physical commands are not blindly replayed.
 
-- configuration
-- device registry
-- scenes
-- routines
-- button bindings
-- Hub/display configuration
-- current logical scene
-- relevant overrides
-- continuity timestamps/state
-- scheduling settings
-- suggestion preferences/suppression where appropriate
+## Later persistence needs
 
-## Physical commands after restart
+If the runtime grows, likely candidates include configuration versions,
+device registry, scenes, routines, Hub settings, scheduling preferences and
+selected continuity state. Migrations should be explicit so that an older
+configuration or snapshot is never silently reinterpreted under a new schema.
 
-Do not blindly resume stale pending commands from before a crash/restart.
+## History and time
 
-On startup:
+The current command and diagnostic histories are bounded in memory and are
+not durable storage. They are intended to answer what event arrived, what
+Lugn believed, which decision it made, what request it sent and what feedback
+arrived. Sensor-to-process and physical response latency require separate
+measurement.
 
-1. restore durable logical state;
-2. invalidate or carefully classify old pending physical commands;
-3. obtain fresh observations;
-4. reconcile desired state with reality.
-
-## History and diagnostics
-
-It is useful to retain enough structured history to answer:
-
-- what event arrived?
-- what state did Lugn believe?
-- what decision was made?
-- what command was sent?
-- what feedback arrived?
-- was it attributed to that command?
-- did the target converge?
-- why was an override created?
-- how long did the fast path take?
-
-History should serve debugging first. Future models may later use selected structured context, but logging should not exist solely "for AI."
-
-## Database
-
-A simple embedded store such as SQLite is a strong initial candidate because it supports:
-
-- one local deployment
-- low operational complexity
-- transactional persistence
-- easy inspection and backup
-
-The concrete choice is not permanently locked yet.
-
-## Time
-
-Use:
-
-- one explicit configured timezone;
-- timezone-aware persisted timestamps;
-- an injectable/testable clock in core logic.
-
-Schedules and continuity timers must be deterministic in tests.
-
-## Migrations
-
-Configuration/state schema changes require versioned migrations.
-
-Do not silently interpret old configuration under a new meaning.
+Room and music schedules use Europe/Stockholm local time. Core time-dependent
+behavior uses an injectable clock so it can be exercised deterministically.

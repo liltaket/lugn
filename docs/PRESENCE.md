@@ -6,6 +6,26 @@ Continuity answers "should the room still remember what was happening before the
 
 These must be separate concepts.
 
+Home/away is a third, independent signal. It answers whether the resident's
+configured Home Assistant person or tracker is at home; it does not replace
+room occupancy.
+
+## Home and room presence
+
+The runtime reads one Home Assistant `person.*` or `device_tracker.*` entity,
+configured as `homeAssistant.homePresence.entity`. The example defaults to
+`device_tracker.lustigkurre`. Its state is normalized to `home`, `away` or
+`unknown` and displayed separately from STL27L room occupancy.
+
+Only a confirmed `away` state blocks automatic room activation. It suppresses
+presence-triggered scene reconciliation, prelight and music automation. If
+music is already playing, Lugn pauses it. Confirmed-empty still turns lights
+off and pauses music. Home status `unknown` is not treated as away.
+
+The gate applies to automation. Explicit dashboard scene, light and music
+requests remain usable while away. That lets a person intentionally control a
+room remotely without allowing a passer-by sensor event to reactivate it.
+
 ## Normalized presence state
 
 At minimum:
@@ -120,9 +140,15 @@ Prelight is separate from confirmed occupancy.
 
 Desired behavior:
 
-    possible entry -> immediate minimal useful lighting
-    confirmed entry -> normal room state
-    no confirmation -> revert prelight according to policy
+    possible entry -> preview the selected scene's on-lights only
+    confirmed entry -> apply the selected scene, including explicit off states
+    no confirmation -> restore the physical state observed before prelight
+
+When no scene is selected, prelight uses the Vardagsljus preset. It must never
+use a static target list that can turn on a light excluded by that scene. The
+prelight snapshot gives current device observations precedence over remembered
+desired state, and timeout restoration is sent even when the preview receives
+no device feedback.
 
 Prelight must not:
 
@@ -130,6 +156,11 @@ Prelight must not:
 - increment person count
 - clear manual overrides
 - pretend occupancy is confirmed
+
+In addition, prelight is suppressed when Home Assistant explicitly reports
+away, during lighting quiet hours (23:00–06:00), when the active scene requests
+all configured lights off, or when a configured room light is already on. The
+exact gate is reported in the runtime diagnostics.
 
 ## Future computer-intent inference
 

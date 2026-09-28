@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111613" />
+    <title>Lugn · Rumskontroll</title>
+    <link rel="stylesheet" href="./display.css" />
+    <script src="./display.js" defer></script>
+  </head>
+  <body>
+    <main class="screen" id="app-root" data-role="unknown">
+      <section class="glance" aria-label="Tid och inomhusklimat">
+        <div class="clock-block" aria-label="Lokal tid och datum">
+          <time id="clock-time" class="clock-time" aria-label="Klockan"
+            >—:—</time
+          >
+          <time id="clock-date" class="clock-date" datetime=""
+            >Hämtar datum …</time
+          >
+        </div>
+        <div
+          class="environment-grid"
+          id="environment-grid"
+          aria-label="Inomhusklimat"
+        >
+          <article class="environment-metric" data-metric="temperature">
+            <span class="metric-label">Temperatur</span>
+            <strong class="metric-value" id="metric-temperature">—</strong>
+            <span class="metric-state" id="metric-temperature-state"
+              >Väntar på sensor</span
+            >
+          </article>
+          <article class="environment-metric" data-metric="humidity">
+            <span class="metric-label">Luftfuktighet</span>
+            <strong class="metric-value" id="metric-humidity">—</strong>
+            <span class="metric-state" id="metric-humidity-state"
+              >Väntar på sensor</span
+            >
+          </article>
+          <article class="environment-metric" data-metric="co2">
+            <span class="metric-label">CO₂</span>
+            <strong class="metric-value" id="metric-co2">—</strong>
+            <span class="metric-state" id="metric-co2-state"
+              >Väntar på sensor</span
+            >
+          </article>
+          <article class="environment-metric" data-metric="pm25">
+            <span class="metric-label">PM2.5</span>
+            <strong class="metric-value" id="metric-pm25">—</strong>
+            <span class="metric-state" id="metric-pm25-state"
+              >Väntar på sensor</span
+            >
+          </article>
+        </div>
+      </section>
+
+      <div class="feedback-slot" id="feedback-slot" hidden>
+        <div
+          class="connection-notice"
+          id="connection-notice"
+          data-state="loading"
+          role="status"
+          aria-live="polite"
+          hidden
+        >
+          <span id="connection-message">Ansluter till Lugn …</span>
+          <button class="retry-button" id="retry-button" type="button" hidden>
+            Försök igen
+          </button>
+        </div>
+        <div
+          class="toast"
+          id="toast"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></div>
+      </div>
+
+      <div class="control-layout">
+        <section class="scene-section" aria-labelledby="scene-heading">
+          <h1 id="scene-heading">Ljuslägen</h1>
+          <div class="scene-grid" id="scene-grid" aria-live="polite">
+            <p class="section-empty">Hämtar ljuslägen …</p>
+          </div>
+        </section>
+
+        <section class="music-section" aria-labelledby="music-heading">
+          <div class="music-heading">
+            <h2 id="music-heading">Musik</h2>
+            <span id="music-player-status" role="status"></span>
+          </div>
+          <div class="music-now-playing" id="music-now-playing">
+            <strong id="music-title">Ingen musik spelar</strong>
+            <span id="music-source">Välj Spotify DJ eller Optical</span>
+          </div>
+          <div class="music-presets" role="group" aria-label="Musikpresets">
+            <button
+              class="music-preset-button"
+              id="music-preset-dj"
+              type="button"
+              data-preset-id="1"
+              disabled
+              aria-busy="false"
+            >
+              Spotify DJ
+            </button>
+            <button
+              class="music-preset-button"
+              id="music-preset-optical"
+              type="button"
+              data-preset-id="4"
+              disabled
+              aria-busy="false"
+            >
+              Optical
+            </button>
+          </div>
+          <div
+            class="music-volume-policy"
+            id="music-volume-policy"
+            data-controller="unknown"
+            aria-live="polite"
+            aria-label="Volymstyrning"
+          >
+            <div class="volume-policy-head">
+              <strong id="music-volume-controller">Volymstyrning okänd</strong>
+              <span class="volume-target"
+                ><span id="music-volume-target-label">Mål</span>
+                <strong id="music-volume-target">—</strong></span
+              >
+            </div>
+            <span class="volume-policy-state" id="music-volume-target-state"
+              >Väntar på volymregel</span
+            >
+            <div class="volume-policy-detail">
+              <span
+                ><span id="music-volume-baseline-label">Basnivå</span>
+                <strong id="music-volume-baseline">—</strong></span
+              >
+              <span id="music-volume-adjustments">Dygn — · personer —</span>
+            </div>
+          </div>
+          <div class="music-transport">
+            <button
+              class="play-button"
+              id="music-playback"
+              type="button"
+              disabled
+              aria-label="Starta musik"
+            >
+              <span id="music-playback-icon" aria-hidden="true">▶</span>
+              <span id="music-playback-label">Spela</span>
+            </button>
+            <div class="volume-control" role="group" aria-label="Musikvolym">
+              <span class="volume-label" id="music-volume-observed-label"
+                >Nu</span
+              >
+              <button
+                class="volume-step"
+                id="music-volume-down"
+                type="button"
+                aria-label="Sänk volymen med 5 procentenheter"
+                disabled
+              >
+                −
+              </button>
+              <output
+                id="music-volume-value"
+                aria-label="Spelarens rapporterade volym"
+                aria-live="polite"
+                >—</output
+              >
+              <button
+                class="volume-step"
+                id="music-volume-up"
+                type="button"
+                aria-label="Höj volymen med 5 procentenheter"
+                disabled
+              >
+                +
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

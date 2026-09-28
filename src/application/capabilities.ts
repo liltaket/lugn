@@ -7,6 +7,7 @@ import {
   SemanticButtonIdSchema,
   SemanticMusicIdSchema,
   MusicCommandStatusSchema,
+  MusicPresetSchema,
   LightingValuesSchema,
   ProvenanceSchema,
   RoomStateSchema,
@@ -39,6 +40,9 @@ const VolumeMusicInput = z
 const SourceMusicInput = z
   .object({ target: SemanticMusicIdSchema, source: z.string().min(1) })
   .strict();
+const PresetMusicInput = z
+  .object({ target: SemanticMusicIdSchema, preset: MusicPresetSchema })
+  .strict();
 const MusicCommandOutput = z.object({
   accepted: z.literal(true),
   commandId: z.string(),
@@ -64,6 +68,7 @@ export const CapabilitySchemas = {
   'music.pause': { input: GetMusicInput, output: MusicCommandOutput },
   'music.setVolume': { input: VolumeMusicInput, output: MusicCommandOutput },
   'music.selectSource': { input: SourceMusicInput, output: MusicCommandOutput },
+  'music.playPreset': { input: PresetMusicInput, output: MusicCommandOutput },
   'switch.getState': {
     input: GetSwitchInput,
     output: z.object({ device: DeviceSwitchStateSchema }),
@@ -188,6 +193,21 @@ export class CapabilityRegistry {
         const command = await this.engine.requestMusic(
           input.target,
           { property: 'source', value: input.source },
+          provenance,
+        );
+        output = {
+          accepted: true,
+          commandId: command.id,
+          status: command.status,
+        };
+        break;
+      }
+      case 'music.playPreset': {
+        const input = PresetMusicInput.parse(rawInput);
+        getMusicTarget(this.engine, input.target);
+        const command = await this.engine.requestMusic(
+          input.target,
+          { property: 'preset', value: input.preset },
           provenance,
         );
         output = {

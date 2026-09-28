@@ -265,6 +265,9 @@ export class MusicController {
         observation.commandId !== command.id)
     )
       return false;
+    // Home Assistant does not expose WiiM's selected preset in the state
+    // snapshot, so playback state alone must never claim a preset confirmed.
+    if (command.requested.property === 'preset') return false;
     const { property, value } = command.requested;
     const actual = observation.values[property];
     const matches =

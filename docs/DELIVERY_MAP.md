@@ -1,144 +1,83 @@
-# Lugn to a connectable local runtime
+# Delivery map: local room-control slice
 
-## Destination
+## Goal
 
-Deliver a locally runnable and configurable Lugn service that can receive STL27L
-presence directly from its existing sensor service, drive multiple real lights
-through an existing integration, and expose a safe path to additional system
-adapters. Document setup, credentials, health, shutdown, and what has and has
-not been verified against physical systems.
+Provide a locally runnable Lugn service that can consume the existing
+STL27L service's MQTT events, control configured room devices through Home
+Assistant, apply room and music policy, and present a custom dashboard to Nest
+Hubs through DashCast.
 
-This map tracks implementation toward a configurable local runtime. Live
-integration acceptance requires installation-specific endpoints and explicit
-authorization to connect to them.
+This checkout contains that implementation. A local source build or read-only
+integration query is not proof that this exact revision is deployed, that a
+Cast receiver rendered its page, or that a physical device reached its target.
 
-## Notes
+## Implemented
 
-- Keep deterministic room behavior in Lugn; keep raw LiDAR parsing and tracking
-  in `liltaket/stl27-presence`.
-- Keep Home Assistant as a supported bridge for existing devices and systems.
-- Keep presence, prelight, and confirmed empty as separate signals. Unknown
-  never means empty.
-- Runtime secrets must come from the host environment or a local secret store,
-  never checked-in configuration.
-- Use the active `wayfinding-planner` and `orchestration` skills for this
-  multi-stage effort.
+### Presence and automatic control
 
-## Decisions so far
+- `Stl27lMqttPresenceAdapter` maps fresh, trustworthy sensor observations to
+  `occupied`, `confirmed_empty` or `unknown`; prelight remains a separate,
+  bounded hint.
+- Home Assistant home status is read from a configured `person.*` or
+  `device_tracker.*` entity, defaulting to `device_tracker.lustigkurre` in the
+  example configuration.
+- Room occupancy and home/away are independent facts. A confirmed `away`
+  suppresses automatic scene reconciliation, prelight and music starts/volume
+  policy, and pauses music that is playing. Confirmed-empty light-off and music
+  pause still run. Unknown home status is not treated as away.
+- Explicit dashboard light and music actions remain available while away.
 
-- [Fast preview event via MQTT](INTEGRATIONS.md) — Lugn has an injectable adapter
-  for `bruno/doorway/preview`; it is prelight only and QoS 0/non-retained.
-- [Lighting through Home Assistant](INTEGRATIONS.md) — current adapter maps
-  semantic Lugn lights to caller-supplied HA entities and uses REST plus an
-  injectable WebSocket state transport.
-- [Bounded switch and music control](INTEGRATIONS.md) — typed light, switch,
-  and media-player operations stay behind semantic mappings and fixed HA
-  services; HA feedback remains separate from command acceptance.
+### Devices, runtime and dashboard
 
-## Frontier tickets
+- Home Assistant adapters cover mapped lights, switches, buttons, media
+  players, environment sensors and home/away status. Control inputs use
+  semantic IDs and fixed service mappings.
+- Light presets are assembled for the configured room. Scene requests start
+  immediate dispatch and bounded convergence; confirmed-empty is a physical
+  off overlay that retains logical intent.
+- Music policy includes Spotify DJ preset 1, Optical preset 4, confirmed-empty
+  pause, short-context resume, no automatic playback at/after 23:00, a
+  Europe/Stockholm daily volume curve, and a 10-point reduction when more than
+  one person is in the room.
+- The custom Hub dashboard is served separately from the loopback capability
+  API. DashCast manager launches the Bed/Desk pages, monitors receiver state
+  and yields to an active external cast.
+- The runtime includes local onboarding, config checking, read-only preflight,
+  graceful shutdown, command diagnostics and persisted logical lighting
+  intent.
 
-### Sensor occupancy and health contract
+## Current integration evidence and limits
 
-- Question: Which retained/versioned sensor outputs safely represent count,
-  availability, and normalized `occupied` / `confirmed_empty` / `unknown`?
-- Depends on: none.
-- Status: resolved from the current sensor repo source.
-- Answer: consume retained `/snapshot` plus retained `/availability`; only map
-  a recently delivered live heartbeat to occupied/empty when availability is
-  online and quality is CERTAIN. Count >0 means occupied, count 0 means
-  confirmed empty. Offline, stale, malformed, or non-CERTAIN data maps to
-  unknown. Do not age by snapshot `updated_at`: the source preserves the time
-  of the last ledger change across heartbeats. `/preview` remains a separate
-  non-retained prelight hint. The current Room Engine source also consumes
-  `bruno/doorway` directly, confirming Lugn can avoid an HA sensor-entity hop.
-  A read-only MQTT handshake reached the documented broker endpoint but an
-  anonymous connection was refused as not authorized; no topics or payloads
-  were read. This does not prove the tracked endpoint is the live deployment.
-  See [sensor integration contract](INTEGRATIONS.md).
+- The `device_tracker.lustigkurre` entity was read from Home Assistant during a
+  read-only check and reported `home`. This verifies the configured entity can
+  be observed at that time; it does not verify away transitions or the
+  automation response end to end.
+- No device service calls or physical light/music checks are part of this
+  documentation update.
+- An accepted Home Assistant service call is not physical-device feedback.
+  Check Lugn's observed state and command status, then confirm the actual
+  device separately when commissioning.
+- DashCast starting an application is not proof that the receiver fetched or
+  rendered the dashboard. For live display issues, inspect a fresh poll or the
+  Hub's visible error.
+- Sensor event timing currently starts at local MQTT callback receipt. It does
+  not include sensor-to-broker delay or physical lamp response.
+- The active host may run a revision different from this checkout. Compare
+  deployed commit/build and configuration before attributing runtime behavior
+  to local changes.
 
-### Runnable host and configuration contract
+## Remaining work
 
-- Question: What minimal local process/config format starts the engine, MQTT
-  sensor bridge, HA lighting adapter, and clean shutdown as one application?
-- Depends on: sensor occupancy and health contract.
-- Status: resolved; `npm start` runs the local Node service, with environment
-  secrets, loopback-only HTTP, MQTT reconnect, HA REST/WebSocket, status/state/
-  capability routes, and graceful shutdown. See [operator guide](OPERATIONS.md).
+- Live commissioning of the actual HA tracker, sensor feed, mapped lights and
+  media player, with explicit verification for home/away and automatic gates.
+- Per-receiver confirmation that Bed and Desk dashboards continue rendering
+  and that recovery behaves correctly after an external cast or service
+  restart.
+- A general Clerk-authenticated configuration UI, routines, and bindings for
+  remote types beyond the configured BILRESA buttons remain outside the current
+  delivered slice.
+- Validate the installed HA media integration's preset, Optical, playback and
+  feedback behavior. Direct WiiM transport and verified fade trajectories are
+  not implemented.
 
-### Home Assistant switch domain
-
-- Question: What state, ownership, capability, and HA service contract safely
-  controls configured `switch` entities alongside lighting?
-- Depends on: runnable host and configuration contract.
-- Status: resolved; semantic switch mappings expose `switch.set` and
-  `switch.getState`, with only allowlisted `switch.turn_on` /
-  `switch.turn_off` operations, observed feedback, and no presence-driven
-  switch automation.
-
-### Additional room systems
-
-- Question: Which WiiM playback/source/volume behaviors and PC/display controls
-  can be added while preserving the documented ownership and safety contracts?
-- Depends on: local host, typed switch/capability surface, device-specific
-  configuration and observations.
-- Status: first bounded slice implemented through HA `media_player.*` mappings:
-  explicit play, pause, volume, and configured-source operations with observed
-  state and pending/confirmed/unconfirmed outcomes. Presets, fades,
-  presence-driven music, and direct WiiM transport remain open until actual
-  entity capabilities and feedback cadence are confirmed.
-
-### Operator setup and recovery
-
-- Question: What setup, health checks, stale-state behavior, and recovery steps
-  make the local runtime understandable and safe to operate?
-- Depends on: runnable host and sensor contract.
-- Status: resolved in [operator guide](OPERATIONS.md), including example JSON,
-  secret environment variables, local API calls, presence freshness, and
-  command feedback semantics.
-
-### Long-running history retention
-
-- Question: How should command, diagnostic, timing, and correlation histories
-  stay bounded over long runtimes without misclassifying delayed device
-  feedback as a manual override?
-- Depends on: command attribution and state-stream contracts.
-- Status: resolved for the in-memory runtime. Lighting/switch commands retain
-  all pending records plus the newest 256 terminal records; music retains all
-  pending plus up to 128 terminal records, protecting a just-completed pending
-  command while pruning the oldest other terminal record; diagnostics/timings retain the
-  newest 256. Unconfirmed lighting commands become terminal after the existing
-  60-second convergence timeout, switches after 10 seconds, and music after 10
-  seconds. Retired lighting IDs remain recognizable for the process lifetime
-  without retaining every record. Runtime state is not persisted across restart.
-  See [operator guide](OPERATIONS.md) for these limits and restart behavior.
-
-### Live integration acceptance
-
-- Question: What evidence proves sensor-event-to-command latency and physical
-  feedback on Bruno's actual broker, Home Assistant, sensor, and lights?
-- Depends on: implementation, user-provided endpoint/entity configuration,
-  and explicit authorization to connect to those live systems.
-- Status: the current LAN endpoint is now identified read-only:
-  `homeassistant.local` resolves and responds as Home Assistant (`/api` returns
-  401 without a bearer token), and its MQTT port accepts TCP but an anonymous
-  MQTT handshake returns not-authorized. The configured sensor topic is known,
-  but no topic was subscribed and no sensor payload was read. Live acceptance
-  still needs HA and MQTT credentials, current entity mappings, a chosen
-  deployment host, and a bounded physical feedback check. No device command or
-  physical actuation has been performed.
-
-## Not yet specified
-
-- Deployment host and service manager.
-- HA and broker credentials, plus confirmation of current sensor deployment
-  settings.
-- Which HA entities represent the multiple lights and the next non-light system.
-- Whether the desired final surface is CLI/service only or also a UI/API.
-
-## Out of scope
-
-- Porting raw STL27L UART parsing, calibration, or tracking into Lugn.
-- Deploying to a host, writing live HA configuration, or actuating physical
-  devices before the host/entity details and live-connection authorization are
-  established.
-- Claiming measured latency or physical success from unit or CI checks.
+For operator setup and credential handling, see [Running Lugn](OPERATIONS.md).

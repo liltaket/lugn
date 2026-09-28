@@ -17,6 +17,7 @@
     "start": "node dist/runtime/main.js",
     "config:check": "npm run build --silent && node dist/runtime/config-check.js",
     "ha:discover": "npm run build --silent && node dist/runtime/ha-discover.js",
+    "onboard": "if [ ! -f dist/runtime/onboard.js ]; then npm run build --silent || exit 1; fi; node dist/runtime/onboard.js",
     "preflight": "npm run build --silent && node dist/runtime/preflight.js",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
     "format": "prettier --write .",
@@ -29,8 +30,12 @@
     "node": ">=22"
   },
   "dependencies": {
+    "castv2-client": "^1.2.0",
     "mqtt": "^5.16.0",
     "zod": "^4.6.5"
+  },
+  "overrides": {
+    "protobufjs": "^7.6.6"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",

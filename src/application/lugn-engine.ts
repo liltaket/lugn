@@ -1,10 +1,15 @@
 import { MusicController, type MusicOptions } from './music-controller.js';
+import {
+  MusicAutomation,
+  type MusicVolumePolicySnapshot,
+} from './music-automation.js';
 import type {
   MusicCommandRecord,
   MusicRequest,
   DeviceMusicState,
 } from '../core/schemas.js';
 import {
+  isLightingDeliveryUnknownError,
   SimulatedLightingAdapter,
   type LightingAdapter,
   type LightingObservation,
@@ -18,8 +23,10 @@ import type { Clock, TimerHandle } from '../core/clock.js';
 import { StateEventStream } from '../core/event-stream.js';
 import {
   LightingProperties,
+  LightingIntentSnapshotSchema,
   LightingValuesSchema,
   PresenceEventSchema,
+  HomePresenceSchema,
   PrelightEventSchema,
   RoomStateSchema,
   SceneSchema,
@@ -33,8 +40,10 @@ import {
   type Diagnostic,
   type FastPathTiming,
   type LightingScene,
+  type LightingIntentSnapshot,
   type LightingValues,
   type PresenceEvent,
+  type HomePresence,
   type PresenceInputEvent,
   type PrelightEvent,
   type RoomState,
@@ -45,6 +54,7 @@ import { CommandLedger } from '../execution/command-ledger.js';
 export type EngineOptions = {
   deviceIds?: string[];
   scenes?: LightingScene[];
+  restoredLightingIntent?: LightingIntentSnapshot;
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
   continuityMs?: number;
@@ -62,6 +72,7 @@ export type EngineOptions = {
 };
 
 const systemActor: Actor = { type: 'automation', id: 'lugn.core' };
+const maxLightingDeliveryAttempts = 3;
 
 export const defaultScenes: LightingScene[] = [
   {
@@ -96,9 +107,12 @@ type IntentProvenance = {
   source: string;
   requestId?: string;
   reason: string;
+  allowWhileEmpty?: boolean;
 };
+type LightingRetryMode = 'scene' | 'confirmed_empty_off';
 type ScheduledRetry = {
   handle: TimerHandle;
+  mode: LightingRetryMode;
   fastPathEventId?: string;
 };
 
@@ -112,11 +126,16 @@ export class LugnEngine {
   readonly scenes: ReadonlyMap<string, LightingScene>;
   readonly state: RoomState;
   private readonly musicController: MusicController;
+  private readonly musicAutomation: MusicAutomation;
+  private lastNonOffSceneId: string | null = null;
+  private bilresaPriorVolumeAutomation: boolean | null = null;
   private readonly convergenceTimeoutMs: number;
   private readonly retryDelayMs: number;
   private readonly continuityMs: number;
   private readonly switchFeedbackTimeoutMs: number;
   private readonly lightingFeedbackTimers = new Map<string, TimerHandle>();
+  private readonly lightingDeliveryAttempts = new Map<string, number>();
+  private readonly exhaustedLightingDeliveryKeys = new Set<string>();
   private readonly forceOffTargetsByRevision = new Map<number, Set<string>>();
   private readonly switchFeedbackTimers = new Map<string, TimerHandle>();
   private nextSwitchCommandId = 0;
@@ -142,6 +161,9 @@ export class LugnEngine {
   private prelightActive = false;
   private prelightTimer: TimerHandle | undefined;
   private prelightSnapshot = new Map<string, LightingValues>();
+  private prelightAppliedValues = new Map<string, LightingValues>();
+  private restoredContinuityPending = false;
+  private suppressInitialEmptyContinuity = false;
 
   constructor(
     private readonly clock: Clock,
@@ -181,6 +203,16 @@ export class LugnEngine {
       SceneSchema.parse(scene),
     );
     this.scenes = new Map(scenes.map((scene) => [scene.id, scene]));
+    const restoredIntent =
+      options.restoredLightingIntent === undefined
+        ? undefined
+        : LightingIntentSnapshotSchema.parse(options.restoredLightingIntent);
+    if (
+      restoredIntent &&
+      restoredIntent.currentScene !== null &&
+      !this.scenes.has(restoredIntent.currentScene)
+    )
+      throw new Error(`Unknown restored scene: ${restoredIntent.currentScene}`);
     const devices: Record<string, DeviceRuntime> = {};
     for (const id of options.deviceIds ?? [
       'lighting.ceiling',
@@ -200,6 +232,43 @@ export class LugnEngine {
         throw new Error(
           `Prelight target is not a configured device: ${target}`,
         );
+    if (
+      restoredIntent &&
+      Object.keys(restoredIntent.devices).sort().join('\0') !==
+        Object.keys(devices).sort().join('\0')
+    )
+      throw new Error('Restored lighting devices do not match engine devices');
+    const restoredIntentExpired =
+      restoredIntent?.continuityExpiresAt !== null &&
+      restoredIntent?.continuityExpiresAt !== undefined &&
+      restoredIntent.continuityExpiresAt <= clock.now();
+    const activeRestoredIntent = restoredIntentExpired
+      ? undefined
+      : restoredIntent;
+    this.restoredContinuityPending =
+      activeRestoredIntent !== undefined &&
+      activeRestoredIntent.continuityExpiresAt !== null;
+    this.suppressInitialEmptyContinuity = restoredIntentExpired;
+    if (activeRestoredIntent) {
+      for (const [target, intent] of Object.entries(
+        activeRestoredIntent.devices,
+      )) {
+        const device = devices[target];
+        if (!device)
+          throw new Error(`Unknown restored lighting device: ${target}`);
+        if (
+          Object.values(intent.ownership).some(
+            (ownership) =>
+              ownership.kind === 'scene' &&
+              ownership.revision > activeRestoredIntent.sceneRevision,
+          )
+        )
+          throw new Error('Restored ownership exceeds its scene revision');
+        device.baselineDesired = { ...intent.baselineDesired };
+        device.effectiveDesired = { ...intent.effectiveDesired };
+        device.ownership = structuredClone(intent.ownership);
+      }
+    }
     const switches: Record<string, DeviceSwitchState> = {};
     for (const id of options.switchDeviceIds ?? []) {
       const target = SemanticSwitchIdSchema.parse(id);
@@ -218,21 +287,50 @@ export class LugnEngine {
     this.musicController = new MusicController(clock, options.music ?? {}, () =>
       this.publish(['music']),
     );
+    this.musicAutomation = new MusicAutomation({
+      targets: Object.keys(options.music?.targets ?? {}),
+      clock,
+      getState: (target) => this.musicController.getState(target),
+      request: (target, request, provenance) =>
+        this.musicController.request(target, request, provenance),
+      onError: (target, operation) => {
+        this.addDiagnostic(
+          'music.automation_unconfirmed',
+          `Music automation could not ${operation} for ${target}`,
+          { target, operation },
+        );
+        this.publish(['music', 'diagnostics']);
+      },
+    });
     this.state = {
       revision: 0,
       updatedAt: clock.now(),
       presence: {
         state: 'unknown',
         personCount: null,
-        continuityExpiresAt: null,
+        continuityExpiresAt: activeRestoredIntent?.continuityExpiresAt ?? null,
+        home: { state: 'unknown', observedAt: null },
       },
-      lighting: { currentScene: null, sceneRevision: 0, devices },
+      lighting: {
+        currentScene: activeRestoredIntent?.currentScene ?? null,
+        sceneRevision: activeRestoredIntent?.sceneRevision ?? 0,
+        devices,
+      },
       switches: { devices: switches, commands: [] },
       music: this.musicController.state,
       commands: this.ledger.records,
       diagnostics: [],
       timings: [],
     };
+    const restoredScene = this.state.lighting.currentScene;
+    if (
+      restoredScene !== null &&
+      restoredScene !== 'scene.all_off' &&
+      restoredScene !== 'scene.sleep'
+    )
+      this.lastNonOffSceneId = restoredScene;
+    if (this.state.presence.continuityExpiresAt !== null)
+      this.scheduleContinuityExpiry(this.state.presence.continuityExpiresAt);
     this.unsubscribers.push(
       this.adapter.subscribe((observation) =>
         this.handleObservation(observation),
@@ -256,11 +354,123 @@ export class LugnEngine {
     return this.musicController.getState(target);
   }
 
+  getMusicVolumePolicySnapshots(): Record<string, MusicVolumePolicySnapshot> {
+    return Object.fromEntries(
+      Object.keys(this.state.music.devices).map((target) => [
+        target,
+        this.musicAutomation.getVolumePolicySnapshot(target),
+      ]),
+    );
+  }
+
+  async handleBilresaPress(
+    button: '1' | '2',
+    gesture: 'multi_press_1' | 'multi_press_2' | 'long_press',
+  ): Promise<void> {
+    const actor: Actor = { type: 'physical_remote', id: `bilresa-${button}` };
+    const source = `bilresa.button_${button}.${gesture}`;
+    if (button === '1' && gesture === 'multi_press_1') {
+      const sceneId =
+        this.state.lighting.currentScene === 'scene.all_off' ||
+        this.state.lighting.currentScene === 'scene.sleep'
+          ? (this.lastNonOffSceneId ?? this.fallbackRemoteSceneId())
+          : 'scene.all_off';
+      await this.activateScene(sceneId, actor, source);
+      return;
+    }
+    if (button === '2' && gesture === 'multi_press_1') {
+      const enabled = !this.musicAutomation.isVolumeAutomationEnabled;
+      this.musicAutomation.setVolumeAutomationEnabled(enabled);
+      this.addDiagnostic(
+        'music.volume_automation_changed',
+        enabled
+          ? 'Automatic music volume control enabled from BILRESA'
+          : 'Automatic music volume control paused from BILRESA',
+        { enabled, source },
+      );
+      this.publish(['music', 'diagnostics']);
+      return;
+    }
+    if (button === '1' && gesture === 'long_press') {
+      const sleepScene = this.scenes.has('scene.sleep')
+        ? 'scene.sleep'
+        : 'scene.all_off';
+      const sceneId =
+        this.state.lighting.currentScene === sleepScene ||
+        this.state.lighting.currentScene === 'scene.all_off'
+          ? (this.lastNonOffSceneId ?? this.fallbackRemoteSceneId())
+          : sleepScene;
+      await this.activateScene(sceneId, actor, source);
+      return;
+    }
+    if (button === '2' && gesture === 'long_press') {
+      if (this.bilresaPriorVolumeAutomation === null) {
+        this.bilresaPriorVolumeAutomation =
+          this.musicAutomation.isVolumeAutomationEnabled;
+        this.musicAutomation.setVolumeAutomationEnabled(false);
+        await this.activateScene('scene.all_off', actor, source);
+      } else {
+        const restoreVolumeAutomation = this.bilresaPriorVolumeAutomation;
+        this.bilresaPriorVolumeAutomation = null;
+        this.musicAutomation.setVolumeAutomationEnabled(
+          restoreVolumeAutomation,
+        );
+        await this.activateScene(
+          this.lastNonOffSceneId ?? this.fallbackRemoteSceneId(),
+          actor,
+          source,
+        );
+      }
+      this.publish(['music', 'diagnostics']);
+      return;
+    }
+    if (button === '1' && gesture === 'multi_press_2') {
+      await this.activateScene(
+        this.lastNonOffSceneId ?? this.fallbackRemoteSceneId(),
+        actor,
+        source,
+      );
+      return;
+    }
+    if (button === '2' && gesture === 'multi_press_2') {
+      await this.activateScene('scene.all_off', actor, source);
+    }
+  }
+
+  private fallbackRemoteSceneId(): string {
+    for (const sceneId of ['scene.everyday_light', 'scene.soft_light'])
+      if (this.scenes.has(sceneId)) return sceneId;
+    const firstUsableScene = [...this.scenes.keys()].find(
+      (sceneId) => sceneId !== 'scene.all_off' && sceneId !== 'scene.sleep',
+    );
+    if (firstUsableScene) return firstUsableScene;
+    throw new Error('BILRESA needs at least one restorable lighting scene');
+  }
+
+  getLightingIntentSnapshot(): LightingIntentSnapshot {
+    return LightingIntentSnapshotSchema.parse({
+      currentScene: this.state.lighting.currentScene,
+      sceneRevision: this.state.lighting.sceneRevision,
+      continuityExpiresAt: this.state.presence.continuityExpiresAt,
+      devices: Object.fromEntries(
+        Object.entries(this.state.lighting.devices).map(([id, device]) => [
+          id,
+          {
+            baselineDesired: device.baselineDesired,
+            effectiveDesired: device.effectiveDesired,
+            ownership: device.ownership,
+          },
+        ]),
+      ),
+    });
+  }
+
   requestMusic(
     target: string,
     requested: MusicRequest,
     provenance: Provenance,
   ): Promise<MusicCommandRecord> {
+    this.musicAutomation.noteExplicitRequest(target, requested, provenance);
     return this.musicController.request(target, requested, provenance);
   }
 
@@ -346,12 +556,15 @@ export class LugnEngine {
   ): Promise<number> {
     const scene = this.scenes.get(sceneId);
     if (!scene) throw new Error(`Unknown scene: ${sceneId}`);
+    if (sceneId !== 'scene.all_off' && sceneId !== 'scene.sleep')
+      this.lastNonOffSceneId = sceneId;
     if (this.prelightActive) await this.finishPrelight(true, scene);
     this.beginScene(scene, {
       actor,
       source,
       ...(requestId === undefined ? {} : { requestId }),
       reason: 'Scene explicitly selected',
+      allowWhileEmpty: this.state.presence.state === 'confirmed_empty',
     });
     if (sceneId === 'scene.all_off')
       this.forceOffTargetsByRevision.set(
@@ -398,6 +611,11 @@ export class LugnEngine {
     this.ledger.supersedePending(
       'Superseded by explicit property adjustment',
       target,
+    );
+    this.clearLightingDeliveryAttempts(target);
+    this.convergenceStartedAt.set(
+      this.state.lighting.sceneRevision,
+      this.clock.now(),
     );
     const now = this.clock.now();
     for (const property of LightingProperties) {
@@ -458,6 +676,7 @@ export class LugnEngine {
   async deviceBecameAvailable(target: string): Promise<void> {
     const device = this.requireDevice(target);
     device.availability = 'available';
+    this.clearLightingDeliveryAttempts(target);
     this.convergenceStartedAt.set(
       this.state.lighting.sceneRevision,
       this.clock.now(),
@@ -479,16 +698,25 @@ export class LugnEngine {
     const createsEmptyTiming =
       normalizedEvent.presence === 'confirmed_empty' &&
       (previous !== 'confirmed_empty' || prelightWasActive);
-    if (
-      normalizedEvent.presence === 'confirmed_empty' ||
-      normalizedEvent.presence === 'occupied'
-    )
+    if (normalizedEvent.presence === 'confirmed_empty') {
       this.clearPrelight();
+    } else if (normalizedEvent.presence === 'occupied' && this.prelightActive) {
+      const scene =
+        this.scenes.get(
+          this.state.lighting.currentScene ?? this.lastNonOffSceneId ?? '',
+        ) ?? this.scenes.get('scene.everyday_light');
+      await this.finishPrelight(true, scene);
+    }
     if (normalizedEvent.presence === 'occupied' || createsEmptyTiming)
       this.terminateAllFastPathEvents();
     this.state.presence.state = normalizedEvent.presence;
     if (normalizedEvent.personCount !== undefined)
       this.state.presence.personCount = normalizedEvent.personCount;
+    this.musicAutomation.handlePresence(
+      previous,
+      normalizedEvent.presence,
+      this.state.presence.personCount,
+    );
     if (createsEmptyTiming) {
       const fastPathEventId = `presence-${++this.nextEventId}`;
       this.confirmedEmptyFastPathEventId = fastPathEventId;
@@ -499,9 +727,24 @@ export class LugnEngine {
           normalizedEvent.localReceivedMonotonicAt,
         ),
       );
-      this.state.presence.continuityExpiresAt = receivedAt + this.continuityMs;
-      this.scheduleContinuityExpiry(this.state.presence.continuityExpiresAt);
+      const keepRestoredExpiry =
+        this.restoredContinuityPending &&
+        this.state.presence.continuityExpiresAt !== null;
+      if (this.suppressInitialEmptyContinuity) {
+        this.state.presence.continuityExpiresAt = null;
+        this.suppressInitialEmptyContinuity = false;
+      } else if (!keepRestoredExpiry) {
+        this.state.presence.continuityExpiresAt =
+          receivedAt + this.continuityMs;
+        this.scheduleContinuityExpiry(this.state.presence.continuityExpiresAt);
+      }
+      this.restoredContinuityPending = false;
       this.cancelRetryTimers();
+      this.clearLightingDeliveryAttempts();
+      const currentSceneIntent = this.intentByRevision.get(
+        this.state.lighting.sceneRevision,
+      );
+      if (currentSceneIntent) currentSceneIntent.allowWhileEmpty = false;
       this.ledger.supersedePending('Room became confirmed empty');
       this.addDiagnostic(
         'presence.empty',
@@ -525,6 +768,7 @@ export class LugnEngine {
               systemActor,
               undefined,
               fastPathEventId,
+              'confirmed_empty_off',
             );
           },
         ),
@@ -543,6 +787,8 @@ export class LugnEngine {
       return;
     }
     if (normalizedEvent.presence === 'occupied') {
+      this.suppressInitialEmptyContinuity = false;
+      this.restoredContinuityPending = false;
       const expiry = this.state.presence.continuityExpiresAt;
       const withinContinuity = expiry !== null && receivedAt < expiry;
       this.cancelContinuityTimer();
@@ -564,6 +810,24 @@ export class LugnEngine {
       );
       this.state.timings.push(timing);
       this.publish(['presence', 'diagnostics', 'timings']);
+      if (this.isLightingQuietHours()) {
+        this.addDiagnostic(
+          'presence.lighting_suppressed_quiet_hours',
+          'Automatic lighting was suppressed during quiet hours',
+          { currentScene: this.state.lighting.currentScene },
+        );
+        this.publish(['diagnostics']);
+        return;
+      }
+      if (this.state.presence.home.state === 'away') {
+        this.addDiagnostic(
+          'presence.lighting_suppressed_home_away',
+          'Automatic lighting was suppressed because Home Assistant reports that the resident is away',
+          { currentScene: this.state.lighting.currentScene },
+        );
+        this.publish(['diagnostics']);
+        return;
+      }
       await this.reconcileScene(
         this.state.lighting.sceneRevision,
         timing.eventId,
@@ -571,6 +835,40 @@ export class LugnEngine {
       return;
     }
     this.publish(['presence']);
+  }
+
+  async handleHomePresence(
+    state: HomePresence,
+    observedAt = this.clock.now(),
+  ): Promise<void> {
+    const normalized = HomePresenceSchema.parse(state);
+    const previous = this.state.presence.home.state;
+    this.state.presence.home = {
+      state: normalized,
+      observedAt: normalized === 'unknown' ? null : observedAt,
+    };
+    this.musicAutomation.handleHomePresence(normalized);
+    if (normalized === 'away' && previous !== 'away') {
+      if (this.prelightActive) await this.finishPrelight(true);
+      this.terminateAllFastPathEvents();
+      const currentIntent = this.intentByRevision.get(
+        this.state.lighting.sceneRevision,
+      );
+      if (currentIntent?.source === 'presence')
+        this.clearRetryTimer(this.state.lighting.sceneRevision);
+      this.addDiagnostic(
+        'home_presence.away',
+        'Home Assistant reports that the resident is away; automatic room activation is blocked',
+        {},
+      );
+    } else if (normalized !== previous) {
+      this.addDiagnostic(
+        'home_presence.changed',
+        `Home Assistant home presence changed to ${normalized}`,
+        {},
+      );
+    }
+    this.publish(['presence', 'music', 'diagnostics']);
   }
 
   async handleEvent(event: PresenceInputEvent): Promise<void> {
@@ -591,6 +889,42 @@ export class LugnEngine {
       return;
     }
 
+    const scene =
+      this.scenes.get(
+        this.state.lighting.currentScene ?? this.lastNonOffSceneId ?? '',
+      ) ?? this.scenes.get('scene.everyday_light');
+    const targetValues = scene
+      ? Object.fromEntries(
+          Object.entries(scene.lighting).filter(
+            ([, values]) => values.power === true,
+          ),
+        )
+      : this.prelightTargets;
+    const allLightsOffScene =
+      this.hasExplicitAllLightsOffScene() ||
+      (scene !== undefined && Object.keys(targetValues).length === 0);
+    const quietHours = this.isLightingQuietHours();
+    const roomAlreadyLit = this.hasAnyLightOn();
+    const homeAway = this.state.presence.home.state === 'away';
+    if (allLightsOffScene || quietHours || roomAlreadyLit || homeAway) {
+      this.addDiagnostic(
+        'presence.prelight_suppressed',
+        'Temporary prelight was suppressed by the active lighting policy',
+        {
+          currentScene: this.state.lighting.currentScene,
+          reason: allLightsOffScene
+            ? 'all_lights_off_scene'
+            : quietHours
+              ? 'quiet_hours'
+              : roomAlreadyLit
+                ? 'room_already_lit'
+                : 'home_away',
+        },
+      );
+      this.publish(['diagnostics']);
+      return;
+    }
+
     this.terminateAllFastPathEvents();
     this.prelightActive = true;
     const eventId = `prelight-${++this.nextEventId}`;
@@ -605,14 +939,16 @@ export class LugnEngine {
     );
     this.fastPathPrelightExpectedValues.set(
       eventId,
-      structuredClone(this.prelightTargets),
+      structuredClone(targetValues),
     );
     this.prelightSnapshot = new Map();
+    this.prelightAppliedValues = new Map();
     const dispatches: Promise<void>[] = [];
-    for (const [target, values] of Object.entries(this.prelightTargets)) {
+    for (const [target, values] of Object.entries(targetValues)) {
       const device = this.requireDevice(target);
-      const snapshot = { ...device.observed, ...device.effectiveDesired };
+      const snapshot = { ...device.effectiveDesired, ...device.observed };
       this.prelightSnapshot.set(target, snapshot);
+      this.prelightAppliedValues.set(target, { ...values });
       dispatches.push(
         this.dispatch(
           target,
@@ -631,7 +967,7 @@ export class LugnEngine {
       'Possible entry; temporary prelight dispatched',
       {
         source: normalizedEvent.source,
-        targets: Object.keys(this.prelightTargets),
+        targets: Object.keys(targetValues),
       },
     );
     this.publish(['diagnostics', 'timings']);
@@ -648,7 +984,10 @@ export class LugnEngine {
   ): Promise<void> {
     if (
       revision !== this.state.lighting.sceneRevision ||
-      this.state.presence.state === 'confirmed_empty'
+      (this.state.presence.home.state === 'away' &&
+        this.intentByRevision.get(revision)?.source === 'presence') ||
+      (this.state.presence.state === 'confirmed_empty' &&
+        !this.sceneIntentCanRunWhileEmpty(revision))
     )
       return;
     const retryEventId = this.retryTimers.get(
@@ -672,8 +1011,8 @@ export class LugnEngine {
       this.state.lighting.devices,
     )) {
       const desired: LightingValues = {};
-      const forcedOffTargets = this.forceOffTargetsByRevision.get(revision);
-      const forceOff = forcedOffTargets?.has(target) === true;
+      const forceOffTargets = this.forceOffTargetsByRevision.get(revision);
+      const forceOff = forceOffTargets?.has(target) === true;
       for (const property of LightingProperties) {
         const value = device.effectiveDesired[property];
         if (
@@ -699,10 +1038,21 @@ export class LugnEngine {
         continue;
       }
       if (device.availability === 'unavailable') continue;
-      if (forceOff && forcedOffTargets) {
-        forcedOffTargets.delete(target);
-        if (forcedOffTargets.size === 0)
+      if (forceOffTargets && forceOff) {
+        forceOffTargets.delete(target);
+        if (forceOffTargets.size === 0)
           this.forceOffTargetsByRevision.delete(revision);
+      }
+      const deliveryKey = this.lightingDeliveryKey(revision, target);
+      const deliveryAttempts =
+        this.lightingDeliveryAttempts.get(deliveryKey) ?? 0;
+      if (deliveryAttempts >= maxLightingDeliveryAttempts) {
+        this.markLightingDeliveryExhausted(
+          deliveryKey,
+          target,
+          deliveryAttempts,
+        );
+        continue;
       }
       this.ledger.supersedePending(
         'Retrying an unconfirmed property command',
@@ -752,7 +1102,7 @@ export class LugnEngine {
       this.publish(['lighting', 'commands', 'diagnostics', 'timings']);
       return;
     }
-    if (!timedOut) {
+    if (!timedOut && this.hasRetryableLightingMismatch(revision)) {
       const remaining = Math.max(
         0,
         this.convergenceTimeoutMs - (this.clock.now() - startedAt),
@@ -764,7 +1114,7 @@ export class LugnEngine {
       );
     } else {
       this.clearRetryTimer(revision);
-      if (timingEventId) this.terminateFastPathEvent(timingEventId);
+      if (timedOut && timingEventId) this.terminateFastPathEvent(timingEventId);
     }
     this.publish(['lighting', 'commands', 'diagnostics']);
   }
@@ -774,6 +1124,7 @@ export class LugnEngine {
     this.cancelContinuityTimer();
     this.clearPrelight();
     this.terminateAllFastPathEvents();
+    this.musicAutomation.dispose();
     this.musicController.dispose();
     for (const handle of this.lightingFeedbackTimers.values())
       this.clock.clearTimeout(handle);
@@ -853,6 +1204,7 @@ export class LugnEngine {
     this.prelightTimer = undefined;
     this.prelightActive = false;
     this.prelightSnapshot.clear();
+    this.prelightAppliedValues.clear();
     if (this.activePrelightFastPathEventId)
       this.terminateFastPathEvent(this.activePrelightFastPathEventId);
     this.activePrelightFastPathEventId = undefined;
@@ -873,6 +1225,8 @@ export class LugnEngine {
     this.activePrelightFastPathEventId = undefined;
     const snapshot = this.prelightSnapshot;
     this.prelightSnapshot = new Map();
+    const appliedValues = this.prelightAppliedValues;
+    this.prelightAppliedValues = new Map();
     if (!restore) return;
 
     const dispatches: Promise<void>[] = [];
@@ -882,7 +1236,7 @@ export class LugnEngine {
       const values: LightingValues = {};
       const excluded = excludedProperties.get(target) ?? new Set<string>();
       const sceneValues = scene?.lighting[target] ?? {};
-      const prelightValues = this.prelightTargets[target] ?? {};
+      const prelightValues = appliedValues.get(target) ?? {};
       for (const property of LightingProperties) {
         if (
           excluded.has(property) ||
@@ -891,7 +1245,11 @@ export class LugnEngine {
         )
           continue;
         const current = device.observed[property];
-        if (current !== undefined && current !== prelightValues[property])
+        if (
+          current !== undefined &&
+          current !== prelightValues[property] &&
+          current !== previousValues[property]
+        )
           continue;
         Object.assign(values, { [property]: previousValues[property] });
       }
@@ -914,6 +1272,7 @@ export class LugnEngine {
     this.terminateAllFastPathEvents();
     const priorRevision = this.state.lighting.sceneRevision;
     this.clearRetryTimer(priorRevision);
+    this.clearLightingDeliveryAttempts();
     this.ledger.supersedePending(
       `Superseded by scene revision ${priorRevision + 1}`,
     );
@@ -954,8 +1313,13 @@ export class LugnEngine {
     actor: Actor,
     requestId?: string,
     eventId?: string,
+    retryMode: LightingRetryMode = 'scene',
   ): Promise<void> {
     if (Object.keys(values).length === 0) return;
+    const deliveryKey = this.lightingDeliveryKey(revision, target);
+    const deliveryAttempt =
+      (this.lightingDeliveryAttempts.get(deliveryKey) ?? 0) + 1;
+    this.lightingDeliveryAttempts.set(deliveryKey, deliveryAttempt);
     const command = this.ledger.issue({
       target,
       controller: target,
@@ -996,12 +1360,54 @@ export class LugnEngine {
       );
       this.publish(['timings']);
     }
+    let dispatchFailed = false;
+    let dispatchError: unknown;
     try {
       await this.adapter.dispatch({ id: command.id, target, values });
     } catch (error) {
+      dispatchFailed = true;
+      dispatchError = error;
+    }
+    if (dispatchFailed && isLightingDeliveryUnknownError(dispatchError)) {
+      if (command.status === 'pending')
+        command.diagnosticReason =
+          'Lighting adapter did not confirm delivery; the requested state may still have taken effect';
+      const currentIntent = this.isCurrentLightingDeliveryIntent(
+        command,
+        retryMode,
+      );
+      const retryScheduled =
+        currentIntent && deliveryAttempt < maxLightingDeliveryAttempts;
+      if (currentIntent && !retryScheduled)
+        this.markLightingDeliveryExhausted(
+          deliveryKey,
+          target,
+          deliveryAttempt,
+        );
+      this.addDiagnostic(
+        'command.delivery_unknown',
+        `Lighting adapter did not confirm the command for ${target}; it may still have taken effect`,
+        {
+          commandId: command.id,
+          target,
+          values,
+          attempt: deliveryAttempt,
+          attemptLimit: maxLightingDeliveryAttempts,
+          retryScheduled,
+        },
+      );
+      if (retryScheduled)
+        this.scheduleRetry(revision, this.retryDelayMs, eventId, retryMode);
+      if (eventId) this.terminateFastPathEvent(eventId);
+      this.publish(['commands', 'lighting', 'diagnostics']);
+      return;
+    }
+    if (dispatchFailed) {
       command.status = 'failed';
       command.diagnosticReason =
-        error instanceof Error ? error.message : String(error);
+        dispatchError instanceof Error
+          ? dispatchError.message
+          : String(dispatchError);
       const device = this.state.lighting.devices[target];
       if (device) device.availability = 'unavailable';
       this.addDiagnostic('command.failed', `Command for ${target} failed`, {
@@ -1010,16 +1416,55 @@ export class LugnEngine {
       });
       if (eventId) this.terminateFastPathEvent(eventId);
       this.publish(['commands', 'lighting', 'diagnostics']);
+      return;
+    }
+    if (this.isCurrentLightingDeliveryIntent(command, retryMode)) {
+      command.diagnosticReason =
+        'Lighting adapter accepted the request; device state has not yet been observed';
+      const retryScheduled = deliveryAttempt < maxLightingDeliveryAttempts;
+      if (retryScheduled)
+        this.scheduleRetry(revision, this.retryDelayMs, eventId, retryMode);
+      else
+        this.markLightingDeliveryExhausted(
+          deliveryKey,
+          target,
+          deliveryAttempt,
+        );
+      this.addDiagnostic(
+        'command.sent_unconfirmed',
+        `Command for ${target} was sent, but matching device feedback has not arrived`,
+        {
+          commandId: command.id,
+          target,
+          values,
+          attempt: deliveryAttempt,
+          attemptLimit: maxLightingDeliveryAttempts,
+          retryScheduled,
+        },
+      );
+      this.publish(['commands', 'lighting', 'diagnostics']);
     }
   }
 
   private handleObservation(observation: LightingObservation): void {
     const device = this.state.lighting.devices[observation.target];
     if (!device) return;
+    const recovered = device.availability !== 'available';
+    device.availability = 'available';
+    if (recovered)
+      this.addDiagnostic(
+        'device.available',
+        `${observation.target} responded with a valid lighting state observation`,
+        {
+          target: observation.target,
+          source: observation.provenance?.source ?? 'lighting_observation',
+        },
+      );
     const feedbackTime = this.clock.now();
     let fastPathEventId = observation.commandId
       ? this.fastPathEventByCommand.get(observation.commandId)
       : undefined;
+    let effectiveIntentChanged = false;
     for (const property of LightingProperties) {
       const value = observation.values[property];
       if (value === undefined) continue;
@@ -1045,6 +1490,7 @@ export class LugnEngine {
       ) {
         this.terminateAllFastPathEvents();
         Object.assign(device.effectiveDesired, { [property]: value });
+        effectiveIntentChanged = true;
         device.ownership[property] = {
           kind: 'override',
           actor: observation.provenance?.actor ?? { type: 'user' },
@@ -1074,6 +1520,18 @@ export class LugnEngine {
         );
       }
     }
+    const currentIntentConfirmed =
+      this.state.presence.state === 'confirmed_empty' &&
+      !this.sceneIntentCanRunWhileEmpty(this.state.lighting.sceneRevision)
+        ? device.observed.power === false
+        : LightingProperties.every((property) => {
+            const desired = device.effectiveDesired[property];
+            return (
+              desired === undefined || desired === device.observed[property]
+            );
+          });
+    if (effectiveIntentChanged || currentIntentConfirmed)
+      this.clearLightingDeliveryAttempts(observation.target);
     if (fastPathEventId) {
       this.recordFastPathStage(
         fastPathEventId,
@@ -1109,6 +1567,7 @@ export class LugnEngine {
         systemActor,
         undefined,
         this.confirmedEmptyFastPathEventId,
+        'confirmed_empty_off',
       );
     }
   }
@@ -1249,7 +1708,10 @@ export class LugnEngine {
     }
     for (const [revision, retry] of this.retryTimers) {
       if (retry.fastPathEventId === eventId)
-        this.retryTimers.set(revision, { handle: retry.handle });
+        this.retryTimers.set(revision, {
+          handle: retry.handle,
+          mode: retry.mode,
+        });
     }
   }
 
@@ -1307,6 +1769,35 @@ export class LugnEngine {
     const device = this.state.lighting.devices[target];
     if (!device) throw new Error(`Unknown semantic lighting device: ${target}`);
     return device;
+  }
+
+  private hasExplicitAllLightsOffScene(): boolean {
+    const sceneId = this.state.lighting.currentScene;
+    if (sceneId === null) return false;
+    const scene = this.scenes.get(sceneId);
+    const targets = Object.keys(this.state.lighting.devices);
+    return (
+      scene !== undefined &&
+      targets.length > 0 &&
+      targets.every((target) => scene.lighting[target]?.power === false)
+    );
+  }
+
+  private hasAnyLightOn(): boolean {
+    return Object.values(this.state.lighting.devices).some(
+      (device) => device.observed.power === true,
+    );
+  }
+
+  private isLightingQuietHours(): boolean {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Stockholm',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(this.clock.now()));
+    const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
+    return hour >= 23 || hour < 6;
   }
 
   private addDiagnostic(
@@ -1404,6 +1895,7 @@ export class LugnEngine {
     revision: number,
     delayMs: number,
     fastPathEventId?: string,
+    mode: LightingRetryMode = 'scene',
   ): void {
     this.clearRetryTimer(revision);
     const handle = this.clock.setTimeout(() => {
@@ -1416,10 +1908,15 @@ export class LugnEngine {
         this.fastPathMonotonicOrigins.has(retry.fastPathEventId)
           ? retry.fastPathEventId
           : undefined;
-      void this.reconcileScene(revision, fastPathEventId);
+      void this.runScheduledLightingRetry(
+        revision,
+        retry.mode,
+        fastPathEventId,
+      );
     }, delayMs);
     this.retryTimers.set(String(revision), {
       handle,
+      mode,
       ...(fastPathEventId === undefined ? {} : { fastPathEventId }),
     });
   }
@@ -1435,5 +1932,155 @@ export class LugnEngine {
     for (const retry of this.retryTimers.values())
       this.clock.clearTimeout(retry.handle);
     this.retryTimers.clear();
+  }
+
+  private lightingDeliveryKey(revision: number, target: string): string {
+    return `${revision}:${target}`;
+  }
+
+  private sceneIntentCanRunWhileEmpty(revision: number): boolean {
+    return this.intentByRevision.get(revision)?.allowWhileEmpty === true;
+  }
+
+  private clearLightingDeliveryAttempts(target?: string): void {
+    if (target === undefined) {
+      this.lightingDeliveryAttempts.clear();
+      this.exhaustedLightingDeliveryKeys.clear();
+      return;
+    }
+    for (const key of this.lightingDeliveryAttempts.keys()) {
+      if (key.endsWith(`:${target}`)) this.lightingDeliveryAttempts.delete(key);
+    }
+    for (const key of this.exhaustedLightingDeliveryKeys) {
+      if (key.endsWith(`:${target}`))
+        this.exhaustedLightingDeliveryKeys.delete(key);
+    }
+  }
+
+  private markLightingDeliveryExhausted(
+    key: string,
+    target: string,
+    attempts: number,
+  ): void {
+    if (this.exhaustedLightingDeliveryKeys.has(key)) return;
+    this.exhaustedLightingDeliveryKeys.add(key);
+    const device = this.state.lighting.devices[target];
+    if (device) device.availability = 'degraded';
+    this.addDiagnostic(
+      'command.retry_limit',
+      `Stopped retrying ${target} after ${attempts} absolute-state delivery attempts without confirmation`,
+      { target, attempts, attemptLimit: maxLightingDeliveryAttempts },
+    );
+  }
+
+  private hasRetryableLightingMismatch(revision: number): boolean {
+    if (
+      revision !== this.state.lighting.sceneRevision ||
+      (this.state.presence.state === 'confirmed_empty' &&
+        !this.sceneIntentCanRunWhileEmpty(revision))
+    )
+      return false;
+    for (const [target, device] of Object.entries(
+      this.state.lighting.devices,
+    )) {
+      const hasMismatch = LightingProperties.some((property) => {
+        const desired = device.effectiveDesired[property];
+        return desired !== undefined && desired !== device.observed[property];
+      });
+      if (!hasMismatch || device.availability === 'unavailable') continue;
+      const key = this.lightingDeliveryKey(revision, target);
+      const attempts = this.lightingDeliveryAttempts.get(key) ?? 0;
+      if (attempts < maxLightingDeliveryAttempts) return true;
+      this.markLightingDeliveryExhausted(key, target, attempts);
+    }
+    return false;
+  }
+
+  private isCurrentLightingDeliveryIntent(
+    command: {
+      id: string;
+      target: string;
+      revision: number;
+      desired: LightingValues;
+    },
+    retryMode: LightingRetryMode,
+  ): boolean {
+    if (
+      command.revision !== this.state.lighting.sceneRevision ||
+      this.ledger.latestCommandId(command.target) !== command.id
+    )
+      return false;
+    const device = this.state.lighting.devices[command.target];
+    if (!device) return false;
+    if (retryMode === 'confirmed_empty_off')
+      return (
+        this.state.presence.state === 'confirmed_empty' &&
+        command.desired.power === false &&
+        Object.keys(command.desired).length === 1 &&
+        device.observed.power !== false
+      );
+    if (
+      this.state.presence.state === 'confirmed_empty' &&
+      !this.sceneIntentCanRunWhileEmpty(command.revision)
+    )
+      return false;
+    const stillDesired = LightingProperties.every((property) => {
+      const value = command.desired[property];
+      return value === undefined || device.effectiveDesired[property] === value;
+    });
+    if (!stillDesired) return false;
+    return LightingProperties.some((property) => {
+      const value = command.desired[property];
+      return value !== undefined && device.observed[property] !== value;
+    });
+  }
+
+  private async runScheduledLightingRetry(
+    revision: number,
+    mode: LightingRetryMode,
+    eventId?: string,
+  ): Promise<void> {
+    if (revision !== this.state.lighting.sceneRevision) return;
+    if (mode === 'scene') {
+      if (
+        this.state.presence.state === 'confirmed_empty' &&
+        !this.sceneIntentCanRunWhileEmpty(revision)
+      )
+        return;
+      await this.reconcileScene(revision, eventId);
+      return;
+    }
+    if (this.state.presence.state !== 'confirmed_empty') return;
+    const dispatches: Promise<void>[] = [];
+    for (const [target, device] of Object.entries(
+      this.state.lighting.devices,
+    )) {
+      if (
+        device.observed.power === false ||
+        device.availability === 'unavailable'
+      )
+        continue;
+      const key = this.lightingDeliveryKey(revision, target);
+      const attempts = this.lightingDeliveryAttempts.get(key) ?? 0;
+      if (attempts >= maxLightingDeliveryAttempts) {
+        this.markLightingDeliveryExhausted(key, target, attempts);
+        continue;
+      }
+      dispatches.push(
+        this.dispatch(
+          target,
+          { power: false },
+          revision,
+          'presence',
+          'Confirmed empty: retry physical off after uncertain delivery',
+          systemActor,
+          undefined,
+          eventId,
+          'confirmed_empty_off',
+        ),
+      );
+    }
+    if (dispatches.length > 0) await Promise.all(dispatches);
+    this.publish(['commands', 'lighting', 'diagnostics']);
   }
 }

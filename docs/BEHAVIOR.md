@@ -2,6 +2,19 @@
 
 This document defines the central behavior model shared by lighting, music, computer control, routines, and future modules.
 
+## Separate state signals in the current runtime
+
+Room occupancy from STL27L and home/away from Home Assistant are independent.
+The room can be empty while the resident is home, or still appear occupied
+after Home Assistant reports away. Home status is read from the configured
+`person.*` or `device_tracker.*` entity; `device_tracker.lustigkurre` is the
+example default.
+
+Confirmed away suppresses automatic room activation and music policy, and
+pauses playing music. It does not suppress confirmed-empty shutoff. It also
+does not disable explicit dashboard requests. Unknown home status is distinct
+from confirmed away and currently does not gate automation.
+
 ## Four pieces of state
 
 For a controllable property, Lugn should be able to distinguish:
