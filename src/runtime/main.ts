@@ -138,6 +138,9 @@ export async function startRuntime(
     adapter: homeAssistantLighting,
     deviceIds,
     scenes,
+    ...(config.defaultSceneId === undefined
+      ? {}
+      : { defaultSceneId: config.defaultSceneId }),
     ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
     prelight: config.prelight,
     ...(homeAssistantMusic === undefined
@@ -246,6 +249,7 @@ export async function startRuntime(
 
   const http = new LugnHttpServer({
     ...config.http,
+    webAssetsDirectory: join(process.cwd(), 'dist', 'web'),
     engine,
     capabilities,
     integrations: () => ({

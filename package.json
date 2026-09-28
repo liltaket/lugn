@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-web-assets.mjs",
     "start": "node dist/runtime/main.js",
     "config:check": "npm run build --silent && node dist/runtime/config-check.js",
     "ha:discover": "npm run build --silent && node dist/runtime/ha-discover.js",
@@ -30,6 +30,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@clerk/backend": "^3.20.1",
     "castv2-client": "^1.2.0",
     "mqtt": "^5.16.0",
     "zod": "^4.6.5"

@@ -54,6 +54,7 @@ import { CommandLedger } from '../execution/command-ledger.js';
 export type EngineOptions = {
   deviceIds?: string[];
   scenes?: LightingScene[];
+  defaultSceneId?: string;
   restoredLightingIntent?: LightingIntentSnapshot;
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
@@ -141,6 +142,7 @@ export class LugnEngine {
   private nextSwitchCommandId = 0;
   private readonly prelightTargets: Readonly<Record<string, LightingValues>>;
   private readonly prelightMaxDurationMs: number;
+  private defaultSceneOnOccupancy: LightingScene | undefined;
   private nextDiagnosticId = 0;
   private nextEventId = 0;
   private readonly unsubscribers: Array<() => void> = [];
@@ -203,6 +205,11 @@ export class LugnEngine {
       SceneSchema.parse(scene),
     );
     this.scenes = new Map(scenes.map((scene) => [scene.id, scene]));
+    if (options.defaultSceneId !== undefined) {
+      this.defaultSceneOnOccupancy = this.scenes.get(options.defaultSceneId);
+      if (!this.defaultSceneOnOccupancy)
+        throw new Error(`Unknown default scene: ${options.defaultSceneId}`);
+    }
     const restoredIntent =
       options.restoredLightingIntent === undefined
         ? undefined
@@ -245,6 +252,7 @@ export class LugnEngine {
     const activeRestoredIntent = restoredIntentExpired
       ? undefined
       : restoredIntent;
+    if (activeRestoredIntent) this.defaultSceneOnOccupancy = undefined;
     this.restoredContinuityPending =
       activeRestoredIntent !== undefined &&
       activeRestoredIntent.continuityExpiresAt !== null;
@@ -312,7 +320,10 @@ export class LugnEngine {
         home: { state: 'unknown', observedAt: null },
       },
       lighting: {
-        currentScene: activeRestoredIntent?.currentScene ?? null,
+        currentScene:
+          activeRestoredIntent?.currentScene ??
+          this.defaultSceneOnOccupancy?.id ??
+          null,
         sceneRevision: activeRestoredIntent?.sceneRevision ?? 0,
         devices,
       },
@@ -828,6 +839,15 @@ export class LugnEngine {
         this.publish(['diagnostics']);
         return;
       }
+      const defaultScene = this.defaultSceneOnOccupancy;
+      if (defaultScene) {
+        this.defaultSceneOnOccupancy = undefined;
+        this.beginScene(defaultScene, {
+          actor: systemActor,
+          source: 'presence',
+          reason: 'Configured default scene activated on confirmed occupancy',
+        });
+      }
       await this.reconcileScene(
         this.state.lighting.sceneRevision,
         timing.eventId,
@@ -869,6 +889,22 @@ export class LugnEngine {
       );
     }
     this.publish(['presence', 'music', 'diagnostics']);
+    if (
+      normalized === 'home' &&
+      previous === 'away' &&
+      this.state.presence.state === 'occupied' &&
+      this.defaultSceneOnOccupancy &&
+      !this.isLightingQuietHours()
+    ) {
+      const defaultScene = this.defaultSceneOnOccupancy;
+      this.defaultSceneOnOccupancy = undefined;
+      this.beginScene(defaultScene, {
+        actor: systemActor,
+        source: 'presence',
+        reason: 'Configured default scene activated after returning home',
+      });
+      await this.reconcileScene(this.state.lighting.sceneRevision);
+    }
   }
 
   async handleEvent(event: PresenceInputEvent): Promise<void> {
@@ -1269,6 +1305,7 @@ export class LugnEngine {
   }
 
   private beginScene(scene: LightingScene, intent: IntentProvenance): void {
+    this.defaultSceneOnOccupancy = undefined;
     this.terminateAllFastPathEvents();
     const priorRevision = this.state.lighting.sceneRevision;
     this.clearRetryTimer(priorRevision);

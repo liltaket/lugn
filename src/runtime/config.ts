@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { z } from 'zod';
 import { defaultScenes } from '../application/lugn-engine.js';
+import { clerkFrontendApiOrigin } from './clerk-auth.js';
 import {
   SceneSchema,
   SemanticLightingIdSchema,
@@ -17,6 +18,38 @@ import {
 } from '../core/schemas.js';
 
 const EnvironmentNameSchema = z.string().regex(/^[A-Z_][A-Z0-9_]*$/);
+const ClerkConfigSchema = z
+  .object({
+    publishableKeyEnv: EnvironmentNameSchema,
+    secretKeyEnv: EnvironmentNameSchema,
+    allowedUserIdsEnv: EnvironmentNameSchema,
+  })
+  .strict();
+const TrustedOriginSchema = z
+  .string()
+  .url()
+  .superRefine((value, context) => {
+    let origin: URL;
+    try {
+      origin = new URL(value);
+    } catch {
+      context.addIssue({
+        code: 'custom',
+        message: 'trustedOrigins entries must be valid HTTP or HTTPS origins',
+      });
+      return;
+    }
+    if (
+      (origin.protocol !== 'http:' && origin.protocol !== 'https:') ||
+      origin.origin !== value ||
+      origin.username ||
+      origin.password
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'trustedOrigins entries must be bare HTTP or HTTPS origins',
+      });
+  });
 
 const HomeAssistantConfigSchema = z
   .object({
@@ -203,9 +236,11 @@ const FileConfigSchema = z
         host: z.string().min(1).default('127.0.0.1'),
         port: z.number().int().min(1).max(65_535).default(8787),
         bearerTokenEnv: EnvironmentNameSchema.optional(),
+        trustedOrigins: z.array(TrustedOriginSchema).max(8).default([]),
+        clerk: ClerkConfigSchema.optional(),
       })
       .strict()
-      .default({ host: '127.0.0.1', port: 8787 }),
+      .default({ host: '127.0.0.1', port: 8787, trustedOrigins: [] }),
     homeAssistant: HomeAssistantConfigSchema,
     mqtt: MqttConfigSchema.optional(),
     display: DisplayConfigSchema.optional(),
@@ -219,6 +254,7 @@ const FileConfigSchema = z
       .strict()
       .default({ targets: {}, maxDurationMs: 5_000 }),
     scenes: z.array(SceneSchema).optional(),
+    defaultSceneId: z.string().min(1).optional(),
   })
   .strict()
   .superRefine((config, context) => {
@@ -234,6 +270,16 @@ const FileConfigSchema = z
     }
 
     const scenes = config.scenes ?? defaultScenes;
+    if (
+      config.defaultSceneId !== undefined &&
+      !scenes.some((scene) => scene.id === config.defaultSceneId)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['defaultSceneId'],
+        message: `Default scene ${config.defaultSceneId} is not configured in scenes`,
+      });
+    }
     scenes.forEach((scene, sceneIndex) => {
       for (const target of Object.keys(scene.lighting)) {
         if (configuredLights.has(target)) continue;
@@ -271,6 +317,13 @@ export type RuntimeConfig = {
     host: string;
     port: number;
     bearerToken?: string;
+    trustedOrigins: string[];
+    clerk?: {
+      publishableKey: string;
+      secretKey: string;
+      allowedUserIds: string[];
+      allowAnyUser: boolean;
+    };
   };
   homeAssistant: {
     baseUrl: string;
@@ -312,6 +365,7 @@ export type RuntimeConfig = {
     maxDurationMs: number;
   };
   scenes?: LightingScene[];
+  defaultSceneId?: string;
 };
 
 export class RuntimeConfigError extends Error {
@@ -351,6 +405,19 @@ export function loadRuntimeConfig(
   const apiToken = fileConfig.http.bearerTokenEnv
     ? requireEnvironmentValue(fileConfig.http.bearerTokenEnv, environment)
     : undefined;
+  if (fileConfig.http.clerk && apiToken === undefined) {
+    throw new RuntimeConfigError(
+      'http.clerk requires http.bearerTokenEnv to protect machine API routes',
+    );
+  }
+  const clerk = fileConfig.http.clerk
+    ? loadClerkConfig(fileConfig.http.clerk, environment)
+    : undefined;
+  if (fileConfig.http.trustedOrigins.length > 0 && apiToken === undefined) {
+    throw new RuntimeConfigError(
+      'trustedOrigins requires an HTTP bearer token to protect the API',
+    );
+  }
   const display = fileConfig.display
     ? {
         host: fileConfig.display.host,
@@ -395,7 +462,9 @@ export function loadRuntimeConfig(
     http: {
       host: fileConfig.http.host,
       port: fileConfig.http.port,
+      trustedOrigins: fileConfig.http.trustedOrigins,
       ...(apiToken === undefined ? {} : { bearerToken: apiToken }),
+      ...(clerk === undefined ? {} : { clerk }),
     },
     homeAssistant: {
       baseUrl: fileConfig.homeAssistant.baseUrl.replace(/\/+$/, ''),
@@ -412,7 +481,58 @@ export function loadRuntimeConfig(
     ...(display === undefined ? {} : { display }),
     prelight: fileConfig.prelight,
     ...(fileConfig.scenes === undefined ? {} : { scenes: fileConfig.scenes }),
+    ...(fileConfig.defaultSceneId === undefined
+      ? {}
+      : { defaultSceneId: fileConfig.defaultSceneId }),
   };
+}
+
+function loadClerkConfig(
+  config: z.infer<typeof ClerkConfigSchema>,
+  environment: NodeJS.ProcessEnv,
+): NonNullable<RuntimeConfig['http']['clerk']> {
+  const publishableKey = requireEnvironmentValue(
+    config.publishableKeyEnv,
+    environment,
+  );
+  const secretKey = requireEnvironmentValue(config.secretKeyEnv, environment);
+  const allowedUserIdsValue = requireEnvironmentValue(
+    config.allowedUserIdsEnv,
+    environment,
+  );
+  const allowedUserIds = allowedUserIdsValue.split(',').map((id) => id.trim());
+  const allowAnyUser = allowedUserIds.length === 1 && allowedUserIds[0] === '*';
+  if (
+    !allowAnyUser &&
+    (allowedUserIds.length === 0 ||
+      allowedUserIds.some((id) => !/^user_[A-Za-z0-9]{1,120}$/.test(id)) ||
+      new Set(allowedUserIds).size !== allowedUserIds.length)
+  ) {
+    throw new RuntimeConfigError(
+      `Required environment variable must be '*' or a comma-separated list of unique Clerk user IDs: ${config.allowedUserIdsEnv}`,
+    );
+  }
+
+  try {
+    clerkFrontendApiOrigin(publishableKey);
+  } catch {
+    throw new RuntimeConfigError(
+      `Required environment variable is not a valid Clerk publishable key: ${config.publishableKeyEnv}`,
+    );
+  }
+
+  const publishableKeyIsTest = publishableKey.startsWith('pk_test_');
+  const secretKeyIsTest = secretKey.startsWith('sk_test_');
+  if (
+    (!secretKeyIsTest && !secretKey.startsWith('sk_live_')) ||
+    publishableKeyIsTest !== secretKeyIsTest
+  ) {
+    throw new RuntimeConfigError(
+      `Required environment variable is not a valid Clerk secret key: ${config.secretKeyEnv}`,
+    );
+  }
+
+  return { publishableKey, secretKey, allowedUserIds, allowAnyUser };
 }
 
 function requireEnvironmentValue(

@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Överblick och styrning av rummets belysning och musik."
+    />
+    <title>Lugn · Rumskontroll</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+    <script type="module" src="/ui/app.js"></script>
+  </head>
+  <body>
+    <!--
+      THESIS: Tune room lights and music by comparing Lugn's requests with the latest device reports.
+      OWN-WORLD: A dim-room operator console in mineral green, soft ink, and restrained citron controls.
+      STORY: Confirm room and integration state, choose a scene, then inspect and adjust configured lights and players.
+      FIRST VIEWPORT: Service state first, scene buttons next, then the configured music players and lights.
+      FORM: A responsive, single-route operations panel; every label and device row comes from the live API.
+    -->
+    <header class="topbar">
+      <a class="wordmark" href="/ui/" aria-label="Lugn rumskontroll">
+        <span class="wordmark-mark" aria-hidden="true">L</span>
+        <span>Lugn</span>
+        <span class="wordmark-divider" aria-hidden="true"></span>
+        <span class="wordmark-section">Rumskontroll</span>
+      </a>
+      <div class="topbar-actions">
+        <p class="live-status" id="live-status" data-tone="neutral">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="live-status-label">Inte ansluten</span>
+        </p>
+        <button
+          class="button button-quiet button-small"
+          id="logout-button"
+          type="button"
+          hidden
+        >
+          Logga ut
+        </button>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="login-view" id="login-view" aria-labelledby="login-title">
+        <div class="login-copy">
+          <p class="login-mark" aria-hidden="true">L</p>
+          <h1 id="login-title">Anslut till Lugn</h1>
+          <p id="login-description">
+            Logga in för att se rummets lampor och styra deras önskade läge.
+          </p>
+        </div>
+        <p class="login-initial-status" id="login-initial-status" role="status">
+          Kontrollerar inloggning…
+        </p>
+        <form class="login-form" id="login-form" hidden>
+          <label for="api-token">Åtkomsttoken</label>
+          <input
+            id="api-token"
+            name="token"
+            type="password"
+            inputmode="text"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            required
+            aria-describedby="token-help login-error"
+          />
+          <p class="field-help" id="token-help">
+            Token används bara för att skapa en session och sparas inte i
+            webbläsaren.
+          </p>
+          <button
+            class="button button-primary login-submit"
+            id="login-submit"
+            type="submit"
+          >
+            Anslut
+          </button>
+        </form>
+        <div class="clerk-login" id="clerk-login" hidden>
+          <p class="clerk-status" id="clerk-status" role="status" hidden>
+            Laddar säker inloggning…
+          </p>
+          <div
+            class="clerk-sign-in"
+            id="clerk-sign-in"
+            aria-label="Logga in med Clerk"
+          ></div>
+          <button
+            class="button button-primary login-submit"
+            id="clerk-retry"
+            type="button"
+            hidden
+          >
+            Försök igen
+          </button>
+        </div>
+        <p
+          class="form-error login-error"
+          id="login-error"
+          role="alert"
+          hidden
+        ></p>
+      </section>
+
+      <section
+        class="dashboard"
+        id="dashboard-view"
+        aria-labelledby="page-title"
+        hidden
+      >
+        <header class="page-heading">
+          <div>
+            <h1 id="page-title">Rumskontroll</h1>
+            <p>
+              Styr belysning och musik och jämför önskemål med enheternas
+              senaste rapporter.
+            </p>
+          </div>
+          <p class="updated-at" id="updated-at">Väntar på tillstånd</p>
+        </header>
+
+        <section class="system-panel" aria-label="Rums- och systemstatus">
+          <div
+            class="room-presence"
+            id="room-presence"
+            data-tone="neutral"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <span class="presence-indicator" aria-hidden="true"></span>
+            <div>
+              <p class="panel-label">Närvaro</p>
+              <h2 id="presence-title">Okänd</h2>
+              <p class="presence-detail" id="presence-detail">
+                Väntar på närvarostatus
+              </p>
+            </div>
+          </div>
+          <div class="integration-status">
+            <div class="integration-heading">
+              <div>
+                <p class="panel-label">System</p>
+                <h2 id="health-title">Anslutningar</h2>
+              </div>
+              <span
+                class="state-chip"
+                id="health-chip"
+                data-tone="neutral"
+                role="status"
+                aria-live="polite"
+                >Okänd</span
+              >
+            </div>
+            <ul class="integration-list" id="integration-list"></ul>
+          </div>
+        </section>
+
+        <div class="system-alert" id="system-alert" role="status" hidden></div>
+
+        <section class="scene-section" aria-labelledby="scenes-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="scenes-title">Ljusscener</h2>
+              <p id="scene-summary">Välj en scen för rummet.</p>
+            </div>
+            <button
+              class="button button-quiet button-small"
+              id="reapply-button"
+              type="button"
+              hidden
+            >
+              Tillämpa scenen igen
+            </button>
+          </div>
+          <div
+            class="scene-list"
+            id="scene-list"
+            aria-label="Tillgängliga ljusscener"
+          ></div>
+        </section>
+
+        <section class="music-section" aria-labelledby="music-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="music-title">Musik</h2>
+              <p>
+                Styr uppspelning, volym och källa. Rapporterat läge visar vad
+                spelaren senast skickade tillbaka.
+              </p>
+            </div>
+          </div>
+          <div class="music-list" id="music-list"></div>
+        </section>
+
+        <section class="lights-section" aria-labelledby="lights-title">
+          <div class="section-heading light-section-heading">
+            <div>
+              <h2 id="lights-title">Lampor</h2>
+              <p>
+                Önskat läge är Lugns mål. Rapporterat läge kommer från enheten.
+              </p>
+            </div>
+            <p class="mapping-summary" id="mapping-summary"></p>
+          </div>
+          <div class="light-list" id="light-list"></div>
+        </section>
+
+        <p
+          class="action-status"
+          id="action-status"
+          role="status"
+          aria-live="polite"
+        ></p>
+      </section>
+    </main>
+  </body>
+</html>
