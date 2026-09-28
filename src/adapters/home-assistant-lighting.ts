@@ -133,32 +133,60 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
         data['color_temp_kelvin'] = command.values.colorTemperature;
     }
 
-    let response: Response;
-    try {
-      response = await this.transport(
-        `${this.baseUrl}/api/services/light/${service}`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
+    const isCleverioOff =
+      entityId === 'light.cleverio_lb100' && service === 'turn_off';
+    const attempts = isCleverioOff ? 3 : 1;
+    let accepted = false;
+    let uncertainFailure = false;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      let response: Response | undefined;
+      try {
+        response = await this.transport(
+          `${this.baseUrl}/api/services/light/${service}`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${this.token}`,
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data),
           },
-          body: JSON.stringify(data),
-        },
-      );
-    } catch {
-      // Transport errors can include request details. Do not forward them since
-      // custom fetch implementations may include request headers in messages.
-      throw new Error(
-        `Home Assistant light.${service} failed for ${command.target} (${entityId}): transport error`,
-      );
+        );
+      } catch {
+        // The light may still receive a command when HA's reply is lost.
+        uncertainFailure = true;
+        if (!isCleverioOff)
+          throw new Error(
+            `Home Assistant light.${service} failed for ${command.target} (${entityId}): transport error`,
+          );
+      }
+
+      if (response?.ok) {
+        accepted = true;
+      } else if (response) {
+        const uncertain =
+          response.status === 408 ||
+          response.status === 425 ||
+          response.status === 429 ||
+          response.status >= 500;
+        if (!isCleverioOff || !uncertain)
+          throw new Error(
+            `Home Assistant light.${service} failed for ${command.target} (${entityId}): HTTP ${response.status}`,
+          );
+        uncertainFailure = true;
+      }
+
+      if (isCleverioOff && attempt + 1 < attempts)
+        await new Promise<void>((resolve) =>
+          this.clock.setTimeout(resolve, 150),
+        );
     }
-    if (!response.ok) {
-      throw new Error(
-        `Home Assistant light.${service} failed for ${command.target} (${entityId}): HTTP ${response.status}`,
-      );
-    }
+
+    // The Cleverio integration may execute an off command without a useful
+    // response. Complete three bounded sends before treating it as fire-and-forget.
+    if (!accepted && uncertainFailure && isCleverioOff) return;
   }
 
   subscribe(listener: (observation: LightingObservation) => void): () => void {

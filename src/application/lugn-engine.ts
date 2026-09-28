@@ -117,6 +117,7 @@ export class LugnEngine {
   private readonly continuityMs: number;
   private readonly switchFeedbackTimeoutMs: number;
   private readonly lightingFeedbackTimers = new Map<string, TimerHandle>();
+  private readonly forceOffTargetsByRevision = new Map<number, Set<string>>();
   private readonly switchFeedbackTimers = new Map<string, TimerHandle>();
   private nextSwitchCommandId = 0;
   private readonly prelightTargets: Readonly<Record<string, LightingValues>>;
@@ -352,6 +353,15 @@ export class LugnEngine {
       ...(requestId === undefined ? {} : { requestId }),
       reason: 'Scene explicitly selected',
     });
+    if (sceneId === 'scene.all_off')
+      this.forceOffTargetsByRevision.set(
+        this.state.lighting.sceneRevision,
+        new Set(
+          Object.entries(scene.lighting)
+            .filter(([, values]) => values.power === false)
+            .map(([target]) => target),
+        ),
+      );
     await this.reconcileScene(this.state.lighting.sceneRevision);
     return this.state.lighting.sceneRevision;
   }
@@ -662,9 +672,15 @@ export class LugnEngine {
       this.state.lighting.devices,
     )) {
       const desired: LightingValues = {};
+      const forcedOffTargets = this.forceOffTargetsByRevision.get(revision);
+      const forceOff = forcedOffTargets?.has(target) === true;
       for (const property of LightingProperties) {
         const value = device.effectiveDesired[property];
-        if (value === undefined || value === device.observed[property])
+        if (
+          value === undefined ||
+          (value === device.observed[property] &&
+            !(forceOff && property === 'power' && value === false))
+        )
           continue;
         const pending = this.ledger.latestPending(target, property, value);
         if (pending && now - pending.issuedAt < this.retryDelayMs) continue;
@@ -683,6 +699,11 @@ export class LugnEngine {
         continue;
       }
       if (device.availability === 'unavailable') continue;
+      if (forceOff && forcedOffTargets) {
+        forcedOffTargets.delete(target);
+        if (forcedOffTargets.size === 0)
+          this.forceOffTargetsByRevision.delete(revision);
+      }
       this.ledger.supersedePending(
         'Retrying an unconfirmed property command',
         target,
