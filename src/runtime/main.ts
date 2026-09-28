@@ -19,7 +19,10 @@ import {
   type Stl27lPresenceMqttSubscriber,
 } from '../adapters/stl27l-mqtt-presence.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
-import { withRoomPresets } from '../application/dashboard-scenes.js';
+import {
+  resolveRoomDefaultSceneId,
+  withRoomPresets,
+} from '../application/dashboard-scenes.js';
 import { defaultScenes, LugnEngine } from '../application/lugn-engine.js';
 import { systemClock } from '../core/clock.js';
 import { LugnDisplayServer } from './display-server.js';
@@ -121,6 +124,10 @@ export async function startRuntime(
   );
   const deviceIds = Object.keys(config.homeAssistant.entities);
   const scenes = withRoomPresets(config.scenes ?? defaultScenes, deviceIds);
+  const defaultSceneId = resolveRoomDefaultSceneId(
+    config.defaultSceneId,
+    scenes,
+  );
   const stateDirectory =
     process.env['XDG_STATE_HOME'] ?? join(homedir(), '.local', 'state');
   const lightingIntentPath =
@@ -138,9 +145,7 @@ export async function startRuntime(
     adapter: homeAssistantLighting,
     deviceIds,
     scenes,
-    ...(config.defaultSceneId === undefined
-      ? {}
-      : { defaultSceneId: config.defaultSceneId }),
+    ...(defaultSceneId === undefined ? {} : { defaultSceneId }),
     ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
     prelight: config.prelight,
     ...(homeAssistantMusic === undefined
