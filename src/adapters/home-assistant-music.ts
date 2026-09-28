@@ -15,6 +15,13 @@ export const HomeAssistantMusicMappingSchema = z
   .object({
     entityId: z.string().regex(/^media_player\.[a-z0-9_]+$/),
     sources: z.array(z.string().min(1)).default([]),
+    presets: z
+      .object({
+        spotify_dj: z.number().int().min(1).max(99).default(1),
+        optical: z.number().int().min(1).max(99).default(4),
+      })
+      .strict()
+      .default({ spotify_dj: 1, optical: 4 }),
   })
   .strict()
   .superRefine((mapping, context) => {
@@ -83,7 +90,7 @@ const EnvelopeSchema = z.object({
   event: EventSchema,
 });
 
-/** Fixed media_player services with explicit target and source allowlists. */
+/** Fixed media_player services with explicit target, source and preset mappings. */
 export class HomeAssistantMusicAdapter implements MusicAdapter {
   private readonly config: z.output<typeof ConfigSchema>;
   private readonly semanticByEntity: Map<string, string>;
@@ -126,6 +133,14 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
           throw new Error(`Source is not allowed for ${target}`);
         service = 'select_source';
         body['source'] = requested.value;
+        break;
+      case 'preset':
+        service = 'play_media';
+        // The built-in Home Assistant WiiM integration treats preset IDs as
+        // media content IDs of type `music`; `preset` is accepted as a generic
+        // media type but can leave the WiiM paused with the ID as its title.
+        body['media_content_type'] = 'music';
+        body['media_content_id'] = String(mapping.presets[requested.value]);
         break;
     }
     let response: Response;
