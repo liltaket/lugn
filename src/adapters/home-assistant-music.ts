@@ -118,6 +118,7 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
       throw new Error(
         `No Home Assistant music entity is configured for ${target}`,
       );
+    let domain = 'media_player';
     let service: string;
     const body: Record<string, unknown> = { entity_id: mapping.entityId };
     switch (requested.property) {
@@ -135,18 +136,18 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
         body['source'] = requested.value;
         break;
       case 'preset':
-        service = 'play_media';
-        // The built-in Home Assistant WiiM integration treats preset IDs as
-        // media content IDs of type `music`; `preset` is accepted as a generic
-        // media type but can leave the WiiM paused with the ID as its title.
-        body['media_content_type'] = 'music';
-        body['media_content_id'] = String(mapping.presets[requested.value]);
+        // The WiiM integration exposes a dedicated action for hardware
+        // presets. Using media_player.play_media can set the displayed media
+        // title to the preset number without starting the saved preset.
+        domain = 'wiim';
+        service = 'play_preset';
+        body['preset'] = mapping.presets[requested.value];
         break;
     }
     let response: Response;
     try {
       response = await this.transport(
-        `${this.config.baseUrl.replace(/\/+$/, '')}/api/services/media_player/${service}`,
+        `${this.config.baseUrl.replace(/\/+$/, '')}/api/services/${domain}/${service}`,
         {
           method: 'POST',
           headers: {

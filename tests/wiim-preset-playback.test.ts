@@ -7,7 +7,7 @@ describe('WiiM preset playback', () => {
     ['spotify_dj', '1'],
     ['optical', '4'],
   ] as const)(
-    'starts the configured %s preset with Home Assistant WiiM media type',
+    'starts the configured %s preset with Home Assistant WiiM action',
     async (preset, presetId) => {
       const transport = vi
         .fn<typeof fetch>()
@@ -34,13 +34,12 @@ describe('WiiM preset playback', () => {
       });
 
       expect(transport).toHaveBeenCalledWith(
-        'http://ha.local/api/services/media_player/play_media',
+        'http://ha.local/api/services/wiim/play_preset',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
             entity_id: 'media_player.wiim_room',
-            media_content_type: 'music',
-            media_content_id: presetId,
+            preset: Number(presetId),
           }),
         }),
       );
