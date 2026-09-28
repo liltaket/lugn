@@ -333,9 +333,11 @@ function renderMusicVolumePolicy(payload, target) {
       ? 'Mål saknas'
       : controller === 'you'
         ? 'Manuellt läge · målet styr inte spelaren'
-        : controller === 'unknown'
-          ? 'Väntar på volymregel'
-          : '';
+        : controller === 'lugn' && policy?.baselineSource === 'user'
+          ? 'Din bas · Lugn anpassar efter dygn och antal personer'
+          : controller === 'unknown'
+            ? 'Väntar på volymregel'
+            : '';
   setText(refs.musicVolumeTargetState, explanation);
   refs.musicVolumeTargetState.hidden = !explanation;
   setText(

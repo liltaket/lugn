@@ -141,6 +141,14 @@ export class MusicAutomation {
     }
   }
 
+  /** Keep WiiM or Home Assistant volume changes as the user's baseline. */
+  noteExternalVolumeChange(target: string, volume: number): void {
+    if (this.disposed || !Number.isFinite(volume)) return;
+    this.baselines.set(target, this.clamp(volume - this.currentOffset()));
+    this.explicitBaselines.add(target);
+    this.applyVolumePolicy();
+  }
+
   getVolumePolicySnapshot(target: string): MusicVolumePolicySnapshot {
     const offsets = this.currentOffsets();
     const device = this.options.getState(target);

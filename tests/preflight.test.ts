@@ -36,7 +36,7 @@ const stateList = [
 
 function runtimeConfig(withMqtt = true): RuntimeConfig {
   return {
-    http: { host: '127.0.0.1', port: 8787 },
+    http: { host: '127.0.0.1', port: 8787, trustedOrigins: [] },
     homeAssistant: {
       baseUrl: 'http://private-host.test:8123',
       token: secret,

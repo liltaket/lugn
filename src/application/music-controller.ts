@@ -33,6 +33,8 @@ export class MusicController {
   private readonly observedSequence = new Map<string, number>();
   private readonly issuedSequence = new Map<string, number>();
   private readonly lastObservations = new Map<string, MusicObservation>();
+  private onExternalVolumeChange:
+    ((target: string, volume: number) => void) | undefined;
   private readonly unsubscribe: () => void;
   private nextCommandId = 0;
   constructor(
@@ -77,6 +79,11 @@ export class MusicController {
   }
   getState(target: string): DeviceMusicState {
     return structuredClone(this.requireTarget(target));
+  }
+  setExternalVolumeChangeHandler(
+    handler: (target: string, volume: number) => void,
+  ): void {
+    this.onExternalVolumeChange = handler;
   }
   async request(
     target: string,
@@ -225,6 +232,14 @@ export class MusicController {
       (device.observedAt !== null && observation.observedAt < device.observedAt)
     )
       return;
+    const previousVolume = device.observed.volume;
+    const observedVolume = observation.values.volume;
+    const externalVolumeChange =
+      observation.available &&
+      previousVolume !== null &&
+      observedVolume !== null &&
+      Math.abs(observedVolume - previousVolume) > 0.005 + Number.EPSILON &&
+      !this.matchesRecentPendingVolumeCommand(observation, observedVolume);
     device.observed = structuredClone(observation.values);
     device.observedAt = observation.observedAt;
     device.availability = observation.available ? 'available' : 'unavailable';
@@ -246,8 +261,43 @@ export class MusicController {
         this.confirm(command, observation)
       )
         confirmedIds.add(command.id);
+    if (externalVolumeChange && observedVolume !== null) {
+      for (const command of this.state.commands) {
+        if (
+          command.target !== observation.target ||
+          command.requested.property !== 'volume' ||
+          command.status !== 'pending'
+        )
+          continue;
+        command.status = 'superseded';
+        command.diagnosticReason =
+          'A newer external volume change superseded this request';
+        this.releaseTracking(command.id);
+        confirmedIds.add(command.id);
+      }
+      // An external adjustment is now the freshest desired value. Retaining a
+      // prior request here would make the automation prefer stale state over
+      // this observation when it calculates the next target.
+      delete device.requested.volume;
+      this.onExternalVolumeChange?.(observation.target, observedVolume);
+    }
     this.pruneHistory(confirmedIds);
     this.publish();
+  }
+  private matchesRecentPendingVolumeCommand(
+    observation: MusicObservation,
+    observedVolume: number,
+  ): boolean {
+    return this.state.commands.some(
+      (command) =>
+        command.target === observation.target &&
+        command.requested.property === 'volume' &&
+        command.status === 'pending' &&
+        observation.observedAt >= command.issuedAt &&
+        this.clock.now() - command.issuedAt < this.timeoutMs &&
+        Math.abs(observedVolume - command.requested.value) <=
+          0.005 + Number.EPSILON,
+    );
   }
   private confirm(
     command: MusicCommandRecord,

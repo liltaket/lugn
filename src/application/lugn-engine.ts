@@ -310,6 +310,9 @@ export class LugnEngine {
         this.publish(['music', 'diagnostics']);
       },
     });
+    this.musicController.setExternalVolumeChangeHandler((target, volume) =>
+      this.musicAutomation.noteExternalVolumeChange(target, volume),
+    );
     this.state = {
       revision: 0,
       updatedAt: clock.now(),
