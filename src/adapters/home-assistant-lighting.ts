@@ -68,6 +68,7 @@ const HomeAssistantStateSchema = z.object({
   entity_id: HomeAssistantEntityIdSchema,
   state: z.string(),
   attributes: z.record(z.string(), z.unknown()).optional(),
+  last_updated: z.string().optional(),
 });
 
 const HomeAssistantStateChangedDataSchema = z.object({
@@ -98,6 +99,7 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
   private readonly listeners = new Set<
     (observation: LightingObservation) => void
   >();
+  private readonly lastUpdatedByTarget = new Map<string, number>();
 
   constructor(
     config: HomeAssistantLightingConfig,
@@ -226,6 +228,19 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
       return false;
     if (newState.state !== 'on' && newState.state !== 'off') return false;
 
+    const lastUpdated = newState.last_updated
+      ? Date.parse(newState.last_updated)
+      : Number.NaN;
+    const previouslyUpdated = this.lastUpdatedByTarget.get(target);
+    if (
+      Number.isFinite(lastUpdated) &&
+      previouslyUpdated !== undefined &&
+      lastUpdated < previouslyUpdated
+    )
+      return true;
+    if (Number.isFinite(lastUpdated))
+      this.lastUpdatedByTarget.set(target, lastUpdated);
+
     const values = this.normalizeValues(newState.state, newState.attributes);
     this.emit({
       target,
@@ -244,7 +259,10 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
     attributes: Record<string, unknown> | undefined,
   ): LightingValues {
     const values: LightingValues = { power: state === 'on' };
-    if (!attributes) return values;
+    // Home Assistant integrations often publish brightness=0 or stale color
+    // metadata while the entity is off. Those attributes do not describe the
+    // remembered lit state, so keep them out of the observation.
+    if (!attributes || state === 'off') return values;
 
     const brightness = attributes['brightness'];
     if (

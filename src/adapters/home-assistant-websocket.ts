@@ -68,6 +68,7 @@ export type HomeAssistantWebSocketOptions = {
   clock?: Clock;
   reconnectDelayMs?: number;
   maxReconnectDelayMs?: number;
+  onConnected?: () => void | Promise<void>;
   onError?: (kind: 'socket' | 'event_handler' | 'malformed_message') => void;
 };
 
@@ -83,6 +84,7 @@ export class HomeAssistantWebSocketTransport {
   private readonly clock: Clock;
   private readonly reconnectDelayMs: number;
   private readonly maxReconnectDelayMs: number;
+  private readonly onConnected?: HomeAssistantWebSocketOptions['onConnected'];
   private readonly onError?: HomeAssistantWebSocketOptions['onError'];
   private nextCommandId = 1;
   private reconnectAttempt = 0;
@@ -105,6 +107,7 @@ export class HomeAssistantWebSocketTransport {
     this.clock = options.clock ?? systemClock;
     this.reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
     this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? 30_000;
+    this.onConnected = options.onConnected;
     this.onError = options.onError;
     if (
       !Number.isFinite(this.reconnectDelayMs) ||
@@ -210,6 +213,14 @@ export class HomeAssistantWebSocketTransport {
       if (message.success) {
         this._status = 'connected';
         this.reconnectAttempt = 0;
+        try {
+          const result = this.onConnected?.();
+          void Promise.resolve(result).catch(() =>
+            this.reportError('event_handler'),
+          );
+        } catch {
+          this.reportError('event_handler');
+        }
       } else {
         this.connectionLost(socket, this.generation);
       }

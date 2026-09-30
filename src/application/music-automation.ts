@@ -2,6 +2,7 @@ import type { Clock, TimerHandle } from '../core/clock.js';
 import type {
   DeviceMusicState,
   HomePresence,
+  MusicFadeRequest,
   MusicRequest,
   Presence,
   Provenance,
@@ -41,12 +42,14 @@ export class MusicAutomation {
   private readonly explicitBaselines = new Set<string>();
   private readonly volumeControllers = new Map<string, 'you' | 'lugn'>();
   private readonly resumeUntil = new Map<string, number>();
+  private readonly explicitFadeUntil = new Map<string, number>();
   private timer: TimerHandle | undefined;
   private presence: Presence = 'unknown';
   private homePresence: HomePresence = 'unknown';
   private personCount: number | null = null;
   private volumeAutomationEnabled = true;
   private disposed = false;
+  private resumeAfterUnknown = false;
 
   constructor(private readonly options: MusicAutomationOptions) {}
 
@@ -60,6 +63,7 @@ export class MusicAutomation {
     this.personCount = personCount;
 
     if (presence === 'confirmed_empty' && previous !== 'confirmed_empty') {
+      this.resumeAfterUnknown = true;
       for (const target of this.options.targets) {
         const device = this.options.getState(target);
         const wasPlaying =
@@ -75,10 +79,18 @@ export class MusicAutomation {
       return;
     }
 
+    if (presence === 'unknown' && previous === 'occupied') {
+      // An occupied -> unknown -> occupied transition is not a room re-entry.
+      this.resumeAfterUnknown = false;
+    }
+
     if (presence === 'occupied') {
+      const returningFromEmpty =
+        previous === 'confirmed_empty' || this.resumeAfterUnknown;
+      this.resumeAfterUnknown = false;
       if (
         this.homePresence !== 'away' &&
-        previous === 'confirmed_empty' &&
+        returningFromEmpty &&
         this.localHour() < 23
       ) {
         for (const target of this.options.targets) {
@@ -136,7 +148,7 @@ export class MusicAutomation {
   ): void {
     if (request.property === 'volume') {
       const offset = this.currentOffset();
-      this.baselines.set(target, this.clamp(request.value - offset));
+      this.baselines.set(target, this.clampBaseline(request.value - offset));
       if (provenance.actor.type === 'user') {
         this.explicitBaselines.add(target);
         this.volumeControllers.set(target, 'you');
@@ -146,10 +158,40 @@ export class MusicAutomation {
     }
   }
 
+  /** Record the user's intended destination while a bounded volume fade runs. */
+  noteExplicitFade(request: MusicFadeRequest, provenance: Provenance): void {
+    if (
+      this.disposed ||
+      !Number.isFinite(request.volume) ||
+      !Number.isFinite(request.durationMs) ||
+      request.durationMs < 0
+    )
+      return;
+
+    const offset = this.currentOffset();
+    this.baselines.set(
+      request.target,
+      this.clampBaseline(request.volume - offset),
+    );
+    if (provenance.actor.type === 'user') {
+      this.explicitBaselines.add(request.target);
+      this.volumeControllers.set(request.target, 'you');
+      this.explicitFadeUntil.set(
+        request.target,
+        this.options.clock.now() + request.durationMs,
+      );
+    } else {
+      this.explicitBaselines.delete(request.target);
+    }
+  }
+
   /** Keep WiiM or Home Assistant volume changes as the user's baseline. */
   noteExternalVolumeChange(target: string, volume: number): void {
     if (this.disposed || !Number.isFinite(volume)) return;
-    this.baselines.set(target, this.clamp(volume - this.currentOffset()));
+    this.baselines.set(
+      target,
+      this.clampBaseline(volume - this.currentOffset()),
+    );
     this.explicitBaselines.add(target);
     this.volumeControllers.set(target, 'you');
     this.applyVolumePolicy();
@@ -165,6 +207,7 @@ export class MusicAutomation {
     const targetVolume =
       baseline === undefined ? null : this.clamp(baseline + offset);
     const automatic =
+      !this.isExplicitFadeActive(target) &&
       this.volumeAutomationEnabled &&
       this.presence === 'occupied' &&
       this.homePresence !== 'away' &&
@@ -219,6 +262,7 @@ export class MusicAutomation {
     const offsets = this.currentOffsets();
     const offset = offsets.daily + offsets.person;
     for (const target of this.options.targets) {
+      if (this.isExplicitFadeActive(target)) continue;
       const device = this.options.getState(target);
       const baseline =
         this.baselines.get(target) ?? this.inferBaseline(device, offset);
@@ -241,7 +285,7 @@ export class MusicAutomation {
     offset: number,
   ): number | undefined {
     const current = device.requested.volume ?? device.observed.volume;
-    return current === null ? undefined : this.clamp(current - offset);
+    return current === null ? undefined : this.clampBaseline(current - offset);
   }
 
   /** -15pp at midnight, rising to baseline at 06:00, flat through 22:00. */
@@ -317,5 +361,20 @@ export class MusicAutomation {
       maximumAutomatedVolume,
       Math.max(minimumAutomatedVolume, value),
     );
+  }
+
+  /** Keep baseline math independent from the physical automated volume cap. */
+  private clampBaseline(value: number): number {
+    return Math.min(1, Math.max(0, value));
+  }
+
+  private isExplicitFadeActive(target: string): boolean {
+    const until = this.explicitFadeUntil.get(target);
+    if (until === undefined) return false;
+    if (until <= this.options.clock.now()) {
+      this.explicitFadeUntil.delete(target);
+      return false;
+    }
+    return true;
   }
 }

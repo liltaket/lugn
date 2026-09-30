@@ -186,22 +186,55 @@ export async function startRuntime(
       ? {}
       : { buttonAdapter: homeAssistantButton }),
   });
+  let syncingHomeAssistantStates = false;
+  let homeAssistantStateSyncGeneration = 0;
+  const bufferedHomeAssistantEvents: unknown[] = [];
+  const forwardHomeAssistantEvent = (event: unknown): void => {
+    homeAssistantLighting.acceptStateChangedEvent(event);
+    homeAssistantSwitch?.acceptStateChangedEvent(event);
+    homeAssistantMusic?.acceptStateChangedEvent(event);
+    homeAssistantEnvironment.acceptStateChangedEvent(event);
+    homeAssistantHomePresence.acceptStateChangedEvent(event);
+    homeAssistantBilresa.acceptStateChangedFrame(event);
+  };
+  const refreshHomeAssistantStates = async (): Promise<void> => {
+    const generation = ++homeAssistantStateSyncGeneration;
+    syncingHomeAssistantStates = true;
+    bufferedHomeAssistantEvents.length = 0;
+    await seedHomeAssistantObservations(
+      config.homeAssistant.baseUrl,
+      config.homeAssistant.token,
+      homeAssistantLighting,
+      homeAssistantSwitch,
+      homeAssistantMusic,
+      homeAssistantEnvironment,
+      homeAssistantHomePresence,
+      homeAssistantFetch,
+      () => generation === homeAssistantStateSyncGeneration,
+    );
+    if (generation !== homeAssistantStateSyncGeneration) return;
+    syncingHomeAssistantStates = false;
+    for (const event of bufferedHomeAssistantEvents.splice(0))
+      forwardHomeAssistantEvent(event);
+  };
   const homeAssistantSocket = new HomeAssistantWebSocketTransport(
     {
       baseUrl: config.homeAssistant.baseUrl,
       token: config.homeAssistant.token,
     },
     (event) => {
-      homeAssistantLighting.acceptStateChangedEvent(event);
-      homeAssistantSwitch?.acceptStateChangedEvent(event);
-      homeAssistantMusic?.acceptStateChangedEvent(event);
-      homeAssistantEnvironment.acceptStateChangedEvent(event);
-      homeAssistantHomePresence.acceptStateChangedEvent(event);
-      homeAssistantBilresa.acceptStateChangedFrame(event);
+      if (syncingHomeAssistantStates) {
+        bufferedHomeAssistantEvents.push(event);
+        return;
+      }
+      forwardHomeAssistantEvent(event);
     },
-    dependencies.createHomeAssistantSocket === undefined
-      ? {}
-      : { createSocket: dependencies.createHomeAssistantSocket },
+    {
+      ...(dependencies.createHomeAssistantSocket === undefined
+        ? {}
+        : { createSocket: dependencies.createHomeAssistantSocket }),
+      onConnected: refreshHomeAssistantStates,
+    },
   );
   let mqttSubscriber: RuntimeMqttSubscriber | undefined;
   let sensorAdapter: Stl27lMqttPresenceAdapter | undefined;
@@ -384,6 +417,7 @@ async function seedHomeAssistantObservations(
   environmentAdapter?: HomeAssistantEnvironmentAdapter,
   homePresenceAdapter?: HomeAssistantHomePresenceAdapter,
   fetcher: typeof fetch = fetch,
+  shouldApply: () => boolean = () => true,
 ): Promise<void> {
   try {
     const response = await fetcher(`${baseUrl}/api/states`, {
@@ -400,6 +434,7 @@ async function seedHomeAssistantObservations(
       return;
     }
     const states: unknown = await response.json();
+    if (!shouldApply()) return;
     if (!Array.isArray(states)) {
       console.warn(
         '[lugn] initial Home Assistant state query returned an unexpected response',

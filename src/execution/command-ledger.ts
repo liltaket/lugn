@@ -6,6 +6,8 @@ import type {
   LightingValues,
 } from '../core/schemas.js';
 
+const staleFeedbackAttributionWindowMs = 10_000;
+
 export class CommandLedger {
   readonly records: CommandRecord[] = [];
   private readonly idPrefix = `cmd-${randomUUID()}-`;
@@ -134,7 +136,7 @@ export class CommandLedger {
   ): CommandRecord | undefined {
     const command = commandId
       ? this.records.find((candidate) => candidate.id === commandId)
-      : [...this.records]
+      : ([...this.records]
           .reverse()
           .find(
             (candidate) =>
@@ -142,7 +144,21 @@ export class CommandLedger {
               candidate.status === 'pending' &&
               now - candidate.issuedAt <= this.attributionWindowMs &&
               candidate.desired[property] === value,
-          );
+          ) ??
+        // HA state_changed events contain no Lugn command ID. Treat an exact
+        // match to a recently superseded command as a bounded late echo; older
+        // observations remain eligible to represent an external/manual change.
+        [...this.records]
+          .reverse()
+          .find(
+            (candidate) =>
+              candidate.target === target &&
+              (candidate.status === 'superseded' ||
+                candidate.status === 'cancelled' ||
+                candidate.status === 'invalidated') &&
+              now - candidate.issuedAt <= staleFeedbackAttributionWindowMs &&
+              candidate.desired[property] === value,
+          ));
     if (
       !command ||
       command.target !== target ||

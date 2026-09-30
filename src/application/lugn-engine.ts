@@ -152,6 +152,8 @@ export class LugnEngine {
   private continuityTimer: TimerHandle | undefined;
   private continuityTimerGeneration = 0;
   private readonly convergenceStartedAt = new Map<number, number>();
+  private lastConfirmedPresence: 'occupied' | 'confirmed_empty' | 'unknown' =
+    'unknown';
   private readonly intentByRevision = new Map<number, IntentProvenance>();
   private readonly fastPathEventByCommand = new Map<string, string>();
   private readonly fastPathMonotonicOrigins = new Map<string, number>();
@@ -551,7 +553,9 @@ export class LugnEngine {
     request: MusicFadeRequest,
     provenance: Provenance,
   ): MusicFadeState {
-    return this.musicController.startFade(request, provenance);
+    const fade = this.musicController.startFade(request, provenance);
+    this.musicAutomation.noteExplicitFade(request, provenance);
+    return fade;
   }
 
   cancelMusicFade(target: string): MusicFadeState | null {
@@ -762,20 +766,22 @@ export class LugnEngine {
       },
     );
     this.publish(['lighting', 'commands', 'diagnostics']);
-    if (this.state.presence.state !== 'confirmed_empty')
-      await Promise.all(
-        [...updates].map(([lightingTarget, targetValues]) =>
-          this.dispatch(
-            lightingTarget,
-            targetValues,
-            this.state.lighting.sceneRevision,
-            source,
-            reason,
-            provenance.actor,
-            provenance.requestId,
-          ),
-        ),
-      );
+    await Promise.all(
+      [...updates].map(([lightingTarget, targetValues]) =>
+        this.state.presence.state !== 'confirmed_empty' ||
+        targetValues.power === false
+          ? this.dispatch(
+              lightingTarget,
+              targetValues,
+              this.state.lighting.sceneRevision,
+              source,
+              reason,
+              provenance.actor,
+              provenance.requestId,
+            )
+          : Promise.resolve(),
+      ),
+    );
   }
 
   async adjustBrightness(
@@ -825,6 +831,7 @@ export class LugnEngine {
     const normalizedEvent = PresenceEventSchema.parse(event);
     const receivedAt = this.clock.now();
     const previous = this.state.presence.state;
+    const lastConfirmedBeforeEvent = this.lastConfirmedPresence;
     const prelightWasActive = this.prelightActive;
     const createsEmptyTiming =
       normalizedEvent.presence === 'confirmed_empty' &&
@@ -841,6 +848,11 @@ export class LugnEngine {
     if (normalizedEvent.presence === 'occupied' || createsEmptyTiming)
       this.terminateAllFastPathEvents();
     this.state.presence.state = normalizedEvent.presence;
+    if (
+      normalizedEvent.presence === 'occupied' ||
+      normalizedEvent.presence === 'confirmed_empty'
+    )
+      this.lastConfirmedPresence = normalizedEvent.presence;
     this.state.presence.personCount =
       normalizedEvent.personCount ??
       (normalizedEvent.presence === 'confirmed_empty' ? 0 : null);
@@ -873,6 +885,14 @@ export class LugnEngine {
       this.restoredContinuityPending = false;
       this.cancelRetryTimers();
       this.clearLightingDeliveryAttempts();
+      const pendingOnTargets = new Set(
+        this.ledger.records
+          .filter(
+            (command) =>
+              command.status === 'pending' && command.desired.power === true,
+          )
+          .map((command) => command.target),
+      );
       const currentSceneIntent = this.intentByRevision.get(
         this.state.lighting.sceneRevision,
       );
@@ -890,7 +910,12 @@ export class LugnEngine {
       await Promise.all(
         Object.entries(this.state.lighting.devices).map(
           async ([target, device]) => {
-            if (device.observed.power === false && !prelightWasActive) return;
+            if (
+              device.observed.power === false &&
+              !prelightWasActive &&
+              !pendingOnTargets.has(target)
+            )
+              return;
             await this.dispatch(
               target,
               { power: false },
@@ -964,6 +989,8 @@ export class LugnEngine {
         this.publish(['diagnostics']);
         return;
       }
+      if (lastConfirmedBeforeEvent !== 'occupied')
+        this.startConvergenceAttempt(this.state.lighting.sceneRevision);
       const defaultScene = this.defaultSceneOnOccupancy;
       if (defaultScene) {
         this.defaultSceneOnOccupancy = undefined;
@@ -1018,16 +1045,18 @@ export class LugnEngine {
       normalized === 'home' &&
       previous === 'away' &&
       this.state.presence.state === 'occupied' &&
-      this.defaultSceneOnOccupancy &&
       !this.isLightingQuietHours()
     ) {
       const defaultScene = this.defaultSceneOnOccupancy;
-      this.defaultSceneOnOccupancy = undefined;
-      this.beginScene(defaultScene, {
-        actor: systemActor,
-        source: 'presence',
-        reason: 'Configured default scene activated after returning home',
-      });
+      if (defaultScene) {
+        this.defaultSceneOnOccupancy = undefined;
+        this.beginScene(defaultScene, {
+          actor: systemActor,
+          source: 'presence',
+          reason: 'Configured default scene activated after returning home',
+        });
+      }
+      this.startConvergenceAttempt(this.state.lighting.sceneRevision);
       await this.reconcileScene(this.state.lighting.sceneRevision);
     }
   }
@@ -1139,6 +1168,16 @@ export class LugnEngine {
     this.tryCompletePrelightFastPath(eventId);
   }
 
+  private startConvergenceAttempt(revision: number): void {
+    this.convergenceStartedAt.set(revision, this.clock.now());
+    for (const [target, device] of Object.entries(
+      this.state.lighting.devices,
+    )) {
+      this.clearLightingDeliveryAttempts(target);
+      if (device.availability === 'degraded') device.availability = 'available';
+    }
+  }
+
   async reconcileScene(
     revision = this.state.lighting.sceneRevision,
     eventId?: string,
@@ -1148,6 +1187,9 @@ export class LugnEngine {
       (this.state.presence.home.state === 'away' &&
         this.intentByRevision.get(revision)?.source === 'presence') ||
       (this.state.presence.state === 'confirmed_empty' &&
+        !this.sceneIntentCanRunWhileEmpty(revision)) ||
+      (this.state.presence.state === 'unknown' &&
+        this.lastConfirmedPresence === 'confirmed_empty' &&
         !this.sceneIntentCanRunWhileEmpty(revision))
     )
       return;
@@ -1175,6 +1217,8 @@ export class LugnEngine {
       const forceOffTargets = this.forceOffTargetsByRevision.get(revision);
       const forceOff = forceOffTargets?.has(target) === true;
       for (const property of LightingProperties) {
+        if (device.effectiveDesired.power === false && property !== 'power')
+          continue;
         const value = device.effectiveDesired[property];
         if (
           value === undefined ||
@@ -1240,10 +1284,14 @@ export class LugnEngine {
     if (dispatches.length > 0) await Promise.all(dispatches);
     const converged = Object.values(this.state.lighting.devices).every(
       (device) =>
-        LightingProperties.every((property) => {
-          const desired = device.effectiveDesired[property];
-          return desired === undefined || desired === device.observed[property];
-        }),
+        device.effectiveDesired.power === false
+          ? device.observed.power === false
+          : LightingProperties.every((property) => {
+              const desired = device.effectiveDesired[property];
+              return (
+                desired === undefined || desired === device.observed[property]
+              );
+            }),
     );
     if (converged) {
       this.clearRetryTimer(revision);
@@ -1628,6 +1676,7 @@ export class LugnEngine {
       ? this.fastPathEventByCommand.get(observation.commandId)
       : undefined;
     let effectiveIntentChanged = false;
+    let attributedStaleCommand = false;
     for (const property of LightingProperties) {
       const value = observation.values[property];
       if (value === undefined) continue;
@@ -1640,6 +1689,13 @@ export class LugnEngine {
         feedbackTime,
         observation.commandId,
       );
+      if (
+        command &&
+        command.id !== this.latestCommandId(observation.target) &&
+        command.status !== 'pending' &&
+        command.status !== 'confirmed'
+      )
+        attributedStaleCommand = true;
       if (command && !fastPathEventId)
         fastPathEventId = this.fastPathEventByCommand.get(command.id);
       if (
@@ -1710,8 +1766,9 @@ export class LugnEngine {
       }
     }
     const currentIntentConfirmed =
-      this.state.presence.state === 'confirmed_empty' &&
-      !this.sceneIntentCanRunWhileEmpty(this.state.lighting.sceneRevision)
+      (this.state.presence.state === 'confirmed_empty' &&
+        !this.sceneIntentCanRunWhileEmpty(this.state.lighting.sceneRevision)) ||
+      device.effectiveDesired.power === false
         ? device.observed.power === false
         : LightingProperties.every((property) => {
             const desired = device.effectiveDesired[property];
@@ -1732,8 +1789,9 @@ export class LugnEngine {
     }
     this.tryCompleteConfirmedEmptyFastPath();
     const isStaleCommand =
-      observation.commandId !== undefined &&
-      observation.commandId !== this.latestCommandId(observation.target);
+      attributedStaleCommand ||
+      (observation.commandId !== undefined &&
+        observation.commandId !== this.latestCommandId(observation.target));
     if (isStaleCommand)
       this.addDiagnostic(
         'command.stale_feedback',
@@ -1743,6 +1801,10 @@ export class LugnEngine {
     this.publish(['lighting', 'commands', 'diagnostics', 'timings']);
     if (
       this.state.presence.state !== 'confirmed_empty' &&
+      !(
+        this.state.presence.state === 'unknown' &&
+        this.lastConfirmedPresence === 'confirmed_empty'
+      ) &&
       !this.restoredIntentAwaitingOccupancy
     ) {
       void this.reconcileScene(
@@ -1750,7 +1812,9 @@ export class LugnEngine {
         fastPathEventId,
       );
     } else if (
-      this.state.presence.state === 'confirmed_empty' &&
+      (this.state.presence.state === 'confirmed_empty' ||
+        (this.state.presence.state === 'unknown' &&
+          this.lastConfirmedPresence === 'confirmed_empty')) &&
       isStaleCommand &&
       observation.values.power === true
     ) {
@@ -1876,6 +1940,7 @@ export class LugnEngine {
       return Object.entries(expected).every(([target, values]) => {
         const observed = this.state.lighting.devices[target]?.observed;
         if (!observed) return false;
+        if (values.power === false) return observed.power === false;
         return LightingProperties.every((property) => {
           const value = values[property];
           return value === undefined || observed[property] === value;
