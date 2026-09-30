@@ -71,6 +71,7 @@ function automationSetup(startAt = 0, feedbackTimeoutMs = 100) {
 function automationInternals(automation: MusicAutomation) {
   return automation as unknown as {
     resumeUntil: Map<string, number>;
+    manuallyPaused: Set<string>;
   };
 }
 
@@ -504,6 +505,68 @@ describe('semantic music control', () => {
       { property: 'playback', value: 'playing' },
       { property: 'playback', value: 'paused' },
     ]);
+    automation.dispose();
+    controller.dispose();
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it('attributes an old pause that arrives after a newer resume request', async () => {
+    const { clock, adapter, controller, automation } = automationSetup(0, 100);
+    adapter.observe('music.room', { ...values, playback: 'playing' });
+    automation.handlePresence('unknown', 'occupied', 1);
+    await flushMicrotasks();
+
+    automation.handlePresence('occupied', 'confirmed_empty', 0);
+    await flushMicrotasks();
+    const oldPause = controller.state.commands.at(-1);
+    expect(oldPause?.requested).toEqual({
+      property: 'playback',
+      value: 'paused',
+    });
+    const pauseIssuedAt = oldPause?.issuedAt ?? clock.now();
+    clock.advanceBy(101);
+    expect(oldPause?.status).toBe('unconfirmed');
+
+    automation.handlePresence('confirmed_empty', 'occupied', 1);
+    await flushMicrotasks();
+    const resume = controller.state.commands.at(-1);
+    expect(resume?.requested).toEqual({
+      property: 'playback',
+      value: 'playing',
+    });
+
+    // HA's timestamp puts this paused report after PAUSE but before PLAY,
+    // even though the report arrives after PLAY was issued.
+    adapter.observe(
+      'music.room',
+      { ...values, playback: 'paused' },
+      true,
+      undefined,
+      pauseIssuedAt + 50,
+    );
+
+    expect(
+      controller.state.commands.find((command) => command.id === resume?.id)
+        ?.status,
+    ).toBe('pending');
+    expect(controller.getState('music.room').requested.playback).toBe(
+      'playing',
+    );
+    expect(
+      automationInternals(automation).manuallyPaused.has('music.room'),
+    ).toBe(false);
+
+    adapter.observe(
+      'music.room',
+      { ...values, playback: 'playing' },
+      true,
+      resume?.id,
+      clock.now(),
+    );
+    expect(
+      controller.state.commands.find((command) => command.id === resume?.id)
+        ?.status,
+    ).toBe('confirmed');
     automation.dispose();
     controller.dispose();
     expect(clock.pendingTimers()).toBe(0);

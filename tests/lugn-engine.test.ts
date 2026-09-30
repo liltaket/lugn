@@ -58,6 +58,133 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
+  it('blocks empty-room brightness and color changes except for manually enabled lights', async () => {
+    const { adapter, engine } = setup({
+      deviceIds: ['lighting.ceiling', 'lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: {
+            'lighting.ceiling': {
+              power: true,
+              brightness: 40,
+              colorTemperature: 2700,
+            },
+            'lighting.desk': {
+              power: true,
+              brightness: 30,
+              colorTemperature: 2700,
+            },
+          },
+        },
+      ],
+    });
+    await engine.activateScene('scene.cozy', user);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'unknown',
+    });
+    const beforeBlockedChanges = adapter.dispatched.length;
+
+    await engine.setLighting(
+      'lighting.desk',
+      { brightness: 60 },
+      { actor: user, source: 'dashboard' },
+    );
+    await engine.setLighting(
+      'lighting.desk',
+      { colorTemperature: 3500 },
+      { actor: user, source: 'dashboard' },
+    );
+    expect(adapter.dispatched).toHaveLength(beforeBlockedChanges);
+
+    await engine.setLighting(
+      'lighting.desk',
+      { power: true },
+      { actor: user, source: 'dashboard' },
+    );
+    const afterManualOn = adapter.dispatched.length;
+    await engine.setLighting(
+      'lighting.desk',
+      { brightness: 65 },
+      { actor: user, source: 'dashboard' },
+    );
+    await engine.setLighting(
+      'lighting.desk',
+      { colorTemperature: 3500 },
+      { actor: user, source: 'dashboard' },
+    );
+
+    expect(adapter.dispatched.slice(afterManualOn)).toEqual([
+      expect.objectContaining({
+        target: 'lighting.desk',
+        values: { brightness: 65 },
+      }),
+      expect.objectContaining({
+        target: 'lighting.desk',
+        values: { colorTemperature: 3500 },
+      }),
+    ]);
+    expect(
+      adapter.dispatched
+        .slice(afterManualOn)
+        .some((command) => command.target === 'lighting.ceiling'),
+    ).toBe(false);
+    expect(adapter.observed.get('lighting.desk')).toMatchObject({
+      power: true,
+      brightness: 65,
+      colorTemperature: 3500,
+    });
+    expect(adapter.observed.get('lighting.ceiling')?.power).toBe(false);
+    engine.dispose();
+  });
+
+  it('keeps scene and confirmed-empty-off retries scheduled together', async () => {
+    const { clock, adapter, engine } = setup({
+      deviceIds: ['lighting.ceiling', 'lighting.desk'],
+      retryDelayMs: 100,
+      scenes: [
+        {
+          id: 'scene.off',
+          name: 'Off',
+          lighting: {
+            'lighting.ceiling': { power: false },
+            'lighting.desk': { power: false },
+          },
+        },
+      ],
+    });
+    await engine.activateScene('scene.off', user);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    await engine.setLighting(
+      'lighting.desk',
+      { power: true },
+      { actor: user, source: 'dashboard' },
+    );
+    adapter.ignoreNextForTargets.add('lighting.ceiling');
+    adapter.externalChange('lighting.ceiling', { power: true });
+    await flushMicrotasks();
+
+    clock.advanceBy(100);
+    await flushMicrotasks();
+
+    expect(adapter.observed.get('lighting.desk')?.power).toBe(true);
+    expect(adapter.observed.get('lighting.ceiling')?.power).toBe(false);
+    engine.dispose();
+  });
+
   it('retries an explicit empty-room light-on after the device recovers', async () => {
     const { adapter, engine } = setup({ deviceIds: ['lighting.desk'] });
     await engine.handlePresence({

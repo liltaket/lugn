@@ -115,7 +115,7 @@ type IntentProvenance = {
 type LightingRetryMode = 'scene' | 'confirmed_empty_off';
 type ScheduledRetry = {
   handle: TimerHandle;
-  mode: LightingRetryMode;
+  modes: Set<LightingRetryMode>;
   fastPathEventId?: string;
 };
 
@@ -755,14 +755,17 @@ export class LugnEngine {
     const scene = this.state.lighting.currentScene
       ? this.scenes.get(this.state.lighting.currentScene)
       : undefined;
+    const physicallyEmpty = this.shouldRemainPhysicallyEmpty();
     const synchronizedTemperatureTargets =
       values.colorTemperature === undefined
         ? []
         : Object.entries(scene?.lighting ?? {})
             .filter(
-              ([, sceneValues]) =>
+              ([sceneTarget, sceneValues]) =>
                 sceneValues.power !== false &&
-                sceneValues.colorTemperature !== undefined,
+                sceneValues.colorTemperature !== undefined &&
+                (!physicallyEmpty ||
+                  this.manualLightingWhileEmpty.has(sceneTarget)),
             )
             .map(([sceneTarget]) => sceneTarget);
     const targets = synchronizedTemperatureTargets.includes(target)
@@ -845,9 +848,12 @@ export class LugnEngine {
     this.publish(['lighting', 'commands', 'diagnostics']);
     await Promise.all(
       [...updates].map(([lightingTarget, targetValues]) =>
-        this.state.presence.state !== 'confirmed_empty' ||
+        !this.shouldRemainPhysicallyEmpty() ||
         targetValues.power === false ||
-        (provenance.actor.type === 'user' && targetValues.power === true)
+        (provenance.actor.type === 'user' &&
+          (targetValues.power === true ||
+            (targetValues.power === undefined &&
+              this.manualLightingWhileEmpty.has(lightingTarget))))
           ? this.dispatch(
               lightingTarget,
               targetValues,
@@ -2247,7 +2253,7 @@ export class LugnEngine {
       if (retry.fastPathEventId === eventId)
         this.retryTimers.set(revision, {
           handle: retry.handle,
-          mode: retry.mode,
+          modes: retry.modes,
         });
     }
   }
@@ -2451,27 +2457,36 @@ export class LugnEngine {
     fastPathEventId?: string,
     mode: LightingRetryMode = 'scene',
   ): void {
-    this.clearRetryTimer(revision);
+    const key = String(revision);
+    const existing = this.retryTimers.get(key);
+    if (existing !== undefined) this.clock.clearTimeout(existing.handle);
+    const modes = new Set(existing?.modes ?? []);
+    modes.add(mode);
+    const scheduledEventId = fastPathEventId ?? existing?.fastPathEventId;
     const handle = this.clock.setTimeout(() => {
-      const key = String(revision);
       const retry = this.retryTimers.get(key);
       if (!retry || retry.handle !== handle) return;
       this.retryTimers.delete(key);
-      const fastPathEventId =
+      const activeEventId =
         retry.fastPathEventId &&
         this.fastPathMonotonicOrigins.has(retry.fastPathEventId)
           ? retry.fastPathEventId
           : undefined;
-      void this.runScheduledLightingRetry(
-        revision,
-        retry.mode,
-        fastPathEventId,
-      );
+      void (async () => {
+        for (const retryMode of retry.modes)
+          await this.runScheduledLightingRetry(
+            revision,
+            retryMode,
+            activeEventId,
+          );
+      })();
     }, delayMs);
-    this.retryTimers.set(String(revision), {
+    this.retryTimers.set(key, {
       handle,
-      mode,
-      ...(fastPathEventId === undefined ? {} : { fastPathEventId }),
+      modes,
+      ...(scheduledEventId === undefined
+        ? {}
+        : { fastPathEventId: scheduledEventId }),
     });
   }
 

@@ -213,6 +213,7 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
       target,
       available,
       observedAt: this.clock.now(),
+      ...(lastUpdated === undefined ? {} : { sourceUpdatedAt: lastUpdated }),
       values: {
         playback,
         volume:

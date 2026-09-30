@@ -645,6 +645,8 @@ export class MusicController {
     const previousPlayback = device.observed.playback;
     const observedVolume = observation.values.volume;
     const observedPlayback = observation.values.playback;
+    const latePausePredatesNewerIntent =
+      this.attributeLatePauseBeforeNewerIntent(observation, observedPlayback);
     const externalVolumeChange =
       observation.available &&
       previousVolume !== null &&
@@ -656,6 +658,7 @@ export class MusicController {
       previousPlayback !== 'unknown' &&
       observedPlayback !== 'unknown' &&
       observedPlayback !== previousPlayback &&
+      !latePausePredatesNewerIntent &&
       !this.matchesRecentPendingPlaybackCommand(observation, observedPlayback);
     device.observed = structuredClone(observation.values);
     device.observedAt = observation.observedAt;
@@ -713,6 +716,7 @@ export class MusicController {
       delete device.requested.playback;
       this.onExternalPlaybackChange?.(observation.target, observedPlayback);
     } else if (
+      !latePausePredatesNewerIntent &&
       device.requested.playback !== undefined &&
       observedPlayback !== device.requested.playback &&
       this.state.commands.some(
@@ -760,6 +764,48 @@ export class MusicController {
         Math.abs(observedVolume - command.requested.value) <=
           0.005 + Number.EPSILON,
     );
+  }
+  private attributeLatePauseBeforeNewerIntent(
+    observation: MusicObservation,
+    observedPlayback: MusicObservation['values']['playback'],
+  ): boolean {
+    const sourceUpdatedAt = observation.sourceUpdatedAt;
+    if (
+      observedPlayback !== 'paused' ||
+      sourceUpdatedAt === undefined ||
+      !Number.isFinite(sourceUpdatedAt)
+    )
+      return false;
+    const pause = [...this.state.commands]
+      .reverse()
+      .find(
+        (command) =>
+          command.target === observation.target &&
+          command.requested.property === 'playback' &&
+          command.requested.value === 'paused' &&
+          command.status === 'unconfirmed' &&
+          command.acceptedAt !== undefined &&
+          sourceUpdatedAt >= command.issuedAt &&
+          this.clock.now() - command.issuedAt < LATE_PAUSE_ATTRIBUTION_MS,
+      );
+    if (!pause) return false;
+    const newerIntent = this.state.commands
+      .slice(this.state.commands.indexOf(pause) + 1)
+      .find(
+        (command) =>
+          command.target === observation.target &&
+          (command.requested.property === 'playback' ||
+            command.requested.property === 'preset') &&
+          sourceUpdatedAt <= command.issuedAt,
+      );
+    if (!newerIntent) return false;
+    pause.status = 'confirmed';
+    pause.confirmedAt = sourceUpdatedAt;
+    pause.diagnosticReason =
+      'Paused state timestamp predates a newer playback request';
+    this.releaseTracking(pause.id);
+    this.clearRequestedIfSettled(pause);
+    return true;
   }
   private matchesRecentPendingPlaybackCommand(
     observation: MusicObservation,
