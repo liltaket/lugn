@@ -127,6 +127,14 @@ acceptance is separate from observed state:
   state does not expose the selected WiiM preset;
 - a successful HA response does not prove that sound is physically audible.
 
+Home Assistant's REST service response does not give this adapter a causal
+command context to match later media-player feedback exactly. An accepted
+pause that times out remains eligible for matching paused feedback for up to
+30 seconds, so delayed room-empty feedback does not look like a manual pause.
+Within that bounded window, a separate external pause to the same state can be
+indistinguishable; exact attribution requires a correlated Home Assistant
+WebSocket service context.
+
 Each target must map to a distinct `media_player.*` entity. Preset IDs default
 to Spotify DJ `1` and Optical `4`; exact source names are allowlisted per
 target. The adapter uses fixed `media_player` services and does not accept an

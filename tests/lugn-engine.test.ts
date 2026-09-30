@@ -20,6 +20,100 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('Lugn deterministic lighting slice', () => {
+  it('allows explicit user light-on while confirmed empty without treating it as occupancy', async () => {
+    const { adapter, engine } = setup({
+      deviceIds: ['lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: { 'lighting.desk': { power: true, brightness: 24 } },
+        },
+      ],
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    const before = adapter.dispatched.length;
+
+    await engine.setLighting(
+      'lighting.desk',
+      { power: true },
+      {
+        actor: user,
+        source: 'dashboard',
+        reason: 'Manual dashboard on',
+      },
+    );
+
+    expect(adapter.dispatched.slice(before)).toEqual([
+      expect.objectContaining({
+        target: 'lighting.desk',
+        values: { power: true },
+      }),
+    ]);
+    expect(engine.state.presence.state).toBe('confirmed_empty');
+    engine.dispose();
+  });
+
+  it('retries an explicit empty-room light-on after the device recovers', async () => {
+    const { adapter, engine } = setup({ deviceIds: ['lighting.desk'] });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    adapter.setAvailable(false);
+
+    await engine.setLighting(
+      'lighting.desk',
+      { power: true },
+      { actor: user, source: 'dashboard' },
+    );
+    expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
+      'unavailable',
+    );
+
+    adapter.setAvailable(true);
+    adapter.externalChange('lighting.desk', { power: false });
+    await flushMicrotasks();
+
+    expect(adapter.observed.get('lighting.desk')?.power).toBe(true);
+    expect(engine.state.presence.state).toBe('confirmed_empty');
+    engine.dispose();
+  });
+
+  it('clears the empty-room manual-on exception when a new scene replaces it', async () => {
+    const { adapter, engine } = setup({
+      deviceIds: ['lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.all_off',
+          name: 'All off',
+          lighting: { 'lighting.desk': { power: false } },
+        },
+      ],
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    await engine.setLighting(
+      'lighting.desk',
+      { power: true },
+      { actor: user, source: 'dashboard' },
+    );
+    expect(adapter.observed.get('lighting.desk')?.power).toBe(true);
+
+    await engine.activateScene('scene.all_off', user);
+
+    expect(adapter.observed.get('lighting.desk')?.power).toBe(false);
+    engine.dispose();
+  });
+
   it('uses the selected scene as the prelight target and leaves excluded lights off', async () => {
     const { adapter, engine } = setup({
       deviceIds: ['lighting.ceiling', 'lighting.desk'],
@@ -889,6 +983,128 @@ describe('Lugn deterministic lighting slice', () => {
     expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
       'available',
     );
+    engine.dispose();
+  });
+
+  it('keeps another light degraded when only one light recovers', async () => {
+    const { clock, adapter, engine } = setup({
+      deviceIds: ['lighting.ceiling', 'lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: {
+            'lighting.ceiling': { power: true },
+            'lighting.desk': { power: true },
+          },
+        },
+      ],
+      retryDelayMs: 250,
+      convergenceTimeoutMs: 1_000,
+    });
+    adapter.setAvailable(false);
+    await engine.activateScene('scene.cozy', user);
+    for (let elapsed = 0; elapsed < 1_000; elapsed += 250) {
+      clock.advanceBy(250);
+      await flushMicrotasks();
+    }
+    expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
+      'degraded',
+    );
+
+    adapter.setAvailable(true);
+    adapter.externalChange('lighting.ceiling', { power: false });
+    await flushMicrotasks();
+
+    expect(
+      engine.state.lighting.devices['lighting.ceiling']?.availability,
+    ).toBe('available');
+    expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
+      'degraded',
+    );
+    engine.dispose();
+  });
+
+  it('retries a degraded light when a new scene revision is selected', async () => {
+    const { clock, adapter, engine } = setup({
+      deviceIds: ['lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: { 'lighting.desk': { power: true, brightness: 30 } },
+        },
+        {
+          id: 'scene.focus',
+          name: 'Focus',
+          lighting: { 'lighting.desk': { power: true, brightness: 80 } },
+        },
+      ],
+      retryDelayMs: 250,
+      convergenceTimeoutMs: 1_000,
+    });
+    adapter.setAvailable(false);
+    await engine.activateScene('scene.cozy', user);
+    for (let elapsed = 0; elapsed < 1_000; elapsed += 250) {
+      clock.advanceBy(250);
+      await flushMicrotasks();
+    }
+    expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
+      'degraded',
+    );
+
+    adapter.setAvailable(true);
+    const before = adapter.dispatched.length;
+    await engine.activateScene('scene.focus', user);
+
+    expect(adapter.dispatched.length).toBeGreaterThan(before);
+    expect(adapter.observed.get('lighting.desk')).toMatchObject({
+      power: true,
+      brightness: 80,
+    });
+    expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
+      'available',
+    );
+    engine.dispose();
+  });
+
+  it('restarts only the explicitly adjusted degraded light', async () => {
+    const { clock, adapter, engine } = setup({
+      deviceIds: ['lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: { 'lighting.desk': { power: true, brightness: 30 } },
+        },
+      ],
+      retryDelayMs: 250,
+      convergenceTimeoutMs: 1_000,
+    });
+    adapter.setAvailable(false);
+    await engine.activateScene('scene.cozy', user);
+    for (let elapsed = 0; elapsed < 1_000; elapsed += 250) {
+      clock.advanceBy(250);
+      await flushMicrotasks();
+    }
+    expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
+      'degraded',
+    );
+
+    adapter.setAvailable(true);
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    await engine.setLighting(
+      'lighting.desk',
+      { brightness: 50 },
+      { actor: user, source: 'dashboard' },
+    );
+    expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
+      'available',
+    );
+    clock.advanceBy(250);
+    await flushMicrotasks();
+
+    expect(adapter.observed.get('lighting.desk')?.brightness).toBe(50);
     engine.dispose();
   });
 

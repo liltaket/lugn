@@ -463,6 +463,52 @@ describe('semantic music control', () => {
     expect(clock.pendingTimers()).toBe(0);
   });
 
+  it('does not mistake a late confirmed Lugn pause for a manual pause', async () => {
+    const { clock, adapter, controller, automation } = automationSetup(0, 100);
+    adapter.observe('music.room', { ...values, playback: 'playing' });
+    automation.handlePresence('unknown', 'occupied', 1);
+    await flushMicrotasks();
+
+    automation.handlePresence('occupied', 'confirmed_empty', 0);
+    await flushMicrotasks();
+    expect(adapter.dispatched).toHaveLength(1);
+    clock.advanceBy(101);
+    expect(controller.state.commands.at(-1)?.status).toBe('unconfirmed');
+
+    // HA feedback arrives late, after Lugn has already cleared requested state.
+    adapter.observe('music.room', { ...values, playback: 'paused' });
+    automation.handlePresence('confirmed_empty', 'occupied', 1);
+    await flushMicrotasks();
+
+    expect(adapter.dispatched.map(({ requested }) => requested)).toEqual([
+      { property: 'playback', value: 'paused' },
+      { property: 'playback', value: 'playing' },
+    ]);
+
+    adapter.observe(
+      'music.room',
+      { ...values, playback: 'playing' },
+      true,
+      adapter.dispatched.at(-1)?.id,
+    );
+    adapter.observe('music.room', { ...values, playback: 'paused' });
+    automation.handlePresence('occupied', 'confirmed_empty', 0);
+    await flushMicrotasks();
+    automation.handlePresence('confirmed_empty', 'occupied', 1);
+    await flushMicrotasks();
+
+    // The old late-pause attribution was consumed; this distinct manual pause
+    // must still block automatic playback on the next entry.
+    expect(adapter.dispatched.map(({ requested }) => requested)).toEqual([
+      { property: 'playback', value: 'paused' },
+      { property: 'playback', value: 'playing' },
+      { property: 'playback', value: 'paused' },
+    ]);
+    automation.dispose();
+    controller.dispose();
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
   it('does not renew the music resume window across confirmed-empty, unknown, confirmed-empty', async () => {
     const startAt = Date.parse('2026-09-30T12:00:00+02:00');
     const { clock, adapter, controller, automation } = automationSetup(startAt);

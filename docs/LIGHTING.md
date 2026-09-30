@@ -101,7 +101,9 @@ When a scene is explicitly selected:
 - default convergence window is 60 seconds, with a 2-second retry interval;
 - surface devices that still fail as degraded/unreachable.
 
-A later device recovery can trigger convergence toward the current effective desired state.
+A later device recovery starts a fresh bounded convergence attempt for that
+device only. It must not clear another light's retry count or degraded status;
+a new scene or confirmed room entry starts a fresh room-wide attempt.
 
 Home Assistant `unknown` and `unavailable` light states invalidate the last
 observed values and mark the device unavailable. A later valid state restores
@@ -147,6 +149,12 @@ A change may come from:
 - a direct device interaction
 
 If Lugn observes the resulting state and it cannot be attributed to a pending Lugn command, it can become an override.
+
+An explicit user `power: true` command from the dashboard is allowed even while
+presence is `confirmed_empty`. That light stays on until the user turns it off
+or a new confirmed occupancy cycle begins. This exception does not infer room
+occupancy and does not allow automatic presence-driven scenes to turn lights on
+in an empty room. Brightness or color adjustments alone never turn a light on.
 
 ## Leaving the room
 

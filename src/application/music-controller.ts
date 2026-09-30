@@ -25,6 +25,10 @@ const MUSIC_FADE_STEP_SIZE = 0.02;
 const MUSIC_FADE_MIN_STEP_INTERVAL_MS = 250;
 const MUSIC_FADE_SETTLING_MS = 2_000;
 const MUSIC_FADE_MAX_EXTENSION_MS = 30_000;
+// HA can report a service-driven playback transition after its command has
+// already timed out. Retain a short attribution window for accepted pauses;
+// HA REST does not expose a causal command context for exact correlation.
+const LATE_PAUSE_ATTRIBUTION_MS = 30_000;
 
 export type MusicOptions = {
   targets?: Record<string, string[]>;
@@ -761,15 +765,51 @@ export class MusicController {
     observation: MusicObservation,
     observedPlayback: MusicObservation['values']['playback'],
   ): boolean {
-    return this.state.commands.some(
-      (command) =>
-        command.target === observation.target &&
-        command.requested.property === 'playback' &&
-        command.status === 'pending' &&
-        observation.observedAt >= command.issuedAt &&
-        this.clock.now() - command.issuedAt < this.timeoutMs &&
-        observedPlayback === command.requested.value,
-    );
+    let commandIndex = -1;
+    for (let index = this.state.commands.length - 1; index >= 0; index -= 1) {
+      const command = this.state.commands[index];
+      if (!command) continue;
+      if (
+        command.target !== observation.target ||
+        command.requested.property !== 'playback' ||
+        observation.observedAt < command.issuedAt ||
+        observedPlayback !== command.requested.value
+      )
+        continue;
+      const age = this.clock.now() - command.issuedAt;
+      const matches =
+        command.status === 'pending'
+          ? age < this.timeoutMs
+          : command.status === 'unconfirmed' &&
+            command.acceptedAt !== undefined &&
+            command.requested.value === 'paused' &&
+            age < LATE_PAUSE_ATTRIBUTION_MS;
+      if (matches) {
+        commandIndex = index;
+        break;
+      }
+    }
+    if (commandIndex < 0) return false;
+    const command = this.state.commands[commandIndex];
+    if (!command) return false;
+    const newerPlaybackIntent = this.state.commands
+      .slice(commandIndex + 1)
+      .some(
+        (candidate) =>
+          candidate.target === observation.target &&
+          (candidate.requested.property === 'playback' ||
+            candidate.requested.property === 'preset'),
+      );
+    if (newerPlaybackIntent) return false;
+    if (command.status === 'unconfirmed') {
+      command.status = 'confirmed';
+      command.confirmedAt = observation.observedAt;
+      command.diagnosticReason =
+        'Late Home Assistant pause feedback matched the latest accepted playback intent';
+      this.releaseTracking(command.id);
+      this.clearRequestedIfSettled(command);
+    }
+    return true;
   }
   private confirm(
     command: MusicCommandRecord,

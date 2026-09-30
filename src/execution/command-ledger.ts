@@ -108,6 +108,20 @@ export class CommandLedger {
     this.pruneTerminalRecords();
   }
 
+  cancelTargetRevision(revision: number, target: string, reason: string): void {
+    for (const command of this.records) {
+      if (
+        command.revision === revision &&
+        command.target === target &&
+        command.status === 'pending'
+      ) {
+        command.status = 'cancelled';
+        command.diagnosticReason = reason;
+      }
+    }
+    this.pruneTerminalRecords();
+  }
+
   cancel(commandId: string, reason: string): boolean {
     const command = this.records.find(
       (candidate) => candidate.id === commandId,
