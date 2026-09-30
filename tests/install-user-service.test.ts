@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -75,7 +76,7 @@ function escapePath(path: string, forExec = false): string {
         '"': '\\x22',
         "'": '\\x27',
         '%': '%%',
-        '$': forExec ? '$$' : '$',
+        $: forExec ? '$$' : '$',
       };
       return controls[character] ?? character;
     })
@@ -94,11 +95,12 @@ describe('systemd user-service installer', () => {
     const unit = readFileSync(unitFile, 'utf8');
     const config = join(home, '.config', 'lugn', 'config.json');
     const environment = join(home, '.config', 'lugn', 'lugn.env');
+    const canonicalRepo = realpathSync(repo);
 
-    expect(unit).toContain(`WorkingDirectory=${escapePath(repo)}`);
+    expect(unit).toContain(`WorkingDirectory=${escapePath(canonicalRepo)}`);
     expect(unit).toContain(`EnvironmentFile=${escapePath(environment)}`);
     expect(unit).toContain(
-      `ExecStart=${escapePath(join(bin, 'node'), true)} ${escapePath(join(repo, 'dist/runtime/main.js'), true)} ${escapePath(config, true)}`,
+      `ExecStart=:${escapePath(join(bin, 'node'), true)} ${escapePath(join(canonicalRepo, 'dist/runtime/main.js'), true)} ${escapePath(config, true)}`,
     );
     expect(unit).not.toContain('WorkingDirectory="/');
     expect(unit).not.toContain('EnvironmentFile="/');
@@ -109,11 +111,11 @@ describe('systemd user-service installer', () => {
     const { unitFile } = makeInstallFixture();
     if (!existsSync('/usr/bin/systemd-analyze')) return;
 
-    const result = spawnSync('/usr/bin/systemd-analyze', [
-      '--user',
-      'verify',
-      unitFile,
-    ], { encoding: 'utf8' });
+    const result = spawnSync(
+      '/usr/bin/systemd-analyze',
+      ['--user', 'verify', unitFile],
+      { encoding: 'utf8' },
+    );
     expect(result.status, result.stderr).toBe(0);
   });
 });

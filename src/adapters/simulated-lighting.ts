@@ -4,6 +4,7 @@ import type { Actor, LightingValues } from '../core/schemas.js';
 export type LightingObservation = {
   target: string;
   values: LightingValues;
+  availability?: 'available' | 'unavailable';
   commandId?: string;
   observedAt: number;
   provenance?: { actor: Actor; source?: string };

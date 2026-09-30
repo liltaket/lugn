@@ -226,7 +226,6 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
     const newState = data.new_state;
     if (!target || !newState || newState.entity_id !== data.entity_id)
       return false;
-    if (newState.state !== 'on' && newState.state !== 'off') return false;
 
     const lastUpdated = newState.last_updated
       ? Date.parse(newState.last_updated)
@@ -240,6 +239,22 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
       return true;
     if (Number.isFinite(lastUpdated))
       this.lastUpdatedByTarget.set(target, lastUpdated);
+
+    if (newState.state !== 'on' && newState.state !== 'off') {
+      if (newState.state !== 'unknown' && newState.state !== 'unavailable')
+        return false;
+      this.emit({
+        target,
+        values: {},
+        availability: 'unavailable',
+        observedAt: this.clock.now(),
+        provenance: {
+          actor: { type: 'home_assistant' },
+          source: 'home_assistant.state_changed',
+        },
+      });
+      return true;
+    }
 
     const values = this.normalizeValues(newState.state, newState.attributes);
     this.emit({

@@ -294,7 +294,9 @@ describe('composed runtime integration', () => {
     });
 
     try {
-      expect(runtime.engine.state.lighting.currentScene).toBe('scene.everyday');
+      expect(runtime.engine.state.lighting.currentScene).toBe(
+        'scene.everyday_light',
+      );
       expect(
         requests.filter(({ url }) => url.includes('/api/services/')),
       ).toEqual([]);
@@ -390,7 +392,9 @@ describe('composed runtime integration', () => {
     });
 
     try {
-      expect(runtime.engine.state.lighting.currentScene).toBe('scene.everyday');
+      expect(runtime.engine.state.lighting.currentScene).toBe(
+        'scene.everyday_light',
+      );
       expect(runtime.engine.state.presence.state).toBe('unknown');
       expect(runtime.engine.state.commands).toEqual([]);
       expect(serviceCalls).toEqual([]);
@@ -409,6 +413,113 @@ describe('composed runtime integration', () => {
         'http://home-assistant.invalid:8123/api/services/light/turn_on',
       ]);
       expect(runtime.engine.state.commands).toHaveLength(1);
+    } finally {
+      await runtime.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an expired persisted sleep scene from lighting during HA state seeding', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'lugn-runtime-'));
+    const port = await findEphemeralLoopbackPort();
+    vi.stubEnv('LUGN_TEST_HA_TOKEN', 'test-ha-token');
+    const configPath = join(directory, 'runtime.json');
+    const statePath = join(directory, 'state', 'lighting-intent.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        http: { host: '127.0.0.1', port },
+        homeAssistant: {
+          baseUrl: 'http://home-assistant.invalid:8123',
+          tokenEnv: 'LUGN_TEST_HA_TOKEN',
+          entities: { 'lighting.entry': 'light.entry' },
+        },
+        scenes: [
+          {
+            id: 'scene.default',
+            name: 'Default',
+            lighting: { 'lighting.entry': { power: true, brightness: 50 } },
+          },
+          {
+            id: 'scene.sleep',
+            name: 'Sleep',
+            lighting: { 'lighting.entry': { power: true, brightness: 2 } },
+          },
+        ],
+        defaultSceneId: 'scene.default',
+      }),
+      'utf8',
+    );
+    await mkdir(join(directory, 'state'), { recursive: true });
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        snapshot: {
+          currentScene: 'scene.sleep',
+          sceneRevision: 4,
+          continuityExpiresAt: Date.now() - 60_000,
+          devices: {
+            'lighting.entry': {
+              baselineDesired: { power: true, brightness: 2 },
+              effectiveDesired: { power: true, brightness: 17 },
+              ownership: {
+                power: { kind: 'scene', revision: 4 },
+                brightness: {
+                  kind: 'override',
+                  actor: { type: 'user', id: 'test-user' },
+                  reason: 'temporary',
+                  createdAt: Date.now() - 120_000,
+                },
+              },
+            },
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    const serviceCalls: Array<{ url: string; body: string | undefined }> = [];
+    const runtime = await startRuntime(configPath, {
+      homeAssistantFetch: async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/api/states'))
+          return Response.json([
+            { entity_id: 'light.entry', state: 'off', attributes: {} },
+          ]);
+        serviceCalls.push({ url, body: init?.body?.toString() });
+        return new Response(null, { status: 200 });
+      },
+      createHomeAssistantSocket: () => new InertHomeAssistantSocket(),
+      lightingIntentPath: statePath,
+    });
+
+    try {
+      expect(runtime.engine.state.presence.state).toBe('unknown');
+      expect(runtime.engine.state.lighting.currentScene).toBe('scene.sleep');
+      expect(
+        runtime.engine.state.lighting.devices['lighting.entry']
+          ?.effectiveDesired,
+      ).toEqual({ power: true, brightness: 2 });
+      expect(serviceCalls).toEqual([]);
+
+      await runtime.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'unknown',
+      });
+      expect(serviceCalls).toEqual([]);
+
+      await runtime.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+        personCount: 1,
+      });
+      expect(serviceCalls).toEqual([
+        {
+          url: 'http://home-assistant.invalid:8123/api/services/light/turn_on',
+          body: JSON.stringify({ entity_id: 'light.entry', brightness_pct: 2 }),
+        },
+      ]);
     } finally {
       await runtime.stop();
       await rm(directory, { recursive: true, force: true });

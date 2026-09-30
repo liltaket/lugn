@@ -101,4 +101,37 @@ describe('CommandLedger', () => {
     ).toBeUndefined();
     expect(old.status).toBe('superseded');
   });
+
+  it('only exposes a recent superseded match within a short feedback window', () => {
+    const clock = new FakeClock(10);
+    const ledger = new CommandLedger(clock);
+    const old = ledger.issue({ ...input, desired: { brightness: 20 } });
+    clock.advanceBy(30_000);
+    ledger.supersedePending('Superseded by scene revision 4');
+
+    expect(
+      ledger.recentSupersededMatch(
+        input.target,
+        'brightness',
+        20,
+        clock.now() + 2_000,
+      ),
+    ).toBe(old);
+    expect(
+      ledger.recentSupersededMatch(
+        input.target,
+        'brightness',
+        20,
+        clock.now() + 10_001,
+      ),
+    ).toBeUndefined();
+    expect(
+      ledger.recentSupersededMatch(
+        input.target,
+        'brightness',
+        30,
+        clock.now() + 2_000,
+      ),
+    ).toBeUndefined();
+  });
 });

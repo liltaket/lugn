@@ -57,12 +57,12 @@ export class MusicAutomation {
   private personCount: number | null = null;
   private volumeAutomationEnabled = true;
   private disposed = false;
-  private resumeAfterUnknown = false;
+  private lastConfirmedPresence: Presence = 'unknown';
 
   constructor(private readonly options: MusicAutomationOptions) {}
 
   handlePresence(
-    previous: Presence,
+    _previous: Presence,
     presence: Presence,
     personCount: number | null,
   ): void {
@@ -70,32 +70,30 @@ export class MusicAutomation {
     this.presence = presence;
     this.personCount = personCount;
 
-    if (presence === 'confirmed_empty' && previous !== 'confirmed_empty') {
-      this.resumeAfterUnknown = true;
-      for (const target of this.options.targets) {
-        const device = this.options.getState(target);
-        const wasPlaying =
-          device.observed.playback === 'playing' ||
-          device.requested.playback === 'playing';
-        this.resumeUntil.set(
-          target,
-          wasPlaying ? this.options.clock.now() + musicContinuityMs : 0,
-        );
-        this.send(target, { property: 'playback', value: 'paused' }, 'pause');
+    const lastConfirmedBeforeEvent = this.lastConfirmedPresence;
+    if (presence === 'confirmed_empty') {
+      this.lastConfirmedPresence = 'confirmed_empty';
+      if (lastConfirmedBeforeEvent !== 'confirmed_empty') {
+        for (const target of this.options.targets) {
+          const device = this.options.getState(target);
+          const wasPlaying =
+            device.observed.playback === 'playing' ||
+            device.requested.playback === 'playing';
+          this.resumeUntil.set(
+            target,
+            wasPlaying ? this.options.clock.now() + musicContinuityMs : 0,
+          );
+          this.send(target, { property: 'playback', value: 'paused' }, 'pause');
+        }
       }
       this.cancelTimer();
       return;
     }
 
-    if (presence === 'unknown' && previous === 'occupied') {
-      // An occupied -> unknown -> occupied transition is not a room re-entry.
-      this.resumeAfterUnknown = false;
-    }
-
     if (presence === 'occupied') {
-      const returningFromEmpty =
-        previous === 'confirmed_empty' || this.resumeAfterUnknown;
-      this.resumeAfterUnknown = false;
+      this.lastConfirmedPresence = 'occupied';
+      // Unknown samples do not erase the last confirmed room transition.
+      const returningFromEmpty = lastConfirmedBeforeEvent === 'confirmed_empty';
       if (
         this.homePresence !== 'away' &&
         returningFromEmpty &&

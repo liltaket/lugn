@@ -276,6 +276,11 @@ export class LugnEngine {
       expiredRestoredSceneIsExplicitlyOffOrSleep
         ? expiredRestoredScene
         : undefined;
+    const expiredRestoredSceneHasPositiveOutput =
+      expiredRestoredSceneToPreserve !== undefined &&
+      Object.values(expiredRestoredSceneToPreserve.lighting).some(
+        (values) => values.power === true || (values.brightness ?? 0) > 0,
+      );
     if (expiredRestoredSceneToPreserve)
       this.defaultSceneOnOccupancy = undefined;
     const hasRestoredIntent =
@@ -289,7 +294,8 @@ export class LugnEngine {
             Object.keys(device.effectiveDesired).length > 0 ||
             Object.keys(device.ownership).length > 0,
         ));
-    if (hasRestoredIntent) this.restoredIntentAwaitingOccupancy = true;
+    if (hasRestoredIntent || expiredRestoredSceneHasPositiveOutput)
+      this.restoredIntentAwaitingOccupancy = true;
     this.restoredContinuityPending =
       restoredIntent !== undefined &&
       !restoredContinuityExpired &&
@@ -891,7 +897,7 @@ export class LugnEngine {
     const prelightWasActive = this.prelightActive;
     const createsEmptyTiming =
       normalizedEvent.presence === 'confirmed_empty' &&
-      (previous !== 'confirmed_empty' || prelightWasActive);
+      (lastConfirmedBeforeEvent !== 'confirmed_empty' || prelightWasActive);
     if (normalizedEvent.presence === 'confirmed_empty') {
       this.clearPrelight();
       this.quietHoursSuppressedForCurrentVisit = false;
@@ -1326,7 +1332,6 @@ export class LugnEngine {
         );
         continue;
       }
-      if (device.availability === 'unavailable') continue;
       if (forceOffTargets && forceOff) {
         forceOffTargets.delete(target);
         if (forceOffTargets.size === 0)
@@ -1405,9 +1410,7 @@ export class LugnEngine {
       );
       this.scheduleRetry(
         revision,
-        hasUnavailableMismatch && !hasRetryableMismatch
-          ? remaining
-          : Math.min(this.retryDelayMs, remaining),
+        Math.min(this.retryDelayMs, remaining),
         timingEventId,
       );
     } else {
@@ -1761,6 +1764,47 @@ export class LugnEngine {
   private handleObservation(observation: LightingObservation): void {
     const device = this.state.lighting.devices[observation.target];
     if (!device) return;
+    if (observation.availability === 'unavailable') {
+      const changed = device.availability !== 'unavailable';
+      device.availability = 'unavailable';
+      device.observed = {};
+      if (changed)
+        this.addDiagnostic(
+          'device.unavailable',
+          `${observation.target} is unavailable in Home Assistant`,
+          {
+            target: observation.target,
+            source: observation.provenance?.source ?? 'lighting_observation',
+          },
+        );
+      const revision = this.state.lighting.sceneRevision;
+      if (changed && this.shouldRemainPhysicallyEmpty()) {
+        void this.dispatch(
+          observation.target,
+          { power: false },
+          revision,
+          'presence',
+          'Confirmed empty: unavailable light remains physically off',
+          systemActor,
+          undefined,
+          this.confirmedEmptyFastPathEventId,
+          'confirmed_empty_off',
+        );
+      } else if (
+        !this.restoredIntentAwaitingOccupancy &&
+        this.hasUnavailableLightingMismatch(revision)
+      ) {
+        const startedAt =
+          this.convergenceStartedAt.get(revision) ?? this.clock.now();
+        const remaining = Math.max(
+          0,
+          this.convergenceTimeoutMs - (this.clock.now() - startedAt),
+        );
+        this.scheduleRetry(revision, Math.min(this.retryDelayMs, remaining));
+      }
+      this.publish(['lighting', 'commands', 'diagnostics']);
+      return;
+    }
     const recovered = device.availability !== 'available';
     device.availability = 'available';
     if (recovered) {
@@ -1792,6 +1836,18 @@ export class LugnEngine {
         feedbackTime,
         observation.commandId,
       );
+      const supersededCommand =
+        !command &&
+        !observation.commandId &&
+        device.effectiveDesired[property] !== value
+          ? this.ledger.recentSupersededMatch(
+              observation.target,
+              property,
+              value,
+              feedbackTime,
+            )
+          : undefined;
+      if (supersededCommand) attributedStaleCommand = true;
       if (
         command &&
         command.id !== this.latestCommandId(observation.target) &&
@@ -1803,6 +1859,7 @@ export class LugnEngine {
         fastPathEventId = this.fastPathEventByCommand.get(command.id);
       if (
         !command &&
+        !supersededCommand &&
         !(
           property === 'power' &&
           value === true &&
@@ -2441,15 +2498,23 @@ export class LugnEngine {
         !this.sceneIntentCanRunWhileEmpty(revision))
     )
       return false;
-    return Object.values(this.state.lighting.devices).some((device) => {
-      if (device.availability !== 'unavailable') return false;
-      return LightingProperties.some((property) => {
+    for (const [target, device] of Object.entries(
+      this.state.lighting.devices,
+    )) {
+      if (device.availability !== 'unavailable') continue;
+      const hasMismatch = LightingProperties.some((property) => {
         if (device.effectiveDesired.power === false && property !== 'power')
           return false;
         const desired = device.effectiveDesired[property];
         return desired !== undefined && desired !== device.observed[property];
       });
-    });
+      if (!hasMismatch) continue;
+      const key = this.lightingDeliveryKey(revision, target);
+      const attempts = this.lightingDeliveryAttempts.get(key) ?? 0;
+      if (attempts < maxLightingDeliveryAttempts) return true;
+      this.markLightingDeliveryExhausted(key, target, attempts);
+    }
+    return false;
   }
 
   private isCurrentLightingDeliveryIntent(

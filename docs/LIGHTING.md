@@ -94,11 +94,22 @@ When a scene is explicitly selected:
 - dispatch commands immediately;
 - verify observed state;
 - retry devices that have not reached their target;
-- keep retrying with controlled backoff for a configurable convergence window;
-- default convergence window is expected to be around one minute;
+- retry unavailable devices at the normal retry interval instead of waiting
+  until the convergence deadline;
+- stop retries at the convergence deadline or after three total delivery
+  attempts per light and scene revision;
+- default convergence window is 60 seconds, with a 2-second retry interval;
 - surface devices that still fail as degraded/unreachable.
 
 A later device recovery can trigger convergence toward the current effective desired state.
+
+Home Assistant `unknown` and `unavailable` light states invalidate the last
+observed values and mark the device unavailable. A later valid state restores
+availability and starts a fresh convergence attempt. Home Assistant feedback
+does not include Lugn command IDs, so values matching a command superseded in
+the last 10 seconds are treated as delayed feedback while a different current
+scene value is desired; older or unrelated values can still become manual
+overrides.
 
 ## Manual adjustment after scene application
 

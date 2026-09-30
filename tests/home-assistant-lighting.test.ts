@@ -103,7 +103,7 @@ describe('Home Assistant lighting adapter', () => {
   });
 
   it.each(['unknown', 'unavailable'])(
-    'ignores %s states instead of reporting them as off',
+    'reports %s states as unavailable instead of reporting them as off',
     (state) => {
       const { adapter } = setup();
       const observations: unknown[] = [];
@@ -121,8 +121,14 @@ describe('Home Assistant lighting adapter', () => {
         },
       });
 
-      expect(accepted).toBe(false);
-      expect(observations).toEqual([]);
+      expect(accepted).toBe(true);
+      expect(observations).toMatchObject([
+        {
+          target: 'lighting.desk',
+          values: {},
+          availability: 'unavailable',
+        },
+      ]);
     },
   );
 
@@ -135,7 +141,7 @@ describe('Home Assistant lighting adapter', () => {
     await expect(
       failedAdapter.dispatch(command({ power: true })),
     ).rejects.toThrow(
-      'Home Assistant light.turn_on failed for lighting.desk (light.study_desk): HTTP 503',
+      'Home Assistant light.turn_on returned HTTP 503 for lighting.desk (light.study_desk)',
     );
 
     const throwingAdapter = new HomeAssistantLightingAdapter(
@@ -153,7 +159,7 @@ describe('Home Assistant lighting adapter', () => {
       );
     expect(transportError).toBeInstanceOf(Error);
     if (transportError instanceof Error) {
-      expect(transportError.message).toContain('transport error');
+      expect(transportError.message).toContain('response was not received');
       expect(transportError.message).not.toContain(token);
     }
   });

@@ -122,12 +122,21 @@ A short bathroom break should therefore not be treated as returning home hours l
 
 Decay timers should normally begin from confirmed_empty, not from unknown.
 
+An `unknown` sample between two `confirmed_empty` samples does not count as a
+second exit: it must not extend the continuity deadline or reset the music
+resume window. A real exit is based on the last confirmed room state, so
+`occupied -> unknown -> confirmed_empty` still starts one.
+
 Sensor tracking loss must not cause:
 
 - clearing overrides
 - starting a new room session
 - unwanted Spotify autostart on rediscovery
 - shutting down a monitor while someone is watching or playing
+
+After a restart, a retained expired sleep scene may remain the logical scene,
+but its positive light output waits for a fresh confirmed occupied event.
+Explicit all-off intent remains safe to reassert while presence is unknown.
 
 ## Last known position
 

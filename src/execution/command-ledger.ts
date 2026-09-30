@@ -11,6 +11,7 @@ export class CommandLedger {
   private readonly idPrefix = `cmd-${randomUUID()}-`;
   private sequence = 0;
   private readonly latestIdByTarget = new Map<string, string>();
+  private readonly supersededAtById = new Map<string, number>();
 
   constructor(
     private readonly clock: Clock,
@@ -58,6 +59,9 @@ export class CommandLedger {
     const keep = new Set(retained);
     const ordered = this.records.filter((record) => keep.has(record));
     this.records.splice(0, this.records.length, ...ordered);
+    const retainedIds = new Set(ordered.map((record) => record.id));
+    for (const commandId of this.supersededAtById.keys())
+      if (!retainedIds.has(commandId)) this.supersededAtById.delete(commandId);
     return true;
   }
 
@@ -88,6 +92,7 @@ export class CommandLedger {
       ) {
         command.status = 'superseded';
         command.diagnosticReason = reason;
+        this.supersededAtById.set(command.id, this.clock.now());
       }
     }
     this.pruneTerminalRecords();
@@ -160,6 +165,33 @@ export class CommandLedger {
     }
     this.pruneTerminalRecords();
     return command;
+  }
+
+  /**
+   * HA state_changed events do not carry Lugn command IDs. During a rapid
+   * intent change, a delayed old value can therefore be mistaken for a manual
+   * override. This bounded lookup lets the engine recognize a recent,
+   * superseded command without attributing ordinary settled-state changes to
+   * the command ledger.
+   */
+  recentSupersededMatch(
+    target: string,
+    property: LightingProperty,
+    value: LightingValues[LightingProperty],
+    now: number,
+  ): CommandRecord | undefined {
+    const windowMs = Math.min(this.attributionWindowMs, 10_000);
+    return [...this.records]
+      .reverse()
+      .find(
+        (command) =>
+          command.status === 'superseded' &&
+          command.target === target &&
+          command.desired[property] === value &&
+          this.supersededAtById.has(command.id) &&
+          this.supersededAtById.get(command.id)! <= now &&
+          now - this.supersededAtById.get(command.id)! <= windowMs,
+      );
   }
 
   latestPending(

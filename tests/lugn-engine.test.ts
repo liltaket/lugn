@@ -844,8 +844,10 @@ describe('Lugn deterministic lighting slice', () => {
         (entry) => entry.kind === 'lighting.override',
       ),
     ).toBe(false);
-    clock.advanceBy(1_000);
-    await flushMicrotasks();
+    for (let elapsed = 0; elapsed < 1_000; elapsed += 250) {
+      clock.advanceBy(250);
+      await flushMicrotasks();
+    }
     expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
       'degraded',
     );
@@ -865,8 +867,10 @@ describe('Lugn deterministic lighting slice', () => {
     });
     adapter.setAvailable(false);
     await engine.activateScene('scene.cozy', user);
-    clock.advanceBy(1_000);
-    await engine.reconcileScene();
+    for (let elapsed = 0; elapsed < 1_000; elapsed += 250) {
+      clock.advanceBy(250);
+      await flushMicrotasks();
+    }
     expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
       'degraded',
     );
@@ -1072,6 +1076,68 @@ describe('Lugn deterministic lighting slice', () => {
       engine.state.diagnostics.some(
         (entry) => entry.kind === 'presence.returned',
       ),
+    ).toBe(true);
+    engine.dispose();
+  });
+
+  it('does not start a new empty continuity window after an unknown gap', async () => {
+    const { clock, adapter, engine } = setup({ continuityMs: 10_000 });
+    await engine.activateScene('scene.cozy', user);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+
+    const originalExpiry = engine.state.presence.continuityExpiresAt;
+    const timingCount = engine.state.timings.length;
+    const commandCount = engine.state.commands.length;
+    clock.advanceBy(4_000);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'unknown',
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+
+    expect(engine.state.presence.continuityExpiresAt).toBe(originalExpiry);
+    expect(engine.state.timings).toHaveLength(timingCount);
+    expect(engine.state.commands).toHaveLength(commandCount);
+    expect(adapter.observed.get('lighting.ceiling')?.power).toBe(false);
+    engine.dispose();
+  });
+
+  it('treats occupied through unknown to confirmed empty as a real exit', async () => {
+    const { clock, engine } = setup({ continuityMs: 10_000 });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    clock.advanceBy(4_000);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'unknown',
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+
+    expect(engine.state.presence.continuityExpiresAt).toBe(
+      clock.now() + 10_000,
+    );
+    expect(
+      engine.state.diagnostics.some((entry) => entry.kind === 'presence.empty'),
     ).toBe(true);
     engine.dispose();
   });
@@ -1307,6 +1373,46 @@ describe('Lugn deterministic lighting slice', () => {
       power: true,
       brightness: 2,
     });
+    engine.dispose();
+  });
+
+  it('reasserts an expired persisted all-off scene during unknown state seeding', async () => {
+    const clock = new FakeClock(Date.parse('2026-09-28T12:00:00+02:00'));
+    const adapter = new SimulatedLightingAdapter(clock);
+    const engine = new LugnEngine(clock, {
+      adapter,
+      deviceIds: ['lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.all_off',
+          name: 'All off',
+          lighting: { 'lighting.desk': { power: false } },
+        },
+      ],
+      restoredLightingIntent: {
+        currentScene: 'scene.all_off',
+        sceneRevision: 4,
+        continuityExpiresAt: clock.now() - 1,
+        devices: {
+          'lighting.desk': {
+            baselineDesired: { power: false },
+            effectiveDesired: { power: false },
+            ownership: { power: { kind: 'scene', revision: 4 } },
+          },
+        },
+      },
+    });
+
+    adapter.externalChange('lighting.desk', { power: true });
+    await flushMicrotasks();
+
+    expect(engine.state.presence.state).toBe('unknown');
+    expect(adapter.dispatched).toContainEqual(
+      expect.objectContaining({
+        target: 'lighting.desk',
+        values: { power: false },
+      }),
+    );
     engine.dispose();
   });
 

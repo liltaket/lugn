@@ -233,7 +233,7 @@ describe('local capability HTTP API', () => {
     expect(page.headers.get('content-security-policy')).toContain(
       "script-src 'self'",
     );
-    expect(await page.text()).toContain('<title>Lugn · Belysning</title>');
+    expect(await page.text()).toContain('<title>Lugn · Rumskontroll</title>');
     const frontend = await fetch(`${baseUrl}/ui/app.js`);
     expect(frontend.status).toBe(200);
     expect(await frontend.text()).not.toContain('local-test-token');
@@ -242,6 +242,7 @@ describe('local capability HTTP API', () => {
     expect(await sessionStatus.json()).toEqual({
       tokenRequired: true,
       authenticated: false,
+      provider: 'token',
     });
 
     const dnsRebindingAttempt = await fetch(`${baseUrl}/ui/api/session`, {

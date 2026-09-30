@@ -46,7 +46,11 @@ describe('runtime configuration cross references', () => {
         },
       }).homeAssistant.music,
     ).toEqual({
-      'music.room': { entityId: 'media_player.room', sources: ['Optical'] },
+      'music.room': {
+        entityId: 'media_player.room',
+        sources: ['Optical'],
+        presets: { spotify_dj: 1, optical: 4 },
+      },
     });
   });
   it('resolves distinct configured semantic buttons', () => {

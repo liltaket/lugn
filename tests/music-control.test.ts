@@ -68,6 +68,12 @@ function automationSetup(startAt = 0, feedbackTimeoutMs = 100) {
   return { clock, adapter, controller, automation };
 }
 
+function automationInternals(automation: MusicAutomation) {
+  return automation as unknown as {
+    resumeUntil: Map<string, number>;
+  };
+}
+
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -452,6 +458,50 @@ describe('semantic music control', () => {
       { property: 'playback', value: 'playing' },
       { property: 'playback', value: 'paused' },
     ]);
+    automation.dispose();
+    controller.dispose();
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it('does not renew the music resume window across confirmed-empty, unknown, confirmed-empty', async () => {
+    const startAt = Date.parse('2026-09-30T12:00:00+02:00');
+    const { clock, adapter, controller, automation } = automationSetup(startAt);
+    automation.setVolumeAutomationEnabled(false);
+    adapter.observe('music.room', { ...values, playback: 'playing' });
+    automation.handlePresence('unknown', 'occupied', 1);
+    await flushMicrotasks();
+
+    automation.handlePresence('occupied', 'confirmed_empty', 0);
+    await flushMicrotasks();
+    const originalResumeDeadline =
+      automationInternals(automation).resumeUntil.get('music.room');
+    expect(originalResumeDeadline).toBe(startAt + 20 * 60_000);
+    expect(adapter.dispatched.map(({ requested }) => requested)).toEqual([
+      { property: 'playback', value: 'paused' },
+    ]);
+
+    clock.advanceBy(19 * 60_000);
+    automation.handlePresence('confirmed_empty', 'unknown', null);
+    automation.handlePresence('unknown', 'confirmed_empty', 0);
+    await flushMicrotasks();
+
+    expect(automationInternals(automation).resumeUntil.get('music.room')).toBe(
+      originalResumeDeadline,
+    );
+    expect(adapter.dispatched.map(({ requested }) => requested)).toEqual([
+      { property: 'playback', value: 'paused' },
+    ]);
+
+    // HA confirms the pause only after the original continuity window expires.
+    controller.state.devices['music.room']!.observed.playback = 'paused';
+    clock.advanceBy(2 * 60_000);
+    automation.handlePresence('confirmed_empty', 'occupied', 1);
+    await flushMicrotasks();
+    expect(adapter.dispatched.map(({ requested }) => requested)).toEqual([
+      { property: 'playback', value: 'paused' },
+      { property: 'preset', value: 'spotify_dj' },
+    ]);
+
     automation.dispose();
     controller.dispose();
     expect(clock.pendingTimers()).toBe(0);

@@ -130,20 +130,20 @@ describe('interactive commissioning wizard', () => {
     const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
       homeAssistant: { entities: Record<string, string> };
       mqtt: { baseTopic: string; usernameEnv?: string; passwordEnv?: string };
-      defaultSceneId: string;
+      defaultSceneId?: string;
       prelight: {
         targets: Record<
           string,
           { brightness: number; colorTemperature?: number }
         >;
       };
-      scenes: Array<{ lighting: Record<string, unknown> }>;
+      scenes?: Array<{ lighting: Record<string, unknown> }>;
     };
     expect(config.homeAssistant.entities).toEqual({
       'lighting.ceiling': 'light.ceiling',
       'lighting.desk': 'light.desk',
     });
-    expect(config.defaultSceneId).toBe('scene.everyday');
+    expect(config.defaultSceneId).toBeUndefined();
     expect(config.mqtt).toMatchObject({
       baseTopic: 'bruno/doorway',
       usernameEnv: 'MQTT_USERNAME_B64',
@@ -153,10 +153,7 @@ describe('interactive commissioning wizard', () => {
       'lighting.ceiling': { power: true, brightness: 35 },
       'lighting.desk': { power: true, brightness: 35 },
     });
-    expect(Object.keys(config.scenes[0]!.lighting)).toEqual([
-      'lighting.ceiling',
-      'lighting.desk',
-    ]);
+    expect(config.scenes).toEqual([]);
     expect(lstatSync(configPath).mode & 0o777).toBe(0o600);
     expect(lstatSync(environmentPath).mode & 0o777).toBe(0o600);
 
