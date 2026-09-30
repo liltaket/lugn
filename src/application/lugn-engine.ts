@@ -282,18 +282,26 @@ export class LugnEngine {
       for (const [target, values] of Object.entries(
         restoredScene?.lighting ?? {},
       )) {
-        const colorTemperature = values.colorTemperature;
         const device = devices[target];
-        if (!device || values.power === false || colorTemperature === undefined)
-          continue;
-        // Older snapshots may contain a per-light color-temperature override.
-        // Restore the current scene's shared Kelvin value instead.
-        device.baselineDesired.colorTemperature = colorTemperature;
-        device.effectiveDesired.colorTemperature = colorTemperature;
-        device.ownership.colorTemperature = {
-          kind: 'scene',
-          revision: activeRestoredIntent.sceneRevision,
-        };
+        if (!device) continue;
+        for (const property of LightingProperties) {
+          const sceneValue = values[property];
+          const ownsSceneValue = device.ownership[property]?.kind === 'scene';
+          const synchronizeCct =
+            property === 'colorTemperature' &&
+            values.power !== false &&
+            sceneValue !== undefined;
+          if (sceneValue === undefined || (!ownsSceneValue && !synchronizeCct))
+            continue;
+          // Migrate stale scene values after preset changes. CCT is stricter:
+          // older per-light overrides cannot split an active room scene.
+          Object.assign(device.baselineDesired, { [property]: sceneValue });
+          Object.assign(device.effectiveDesired, { [property]: sceneValue });
+          device.ownership[property] = {
+            kind: 'scene',
+            revision: activeRestoredIntent.sceneRevision,
+          };
+        }
       }
     }
     const switches: Record<string, DeviceSwitchState> = {};
