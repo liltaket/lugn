@@ -49,7 +49,11 @@ const ConfigSchema = z
 
 export type HomeAssistantSwitchConfig = z.input<typeof ConfigSchema>;
 
-const StateSchema = z.object({ entity_id: EntityId, state: z.string() });
+const StateSchema = z.object({
+  entity_id: EntityId,
+  state: z.string(),
+  last_updated: z.string().optional(),
+});
 const EventDataSchema = z.object({
   entity_id: EntityId,
   new_state: StateSchema.nullable(),
@@ -70,6 +74,7 @@ export class HomeAssistantSwitchAdapter implements SwitchAdapter {
   private readonly listeners = new Set<
     (observation: SwitchObservation) => void
   >();
+  private readonly lastUpdatedByEntity = new Map<string, number>();
 
   constructor(
     config: HomeAssistantSwitchConfig,
@@ -131,6 +136,16 @@ export class HomeAssistantSwitchAdapter implements SwitchAdapter {
     if (!result.success) return false;
     const target = this.semanticByEntity.get(result.data.entity_id);
     if (!target) return false;
+    const lastUpdated = parseObservationTime(result.data.last_updated);
+    const previousUpdate = this.lastUpdatedByEntity.get(result.data.entity_id);
+    if (
+      lastUpdated !== undefined &&
+      previousUpdate !== undefined &&
+      lastUpdated < previousUpdate
+    )
+      return true;
+    if (lastUpdated !== undefined)
+      this.lastUpdatedByEntity.set(result.data.entity_id, lastUpdated);
     const state = result.data.state;
     const available = state === 'on' || state === 'off';
     const observation: SwitchObservation = {
@@ -165,4 +180,10 @@ export class HomeAssistantSwitchAdapter implements SwitchAdapter {
       state ?? { entity_id: entityId, state: 'unavailable' },
     );
   }
+}
+
+function parseObservationTime(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
 }

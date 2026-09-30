@@ -61,6 +61,14 @@ type MusicFadeRuntime = {
   deadlineTimer: TimerHandle | undefined;
 };
 
+export type MusicFadeLifecycleEvent = {
+  phase: 'started' | 'terminal';
+  target: string;
+  state: MusicFadeState;
+  actualVolume: number | null;
+  provenance: Provenance;
+};
+
 /** Explicit music requests; no presence automation or ownership inference. */
 export class MusicController {
   readonly state: MusicState = { devices: {}, commands: [], fades: {} };
@@ -72,6 +80,14 @@ export class MusicController {
   private readonly lastObservations = new Map<string, MusicObservation>();
   private onExternalVolumeChange:
     ((target: string, volume: number) => void) | undefined;
+  private onExternalPlaybackChange:
+    | ((
+        target: string,
+        playback: MusicObservation['values']['playback'],
+      ) => void)
+    | undefined;
+  private onFadeLifecycle:
+    ((event: MusicFadeLifecycleEvent) => void) | undefined;
   private readonly fades = new Map<string, MusicFadeRuntime>();
   private readonly fadeDispatching = new Set<string>();
   private readonly unsubscribe: () => void;
@@ -124,6 +140,19 @@ export class MusicController {
     handler: (target: string, volume: number) => void,
   ): void {
     this.onExternalVolumeChange = handler;
+  }
+  setExternalPlaybackChangeHandler(
+    handler: (
+      target: string,
+      playback: MusicObservation['values']['playback'],
+    ) => void,
+  ): void {
+    this.onExternalPlaybackChange = handler;
+  }
+  setFadeLifecycleHandler(
+    handler: (event: MusicFadeLifecycleEvent) => void,
+  ): void {
+    this.onFadeLifecycle = handler;
   }
   async request(
     target: string,
@@ -205,6 +234,7 @@ export class MusicController {
     };
     this.state.fades[request.target] = state;
     this.fades.set(request.target, runtime);
+    this.notifyFadeLifecycle(runtime, 'started');
     if (Math.abs(request.volume - startVolume) <= Number.EPSILON) {
       this.beginSettling(runtime);
     } else {
@@ -285,6 +315,7 @@ export class MusicController {
         command.status = 'unconfirmed';
         command.diagnosticReason = 'No matching music feedback before timeout';
         this.issuedSequence.delete(command.id);
+        this.clearRequestedIfSettled(command);
         this.pruneHistory(new Set([command.id]));
         this.publish();
       }, this.timeoutMs),
@@ -303,6 +334,7 @@ export class MusicController {
         command.diagnosticReason =
           'Music adapter rejected or failed the request';
         this.releaseTracking(command.id);
+        this.clearRequestedIfSettled(command);
         this.pruneHistory(new Set([command.id]));
       }
       this.publish();
@@ -522,6 +554,7 @@ export class MusicController {
     if (diagnosticReason === undefined) delete runtime.state.diagnosticReason;
     else runtime.state.diagnosticReason = diagnosticReason;
     this.fades.delete(runtime.state.target);
+    this.notifyFadeLifecycle(runtime, 'terminal');
     this.publish();
   }
 
@@ -538,6 +571,7 @@ export class MusicController {
     runtime.state.diagnosticReason = reason;
     delete runtime.state.settlingUntil;
     this.fades.delete(target);
+    this.notifyFadeLifecycle(runtime, 'terminal');
     if (publish) this.publish();
   }
   private requireTarget(target: string): DeviceMusicState {
@@ -604,13 +638,21 @@ export class MusicController {
     )
       return;
     const previousVolume = device.observed.volume;
+    const previousPlayback = device.observed.playback;
     const observedVolume = observation.values.volume;
+    const observedPlayback = observation.values.playback;
     const externalVolumeChange =
       observation.available &&
       previousVolume !== null &&
       observedVolume !== null &&
       Math.abs(observedVolume - previousVolume) > 0.005 + Number.EPSILON &&
       !this.matchesRecentPendingVolumeCommand(observation, observedVolume);
+    const externalPlaybackChange =
+      observation.available &&
+      previousPlayback !== 'unknown' &&
+      observedPlayback !== 'unknown' &&
+      observedPlayback !== previousPlayback &&
+      !this.matchesRecentPendingPlaybackCommand(observation, observedPlayback);
     device.observed = structuredClone(observation.values);
     device.observedAt = observation.observedAt;
     device.availability = observation.available ? 'available' : 'unavailable';
@@ -650,6 +692,51 @@ export class MusicController {
       delete device.requested.volume;
       this.onExternalVolumeChange?.(observation.target, observedVolume);
     }
+    if (externalPlaybackChange) {
+      for (const command of this.state.commands) {
+        if (
+          command.target !== observation.target ||
+          command.requested.property !== 'playback' ||
+          command.status !== 'pending'
+        )
+          continue;
+        command.status = 'superseded';
+        command.diagnosticReason =
+          'A newer external playback change superseded this request';
+        this.releaseTracking(command.id);
+        confirmedIds.add(command.id);
+      }
+      delete device.requested.playback;
+      this.onExternalPlaybackChange?.(observation.target, observedPlayback);
+    } else if (
+      device.requested.playback !== undefined &&
+      observedPlayback !== device.requested.playback &&
+      this.state.commands.some(
+        (command) =>
+          command.target === observation.target &&
+          command.requested.property === 'playback' &&
+          command.status === 'pending' &&
+          command.acceptedAt !== undefined,
+      )
+    ) {
+      // Once HA accepted a playback request, a newer contradictory state is
+      // authoritative even when the transition's previous value was unknown.
+      for (const command of this.state.commands) {
+        if (
+          command.target !== observation.target ||
+          command.requested.property !== 'playback' ||
+          command.status !== 'pending'
+        )
+          continue;
+        command.status = 'superseded';
+        command.diagnosticReason =
+          'Observed playback state superseded this request';
+        this.releaseTracking(command.id);
+        confirmedIds.add(command.id);
+      }
+      delete device.requested.playback;
+      this.onExternalPlaybackChange?.(observation.target, observedPlayback);
+    }
     const fade = this.fades.get(observation.target);
     if (fade) this.acceptFadeObservation(fade, observation, sequence);
     this.pruneHistory(confirmedIds);
@@ -668,6 +755,20 @@ export class MusicController {
         this.clock.now() - command.issuedAt < this.timeoutMs &&
         Math.abs(observedVolume - command.requested.value) <=
           0.005 + Number.EPSILON,
+    );
+  }
+  private matchesRecentPendingPlaybackCommand(
+    observation: MusicObservation,
+    observedPlayback: MusicObservation['values']['playback'],
+  ): boolean {
+    return this.state.commands.some(
+      (command) =>
+        command.target === observation.target &&
+        command.requested.property === 'playback' &&
+        command.status === 'pending' &&
+        observation.observedAt >= command.issuedAt &&
+        this.clock.now() - command.issuedAt < this.timeoutMs &&
+        observedPlayback === command.requested.value,
     );
   }
   private confirm(
@@ -702,6 +803,38 @@ export class MusicController {
     command.diagnosticReason =
       'Matching Home Assistant observation; attribution is not guaranteed';
     this.releaseTracking(command.id);
+    this.clearRequestedIfSettled(command);
     return true;
+  }
+
+  private clearRequestedIfSettled(command: MusicCommandRecord): void {
+    if (
+      this.state.commands.some(
+        (candidate) =>
+          candidate.target === command.target &&
+          candidate.requested.property === command.requested.property &&
+          candidate.status === 'pending',
+      )
+    )
+      return;
+    const device = this.state.devices[command.target];
+    if (!device) return;
+    const current = device.requested[command.requested.property];
+    if (current === command.requested.value)
+      delete device.requested[command.requested.property];
+  }
+
+  private notifyFadeLifecycle(
+    runtime: MusicFadeRuntime,
+    phase: MusicFadeLifecycleEvent['phase'],
+  ): void {
+    this.onFadeLifecycle?.({
+      phase,
+      target: runtime.state.target,
+      state: structuredClone(runtime.state),
+      actualVolume:
+        this.state.devices[runtime.state.target]?.observed.volume ?? null,
+      provenance: structuredClone(runtime.provenance),
+    });
   }
 }

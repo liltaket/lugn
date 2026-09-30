@@ -83,4 +83,22 @@ describe('CommandLedger', () => {
     expect(invalidated.diagnosticReason).toBe('new intent arrived');
     expect(ledger.cancel(cancelled.id, 'duplicate cancellation')).toBe(false);
   });
+
+  it('does not mistake a manual value matching a superseded command for its feedback', () => {
+    const clock = new FakeClock(10);
+    const ledger = new CommandLedger(clock);
+    const old = ledger.issue({ ...input, desired: { brightness: 20 } });
+    ledger.supersedePending('A newer scene was selected');
+    ledger.issue({ ...input, desired: { brightness: 60 } });
+
+    expect(
+      ledger.attributeObservation(
+        input.target,
+        'brightness',
+        20,
+        clock.now() + 2_000,
+      ),
+    ).toBeUndefined();
+    expect(old.status).toBe('superseded');
+  });
 });

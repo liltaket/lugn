@@ -7,12 +7,19 @@ import type {
   Presence,
   Provenance,
 } from '../core/schemas.js';
+import type { MusicFadeLifecycleEvent } from './music-controller.js';
 
 const automationActor = { type: 'automation' as const, id: 'lugn.music' };
 const minimumAutomatedVolume = 0.05;
 const maximumAutomatedVolume = 0.8;
 const twoPersonReduction = 0.1;
 const musicContinuityMs = 20 * 60_000;
+
+type ActiveFade = {
+  id: string;
+  targetVolume: number;
+  isUser: boolean;
+};
 
 export type MusicVolumePolicySnapshot = {
   controller: 'you' | 'lugn';
@@ -42,7 +49,8 @@ export class MusicAutomation {
   private readonly explicitBaselines = new Set<string>();
   private readonly volumeControllers = new Map<string, 'you' | 'lugn'>();
   private readonly resumeUntil = new Map<string, number>();
-  private readonly explicitFadeUntil = new Map<string, number>();
+  private readonly activeFades = new Map<string, ActiveFade>();
+  private readonly manuallyPaused = new Set<string>();
   private timer: TimerHandle | undefined;
   private presence: Presence = 'unknown';
   private homePresence: HomePresence = 'unknown';
@@ -100,7 +108,10 @@ export class MusicAutomation {
               { property: 'playback', value: 'playing' },
               'resume',
             );
-          } else if (!this.isPlaying(this.options.getState(target))) {
+          } else if (
+            !this.manuallyPaused.has(target) &&
+            !this.isPlaying(this.options.getState(target))
+          ) {
             this.send(
               target,
               { property: 'preset', value: 'spotify_dj' },
@@ -155,6 +166,12 @@ export class MusicAutomation {
       } else {
         this.explicitBaselines.delete(target);
       }
+    } else if (
+      request.property === 'playback' &&
+      provenance.actor.type === 'user'
+    ) {
+      if (request.value === 'paused') this.manuallyPaused.add(target);
+      else this.manuallyPaused.delete(target);
     }
   }
 
@@ -168,20 +185,58 @@ export class MusicAutomation {
     )
       return;
 
-    const offset = this.currentOffset();
+    const activeFade = this.activeFades.get(request.target);
+    if (!activeFade) return;
+    activeFade.targetVolume = request.volume;
+    activeFade.isUser = provenance.actor.type === 'user';
+  }
+
+  /** Follow the controller's actual fade lifetime, including settling and terminal paths. */
+  handleFadeLifecycle(event: MusicFadeLifecycleEvent): void {
+    if (this.disposed) return;
+    if (event.phase === 'started') {
+      this.activeFades.set(event.target, {
+        id: event.state.id,
+        targetVolume: event.state.targetVolume,
+        isUser: event.provenance.actor.type === 'user',
+      });
+      return;
+    }
+
+    const activeFade = this.activeFades.get(event.target);
+    if (!activeFade || activeFade.id !== event.state.id) return;
+    this.activeFades.delete(event.target);
+    const terminalVolume =
+      event.state.status === 'completed'
+        ? activeFade.targetVolume
+        : event.actualVolume;
+    if (terminalVolume === null) return;
+
     this.baselines.set(
-      request.target,
-      this.clampBaseline(request.volume - offset),
+      event.target,
+      this.clampBaseline(terminalVolume - this.currentOffset()),
     );
-    if (provenance.actor.type === 'user') {
-      this.explicitBaselines.add(request.target);
-      this.volumeControllers.set(request.target, 'you');
-      this.explicitFadeUntil.set(
-        request.target,
-        this.options.clock.now() + request.durationMs,
-      );
+    if (activeFade.isUser) {
+      this.explicitBaselines.add(event.target);
+      this.volumeControllers.set(event.target, 'you');
     } else {
-      this.explicitBaselines.delete(request.target);
+      this.explicitBaselines.delete(event.target);
+    }
+  }
+
+  /** Preserve a physical pause so room re-entry cannot restart music over it. */
+  noteExternalPlaybackChange(
+    target: string,
+    playback: DeviceMusicState['observed']['playback'],
+  ): void {
+    if (this.disposed) return;
+    if (playback === 'playing') {
+      this.manuallyPaused.delete(target);
+      return;
+    }
+    if (playback === 'paused') {
+      this.manuallyPaused.add(target);
+      this.resumeUntil.set(target, 0);
     }
   }
 
@@ -207,7 +262,7 @@ export class MusicAutomation {
     const targetVolume =
       baseline === undefined ? null : this.clamp(baseline + offset);
     const automatic =
-      !this.isExplicitFadeActive(target) &&
+      !this.activeFades.has(target) &&
       this.volumeAutomationEnabled &&
       this.presence === 'occupied' &&
       this.homePresence !== 'away' &&
@@ -262,7 +317,7 @@ export class MusicAutomation {
     const offsets = this.currentOffsets();
     const offset = offsets.daily + offsets.person;
     for (const target of this.options.targets) {
-      if (this.isExplicitFadeActive(target)) continue;
+      if (this.activeFades.has(target)) continue;
       const device = this.options.getState(target);
       const baseline =
         this.baselines.get(target) ?? this.inferBaseline(device, offset);
@@ -366,15 +421,5 @@ export class MusicAutomation {
   /** Keep baseline math independent from the physical automated volume cap. */
   private clampBaseline(value: number): number {
     return Math.min(1, Math.max(0, value));
-  }
-
-  private isExplicitFadeActive(target: string): boolean {
-    const until = this.explicitFadeUntil.get(target);
-    if (until === undefined) return false;
-    if (until <= this.options.clock.now()) {
-      this.explicitFadeUntil.delete(target);
-      return false;
-    }
-    return true;
   }
 }

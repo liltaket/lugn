@@ -489,7 +489,7 @@ describe('composed runtime integration', () => {
       expect(serviceRequests[0]?.init?.body).toBe(
         JSON.stringify({
           entity_id: 'light.entry',
-          brightness_pct: 32,
+          brightness_pct: 55,
           color_temp_kelvin: 2700,
         }),
       );

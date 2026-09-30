@@ -78,6 +78,7 @@ export class HomeAssistantEnvironmentAdapter {
     EnvironmentMetric,
     { value: number | null; observedAt: number }
   >();
+  private readonly lastUpdatedByEntity = new Map<string, number>();
 
   constructor(
     mappings: HomeAssistantEnvironmentMappings,
@@ -97,10 +98,19 @@ export class HomeAssistantEnvironmentAdapter {
     if (!result.success) return false;
     const metric = this.metricByEntity.get(result.data.entity_id);
     if (!metric) return false;
+    const lastUpdated = parseObservationTime(result.data.last_updated);
+    const previousUpdate = this.lastUpdatedByEntity.get(result.data.entity_id);
+    if (
+      lastUpdated !== undefined &&
+      previousUpdate !== undefined &&
+      lastUpdated < previousUpdate
+    )
+      return true;
+    if (lastUpdated !== undefined)
+      this.lastUpdatedByEntity.set(result.data.entity_id, lastUpdated);
     this.observations.set(metric, {
       value: normalizeNumericState(result.data.state),
-      observedAt:
-        parseObservationTime(result.data.last_updated) ?? this.clock.now(),
+      observedAt: lastUpdated ?? this.clock.now(),
     });
     return true;
   }

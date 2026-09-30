@@ -1,8 +1,7 @@
 import { z } from 'zod';
 import type { Clock } from '../core/clock.js';
 
-const HomePresenceStateSchema = z.enum(['home', 'away', 'unknown']);
-export type HomePresenceState = z.infer<typeof HomePresenceStateSchema>;
+export type HomePresenceState = 'home' | 'away' | 'unknown';
 
 export const HomeAssistantHomePresenceConfigSchema = z
   .object({
@@ -41,6 +40,7 @@ export class HomeAssistantHomePresenceAdapter {
     state: 'unknown',
     observedAt: 0,
   };
+  private lastUpdated: number | undefined;
 
   constructor(
     config: HomeAssistantHomePresenceConfig,
@@ -56,9 +56,16 @@ export class HomeAssistantHomePresenceAdapter {
   acceptState(payload: unknown): boolean {
     const result = StateSchema.safeParse(payload);
     if (!result.success || result.data.entity_id !== this.entity) return false;
+    const lastUpdated = parseObservationTime(result.data.last_updated);
+    if (
+      lastUpdated !== undefined &&
+      this.lastUpdated !== undefined &&
+      lastUpdated < this.lastUpdated
+    )
+      return true;
+    if (lastUpdated !== undefined) this.lastUpdated = lastUpdated;
     const state = normalizeHomeState(result.data.state);
-    const observedAt =
-      parseObservationTime(result.data.last_updated) ?? this.clock.now();
+    const observedAt = lastUpdated ?? this.clock.now();
     this.current = { state, observedAt };
     this.onChange(state, observedAt);
     return true;

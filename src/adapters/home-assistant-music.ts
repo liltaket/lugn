@@ -76,6 +76,7 @@ const StateSchema = z.object({
   entity_id: EntityIdSchema,
   state: z.string(),
   attributes: z.record(z.string(), z.unknown()).optional(),
+  last_updated: z.string().optional(),
 });
 const EventDataSchema = z.object({
   entity_id: EntityIdSchema,
@@ -97,6 +98,7 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
   private readonly listeners = new Set<
     (observation: MusicObservation) => void
   >();
+  private readonly lastUpdatedByEntity = new Map<string, number>();
   constructor(
     config: HomeAssistantMusicConfig,
     private readonly transport: typeof fetch,
@@ -178,6 +180,16 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
     if (!result.success) return false;
     const target = this.semanticByEntity.get(result.data.entity_id);
     if (!target) return false;
+    const lastUpdated = parseObservationTime(result.data.last_updated);
+    const previousUpdate = this.lastUpdatedByEntity.get(result.data.entity_id);
+    if (
+      lastUpdated !== undefined &&
+      previousUpdate !== undefined &&
+      lastUpdated < previousUpdate
+    )
+      return true;
+    if (lastUpdated !== undefined)
+      this.lastUpdatedByEntity.set(result.data.entity_id, lastUpdated);
     const { state, attributes = {} } = result.data;
     const available = [
       'playing',
@@ -240,4 +252,10 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
       state ?? { entity_id: entityId, state: 'unavailable' },
     );
   }
+}
+
+function parseObservationTime(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
 }

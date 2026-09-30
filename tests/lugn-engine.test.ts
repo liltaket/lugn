@@ -43,8 +43,12 @@ describe('Lugn deterministic lighting slice', () => {
     });
 
     await engine.activateScene('scene.cozy', user);
-    adapter.externalChange('lighting.ceiling', { power: false });
-    adapter.externalChange('lighting.desk', { power: false });
+    // Seed the physical baseline as off without emitting a user override after
+    // the scene has taken ownership.
+    adapter.observed.set('lighting.ceiling', { power: false });
+    adapter.observed.set('lighting.desk', { power: false });
+    engine.state.lighting.devices['lighting.ceiling']!.observed.power = false;
+    engine.state.lighting.devices['lighting.desk']!.observed.power = false;
     adapter.dispatched.length = 0;
 
     await engine.handlePrelight({ type: 'presence.prelight', active: true });
@@ -269,7 +273,7 @@ describe('Lugn deterministic lighting slice', () => {
     const after = engine.state.lighting.devices['lighting.desk']!;
     expect(after.effectiveDesired).toEqual(before.effectiveDesired);
     expect(after.ownership).toEqual(before.ownership);
-    expect(after.observed).toEqual(before.effectiveDesired);
+    expect(after.observed.power).toBe(false);
     expect(
       engine.state.diagnostics.some(
         (entry) => entry.kind === 'command.stale_feedback',
@@ -725,7 +729,8 @@ describe('Lugn deterministic lighting slice', () => {
     const desk = engine.state.lighting.devices['lighting.desk'];
     expect(desk?.ownership.brightness?.kind).toBe('scene');
     expect(desk?.effectiveDesired.brightness).toBe(0);
-    expect(desk?.observed.brightness).toBe(0);
+    expect(desk?.observed.brightness).toBe(47);
+    expect(desk?.observed.power).toBe(false);
     expect(engine.state.lighting.currentScene).toBe('scene.movie');
     engine.dispose();
   });
@@ -853,6 +858,36 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
+  it('starts a fresh bounded scene attempt when lighting feedback recovers a device', async () => {
+    const { clock, adapter, engine } = setup({
+      retryDelayMs: 250,
+      convergenceTimeoutMs: 1_000,
+    });
+    adapter.setAvailable(false);
+    await engine.activateScene('scene.cozy', user);
+    clock.advanceBy(1_000);
+    await engine.reconcileScene();
+    expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
+      'degraded',
+    );
+
+    const dispatchCount = adapter.dispatched.length;
+    adapter.setAvailable(true);
+    adapter.externalChange('lighting.desk', { power: false });
+    await flushMicrotasks();
+
+    expect(adapter.dispatched.length).toBeGreaterThan(dispatchCount);
+    expect(adapter.dispatched.at(-1)).toMatchObject({
+      target: 'lighting.desk',
+      values: expect.objectContaining({ power: true }),
+    });
+    expect(adapter.observed.get('lighting.desk')?.power).toBe(true);
+    expect(engine.state.lighting.devices['lighting.desk']?.availability).toBe(
+      'available',
+    );
+    engine.dispose();
+  });
+
   it('restores current intent when feedback from an older delayed scene arrives late', async () => {
     const { clock, adapter, engine } = setup();
     adapter.feedbackDelayMs = 1_000;
@@ -951,6 +986,58 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
+  it('continues a confirmed-empty off retry after presence becomes unknown', async () => {
+    const { clock, adapter, engine } = setup({ retryDelayMs: 500 });
+    await engine.activateScene('scene.cozy', user);
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'unknown',
+      personCount: null,
+    });
+
+    clock.advanceBy(500);
+    await flushMicrotasks();
+
+    expect(engine.state.presence.state).toBe('unknown');
+    expect(
+      adapter.dispatched.filter(
+        (command) =>
+          command.target === 'lighting.desk' && command.values.power === false,
+      ),
+    ).toHaveLength(2);
+    expect(adapter.observed.get('lighting.desk')?.power).toBe(false);
+    engine.dispose();
+  });
+
+  it('corrects a lighting power-on observation while still physically empty through unknown', async () => {
+    const { adapter, engine } = setup();
+    await engine.activateScene('scene.cozy', user);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'unknown',
+      personCount: null,
+    });
+
+    adapter.externalChange('lighting.desk', { power: true });
+
+    expect(adapter.observed.get('lighting.desk')?.power).toBe(false);
+    expect(
+      engine.state.lighting.devices['lighting.desk']?.ownership.power?.kind,
+    ).toBe('scene');
+    engine.dispose();
+  });
+
   it('does not treat unknown as empty or clear continuity memory', async () => {
     const { adapter, engine } = setup({ continuityMs: 10_000 });
     await engine.activateScene('scene.cozy', user);
@@ -1042,6 +1129,229 @@ describe('Lugn deterministic lighting slice', () => {
     ).toEqual(engine.state);
 
     unsubscribe();
+    engine.dispose();
+  });
+
+  it('drops visit overrides at continuity expiry and applies the configured default on the next entry', async () => {
+    const { clock, adapter, engine } = setup({
+      continuityMs: 1_000,
+      deviceIds: ['lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.default',
+          name: 'Default',
+          lighting: { 'lighting.desk': { power: true, brightness: 55 } },
+        },
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: { 'lighting.desk': { power: true, brightness: 20 } },
+        },
+      ],
+      defaultSceneId: 'scene.default',
+    });
+    await engine.activateScene('scene.cozy', user);
+    adapter.externalChange('lighting.desk', { brightness: 47 });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+
+    clock.advanceBy(1_000);
+    await flushMicrotasks();
+    expect(engine.state.lighting.currentScene).toBeNull();
+    expect(engine.defaultScenePending).toBe(true);
+    expect(
+      engine.state.lighting.devices['lighting.desk']?.effectiveDesired,
+    ).toEqual({});
+
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+
+    expect(engine.state.lighting.currentScene).toBe('scene.default');
+    expect(engine.defaultScenePending).toBe(false);
+    expect(adapter.observed.get('lighting.desk')).toMatchObject({
+      power: true,
+      brightness: 55,
+    });
+    engine.dispose();
+  });
+
+  it.each([
+    {
+      id: 'scene.all_off',
+      name: 'All off',
+      lighting: {
+        'lighting.ceiling': { power: false },
+        'lighting.desk': { power: false },
+      },
+    },
+    {
+      id: 'scene.sleep',
+      name: 'Sleep',
+      lighting: {
+        'lighting.ceiling': { power: false },
+        'lighting.desk': { power: true, brightness: 2 },
+      },
+    },
+  ])(
+    'retains explicit $id semantics after continuity expiry',
+    async (scene) => {
+      const { clock, adapter, engine } = setup({
+        continuityMs: 1_000,
+        scenes: [
+          {
+            id: 'scene.default',
+            name: 'Default',
+            lighting: {
+              'lighting.ceiling': { power: true, brightness: 60 },
+              'lighting.desk': { power: true, brightness: 55 },
+            },
+          },
+          scene,
+        ],
+        defaultSceneId: 'scene.default',
+      });
+      await engine.activateScene(scene.id, user);
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'confirmed_empty',
+        personCount: 0,
+      });
+      clock.advanceBy(1_000);
+      await flushMicrotasks();
+
+      expect(engine.state.lighting.currentScene).toBe(scene.id);
+      expect(engine.defaultScenePending).toBe(false);
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+        personCount: 1,
+      });
+      expect(engine.state.lighting.currentScene).toBe(scene.id);
+      if (scene.id === 'scene.all_off') {
+        expect(adapter.observed.get('lighting.ceiling')?.power).toBe(false);
+        expect(adapter.observed.get('lighting.desk')?.power).toBe(false);
+      } else {
+        expect(adapter.observed.get('lighting.desk')).toMatchObject({
+          power: true,
+          brightness: 2,
+        });
+        expect(adapter.observed.get('lighting.ceiling')?.power).toBe(false);
+      }
+      engine.dispose();
+    },
+  );
+
+  it('retains an explicit sleep scene from an expired persisted intent', async () => {
+    const clock = new FakeClock(Date.parse('2026-09-28T12:00:00+02:00'));
+    const adapter = new SimulatedLightingAdapter(clock);
+    const engine = new LugnEngine(clock, {
+      adapter,
+      deviceIds: ['lighting.desk'],
+      scenes: [
+        {
+          id: 'scene.default',
+          name: 'Default',
+          lighting: { 'lighting.desk': { power: true, brightness: 60 } },
+        },
+        {
+          id: 'scene.sleep',
+          name: 'Sleep',
+          lighting: { 'lighting.desk': { power: true, brightness: 2 } },
+        },
+      ],
+      defaultSceneId: 'scene.default',
+      restoredLightingIntent: {
+        currentScene: 'scene.sleep',
+        sceneRevision: 4,
+        continuityExpiresAt: clock.now() - 1,
+        devices: {
+          'lighting.desk': {
+            baselineDesired: { power: true, brightness: 2 },
+            effectiveDesired: { power: true, brightness: 17 },
+            ownership: {
+              power: { kind: 'scene', revision: 4 },
+              brightness: {
+                kind: 'override',
+                actor: user,
+                reason: 'temporary',
+                createdAt: clock.now() - 100,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(engine.state.lighting.currentScene).toBe('scene.sleep');
+    expect(engine.defaultScenePending).toBe(false);
+    expect(
+      engine.state.lighting.devices['lighting.desk']?.effectiveDesired,
+    ).toEqual({ power: true, brightness: 2 });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    expect(adapter.observed.get('lighting.desk')).toMatchObject({
+      power: true,
+      brightness: 2,
+    });
+    engine.dispose();
+  });
+
+  it('waits for a new confirmed entry after a quiet-hours-suppressed visit', async () => {
+    const clock = new FakeClock(Date.parse('2026-09-30T05:55:00+02:00'));
+    const adapter = new SimulatedLightingAdapter(clock);
+    const engine = new LugnEngine(clock, {
+      adapter,
+      deviceIds: ['lighting.ceiling'],
+      scenes: [
+        {
+          id: 'scene.default',
+          name: 'Default',
+          lighting: { 'lighting.ceiling': { power: true, brightness: 60 } },
+        },
+      ],
+      defaultSceneId: 'scene.default',
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    clock.advanceBy(5 * 60_000);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    expect(engine.defaultScenePending).toBe(true);
+    expect(adapter.dispatched).toEqual([]);
+
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    expect(engine.state.lighting.currentScene).toBe('scene.default');
+    expect(engine.defaultScenePending).toBe(false);
+    expect(adapter.observed.get('lighting.ceiling')?.power).toBe(true);
     engine.dispose();
   });
 

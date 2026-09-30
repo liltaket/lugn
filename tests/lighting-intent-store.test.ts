@@ -32,7 +32,8 @@ describe('lighting intent persistence', () => {
   it('restores scene and manual property ownership without replaying startup observations or commands', async () => {
     const directory = await temporaryDirectory();
     const filePath = join(directory, 'lighting-intent.json');
-    const initialClock = new FakeClock(1_000);
+    const startingAt = Date.parse('2026-09-28T12:00:00+02:00');
+    const initialClock = new FakeClock(startingAt);
     const initialAdapter = new SimulatedLightingAdapter(initialClock);
     const initialEngine = new LugnEngine(initialClock, {
       deviceIds,
@@ -65,14 +66,14 @@ describe('lighting intent persistence', () => {
       'sceneRevision',
     ]);
     expect(stored.snapshot['currentScene']).toBe(scene.id);
-    expect(stored.snapshot['continuityExpiresAt']).toBe(21_000);
+    expect(stored.snapshot['continuityExpiresAt']).toBe(startingAt + 20_000);
     const fileMode = (await stat(filePath)).mode & 0o777;
     expect(fileMode).toBe(0o600);
 
     const restoreStore = createStore(filePath, { onWarning: vi.fn() });
     const restored = await restoreStore.load();
     expect(restored).toBeDefined();
-    const restartedClock = new FakeClock(2_000);
+    const restartedClock = new FakeClock(startingAt + 1_000);
     const restartedAdapter = new SimulatedLightingAdapter(restartedClock);
     const restartedEngine = new LugnEngine(restartedClock, {
       deviceIds,
@@ -203,10 +204,11 @@ describe('lighting intent persistence', () => {
   it('keeps the default scene pending across repeated restarts after expiry', async () => {
     const directory = await temporaryDirectory();
     const filePath = join(directory, 'lighting-intent.json');
+    const daytime = Date.parse('2026-09-28T12:00:00+02:00');
     const expiredIntent = {
       currentScene: scene.id,
       sceneRevision: 1,
-      continuityExpiresAt: 4_999,
+      continuityExpiresAt: daytime,
       devices: {
         'lighting.entry': {
           baselineDesired: { power: true },
@@ -216,7 +218,7 @@ describe('lighting intent persistence', () => {
       },
     };
 
-    const firstClock = new FakeClock(5_000);
+    const firstClock = new FakeClock(daytime + 1);
     const firstEngine = new LugnEngine(firstClock, {
       deviceIds,
       scenes,
@@ -237,7 +239,7 @@ describe('lighting intent persistence', () => {
     expect(firstRestore?.currentScene).toBeNull();
     if (!firstRestore) throw new Error('First restored intent is missing');
 
-    const secondClock = new FakeClock(6_000);
+    const secondClock = new FakeClock(daytime + 2);
     const secondAdapter = new SimulatedLightingAdapter(secondClock);
     const secondEngine = new LugnEngine(secondClock, {
       deviceIds,
@@ -258,7 +260,7 @@ describe('lighting intent persistence', () => {
     expect(secondRestore?.currentScene).toBeNull();
     if (!secondRestore) throw new Error('Second restored intent is missing');
 
-    const thirdClock = new FakeClock(7_000);
+    const thirdClock = new FakeClock(daytime + 3);
     const thirdAdapter = new SimulatedLightingAdapter(thirdClock);
     const thirdEngine = new LugnEngine(thirdClock, {
       deviceIds,

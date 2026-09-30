@@ -3,6 +3,7 @@ import { HomeAssistantMusicAdapter } from '../src/adapters/home-assistant-music.
 import { SimulatedMusicAdapter } from '../src/adapters/simulated-music.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
+import { MusicAutomation } from '../src/application/music-automation.js';
 import { MusicController } from '../src/application/music-controller.js';
 import { FakeClock } from '../src/core/clock.js';
 import { applyStateUpdate } from '../src/core/event-stream.js';
@@ -38,6 +39,38 @@ function controllerInternals(controller: MusicController) {
     issuedSequence: Map<string, number>;
     timers: Map<string, unknown>;
   };
+}
+
+function automationSetup(startAt = 0, feedbackTimeoutMs = 100) {
+  const clock = new FakeClock(startAt);
+  const adapter = new SimulatedMusicAdapter(clock);
+  const controller = new MusicController(
+    clock,
+    { targets: { 'music.room': ['Optical'] }, adapter, feedbackTimeoutMs },
+    () => {},
+  );
+  const automation = new MusicAutomation({
+    targets: ['music.room'],
+    clock,
+    getState: (target) => controller.getState(target),
+    request: (target, request, provenance) =>
+      controller.request(target, request, provenance),
+  });
+  controller.setFadeLifecycleHandler((event) =>
+    automation.handleFadeLifecycle(event),
+  );
+  controller.setExternalPlaybackChangeHandler((target, playback) =>
+    automation.noteExternalPlaybackChange(target, playback),
+  );
+  controller.setExternalVolumeChangeHandler((target, volume) =>
+    automation.noteExternalVolumeChange(target, volume),
+  );
+  return { clock, adapter, controller, automation };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe('semantic music control', () => {
@@ -133,6 +166,7 @@ describe('semantic music control', () => {
     clock.advanceBy(100);
     adapter.observe('music.room', { ...values, volume: 0.5 });
     expect(engine.state.music.commands[0]?.status).toBe('unconfirmed');
+    expect(engine.getMusicState('music.room').requested.volume).toBeUndefined();
     expect(adapter.dispatched).toHaveLength(1);
     engine.dispose();
     expect(clock.pendingTimers()).toBe(0);
@@ -147,6 +181,9 @@ describe('semantic music control', () => {
       registry.invoke('music.pause', { target: 'music.room' }, actor),
     ).rejects.toThrow('Music command failed');
     expect(engine.state.music.commands[0]?.status).toBe('failed');
+    expect(
+      engine.getMusicState('music.room').requested.playback,
+    ).toBeUndefined();
     expect(JSON.stringify(engine.state)).not.toContain('private-token');
     engine.dispose();
   });
@@ -172,7 +209,11 @@ describe('semantic music control', () => {
       deviceIds: [],
       scenes: [],
     });
-    expect(engine.state.music).toEqual({ devices: {}, commands: [] });
+    expect(engine.state.music).toEqual({
+      devices: {},
+      commands: [],
+      fades: {},
+    });
     await expect(
       new CapabilityRegistry(engine).invoke(
         'music.play',
@@ -320,6 +361,308 @@ describe('semantic music control', () => {
     expect(internals.issuedSequence.size).toBe(0);
     expect(internals.timers.size).toBe(0);
     expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it('clears a failed volume intent so automation can retry against observed state', async () => {
+    const { clock, adapter, controller, automation } = automationSetup();
+    adapter.observe('music.room', {
+      ...values,
+      playback: 'playing',
+      volume: 0.25,
+    });
+    automation.setVolumeAutomationEnabled(false);
+    automation.handlePresence('unknown', 'occupied', 1);
+
+    const dispatch = adapter.dispatch.bind(adapter);
+    vi.spyOn(adapter, 'dispatch')
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementation((command) => dispatch(command));
+    automation.noteExplicitRequest(
+      'music.room',
+      { property: 'volume', value: 0.4 },
+      actor,
+    );
+    await expect(
+      controller.request(
+        'music.room',
+        { property: 'volume', value: 0.4 },
+        actor,
+      ),
+    ).rejects.toThrow('Music command failed');
+    expect(controller.getState('music.room').requested.volume).toBeUndefined();
+
+    automation.setVolumeAutomationEnabled(true);
+    await flushMicrotasks();
+    expect(adapter.dispatched).toHaveLength(1);
+    expect(adapter.dispatched[0]?.requested).toEqual({
+      property: 'volume',
+      value: 0.4,
+    });
+    expect(controller.state.commands.map(({ status }) => status)).toEqual([
+      'failed',
+      'pending',
+    ]);
+    automation.dispose();
+    controller.dispose();
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it('clears confirmed playback intent before a physical pause and does not resume it on re-entry', async () => {
+    const { clock, adapter, controller, automation } = automationSetup();
+    automation.setVolumeAutomationEnabled(false);
+    adapter.observe('music.room', { ...values, playback: 'playing' });
+    automation.handlePresence('unknown', 'occupied', 1);
+
+    const play = await controller.request(
+      'music.room',
+      { property: 'playback', value: 'playing' },
+      actor,
+    );
+    adapter.observe(
+      'music.room',
+      { ...values, playback: 'playing' },
+      true,
+      play.id,
+    );
+    expect(
+      controller.getState('music.room').requested.playback,
+    ).toBeUndefined();
+
+    adapter.observe('music.room', { ...values, playback: 'paused' });
+    expect(
+      controller.getState('music.room').requested.playback,
+    ).toBeUndefined();
+    automation.handlePresence('occupied', 'confirmed_empty', 0);
+    await flushMicrotasks();
+    const leavePause = controller.state.commands.at(-1);
+    expect(leavePause?.requested).toEqual({
+      property: 'playback',
+      value: 'paused',
+    });
+    adapter.observe(
+      'music.room',
+      { ...values, playback: 'paused' },
+      true,
+      leavePause?.id,
+    );
+
+    automation.handlePresence('confirmed_empty', 'occupied', 1);
+    await flushMicrotasks();
+    expect(adapter.dispatched.map(({ requested }) => requested)).toEqual([
+      { property: 'playback', value: 'playing' },
+      { property: 'playback', value: 'paused' },
+    ]);
+    automation.dispose();
+    controller.dispose();
+    expect(clock.pendingTimers()).toBe(0);
+  });
+});
+
+describe('music automation fade lifecycle', () => {
+  function prepare(startAt = 0, feedbackTimeoutMs = 10_000) {
+    const setup = automationSetup(startAt, feedbackTimeoutMs);
+    setup.adapter.observe('music.room', {
+      ...values,
+      playback: 'playing',
+      volume: 0.5,
+    });
+    setup.automation.handlePresence('unknown', 'occupied', 1);
+    return setup;
+  }
+
+  it('blocks minute policy ticks until the actual fade ends, not its requested duration', async () => {
+    const { clock, adapter, controller, automation } = prepare(57_000);
+    const before = automation.getVolumePolicySnapshot('music.room');
+    const fade = { target: 'music.room', volume: 0.6, durationMs: 2_500 };
+    controller.startFade(fade, actor);
+    automation.noteExplicitFade(fade, actor);
+
+    expect(automation.getVolumePolicySnapshot('music.room').automatic).toBe(
+      false,
+    );
+    expect(automation.getVolumePolicySnapshot('music.room').baseline).toBe(
+      before.baseline,
+    );
+
+    // The first command receives no feedback. At the next minute tick the
+    // requested duration has elapsed, but the controller still owns the fade.
+    clock.advanceBy(3_000);
+    await flushMicrotasks();
+    clock.advanceBy(25);
+    expect(controller.state.fades['music.room']?.status).toBe('active');
+    expect(adapter.dispatched).toHaveLength(1);
+    expect(automation.getVolumePolicySnapshot('music.room').automatic).toBe(
+      false,
+    );
+
+    automation.dispose();
+    controller.dispose();
+  });
+
+  it('wires the engine fade lifecycle back into the volume policy', async () => {
+    const { clock, adapter, engine } = setup();
+    adapter.observe('music.room', {
+      ...values,
+      playback: 'playing',
+      volume: 0.5,
+    });
+
+    engine.startMusicFade(
+      { target: 'music.room', volume: 0.519, durationMs: 1_000 },
+      actor,
+    );
+    clock.advanceBy(1_000);
+    await flushMicrotasks();
+    expect(adapter.dispatched.at(-1)?.requested).toEqual({
+      property: 'volume',
+      value: 0.519,
+    });
+    adapter.observe('music.room', {
+      ...values,
+      playback: 'playing',
+      volume: 0.519,
+    });
+    clock.advanceBy(2_000);
+
+    expect(
+      engine.getMusicVolumePolicySnapshots()['music.room']?.target,
+    ).toBeCloseTo(0.519);
+    engine.dispose();
+  });
+
+  it('commits the destination only after successful settling', async () => {
+    const { clock, adapter, controller, automation } = prepare();
+    const before = automation.getVolumePolicySnapshot('music.room');
+    const fade = { target: 'music.room', volume: 0.519, durationMs: 1_000 };
+    controller.startFade(fade, actor);
+    automation.noteExplicitFade(fade, actor);
+
+    clock.advanceBy(1_000);
+    await flushMicrotasks();
+    const command = controller.state.commands.at(-1);
+    expect(command?.requested).toEqual({ property: 'volume', value: 0.519 });
+    adapter.observe('music.room', {
+      ...values,
+      playback: 'playing',
+      volume: 0.519,
+    });
+    expect(controller.state.fades['music.room']?.status).toBe('settling');
+    expect(automation.getVolumePolicySnapshot('music.room').baseline).toBe(
+      before.baseline,
+    );
+
+    automation.handlePresence('occupied', 'occupied', 1);
+    expect(adapter.dispatched).toHaveLength(1);
+    clock.advanceBy(1_999);
+    expect(controller.state.fades['music.room']?.status).toBe('settling');
+    clock.advanceBy(1);
+    const after = automation.getVolumePolicySnapshot('music.room');
+    expect(controller.state.fades['music.room']?.status).toBe('completed');
+    expect(after.baselineSource).toBe('user');
+    expect(after.target).toBeCloseTo(0.519);
+    expect(after.controller).toBe('you');
+
+    automation.dispose();
+    controller.dispose();
+  });
+
+  it('uses actual terminal volume for cancelled and unconfirmed fades without later playing the old target', async () => {
+    const cancelled = prepare();
+    const cancelledFade = {
+      target: 'music.room',
+      volume: 0.8,
+      durationMs: 7_500,
+    };
+    cancelled.controller.startFade(cancelledFade, actor);
+    cancelled.automation.noteExplicitFade(cancelledFade, actor);
+    cancelled.controller.cancelFade('music.room');
+    expect(
+      cancelled.automation.getVolumePolicySnapshot('music.room').target,
+    ).toBeCloseTo(0.5);
+    cancelled.automation.handlePresence('occupied', 'occupied', 1);
+    await flushMicrotasks();
+    expect(cancelled.adapter.dispatched).toHaveLength(0);
+    cancelled.automation.dispose();
+    cancelled.controller.dispose();
+
+    const unconfirmed = prepare(0, 100);
+    const unconfirmedFade = {
+      target: 'music.room',
+      volume: 0.7,
+      durationMs: 2_500,
+    };
+    unconfirmed.controller.startFade(unconfirmedFade, actor);
+    unconfirmed.automation.noteExplicitFade(unconfirmedFade, actor);
+    unconfirmed.clock.advanceBy(250);
+    await flushMicrotasks();
+    expect(unconfirmed.controller.getState('music.room').requested.volume).toBe(
+      0.52,
+    );
+    unconfirmed.clock.advanceBy(100);
+    expect(unconfirmed.controller.state.fades['music.room']?.status).toBe(
+      'unconfirmed',
+    );
+    expect(
+      unconfirmed.controller.getState('music.room').requested.volume,
+    ).toBeUndefined();
+    expect(
+      unconfirmed.automation.getVolumePolicySnapshot('music.room').target,
+    ).toBeCloseTo(0.5);
+    unconfirmed.automation.handlePresence('occupied', 'occupied', 1);
+    await flushMicrotasks();
+    expect(unconfirmed.adapter.dispatched).toHaveLength(1);
+    unconfirmed.automation.dispose();
+    unconfirmed.controller.dispose();
+  });
+
+  it('commits actual volume after interrupted or failed fades', async () => {
+    const interrupted = prepare(0, 1_000);
+    const interruptedFade = {
+      target: 'music.room',
+      volume: 0.8,
+      durationMs: 4_000,
+    };
+    interrupted.controller.startFade(interruptedFade, actor);
+    interrupted.automation.noteExplicitFade(interruptedFade, actor);
+    interrupted.clock.advanceBy(267);
+    await flushMicrotasks();
+    interrupted.adapter.observe('music.room', {
+      ...values,
+      playback: 'playing',
+      volume: 0.6,
+    });
+    expect(interrupted.controller.state.fades['music.room']?.status).toBe(
+      'interrupted',
+    );
+    expect(
+      interrupted.automation.getVolumePolicySnapshot('music.room').target,
+    ).toBeCloseTo(0.6);
+    interrupted.automation.dispose();
+    interrupted.controller.dispose();
+
+    const failed = prepare(0, 1_000);
+    const dispatch = failed.adapter.dispatch.bind(failed.adapter);
+    vi.spyOn(failed.adapter, 'dispatch')
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementation((command) => dispatch(command));
+    const failedFade = {
+      target: 'music.room',
+      volume: 0.519,
+      durationMs: 1_000,
+    };
+    failed.controller.startFade(failedFade, actor);
+    failed.automation.noteExplicitFade(failedFade, actor);
+    failed.clock.advanceBy(1_000);
+    await flushMicrotasks();
+    expect(failed.controller.state.fades['music.room']?.status).toBe('failed');
+    expect(
+      failed.controller.getState('music.room').requested.volume,
+    ).toBeUndefined();
+    expect(
+      failed.automation.getVolumePolicySnapshot('music.room').target,
+    ).toBeCloseTo(0.5);
+    failed.automation.dispose();
+    failed.controller.dispose();
   });
 });
 
