@@ -1,8 +1,17 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadRuntimeConfig } from '../src/runtime/config.js';
+import {
+  loadRuntimeConfig,
+  validateStateDirectoryAncestors,
+} from '../src/runtime/config.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -119,6 +128,108 @@ describe('runtime configuration cross references', () => {
         },
       }),
     ).toThrow(/Scene target lighting\.desk.*Prelight target lighting\.desk/);
+  });
+
+  it('accepts only a configured default scene', () => {
+    const configuredScenes = [
+      {
+        id: 'scene.everyday',
+        name: 'Everyday',
+        lighting: { 'lighting.ceiling': { power: true } },
+      },
+    ];
+    expect(
+      loadConfig({
+        ...minimal,
+        scenes: configuredScenes,
+        defaultSceneId: 'scene.everyday',
+      }).defaultSceneId,
+    ).toBe('scene.everyday');
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        scenes: configuredScenes,
+        defaultSceneId: 'scene.missing',
+      }),
+    ).toThrow('defaultSceneId: Default scene scene.missing is not configured');
+    expect(loadConfig(minimal).defaultSceneId).toBeUndefined();
+  });
+
+  it('requires a bearer token for trusted proxy origins and accepts bare origins only', () => {
+    expect(loadConfig(minimal).http.trustedOrigins).toEqual([]);
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        http: { trustedOrigins: ['https://lugn.example.test'] },
+      }),
+    ).toThrow('trustedOrigins requires an HTTP bearer token');
+
+    expect(
+      loadConfig(
+        {
+          ...minimal,
+          http: {
+            bearerTokenEnv: 'API_TOKEN_B64',
+            trustedOrigins: [
+              'https://lugn.example.test',
+              'http://lugn.example.test',
+            ],
+          },
+        },
+        {
+          HA_TOKEN: 'ha-token',
+          API_TOKEN_B64: Buffer.from('api-token').toString('base64url'),
+        },
+      ).http.trustedOrigins,
+    ).toEqual(['https://lugn.example.test', 'http://lugn.example.test']);
+
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        http: {
+          bearerTokenEnv: 'API_TOKEN',
+          trustedOrigins: ['https://lugn.example.test/panel'],
+        },
+      }),
+    ).toThrow('Invalid configuration');
+  });
+
+  it('keeps persisted state inside the service writable state directory', () => {
+    const stateDirectory = join(homedir(), '.local', 'state', 'lugn');
+    expect(loadConfig(minimal).statePath).toBe(
+      join(stateDirectory, 'lighting-intent.json'),
+    );
+    const customPath = join(stateDirectory, 'custom.json');
+    expect(loadConfig({ ...minimal, statePath: customPath }).statePath).toBe(
+      customPath,
+    );
+    expect(
+      loadConfig(minimal, {
+        HA_TOKEN: 'deterministic-test-token',
+        LUGN_STATE_PATH: customPath,
+      }).statePath,
+    ).toBe(customPath);
+
+    for (const statePath of [
+      join(tmpdir(), 'outside.json'),
+      join(stateDirectory, 'nested', 'lighting-intent.json'),
+      'relative.json',
+    ])
+      expect(() => loadConfig({ ...minimal, statePath })).toThrow(
+        'statePath must be',
+      );
+  });
+
+  it('rejects symlinked state directory ancestors', () => {
+    const homeDirectory = mkdtempSync(join(tmpdir(), 'lugn-state-home-'));
+    temporaryDirectories.push(homeDirectory);
+    const outside = join(homeDirectory, 'outside');
+    mkdirSync(outside);
+    symlinkSync(outside, join(homeDirectory, '.local'), 'dir');
+
+    expect(() => validateStateDirectoryAncestors(homeDirectory)).toThrow(
+      'must be a regular directory',
+    );
   });
 
   it('decodes canonical base64url secret references and rejects malformed values without echoing them', () => {

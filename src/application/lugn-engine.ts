@@ -5,6 +5,8 @@ import {
 } from './music-automation.js';
 import type {
   MusicCommandRecord,
+  MusicFadeRequest,
+  MusicFadeState,
   MusicRequest,
   DeviceMusicState,
 } from '../core/schemas.js';
@@ -164,6 +166,7 @@ export class LugnEngine {
   private prelightTimer: TimerHandle | undefined;
   private prelightSnapshot = new Map<string, LightingValues>();
   private prelightAppliedValues = new Map<string, LightingValues>();
+  private restoredIntentAwaitingOccupancy = false;
   private restoredContinuityPending = false;
   private suppressInitialEmptyContinuity = false;
 
@@ -205,11 +208,6 @@ export class LugnEngine {
       SceneSchema.parse(scene),
     );
     this.scenes = new Map(scenes.map((scene) => [scene.id, scene]));
-    if (options.defaultSceneId !== undefined) {
-      this.defaultSceneOnOccupancy = this.scenes.get(options.defaultSceneId);
-      if (!this.defaultSceneOnOccupancy)
-        throw new Error(`Unknown default scene: ${options.defaultSceneId}`);
-    }
     const restoredIntent =
       options.restoredLightingIntent === undefined
         ? undefined
@@ -220,6 +218,11 @@ export class LugnEngine {
       !this.scenes.has(restoredIntent.currentScene)
     )
       throw new Error(`Unknown restored scene: ${restoredIntent.currentScene}`);
+    if (options.defaultSceneId !== undefined) {
+      this.defaultSceneOnOccupancy = this.scenes.get(options.defaultSceneId);
+      if (!this.defaultSceneOnOccupancy)
+        throw new Error(`Unknown default scene: ${options.defaultSceneId}`);
+    }
     const devices: Record<string, DeviceRuntime> = {};
     for (const id of options.deviceIds ?? [
       'lighting.ceiling',
@@ -245,22 +248,29 @@ export class LugnEngine {
         Object.keys(devices).sort().join('\0')
     )
       throw new Error('Restored lighting devices do not match engine devices');
-    const restoredIntentExpired =
+    const restoredContinuityExpired =
       restoredIntent?.continuityExpiresAt !== null &&
       restoredIntent?.continuityExpiresAt !== undefined &&
       restoredIntent.continuityExpiresAt <= clock.now();
-    const activeRestoredIntent = restoredIntentExpired
-      ? undefined
-      : restoredIntent;
-    if (activeRestoredIntent) this.defaultSceneOnOccupancy = undefined;
+    const hasRestoredIntent =
+      restoredIntent !== undefined &&
+      !restoredContinuityExpired &&
+      ((restoredIntent.sceneRevision > 0 &&
+        restoredIntent.currentScene !== null) ||
+        Object.values(restoredIntent.devices).some(
+          (device) =>
+            Object.keys(device.baselineDesired).length > 0 ||
+            Object.keys(device.effectiveDesired).length > 0 ||
+            Object.keys(device.ownership).length > 0,
+        ));
+    if (hasRestoredIntent) this.restoredIntentAwaitingOccupancy = true;
     this.restoredContinuityPending =
-      activeRestoredIntent !== undefined &&
-      activeRestoredIntent.continuityExpiresAt !== null;
-    this.suppressInitialEmptyContinuity = restoredIntentExpired;
-    if (activeRestoredIntent) {
-      for (const [target, intent] of Object.entries(
-        activeRestoredIntent.devices,
-      )) {
+      restoredIntent !== undefined &&
+      !restoredContinuityExpired &&
+      restoredIntent.continuityExpiresAt !== null;
+    this.suppressInitialEmptyContinuity = restoredContinuityExpired;
+    if (restoredIntent && !restoredContinuityExpired) {
+      for (const [target, intent] of Object.entries(restoredIntent.devices)) {
         const device = devices[target];
         if (!device)
           throw new Error(`Unknown restored lighting device: ${target}`);
@@ -268,39 +278,46 @@ export class LugnEngine {
           Object.values(intent.ownership).some(
             (ownership) =>
               ownership.kind === 'scene' &&
-              ownership.revision > activeRestoredIntent.sceneRevision,
+              ownership.revision > restoredIntent.sceneRevision,
           )
         )
           throw new Error('Restored ownership exceeds its scene revision');
-        device.baselineDesired = { ...intent.baselineDesired };
-        device.effectiveDesired = { ...intent.effectiveDesired };
-        device.ownership = structuredClone(intent.ownership);
+        if (hasRestoredIntent) {
+          device.baselineDesired = { ...intent.baselineDesired };
+          device.effectiveDesired = { ...intent.effectiveDesired };
+          device.ownership = structuredClone(intent.ownership);
+        }
       }
-      const restoredScene = activeRestoredIntent.currentScene
-        ? this.scenes.get(activeRestoredIntent.currentScene)
-        : undefined;
-      for (const [target, values] of Object.entries(
-        restoredScene?.lighting ?? {},
-      )) {
-        const device = devices[target];
-        if (!device) continue;
-        for (const property of LightingProperties) {
-          const sceneValue = values[property];
-          const ownsSceneValue = device.ownership[property]?.kind === 'scene';
-          const synchronizeCct =
-            property === 'colorTemperature' &&
-            values.power !== false &&
-            sceneValue !== undefined;
-          if (sceneValue === undefined || (!ownsSceneValue && !synchronizeCct))
-            continue;
-          // Migrate stale scene values after preset changes. CCT is stricter:
-          // older per-light overrides cannot split an active room scene.
-          Object.assign(device.baselineDesired, { [property]: sceneValue });
-          Object.assign(device.effectiveDesired, { [property]: sceneValue });
-          device.ownership[property] = {
-            kind: 'scene',
-            revision: activeRestoredIntent.sceneRevision,
-          };
+      if (hasRestoredIntent) {
+        const restoredScene = restoredIntent.currentScene
+          ? this.scenes.get(restoredIntent.currentScene)
+          : undefined;
+        for (const [target, values] of Object.entries(
+          restoredScene?.lighting ?? {},
+        )) {
+          const device = devices[target];
+          if (!device) continue;
+          for (const property of LightingProperties) {
+            const sceneValue = values[property];
+            const ownsSceneValue = device.ownership[property]?.kind === 'scene';
+            const synchronizeCct =
+              property === 'colorTemperature' &&
+              values.power !== false &&
+              sceneValue !== undefined;
+            if (
+              sceneValue === undefined ||
+              (!ownsSceneValue && !synchronizeCct)
+            )
+              continue;
+            // Migrate stale scene values after preset changes. CCT is stricter:
+            // older per-light overrides cannot split an active room scene.
+            Object.assign(device.baselineDesired, { [property]: sceneValue });
+            Object.assign(device.effectiveDesired, { [property]: sceneValue });
+            device.ownership[property] = {
+              kind: 'scene',
+              revision: restoredIntent.sceneRevision,
+            };
+          }
         }
       }
     }
@@ -346,15 +363,22 @@ export class LugnEngine {
       presence: {
         state: 'unknown',
         personCount: null,
-        continuityExpiresAt: activeRestoredIntent?.continuityExpiresAt ?? null,
+        continuityExpiresAt:
+          restoredContinuityExpired || restoredIntent === undefined
+            ? null
+            : restoredIntent.continuityExpiresAt,
         home: { state: 'unknown', observedAt: null },
       },
       lighting: {
-        currentScene:
-          activeRestoredIntent?.currentScene ??
-          this.defaultSceneOnOccupancy?.id ??
-          null,
-        sceneRevision: activeRestoredIntent?.sceneRevision ?? 0,
+        currentScene: hasRestoredIntent
+          ? restoredIntent.currentScene
+          : (this.defaultSceneOnOccupancy?.id ?? null),
+        sceneRevision:
+          restoredIntent === undefined
+            ? 0
+            : restoredContinuityExpired
+              ? restoredIntent.sceneRevision + 1
+              : restoredIntent.sceneRevision,
         devices,
       },
       switches: { devices: switches, commands: [] },
@@ -506,6 +530,14 @@ export class LugnEngine {
     });
   }
 
+  /** True while the configured default is waiting for the first confirmed entry. */
+  get defaultScenePending(): boolean {
+    return (
+      this.defaultSceneOnOccupancy !== undefined &&
+      !this.restoredIntentAwaitingOccupancy
+    );
+  }
+
   requestMusic(
     target: string,
     requested: MusicRequest,
@@ -513,6 +545,17 @@ export class LugnEngine {
   ): Promise<MusicCommandRecord> {
     this.musicAutomation.noteExplicitRequest(target, requested, provenance);
     return this.musicController.request(target, requested, provenance);
+  }
+
+  startMusicFade(
+    request: MusicFadeRequest,
+    provenance: Provenance,
+  ): MusicFadeState {
+    return this.musicController.startFade(request, provenance);
+  }
+
+  cancelMusicFade(target: string): MusicFadeState | null {
+    return this.musicController.cancelFade(target);
   }
 
   getSwitchState(target: string): DeviceSwitchState {
@@ -768,11 +811,14 @@ export class LugnEngine {
     );
     this.addDiagnostic(
       'device.available',
-      `${target} is available again; reconciling current desired state`,
+      this.restoredIntentAwaitingOccupancy
+        ? `${target} is available again; restored intent waits for confirmed occupancy`
+        : `${target} is available again; reconciling current desired state`,
       { target },
     );
     this.publish(['lighting', 'diagnostics']);
-    await this.reconcileScene(this.state.lighting.sceneRevision);
+    if (!this.restoredIntentAwaitingOccupancy)
+      await this.reconcileScene(this.state.lighting.sceneRevision);
   }
 
   async handlePresence(event: PresenceEvent): Promise<void> {
@@ -881,6 +927,10 @@ export class LugnEngine {
       if (expiry !== null && receivedAt >= expiry) this.expireContinuity();
       const returned = withinContinuity;
       this.state.presence.continuityExpiresAt = null;
+      if (this.restoredIntentAwaitingOccupancy) {
+        this.defaultSceneOnOccupancy = undefined;
+        this.restoredIntentAwaitingOccupancy = false;
+      }
       this.addDiagnostic(
         returned ? 'presence.returned' : 'presence.occupied',
         returned
@@ -1381,6 +1431,7 @@ export class LugnEngine {
 
   private beginScene(scene: LightingScene, intent: IntentProvenance): void {
     this.defaultSceneOnOccupancy = undefined;
+    this.restoredIntentAwaitingOccupancy = false;
     this.terminateAllFastPathEvents();
     const priorRevision = this.state.lighting.sceneRevision;
     this.clearRetryTimer(priorRevision);
@@ -1690,12 +1741,19 @@ export class LugnEngine {
         { commandId: observation.commandId },
       );
     this.publish(['lighting', 'commands', 'diagnostics', 'timings']);
-    if (this.state.presence.state !== 'confirmed_empty') {
+    if (
+      this.state.presence.state !== 'confirmed_empty' &&
+      !this.restoredIntentAwaitingOccupancy
+    ) {
       void this.reconcileScene(
         this.state.lighting.sceneRevision,
         fastPathEventId,
       );
-    } else if (isStaleCommand && observation.values.power === true) {
+    } else if (
+      this.state.presence.state === 'confirmed_empty' &&
+      isStaleCommand &&
+      observation.values.power === true
+    ) {
       void this.dispatch(
         observation.target,
         { power: false },
@@ -1734,7 +1792,11 @@ export class LugnEngine {
   }
 
   private expireContinuity(): void {
+    if (this.state.presence.state === 'unknown')
+      this.suppressInitialEmptyContinuity = true;
     this.cancelContinuityTimer();
+    this.restoredContinuityPending = false;
+    this.restoredIntentAwaitingOccupancy = false;
     this.state.lighting.currentScene = null;
     this.state.lighting.sceneRevision += 1;
     this.ledger.cancelRevision(

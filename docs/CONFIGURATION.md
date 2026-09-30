@@ -34,9 +34,10 @@ a protected secret file. Never put credential values in checked-in config.
 
 ## Future configuration goals
 
-A future configuration UI should edit the same validated schema, while
-advanced users can inspect or export JSON. The current runtime does not yet
-offer visual editing for:
+The `/ui/` operational panel supports optional Clerk sign-in, but it does not
+edit configuration. A future configuration UI should edit the same validated
+schema, while advanced users can inspect or export JSON. Potential areas for
+visual editing include:
 
 - device and adapter mappings;
 - scenes and quiet-hour policy;
@@ -47,7 +48,30 @@ offer visual editing for:
 - convergence, retry and diagnostic settings.
 
 Avoid burying ordinary user behavior in hardcoded application logic as these
-settings expand.
+settings expand. The current `homeAssistant.buttons` map is an explicit
+allowlist of semantic IDs to `button.*` entities; the runtime exposes only the
+typed `button.press` action for mapped targets. Discovery and preflight do not
+invoke the buttons. See [IKEA BILRESA](INTEGRATIONS.md#ikea-bilresa) and
+[Running Lugn](OPERATIONS.md#home-assistant-buttons).
+
+## Default scene and lighting intent
+
+`defaultSceneId` is optional and must name one of the configured scenes. When
+set, Lugn selects it as the default scene but waits for confirmed occupancy
+before applying its lighting values. Unknown presence and startup observations
+alone do not turn lights on. A confirmed-empty event continues to apply the
+normal physical-off policy; a live preview may also apply configured prelight.
+The onboarding wizard writes `scenes: []`; the runtime expands this to its
+built-in room presets for the mapped lights. Onboarding does not write a
+`scene.everyday` preset or set `defaultSceneId`.
+
+## HTTP trusted origins
+
+`http.trustedOrigins` defaults to an empty list. Direct requests must use a
+loopback host. If Lugn is behind a TLS-terminating reverse proxy, add the exact
+origin (scheme and host, without a path) and keep `bearerTokenEnv` configured;
+the proxy must preserve the external `Host` header. Other host/origin pairs
+are rejected to protect the loopback API against DNS rebinding.
 
 ## BILRESA event entities
 
@@ -60,15 +84,25 @@ mapping.
 
 ## Persistence
 
-The runtime currently persists a smaller first slice: the selected lighting
-scene, desired lighting values, per-property ownership, and the confirmed-
-empty continuity deadline. The versioned snapshot is atomically written to a
-private JSON file under the service account's state directory. Device
-observations, current home/room presence, music context and pending commands
-are not restored. See [Lighting intent persistence](OPERATIONS.md#lighting-intent-persistence).
+The runtime stores versioned lighting intent in
+`$HOME/.local/state/lugn/lighting-intent.json` by default. `statePath` in
+`config.json` or `LUGN_STATE_PATH` in `lugn.env` may select another direct-child
+file under `$HOME/.local/state/lugn/`. The file contains the selected scene,
+logical baseline/effective values, property ownership, and the absolute
+continuity expiry. It never contains sensor presence, observed device values,
+pending commands, or command history. Writes are atomic and restricted to
+mode `0600`. The systemd installer grants the service write access only to
+that state directory.
 
-On restart, saved lighting intent can be reconciled with newly observed device
-state. Stale physical commands are not blindly replayed.
+After restart, Lugn restores logical lighting intent and its absolute
+continuity expiry, starts with unknown presence and no prior observations or
+command ledger, and obtains fresh Home Assistant observations without issuing
+commands. It reconciles restored intent on the next confirmed occupancy unless
+continuity has expired. A confirmed-empty heartbeat immediately after restart
+still switches lights off but does not extend the restored deadline. Corrupt,
+unsupported, or device/scene-mismatched state is ignored safely. Music state and
+configuration are not part of this lighting-intent file. See [Lighting intent
+persistence](OPERATIONS.md#lighting-intent-persistence) for service setup.
 
 ## Later persistence needs
 

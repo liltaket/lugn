@@ -14,6 +14,15 @@ The custom room dashboard provides:
 - Play/pause.
 - Volume down/up in 5 percentage-point steps.
 
+The capability API includes `music.getState`, `music.play`, `music.pause`,
+`music.setVolume` (0..1), `music.fadeVolume`, `music.cancelFade`, and
+`music.selectSource`. Fade requests use `{ target, volume, durationMs }`, with a
+1 second to 2 minute duration. Source names must appear in the target's
+configured `sources` allowlist; copy their exact spelling from the entity's
+Home Assistant `source_list`. An empty allowlist disables source changes. The
+bridge uses fixed media-player services documented by
+[Home Assistant](https://www.home-assistant.io/integrations/media_player/).
+
 The preset numbers can be changed under each `homeAssistant.music` mapping.
 Each target can also have an allowlist of exact source names copied from its
 Home Assistant `source_list`. The dashboard targets the first configured music
@@ -26,6 +35,35 @@ preset.
 
 These are explicit user actions. They remain available when HA reports the
 resident away; the away gate controls automatic music actions.
+
+### Volume fades
+
+Fades require an available target and a volume observation no older than the
+command feedback timeout. The controller interpolates bounded steps (at most
+50, no faster than every 250 ms), sends each as a normal volume command, and
+waits for that command to be confirmed by the existing ledger before sending
+the next step. It stops if feedback leaves the expected segment, the target
+becomes unavailable, a direct volume request supersedes it, or feedback times
+out. A requested duration must allow at least 250 ms per 0.02 volume step (a
+full-scale fade therefore needs at least 12.5 seconds). Cancelling stops future
+steps; an already dispatched Home Assistant service call cannot be recalled.
+
+The latest fade is exposed at `music.fades[target]` with its start, target,
+nominal duration, expected/observed/last-issued volumes, status, settling end,
+and a diagnostic reason when it stops early. A completed fade remains in a
+2-second settling window before it is marked complete. That window tolerates
+late observations around the target, but a move outside the 0.02 tolerance
+marks the fade interrupted. An overall duration-plus-30-second deadline and
+the existing per-command timeout keep a stalled fade bounded. These tolerances
+are initial software defaults and need measurement against the real WiiM.
+
+Volume matching allows a difference of 0.005 in Home Assistant's 0..1 scale.
+An observation cached from before a request cannot confirm it, and a matching
+observation only proves that HA reported the expected value. The volume policy
+tracks attribution separately: explicit/manual volume changes update the user
+baseline, while automatic policy actions are attributed to Lugn. See
+[Volume policy](#volume-policy) for the distinction between last controller,
+automatic adjustment, baseline and target.
 
 ## Automatic playback rules
 
@@ -99,6 +137,7 @@ arbitrary entity ID or service call from a dashboard request.
 - Music control depends on Home Assistant exposing and supporting the needed
   media-player service for the mapped device.
 - Preset request confirmation is unavailable from the current HA observations.
-- Direct WiiM transport and measured fade behavior are not implemented.
+- Direct WiiM transport is not implemented. Software fades use Home Assistant
+  feedback, but their timing has not been measured against the connected WiiM.
 - Automatic behavior is configured for the room-level policy; the dashboard
   does not provide a player/source selector or an automation settings editor.

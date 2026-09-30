@@ -154,12 +154,12 @@ Startup and operational logs omit tokens and raw broker/HA errors.
 
 ## Lighting intent persistence
 
-The runtime saves the selected scene, desired light values, manual property
-overrides, and confirmed-empty continuity deadline to
-`$XDG_STATE_HOME/lugn/lighting-intent.json`, or
-`~/.local/state/lugn/lighting-intent.json` when `XDG_STATE_HOME` is unset.
-Set `LUGN_LIGHTING_INTENT_PATH` to choose another path. The file and its
-directory are private to the service account. Writes are versioned and atomic.
+The runtime saves the selected scene, desired light values, per-property
+ownership, and confirmed-empty continuity deadline to
+`$HOME/.local/state/lugn/lighting-intent.json`. The optional `statePath` config
+field or `LUGN_STATE_PATH` environment variable may choose another direct-child
+file in that writable state directory. The file is versioned, written
+atomically, and restricted to mode `0600`.
 
 Physical observations, presence counts, command history, and pending commands
 are not restored. After restart, saved lighting intent is reconciled only when
@@ -233,7 +233,11 @@ already exists. It creates an empty `$HOME/.config/lugn/lugn.env` with mode
 `NAME=value` per line. Keep both files private. The installer prints the
 resolved paths when it finishes. Edit the config with the actual Home
 Assistant URL/entity IDs and the sensor's MQTT URL/topic before starting the
-service. Validate the config and secrets without contacting any service:
+service. It also creates `$HOME/.local/state/lugn/` for the durable lighting
+intent file and grants the service write access only to that directory. The
+optional `statePath` config field or `LUGN_STATE_PATH` environment variable
+must name a direct child of this directory. Validate the config and secrets without
+contacting any service:
 
 ```sh
 node --env-file="$HOME/.config/lugn/lugn.env" \
@@ -254,6 +258,62 @@ administrator must enable lingering for the account using
 `loginctl enable-linger <user>`. The service runs as the installing user and
 keeps the HTTP API bound to loopback. Re-run the installer after moving the
 checkout or changing the Node.js executable path.
+
+## Room control panel
+
+The loopback control panel is available at `/ui/`. From another computer,
+open an SSH tunnel to the Lugn host:
+
+```sh
+ssh -N -L 8787:127.0.0.1:8787 <user>@<host>
+```
+
+Then visit `http://127.0.0.1:8787/ui/`. Once the Clerk settings below are
+configured, the panel shows Clerk sign-in. Without them, the panel retains its
+token-login mode. Keep the API bearer token for machine clients only.
+
+Create a Clerk application and set its sign-up mode to **Open** if anyone who
+can reach the panel should be able to create an account. Add the exact panel
+origin used by the browser to the Clerk instance's allowed origins when
+required. Use development keys only for development; Clerk's development
+instances are not intended for production workloads. Production keys require
+the application's configured domain and HTTPS.
+
+Add this block to `http` in `config.json`, using the environment variable names
+that hold your Clerk keys and access policy.
+
+```json
+{
+  "clerk": {
+    "publishableKeyEnv": "CLERK_PUBLISHABLE_KEY",
+    "secretKeyEnv": "CLERK_SECRET_KEY_B64",
+    "allowedUserIdsEnv": "CLERK_ALLOWED_USER_IDS"
+  }
+}
+```
+
+Set the referenced variables in `$HOME/.config/lugn/lugn.env`. Keep the Clerk
+secret key in that mode-0600 file; it is never sent to the browser. The
+`CLERK_SECRET_KEY_B64` value must be the key's base64url encoding, matching the
+other `_B64` values in this file. Set `CLERK_ALLOWED_USER_IDS=*` to let any
+successfully authenticated account in this Clerk instance create a panel
+session. This works with Open sign-ups so anyone who can reach the panel can
+register and control Lugn. To restrict access later, replace `*` with a
+comma-separated list of Clerk user IDs such as `user_example123`. Lugn
+continues to require `bearerTokenEnv` for its machine HTTP API.
+
+The wildcard changes which Clerk users are authorized; it does not expose the
+panel to the network. Lugn still binds to loopback, validates Clerk sessions,
+and applies its origin and CSRF checks. A reverse proxy or tunnel that makes
+the panel reachable also makes it available to anyone who can sign in through
+the open Clerk instance.
+
+For a TLS reverse proxy, add its exact origin to `http.trustedOrigins` (for
+example, `https://lugn.example.org`) and keep `bearerTokenEnv` configured. The
+proxy must preserve that host when forwarding to loopback. Lugn rejects
+unconfigured hosts and cross-origin browser requests to prevent DNS rebinding.
+The panel shows reported state and command feedback; a dispatch alone does not
+prove a physical light changed.
 
 ## HTTP API
 
@@ -400,7 +460,9 @@ curl -sS -X POST \
 ```
 
 Use `music.play` and `music.pause` with `{ "target": "music.room" }`, or
-`music.selectSource` with `{ "target": "music.room", "source": "Optical" }`.
+`music.selectSource` with a source from the target's configured allowlist.
+`music.fadeVolume` takes a target, 0..1 volume and duration in milliseconds;
+`music.cancelFade` stops future steps for that target.
 `music.getState` returns observed playback, volume, source, title, availability
 and requested values. Check the matching command in `/state` for
 `pending`, `confirmed`, `unconfirmed`, `superseded` or `failed`. Confirmation
@@ -488,8 +550,12 @@ feedback time out after 10 seconds. These limits keep the runtime bounded in
 normal operation while leaving active commands attributable until feedback or
 timeout.
 
-Runtime command history and command-ID attribution are not persisted. Restart
-does not replay old physical commands; the new process seeds fresh Home
-Assistant observations and starts with a new in-memory ledger. Back up the
-installation config and secret file separately; the runtime state stream is
-diagnostic history, not durable storage.
+Runtime command history, command-ID attribution, Home Assistant observations,
+sensor presence, diagnostics, and timing records are not persisted. The
+separate lighting-intent file retains only the selected scene, logical desired
+values, manual property ownership, and absolute continuity expiry. Restart does
+not replay old physical commands; the new process starts with unknown presence,
+seeds fresh Home Assistant observations, and waits for confirmed occupancy
+before reconverging saved intent. Back up the installation config and secret
+file separately; the runtime state stream is diagnostic history, not durable
+storage.

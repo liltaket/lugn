@@ -24,7 +24,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run && bash tests/install-user-service.test.sh"
   },
   "engines": {
     "node": ">=22"

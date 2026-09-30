@@ -117,6 +117,14 @@ export const MusicRequestSchema = z.discriminatedUnion('property', [
     .strict(),
 ]);
 export type MusicRequest = z.infer<typeof MusicRequestSchema>;
+export const MusicFadeRequestSchema = z
+  .object({
+    target: SemanticMusicIdSchema,
+    volume: z.number().min(0).max(1),
+    durationMs: z.number().int().min(1_000).max(120_000),
+  })
+  .strict();
+export type MusicFadeRequest = z.infer<typeof MusicFadeRequestSchema>;
 export const MusicObservationValuesSchema = z
   .object({
     playback: z.enum(['playing', 'paused', 'idle', 'off', 'unknown']),
@@ -161,9 +169,34 @@ export const DeviceMusicStateSchema = z.object({
   allowedSources: z.array(z.string().min(1)),
 });
 export type DeviceMusicState = z.infer<typeof DeviceMusicStateSchema>;
+export const MusicFadeStatusSchema = z.enum([
+  'active',
+  'settling',
+  'completed',
+  'cancelled',
+  'interrupted',
+  'failed',
+  'unconfirmed',
+]);
+export const MusicFadeStateSchema = z.object({
+  id: z.string(),
+  target: SemanticMusicIdSchema,
+  startVolume: z.number().min(0).max(1),
+  targetVolume: z.number().min(0).max(1),
+  durationMs: z.number().int().positive(),
+  startedAt: z.number().nonnegative(),
+  expectedVolume: z.number().min(0).max(1),
+  observedVolume: z.number().min(0).max(1).nullable(),
+  issuedVolume: z.number().min(0).max(1).nullable(),
+  status: MusicFadeStatusSchema,
+  settlingUntil: z.number().nonnegative().optional(),
+  diagnosticReason: z.string().optional(),
+});
+export type MusicFadeState = z.infer<typeof MusicFadeStateSchema>;
 export const MusicStateSchema = z.object({
   devices: z.record(SemanticMusicIdSchema, DeviceMusicStateSchema),
   commands: z.array(MusicCommandRecordSchema),
+  fades: z.record(SemanticMusicIdSchema, MusicFadeStateSchema).default({}),
 });
 export type MusicState = z.infer<typeof MusicStateSchema>;
 
@@ -217,7 +250,34 @@ export const OwnershipSchema = z.discriminatedUnion('kind', [
 ]);
 export type Ownership = z.infer<typeof OwnershipSchema>;
 
-/** Durable lighting intent. Physical observations and command history stay ephemeral. */
+export const DeviceLightingStateSchema = z.object({
+  observed: LightingValuesSchema,
+  baselineDesired: LightingValuesSchema,
+  effectiveDesired: LightingValuesSchema,
+  ownership: z.partialRecord(LightingPropertySchema, OwnershipSchema),
+  availability: z.enum(['available', 'degraded', 'unavailable']),
+});
+export type DeviceLightingState = z.infer<typeof DeviceLightingStateSchema>;
+
+const PersistedLightingOwnershipSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('scene'),
+      revision: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('override'),
+      actor: ActorSchema.strict(),
+      source: z.string().optional(),
+      reason: z.string(),
+      createdAt: z.number().finite().nonnegative(),
+    })
+    .strict(),
+]);
+
+/** The durable subset of lighting state. Observations and commands are excluded. */
 export const LightingIntentSnapshotSchema = z
   .object({
     currentScene: z
@@ -232,7 +292,10 @@ export const LightingIntentSnapshotSchema = z
         .object({
           baselineDesired: LightingValuesSchema.strict(),
           effectiveDesired: LightingValuesSchema.strict(),
-          ownership: z.partialRecord(LightingPropertySchema, OwnershipSchema),
+          ownership: z.partialRecord(
+            LightingPropertySchema,
+            PersistedLightingOwnershipSchema,
+          ),
         })
         .strict(),
     ),
@@ -241,15 +304,6 @@ export const LightingIntentSnapshotSchema = z
 export type LightingIntentSnapshot = z.infer<
   typeof LightingIntentSnapshotSchema
 >;
-
-export const DeviceLightingStateSchema = z.object({
-  observed: LightingValuesSchema,
-  baselineDesired: LightingValuesSchema,
-  effectiveDesired: LightingValuesSchema,
-  ownership: z.partialRecord(LightingPropertySchema, OwnershipSchema),
-  availability: z.enum(['available', 'degraded', 'unavailable']),
-});
-export type DeviceLightingState = z.infer<typeof DeviceLightingStateSchema>;
 
 export const CommandStatusSchema = z.enum([
   'pending',

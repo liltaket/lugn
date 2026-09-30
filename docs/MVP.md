@@ -84,3 +84,16 @@ still needs work before Lugn is a broadly configurable, finished product.
   dashboards.
 - Music stays silent from automatic start/resume after 23:00; user-selected
   preset and playback controls remain manual actions.
+- The fast entry-light command is dispatched without waiting for persistence or
+  UI work. Confirmed empty turns lights off immediately while retaining the
+  logical scene; a short return restores the effective scene and overrides.
+- Scene selection converges all configured targets. A manual change is tracked
+  only for the property changed when possible, and an unreachable target does
+  not create a false manual override.
+- Bed and Desk Hub roles use separate pages/tokens; DashCast yields to an active
+  external cast and the dashboard reflects current runtime state.
+- Music fade feedback does not create false manual ownership. Explicit volume
+  changes update the user's baseline, while automatic adjustments identify
+  Lugn as the controller and expose their target.
+- Restart restores logical lighting intent only after fresh occupancy; old
+  presence, observations, command ledgers and pending commands are not replayed.

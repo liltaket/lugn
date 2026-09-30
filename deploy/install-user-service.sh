@@ -9,6 +9,7 @@ home_dir="${HOME:?HOME must be set}"
 }
 config_home="$home_dir/.config"
 config_root="$config_home/lugn"
+state_root="$home_dir/.local/state/lugn"
 systemd_root="$config_home/systemd"
 unit_dir="$systemd_root/user"
 config_file="$config_root/config.json"
@@ -28,10 +29,10 @@ node_path="$(command -v node)"
 [[ -f "$repo_dir/dist/runtime/main.js" ]] || fail 'Build Lugn first with npm ci && npm run build.'
 [[ -f "$repo_dir/config.example.json" ]] || fail 'config.example.json was not found in the repository.'
 
-for path in "$config_home" "$config_root" "$systemd_root" "$unit_dir"; do
+for path in "$config_home" "$config_root" "$home_dir/.local" "$home_dir/.local/state" "$state_root" "$systemd_root" "$unit_dir"; do
   [[ ! -L "$path" ]] || fail "$path must not be a symbolic link."
 done
-install -d -m 700 "$config_root" "$unit_dir"
+install -d -m 700 "$config_root" "$state_root" "$unit_dir"
 for path in "$config_file" "$environment_file" "$unit_file"; do
   [[ ! -L "$path" ]] || fail "$path must not be a symbolic link."
   if [[ -e "$path" && ! -f "$path" ]]; then
@@ -46,9 +47,8 @@ if [[ ! -e "$environment_file" ]]; then
 fi
 chmod 600 "$config_file" "$environment_file"
 
-systemd_path() {
+systemd_path_value() {
   local value="$1"
-  local mode="${2:-path}"
   local escaped=""
   local character
 
@@ -58,23 +58,17 @@ systemd_path() {
     character="${value:0:1}"
     value="${value:1}"
     case "$character" in
-      ' ') escaped+='\\x20' ;;
-      $'\t') escaped+='\\x09' ;;
-      $'\n') escaped+='\\x0a' ;;
-      $'\r') escaped+='\\x0d' ;;
-      $'\v') escaped+='\\x0b' ;;
-      $'\f') escaped+='\\x0c' ;;
-      '\\') escaped+='\\x5c' ;;
-      '"') escaped+='\\x22' ;;
-      "'") escaped+='\\x27' ;;
+      ' ') escaped+='\x20' ;;
+      $'\t') escaped+='\x09' ;;
+      $'\n') escaped+='\x0a' ;;
+      $'\r') escaped+='\x0d' ;;
+      $'\v') escaped+='\x0b' ;;
+      $'\f') escaped+='\x0c' ;;
+      $'\\') escaped+='\x5c' ;;
+      '"') escaped+='\x22' ;;
+      "'") escaped+='\x27' ;;
       '%') escaped+='%%' ;;
-      '$')
-        if [[ "$mode" = exec ]]; then
-          escaped+='$$'
-        else
-          escaped+='$'
-        fi
-        ;;
+      '$') escaped+='$' ;;
       *) escaped+="$character" ;;
     esac
   done
@@ -91,15 +85,16 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=$(systemd_path "$repo_dir")
-EnvironmentFile=$(systemd_path "$environment_file")
+WorkingDirectory=$(systemd_path_value "$repo_dir")
+EnvironmentFile=$(systemd_path_value "$environment_file")
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
+ReadWritePaths=$(systemd_path_value "$state_root")
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ExecStart=$(systemd_path "$node_path" exec) $(systemd_path "$repo_dir/dist/runtime/main.js" exec) $(systemd_path "$config_file" exec)
+ExecStart=:$(systemd_path_value "$node_path") $(systemd_path_value "$repo_dir/dist/runtime/main.js") $(systemd_path_value "$config_file")
 Restart=on-failure
 RestartSec=3
 

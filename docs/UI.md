@@ -1,5 +1,28 @@
 # UI, Nest Hubs and DashCast
 
+## Operational control panel
+
+The initial web surface is a focused lighting panel. It shows current presence,
+integration health, configured scenes, and every mapped light's availability,
+desired values, reported values, and ownership. Operators can select or reapply
+a scene, toggle a mapped light, and adjust its brightness when the adapter
+reports that property. Command acceptance remains separate from device
+feedback.
+
+The panel supports optional Clerk sign-in. Lugn verifies the signed Clerk
+session token, applies the configured server-side user policy, and creates a
+short-lived same-origin session with CSRF protection. The Clerk secret key is
+server-only. The API bearer token remains available for machine clients and
+does not sign humans into the panel. Keep the HTTP service on loopback and use
+an SSH tunnel for local operation, or configure the exact TLS proxy origin in
+`http.trustedOrigins`. The existing typed capabilities remain the only path to
+device commands. Clerk project sign-up settings control who can create an
+account; the Lugn allowlist can restrict which authenticated users may operate
+the panel.
+
+This panel is for observing and tuning configured lights. Editing Home
+Assistant mappings and broader room systems remain future UI work.
+
 ## Current Hub dashboard
 
 Lugn serves its own room dashboard for Nest Hubs. It is a custom Lugn page, not
@@ -62,10 +85,8 @@ Hub's fresh displayed error/poll, the display listener's reachability from
 that Hub, and its status on Lugn's dashboard. Do not diagnose receiver
 rendering only from an HTTP response on the Lugn host.
 
-## Operational control panel and future configuration editor
+## Future configuration editor
 
-The `/ui/` operational control panel can use Clerk for human sign-in; device
-and Home Assistant connections continue to use their own machine credentials.
 A full visual settings editor is not part of the current delivery. Future
 settings can include scenes, home-presence mapping, music policy, routines,
 receiver roles and diagnostics, using the typed Lugn capability layer.

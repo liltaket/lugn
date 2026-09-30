@@ -3,9 +3,8 @@ import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
 import { HomeAssistantHomePresenceAdapter } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
-import { pathToFileURL } from 'node:url';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DashCastAdapter } from '../adapters/dashcast.js';
 import { HomeAssistantLightingAdapter } from '../adapters/home-assistant-lighting.js';
 import { HomeAssistantSwitchAdapter } from '../adapters/home-assistant-switch.js';
@@ -128,12 +127,8 @@ export async function startRuntime(
     config.defaultSceneId,
     scenes,
   );
-  const stateDirectory =
-    process.env['XDG_STATE_HOME'] ?? join(homedir(), '.local', 'state');
   const lightingIntentPath =
-    dependencies.lightingIntentPath ??
-    process.env['LUGN_LIGHTING_INTENT_PATH'] ??
-    join(stateDirectory, 'lugn', 'lighting-intent.json');
+    dependencies.lightingIntentPath ?? config.statePath;
   const lightingIntentStore = new LightingIntentStore({
     filePath: lightingIntentPath,
     expectedDeviceIds: deviceIds,
@@ -254,9 +249,9 @@ export async function startRuntime(
 
   const http = new LugnHttpServer({
     ...config.http,
-    webAssetsDirectory: join(process.cwd(), 'dist', 'web'),
     engine,
     capabilities,
+    webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
     integrations: () => ({
       home_assistant: homeAssistantSocket.status,
       mqtt: mqttSubscriber?.status ?? 'not_configured',
@@ -322,7 +317,6 @@ export async function startRuntime(
     : undefined;
 
   try {
-    if (mqttSubscriber) mqttSubscriber.start();
     await seedHomeAssistantObservations(
       config.homeAssistant.baseUrl,
       config.homeAssistant.token,
@@ -333,6 +327,7 @@ export async function startRuntime(
       homeAssistantHomePresence,
       homeAssistantFetch,
     );
+    if (mqttSubscriber) mqttSubscriber.start();
     homeAssistantSocket.start();
     await http.start();
     await displayServer?.start();
@@ -344,7 +339,7 @@ export async function startRuntime(
     sensorAdapter?.stop();
     unsubscribeMqttStatus?.();
     homeAssistantSocket.stop();
-    await lightingIntentStore.stop();
+    await lightingIntentStore.stop().catch(() => undefined);
     engine.dispose();
     await mqttSubscriber?.stop();
     throw error;
@@ -367,9 +362,15 @@ export async function startRuntime(
       sensorAdapter?.stop();
       unsubscribeMqttStatus?.();
       homeAssistantSocket.stop();
-      await lightingIntentStore.stop();
-      engine.dispose();
-      await mqttSubscriber?.stop();
+      try {
+        await mqttSubscriber?.stop();
+      } finally {
+        try {
+          await lightingIntentStore.stop();
+        } finally {
+          engine.dispose();
+        }
+      }
     },
   };
 }

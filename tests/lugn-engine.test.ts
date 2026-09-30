@@ -71,6 +71,86 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
+  it('does not dispatch corrective off for stale feedback while restored intent awaits occupancy', () => {
+    const scene = {
+      id: 'scene.everyday',
+      name: 'Everyday',
+      lighting: { 'lighting.ceiling': { power: true as const } },
+    };
+    const { clock, adapter, engine } = setup({
+      deviceIds: ['lighting.ceiling'],
+      scenes: [scene],
+      restoredLightingIntent: {
+        currentScene: scene.id,
+        sceneRevision: 1,
+        continuityExpiresAt: null,
+        devices: {
+          'lighting.ceiling': {
+            baselineDesired: { power: true },
+            effectiveDesired: { power: true },
+            ownership: { power: { kind: 'scene', revision: 1 } },
+          },
+        },
+      },
+    });
+
+    const internals = engine as unknown as {
+      handleObservation(observation: {
+        target: string;
+        values: { power: boolean };
+        commandId: string;
+        observedAt: number;
+      }): void;
+    };
+    internals.handleObservation({
+      target: 'lighting.ceiling',
+      values: { power: true },
+      commandId: 'stale-command-from-before-restart',
+      observedAt: clock.now(),
+    });
+
+    expect(engine.state.presence.state).toBe('unknown');
+    expect(adapter.dispatched).toEqual([]);
+    engine.dispose();
+  });
+
+  it('selects a configured default scene at startup but applies it only after confirmed occupancy', async () => {
+    const scene = {
+      id: 'scene.everyday',
+      name: 'Everyday',
+      lighting: { 'lighting.ceiling': { power: true as const } },
+    };
+    const { adapter, engine } = setup({
+      deviceIds: ['lighting.ceiling'],
+      scenes: [scene],
+      defaultSceneId: scene.id,
+    });
+
+    expect(engine.state.lighting.currentScene).toBe(scene.id);
+    expect(
+      engine.state.lighting.devices['lighting.ceiling']?.effectiveDesired,
+    ).toEqual({});
+    expect(adapter.dispatched).toEqual([]);
+
+    adapter.externalChange('lighting.ceiling', { power: false });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'unknown',
+    });
+    expect(adapter.dispatched).toEqual([]);
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+    });
+    expect(adapter.dispatched).toHaveLength(1);
+    expect(adapter.dispatched[0]).toMatchObject({
+      target: 'lighting.ceiling',
+      values: { power: true },
+    });
+    expect(engine.state.lighting.currentScene).toBe(scene.id);
+    engine.dispose();
+  });
+
   it('uses Vardagsljus instead of the legacy static target when no scene is selected', async () => {
     const { adapter, engine } = setup({
       deviceIds: ['lighting.ceiling', 'lighting.desk'],

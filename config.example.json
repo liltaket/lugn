@@ -2,7 +2,8 @@
   "http": {
     "host": "127.0.0.1",
     "port": 8787,
-    "bearerTokenEnv": "LUGN_API_TOKEN"
+    "bearerTokenEnv": "LUGN_API_TOKEN",
+    "trustedOrigins": []
   },
   "homeAssistant": {
     "baseUrl": "http://homeassistant.local:8123",
@@ -96,5 +97,6 @@
         }
       }
     }
-  ]
+  ],
+  "defaultSceneId": "scene.cozy"
 }

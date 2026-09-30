@@ -83,7 +83,14 @@ generated config and update entity mappings to match your installation before
 starting Lugn. See [Running Lugn](docs/OPERATIONS.md) for full setup, systemd,
 Hub and recovery instructions.
 
-To use a protected `lugn.env` for a local run:
+For interactive first-time setup, run `npm run onboard`. The wizard discovers
+current Home Assistant lights, lets you assign semantic IDs, configures the
+STL27L MQTT feed and optional entry lighting, and stores credentials in a
+protected local env file. It does not send device commands or start Lugn. Run
+`npm run config:check` to validate the generated configuration without
+contacting Home Assistant, MQTT or a device. See [Running Lugn](docs/OPERATIONS.md#interactive-first-run-setup).
+
+To use an existing protected `lugn.env` for a local run:
 
 ```sh
 chmod 600 lugn.env

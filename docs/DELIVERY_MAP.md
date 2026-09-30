@@ -58,11 +58,19 @@ Cast receiver rendered its page, or that a physical device reached its target.
 - DashCast starting an application is not proof that the receiver fetched or
   rendered the dashboard. For live display issues, inspect a fresh poll or the
   Hub's visible error.
-- Sensor event timing currently starts at local MQTT callback receipt. It does
-  not include sensor-to-broker delay or physical lamp response.
+- Sensor event timing starts at local MQTT callback receipt. It does not
+  include sensor-to-broker delay or physical lamp response.
 - The active host may run a revision different from this checkout. Compare
   deployed commit/build and configuration before attributing runtime behavior
   to local changes.
+
+The STL27L adapter consumes retained `/snapshot` and `/availability` plus a
+recent live heartbeat. Availability must be online and quality `CERTAIN`; a
+positive count means occupied and zero means confirmed empty. Offline, stale,
+malformed or non-CERTAIN data maps to unknown. Lugn uses local heartbeat receipt
+time for freshness because snapshot `updated_at` can remain unchanged across
+healthy heartbeats. `/preview` is a separate non-retained prelight hint. See
+[the sensor integration contract](INTEGRATIONS.md).
 
 ## Remaining work
 
@@ -75,7 +83,7 @@ Cast receiver rendered its page, or that a physical device reached its target.
   beyond the configured BILRESA buttons remain outside the current delivered
   slice. The operational control panel supports optional Clerk sign-in.
 - Validate the installed HA media integration's preset, Optical, playback and
-  feedback behavior. Direct WiiM transport and verified fade trajectories are
-  not implemented.
+  feedback behavior. Direct WiiM transport is not implemented, and software
+  fade trajectories still need validation against the connected device.
 
 For operator setup and credential handling, see [Running Lugn](OPERATIONS.md).

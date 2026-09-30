@@ -34,9 +34,10 @@ const stateList = [
   },
 ];
 
-function runtimeConfig(withMqtt = true): RuntimeConfig {
+function runtimeConfig(withMqtt = true, clientId?: string): RuntimeConfig {
   return {
     http: { host: '127.0.0.1', port: 8787, trustedOrigins: [] },
+    statePath: '/tmp/lugn-state/lighting-intent.json',
     homeAssistant: {
       baseUrl: 'http://private-host.test:8123',
       token: secret,
@@ -63,6 +64,7 @@ function runtimeConfig(withMqtt = true): RuntimeConfig {
             url: 'mqtt://private-host.test:1883',
             username: 'private-user',
             password: 'private-password',
+            ...(clientId === undefined ? {} : { clientId }),
             baseTopic: 'bruno/doorway',
             maxAgeMs: 7_000,
           },
@@ -198,12 +200,16 @@ describe('read-only preflight', () => {
   it('confirms fresh sensor status through the runtime STL27L adapter and stops MQTT', async () => {
     const subscriber = new FakeMqttSubscriber(() => undefined, true);
     let requestCount = 0;
+    let mqttClientId: string | undefined;
     const report = await runRuntimePreflight(runtimeConfig(), {
       fetcher: async () => {
         requestCount += 1;
         return Response.json(stateList);
       },
-      createMqttSubscriber: () => subscriber,
+      createMqttSubscriber: (config) => {
+        mqttClientId = config.clientId;
+        return subscriber;
+      },
     });
 
     expect(report).toEqual({
@@ -216,12 +222,44 @@ describe('read-only preflight', () => {
       mqtt: { broker: 'connected', sensor: 'fresh' },
     });
     expect(requestCount).toBe(1);
+    expect(mqttClientId).toMatch(
+      /^lugn-preflight-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(mqttClientId).not.toBe(undefined);
+    expect(mqttClientId?.length).toBeLessThanOrEqual(128);
     expect(subscriber.subscribedTopics).toEqual([
       'bruno/doorway/snapshot',
       'bruno/doorway/availability',
       'bruno/doorway/preview',
     ]);
     expect(subscriber.stopCalls).toBe(1);
+  });
+
+  it('uses a unique bounded preflight client ID for each probe', async () => {
+    const runtimeClientId = 'runtime-' + 'x'.repeat(120);
+    expect(runtimeClientId).toHaveLength(128);
+
+    const readPreflightClientId = async (): Promise<string | undefined> => {
+      let clientId: string | undefined;
+      const subscriber = new FakeMqttSubscriber(() => undefined, false);
+      await runRuntimePreflight(runtimeConfig(true, runtimeClientId), {
+        fetcher: fakeFetch(),
+        createMqttSubscriber: (config) => {
+          clientId = config.clientId;
+          return subscriber;
+        },
+        mqttWaitTimeoutMs: 1,
+      });
+      return clientId;
+    };
+
+    const firstClientId = await readPreflightClientId();
+    const secondClientId = await readPreflightClientId();
+
+    expect(firstClientId).toMatch(/^lugn-preflight-[0-9a-f-]{36}$/);
+    expect(firstClientId).not.toBe(secondClientId);
+    expect(firstClientId).not.toBe(runtimeClientId);
+    expect(firstClientId?.length).toBeLessThanOrEqual(128);
   });
 
   it('reports a connected broker with no fresh sensor heartbeat and stops MQTT on timeout', async () => {

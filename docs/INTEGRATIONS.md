@@ -132,8 +132,9 @@ config. The Hub dashboard exposes those two preset actions, play/pause and
 The `MusicAutomation` policy handles room-empty pause, short-context resume,
 entry autostart before 23:00, confirmed-away gating and the daily volume curve.
 See [Music](MUSIC.md) for exact behavior. The selected preset cannot be
-confirmed from current Home Assistant observations, and direct WiiM transport
-or measured fades are not implemented.
+confirmed from current Home Assistant observations. Direct WiiM transport is
+not implemented, and software fade timing has not been measured against the
+connected WiiM.
 
 ## HASS.Agent / Windows
 
