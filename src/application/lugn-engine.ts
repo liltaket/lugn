@@ -36,6 +36,7 @@ import {
   SemanticSwitchIdSchema,
   ProvenanceSchema,
   type DeviceSwitchState,
+  type CommandRecord,
   type Provenance,
   type SwitchCommandRecord,
   type Actor,
@@ -123,6 +124,9 @@ type ScheduledRetry = {
   modes: Map<LightingRetryMode, ScheduledRetryMode>;
 };
 const prelightCommandReason = 'Possible entry: temporary prelight';
+const prelightRestoreReason =
+  'Prelight ended before confirmed entry; restoring prior observed intent';
+const prelightHandoffGraceMs = 1_000;
 
 const runtimeHistoryLimit = 256;
 
@@ -180,6 +184,7 @@ export class LugnEngine {
   private prelightPreviewActive = false;
   private prelightTimer: TimerHandle | undefined;
   private prelightFinishPromise: Promise<Set<string>> | undefined;
+  private prelightFinishTargets = new Set<string>();
   private prelightSnapshot = new Map<string, LightingValues>();
   private prelightAppliedValues = new Map<string, LightingValues>();
   private restoredIntentAwaitingOccupancy = false;
@@ -982,8 +987,10 @@ export class LugnEngine {
             this.lastNonOffSceneId ??
             '',
         ) ?? this.scenes.get('scene.everyday_light');
-      if (this.prelightActive || this.prelightFinishPromise)
-        restoredTargets = await this.finishPrelight(true, scene);
+      if (this.prelightActive || this.prelightFinishPromise) {
+        void this.finishPrelight(true, scene);
+        restoredTargets = new Set(this.prelightFinishTargets);
+      }
     }
     if (transitionGeneration !== this.presenceTransitionGeneration) return;
     if (normalizedEvent.presence === 'occupied' || createsEmptyTiming)
@@ -1445,13 +1452,19 @@ export class LugnEngine {
         )
           continue;
         const pending = this.ledger.latestPending(target, property, value);
+        const acceptedPrelightHandoff =
+          pending?.reason === prelightCommandReason &&
+          (this.acceptedLightingCommandIds.has(pending.id) ||
+            this.inFlightLightingCommandIds.has(pending.id));
+        const prelightGraceRemaining = acceptedPrelightHandoff
+          ? Math.max(0, prelightHandoffGraceMs - (now - pending.issuedAt))
+          : 0;
         if (
           pending &&
-          (now - pending.issuedAt < this.retryDelayMs ||
-            this.inFlightLightingCommandIds.has(pending.id) ||
-            (pending.reason === prelightCommandReason &&
-              this.acceptedLightingCommandIds.has(pending.id) &&
-              now - pending.issuedAt < this.convergenceTimeoutMs))
+          (prelightGraceRemaining > 0 ||
+            (!acceptedPrelightHandoff &&
+              (now - pending.issuedAt < this.retryDelayMs ||
+                this.inFlightLightingCommandIds.has(pending.id))))
         )
           continue;
         Object.assign(desired, { [property]: value });
@@ -1546,9 +1559,25 @@ export class LugnEngine {
       this.hasUnavailableLightingMismatch(revision);
     if (hasRetryableMismatch || hasUnavailableMismatch) {
       const remaining = this.minimumRemainingConvergenceMs(revision, startedAt);
+      const handoffGraceRemaining = this.ledger.records.reduce(
+        (minimum, command) => {
+          if (
+            command.status !== 'pending' ||
+            command.reason !== prelightCommandReason ||
+            (!this.acceptedLightingCommandIds.has(command.id) &&
+              !this.inFlightLightingCommandIds.has(command.id))
+          )
+            return minimum;
+          return Math.min(
+            minimum,
+            Math.max(0, prelightHandoffGraceMs - (now - command.issuedAt)),
+          );
+        },
+        Number.POSITIVE_INFINITY,
+      );
       this.scheduleRetry(
         revision,
-        Math.min(this.retryDelayMs, remaining),
+        Math.min(this.retryDelayMs, remaining, handoffGraceRemaining),
         timingEventId,
       );
     } else {
@@ -1669,15 +1698,20 @@ export class LugnEngine {
     this.prelightSnapshot = new Map();
     const appliedValues = this.prelightAppliedValues;
     this.prelightAppliedValues = new Map();
+    const restoredTargets = new Set<string>();
+    this.prelightFinishTargets = restoredTargets;
     const finish = this.restorePrelightSnapshot(
       restore,
       scene,
       excludedProperties,
       snapshot,
       appliedValues,
+      restoredTargets,
     );
     this.prelightFinishPromise = finish.finally(() => {
       this.prelightFinishPromise = undefined;
+      if (this.prelightFinishTargets === restoredTargets)
+        this.prelightFinishTargets = new Set();
     });
     return this.prelightFinishPromise;
   }
@@ -1688,10 +1722,10 @@ export class LugnEngine {
     excludedProperties: Map<string, Set<string>>,
     snapshot: Map<string, LightingValues>,
     appliedValues: Map<string, LightingValues>,
+    restoredTargets: Set<string>,
   ): Promise<Set<string>> {
-    if (!restore) return new Set();
+    if (!restore) return restoredTargets;
     const dispatches: Promise<void>[] = [];
-    const restoredTargets = new Set<string>();
     for (const [target, previousValues] of snapshot) {
       const device = this.state.lighting.devices[target];
       if (!device) continue;
@@ -1723,7 +1757,7 @@ export class LugnEngine {
             values,
             this.state.lighting.sceneRevision,
             'prelight.restore',
-            'Prelight ended before confirmed entry; restoring prior observed intent',
+            prelightRestoreReason,
             systemActor,
           ),
         );
@@ -1864,6 +1898,7 @@ export class LugnEngine {
       dispatchError = error;
     }
     this.inFlightLightingCommandIds.delete(command.id);
+    this.reassertAfterStalePrelightRestore(command);
     if (dispatchFailed && isLightingDeliveryUnknownError(dispatchError)) {
       this.acceptedLightingCommandIds.delete(command.id);
       if (command.status === 'pending')
@@ -1928,7 +1963,8 @@ export class LugnEngine {
       this.publish(['commands', 'lighting', 'diagnostics']);
       return;
     }
-    this.acceptedLightingCommandIds.add(command.id);
+    if (command.status === 'pending')
+      this.acceptedLightingCommandIds.add(command.id);
     if (this.isCurrentLightingDeliveryIntent(command, retryMode)) {
       command.diagnosticReason =
         'Lighting adapter accepted the request; device state has not yet been observed';
@@ -1955,6 +1991,37 @@ export class LugnEngine {
       );
       this.publish(['commands', 'lighting', 'diagnostics']);
     }
+  }
+
+  private reassertAfterStalePrelightRestore(
+    command: Pick<
+      CommandRecord,
+      'id' | 'target' | 'revision' | 'desired' | 'reason'
+    >,
+  ): void {
+    if (command.reason !== prelightRestoreReason) return;
+    const isStale =
+      command.revision !== this.state.lighting.sceneRevision ||
+      this.ledger.latestCommandId(command.target) !== command.id;
+    if (!isStale) return;
+    const device = this.state.lighting.devices[command.target];
+    if (!device) return;
+    const conflictsWithCurrentIntent = LightingProperties.some((property) => {
+      const restored = command.desired[property];
+      const current = device.effectiveDesired[property];
+      return (
+        restored !== undefined &&
+        current !== undefined &&
+        restored !== current &&
+        device.observed[property] !== current
+      );
+    });
+    if (conflictsWithCurrentIntent)
+      void this.reconcileScene(
+        this.state.lighting.sceneRevision,
+        undefined,
+        new Set([command.target]),
+      );
   }
 
   private handleObservation(observation: LightingObservation): void {
@@ -2048,6 +2115,10 @@ export class LugnEngine {
         feedbackTime,
         observation.commandId,
       );
+      if (command) {
+        this.inFlightLightingCommandIds.delete(command.id);
+        this.acceptedLightingCommandIds.delete(command.id);
+      }
       const supersededCommand =
         !command &&
         !observation.commandId &&

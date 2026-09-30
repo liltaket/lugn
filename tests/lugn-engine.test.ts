@@ -1198,7 +1198,7 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
-  it('waits for an in-flight timeout restore and reapplies occupied intent last', async () => {
+  it('dispatches occupied intent before an in-flight timeout restore completes', async () => {
     const scene = {
       id: 'scene.entry',
       name: 'Entry',
@@ -1234,8 +1234,12 @@ describe('Lugn deterministic lighting slice', () => {
       personCount: 1,
     });
     expect(engine.state.presence.state).toBe('occupied');
-    await engine.handleEvent({ type: 'presence.prelight', active: true });
-    expect(adapter.dispatched).toHaveLength(2);
+    await flushMicrotasks();
+    expect(adapter.dispatched.map(({ values }) => values)).toEqual([
+      { power: true, brightness: 38 },
+      { power: false },
+      { power: true, brightness: 38 },
+    ]);
 
     clock.advanceBy(500);
     await flushMicrotasks();
@@ -1405,6 +1409,96 @@ describe('Lugn deterministic lighting slice', () => {
       brightness: 42,
       colorTemperature: 3000,
     });
+    engine.dispose();
+  });
+
+  it('retries an accepted prelight after a short handoff grace without feedback', async () => {
+    const scene = {
+      id: 'scene.entry',
+      name: 'Entry',
+      lighting: { 'lighting.desk': { power: true as const, brightness: 42 } },
+    };
+    const { clock, adapter, engine } = setup({
+      deviceIds: ['lighting.desk'],
+      scenes: [scene],
+      defaultSceneId: scene.id,
+      retryDelayMs: 10_000,
+      convergenceTimeoutMs: 60_000,
+      prelight: { targets: {}, maxDurationMs: 1_000 },
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    adapter.dispatched.length = 0;
+    adapter.ignoreNextForTargets.add('lighting.desk');
+
+    await engine.handleEvent({
+      type: 'presence.prelight',
+      active: true,
+      source: 'stl27l',
+    });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    expect(adapter.dispatched).toHaveLength(1);
+
+    clock.advanceBy(999);
+    await flushMicrotasks();
+    expect(adapter.dispatched).toHaveLength(1);
+    clock.advanceBy(1);
+    await flushMicrotasks();
+    expect(adapter.dispatched).toHaveLength(2);
+    expect(adapter.observed.get('lighting.desk')).toMatchObject({
+      power: true,
+      brightness: 42,
+    });
+    engine.dispose();
+  });
+
+  it('cleans accepted prelight tracking when commandless feedback confirms its ledger command', async () => {
+    const scene = {
+      id: 'scene.entry',
+      name: 'Entry',
+      lighting: { 'lighting.desk': { power: true as const, brightness: 42 } },
+    };
+    const { adapter, engine } = setup({
+      deviceIds: ['lighting.desk'],
+      scenes: [scene],
+      defaultSceneId: scene.id,
+      prelight: { targets: {}, maxDurationMs: 1_000 },
+    });
+    const internals = engine as unknown as {
+      acceptedLightingCommandIds: Set<string>;
+      inFlightLightingCommandIds: Set<string>;
+    };
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    await engine.handleEvent({
+      type: 'presence.prelight',
+      active: true,
+      source: 'stl27l',
+    });
+    const command = engine.state.commands.at(-1)!;
+    expect(internals.acceptedLightingCommandIds.has(command.id)).toBe(true);
+
+    adapter.externalChange('lighting.desk', {
+      power: true,
+      brightness: 42,
+    });
+
+    expect(
+      engine.state.commands.find(({ id }) => id === command.id)?.status,
+    ).toBe('confirmed');
+    expect(internals.acceptedLightingCommandIds.has(command.id)).toBe(false);
+    expect(internals.inFlightLightingCommandIds.has(command.id)).toBe(false);
     engine.dispose();
   });
 
