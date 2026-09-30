@@ -93,6 +93,80 @@ describe('Home Assistant adapter state ordering', () => {
     );
   });
 
+  it('uses last_updated for ordering and exposes last_changed separately', () => {
+    const changedAt = '2026-09-30T10:00:00.000Z';
+    const resumedAt = '2026-09-30T10:01:00.000Z';
+    const updatedAt = '2026-09-30T10:02:00.000Z';
+    const adapter = new HomeAssistantMusicAdapter(
+      {
+        baseUrl: 'http://ha.local',
+        token: 'token',
+        entities: {
+          'music.room': { entityId: 'media_player.room', sources: [] },
+        },
+      },
+      fetch,
+      new FakeClock(),
+    );
+    const listener = vi.fn();
+    adapter.subscribe(listener);
+
+    expect(
+      adapter.acceptState({
+        entity_id: 'media_player.room',
+        state: 'playing',
+        last_updated: resumedAt,
+        last_changed: resumedAt,
+      }),
+    ).toBe(true);
+    expect(
+      adapter.acceptState({
+        entity_id: 'media_player.room',
+        state: 'paused',
+        last_updated: updatedAt,
+        last_changed: changedAt,
+      }),
+    ).toBe(true);
+
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sourceUpdatedAt: Date.parse(updatedAt),
+        playbackChangedAt: Date.parse(changedAt),
+        values: expect.objectContaining({ playback: 'paused' }),
+      }),
+    );
+  });
+
+  it('ignores malformed music timestamps independently', () => {
+    const adapter = new HomeAssistantMusicAdapter(
+      {
+        baseUrl: 'http://ha.local',
+        token: 'token',
+        entities: {
+          'music.room': { entityId: 'media_player.room', sources: [] },
+        },
+      },
+      fetch,
+      new FakeClock(),
+    );
+    const listener = vi.fn();
+
+    adapter.subscribe(listener);
+    expect(
+      adapter.acceptState({
+        entity_id: 'media_player.room',
+        state: 'paused',
+        last_updated: later,
+        last_changed: 'not-a-timestamp',
+      }),
+    ).toBe(true);
+
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sourceUpdatedAt: Date.parse(later) }),
+    );
+    expect(listener.mock.calls[0]?.[0]).not.toHaveProperty('playbackChangedAt');
+  });
+
   it('keeps the newest environmental sensor value when an older snapshot arrives', () => {
     const adapter = new HomeAssistantEnvironmentAdapter(
       {

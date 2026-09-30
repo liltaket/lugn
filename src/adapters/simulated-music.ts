@@ -15,8 +15,10 @@ export type MusicObservation = {
   values: MusicObservationValues;
   available: boolean;
   observedAt: number;
-  /** Home Assistant's state-change time when the adapter can provide it. */
+  /** Home Assistant last_updated, used to reject stale state snapshots. */
   sourceUpdatedAt?: number;
+  /** Home Assistant last_changed, which excludes attribute-only updates. */
+  playbackChangedAt?: number;
   commandId?: string;
   provenance?: Provenance;
 };
@@ -45,6 +47,7 @@ export class SimulatedMusicAdapter implements MusicAdapter {
     available = true,
     commandId?: string,
     sourceUpdatedAt?: number,
+    playbackChangedAt?: number,
   ): void {
     const observation: MusicObservation = {
       target,
@@ -52,6 +55,7 @@ export class SimulatedMusicAdapter implements MusicAdapter {
       available,
       observedAt: this.clock.now(),
       ...(sourceUpdatedAt === undefined ? {} : { sourceUpdatedAt }),
+      ...(playbackChangedAt === undefined ? {} : { playbackChangedAt }),
       ...(commandId === undefined ? {} : { commandId }),
     };
     for (const listener of this.listeners)

@@ -158,13 +158,17 @@ Desired behavior:
 
     possible entry -> preview the selected scene's on-lights only
     confirmed entry -> apply the selected scene, including explicit off states
-    no confirmation -> restore the physical state observed before prelight
+    preview OFF -> keep the temporary output until entry is confirmed or the
+                    existing maximum duration expires
+    no confirmation by timeout -> restore the physical state observed before prelight
 
 When no scene is selected, prelight uses the Vardagsljus preset. It must never
 use a static target list that can turn on a light excluded by that scene. The
 prelight snapshot gives current device observations precedence over remembered
 desired state, and timeout restoration is sent even when the preview receives
-no device feedback.
+no device feedback. Occupancy and explicit user intent take over only after any
+restore already in flight completes, then reconcile the final scene so an old
+restore cannot leave the room off.
 
 Prelight must not:
 

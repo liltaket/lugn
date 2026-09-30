@@ -769,11 +769,11 @@ export class MusicController {
     observation: MusicObservation,
     observedPlayback: MusicObservation['values']['playback'],
   ): boolean {
-    const sourceUpdatedAt = observation.sourceUpdatedAt;
+    const playbackChangedAt = observation.playbackChangedAt;
     if (
       observedPlayback !== 'paused' ||
-      sourceUpdatedAt === undefined ||
-      !Number.isFinite(sourceUpdatedAt)
+      playbackChangedAt === undefined ||
+      !Number.isFinite(playbackChangedAt)
     )
       return false;
     const pause = [...this.state.commands]
@@ -785,7 +785,7 @@ export class MusicController {
           command.requested.value === 'paused' &&
           command.status === 'unconfirmed' &&
           command.acceptedAt !== undefined &&
-          sourceUpdatedAt >= command.issuedAt &&
+          playbackChangedAt >= command.issuedAt &&
           this.clock.now() - command.issuedAt < LATE_PAUSE_ATTRIBUTION_MS,
       );
     if (!pause) return false;
@@ -796,11 +796,11 @@ export class MusicController {
           command.target === observation.target &&
           (command.requested.property === 'playback' ||
             command.requested.property === 'preset') &&
-          sourceUpdatedAt <= command.issuedAt,
+          playbackChangedAt <= command.issuedAt,
       );
     if (!newerIntent) return false;
     pause.status = 'confirmed';
-    pause.confirmedAt = sourceUpdatedAt;
+    pause.confirmedAt = playbackChangedAt;
     pause.diagnosticReason =
       'Paused state timestamp predates a newer playback request';
     this.releaseTracking(pause.id);

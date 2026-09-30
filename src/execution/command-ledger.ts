@@ -84,11 +84,16 @@ export class CommandLedger {
     return record;
   }
 
-  supersedePending(reason: string, target?: string): void {
+  supersedePending(
+    reason: string,
+    target?: string,
+    preserve?: (command: CommandRecord) => boolean,
+  ): void {
     for (const command of this.records) {
       if (
         command.status === 'pending' &&
-        (target === undefined || command.target === target)
+        (target === undefined || command.target === target) &&
+        !preserve?.(command)
       ) {
         command.status = 'superseded';
         command.diagnosticReason = reason;

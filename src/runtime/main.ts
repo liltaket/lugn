@@ -5,7 +5,7 @@ import { HomeAssistantHomePresenceAdapter } from '../adapters/home-assistant-hom
 import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { DashCastAdapter } from '../adapters/dashcast.js';
+import type { DashCastAdapter } from '../adapters/dashcast.js';
 import { HomeAssistantLightingAdapter } from '../adapters/home-assistant-lighting.js';
 import { HomeAssistantSwitchAdapter } from '../adapters/home-assistant-switch.js';
 import {
@@ -290,9 +290,11 @@ export async function startRuntime(
       mqtt: mqttSubscriber?.status ?? 'not_configured',
     }),
   });
-  let castManager: DashCastManager | undefined;
-  let displayServer: LugnDisplayServer | undefined;
-  displayServer = config.display
+  const displayRefs: {
+    castManager: DashCastManager | undefined;
+    displayServer: LugnDisplayServer | undefined;
+  } = { castManager: undefined, displayServer: undefined };
+  const displayServer = config.display
     ? new LugnDisplayServer({
         host: config.display.host,
         port: config.display.port,
@@ -310,7 +312,8 @@ export async function startRuntime(
           engine.getMusicVolumePolicySnapshots(),
         environmentProvider: () => homeAssistantEnvironment.snapshot(),
         castStatus: (hubId) => {
-          const lastHubPollAt = displayServer?.lastHubHeartbeatAt(hubId);
+          const lastHubPollAt =
+            displayRefs.displayServer?.lastHubHeartbeatAt(hubId);
           if (
             lastHubPollAt !== undefined &&
             Date.now() - lastHubPollAt < 12_000
@@ -321,7 +324,7 @@ export async function startRuntime(
             };
           }
           return (
-            castManager?.statusForHub(hubId) ?? {
+            displayRefs.castManager?.statusForHub(hubId) ?? {
               state: 'starting',
               message: 'Lugn ansluter till DashCast.',
             }
@@ -329,16 +332,18 @@ export async function startRuntime(
         },
       })
     : undefined;
-  castManager = config.display
+  displayRefs.displayServer = displayServer;
+  const castManager = config.display
     ? new DashCastManager({
         publicUrl: config.display.publicUrl,
         hubs: config.display.hubs.map(({ id, castHost }) => ({
           id,
           castHost,
         })),
-        dashboardPath: (hubId) => displayServer!.pathForHub(hubId),
+        dashboardPath: (hubId) => displayRefs.displayServer!.pathForHub(hubId),
         dashboardActive: (hubId) => {
-          const lastHubPollAt = displayServer?.lastHubHeartbeatAt(hubId);
+          const lastHubPollAt =
+            displayRefs.displayServer?.lastHubHeartbeatAt(hubId);
           return (
             lastHubPollAt !== undefined && Date.now() - lastHubPollAt < 12_000
           );
@@ -348,6 +353,7 @@ export async function startRuntime(
           : { createAdapter: dependencies.createDashCastAdapter }),
       })
     : undefined;
+  displayRefs.castManager = castManager;
 
   try {
     await seedHomeAssistantObservations(

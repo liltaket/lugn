@@ -77,6 +77,7 @@ const StateSchema = z.object({
   state: z.string(),
   attributes: z.record(z.string(), z.unknown()).optional(),
   last_updated: z.string().optional(),
+  last_changed: z.string().optional(),
 });
 const EventDataSchema = z.object({
   entity_id: EntityIdSchema,
@@ -181,6 +182,7 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
     const target = this.semanticByEntity.get(result.data.entity_id);
     if (!target) return false;
     const lastUpdated = parseObservationTime(result.data.last_updated);
+    const lastChanged = parseObservationTime(result.data.last_changed);
     const previousUpdate = this.lastUpdatedByEntity.get(result.data.entity_id);
     if (
       lastUpdated !== undefined &&
@@ -214,6 +216,7 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
       available,
       observedAt: this.clock.now(),
       ...(lastUpdated === undefined ? {} : { sourceUpdatedAt: lastUpdated }),
+      ...(lastChanged === undefined ? {} : { playbackChangedAt: lastChanged }),
       values: {
         playback,
         volume:

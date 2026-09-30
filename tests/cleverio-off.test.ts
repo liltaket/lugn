@@ -63,9 +63,7 @@ describe('Cleverio off delivery', () => {
       'http://home-assistant.test:8123/api/services/light/turn_off',
       'http://home-assistant.test:8123/api/services/light/turn_off',
     ]);
-    expect(
-      requests.map(({ init }) => JSON.parse(String(init?.body))),
-    ).toEqual([
+    expect(requests.map(({ init }) => JSON.parse(String(init?.body)))).toEqual([
       { entity_id: 'light.cleverio_lb100' },
       { entity_id: 'light.cleverio_lb100' },
       { entity_id: 'light.cleverio_lb100' },

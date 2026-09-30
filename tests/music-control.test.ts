@@ -510,8 +510,12 @@ describe('semantic music control', () => {
     expect(clock.pendingTimers()).toBe(0);
   });
 
-  it('attributes an old pause that arrives after a newer resume request', async () => {
-    const { clock, adapter, controller, automation } = automationSetup(0, 100);
+  it('attributes a pause by last_changed when a later attribute update follows a newer resume', async () => {
+    const startAt = Date.parse('2026-09-30T10:00:00.000Z');
+    const { clock, adapter, controller, automation } = automationSetup(
+      startAt,
+      100,
+    );
     adapter.observe('music.room', { ...values, playback: 'playing' });
     automation.handlePresence('unknown', 'occupied', 1);
     await flushMicrotasks();
@@ -535,14 +539,21 @@ describe('semantic music control', () => {
       value: 'playing',
     });
 
-    // HA's timestamp puts this paused report after PAUSE but before PLAY,
-    // even though the report arrives after PLAY was issued.
+    // The old PAUSE transition happened before PLAY, but a later attribute
+    // update advanced last_updated after PLAY. last_changed retains the actual
+    // playback transition time and must control the attribution.
+    const lastChanged = pauseIssuedAt + 50;
+    const lastUpdated = (resume?.issuedAt ?? clock.now()) + 50;
+    expect(lastChanged).toBeLessThan(resume?.issuedAt ?? clock.now());
+    expect(lastUpdated).toBeGreaterThan(resume?.issuedAt ?? clock.now());
+    clock.advanceBy(50);
     adapter.observe(
       'music.room',
       { ...values, playback: 'paused' },
       true,
       undefined,
-      pauseIssuedAt + 50,
+      lastUpdated,
+      lastChanged,
     );
 
     expect(
@@ -562,11 +573,25 @@ describe('semantic music control', () => {
       true,
       resume?.id,
       clock.now(),
+      clock.now(),
     );
     expect(
       controller.state.commands.find((command) => command.id === resume?.id)
         ?.status,
     ).toBe('confirmed');
+
+    clock.advanceBy(1);
+    adapter.observe(
+      'music.room',
+      { ...values, playback: 'paused' },
+      true,
+      undefined,
+      clock.now(),
+      clock.now(),
+    );
+    expect(
+      automationInternals(automation).manuallyPaused.has('music.room'),
+    ).toBe(true);
     automation.dispose();
     controller.dispose();
     expect(clock.pendingTimers()).toBe(0);

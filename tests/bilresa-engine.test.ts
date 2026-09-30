@@ -46,9 +46,13 @@ describe('BILRESA remote to room actions', () => {
       id: 'test',
     });
     const actions: Array<Promise<void>> = [];
-    const remote = new HomeAssistantBilresaAdapter({}, clock, ({ button, gesture }) => {
-      actions.push(engine.handleBilresaPress(button, gesture));
-    });
+    const remote = new HomeAssistantBilresaAdapter(
+      {},
+      clock,
+      ({ button, gesture }) => {
+        actions.push(engine.handleBilresaPress(button, gesture));
+      },
+    );
 
     expect(
       remote.acceptStateChangedFrame(

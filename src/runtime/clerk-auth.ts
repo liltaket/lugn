@@ -74,8 +74,8 @@ export async function verifyClerkSessionToken(
     return {
       status:
         options.allowAnyUser || options.allowedUserIds.includes(payload.sub)
-        ? 'authorized'
-        : 'forbidden',
+          ? 'authorized'
+          : 'forbidden',
       sid: payload.sid,
       exp: payload.exp,
     };

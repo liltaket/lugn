@@ -113,11 +113,16 @@ type IntentProvenance = {
   allowWhileEmpty?: boolean;
 };
 type LightingRetryMode = 'scene' | 'confirmed_empty_off';
-type ScheduledRetry = {
-  handle: TimerHandle;
-  modes: Set<LightingRetryMode>;
+type ScheduledRetryMode = {
+  dueAt: number;
   fastPathEventId?: string;
 };
+type ScheduledRetry = {
+  handle?: TimerHandle;
+  armedAt?: number;
+  modes: Map<LightingRetryMode, ScheduledRetryMode>;
+};
+const prelightCommandReason = 'Possible entry: temporary prelight';
 
 const runtimeHistoryLimit = 256;
 
@@ -157,9 +162,12 @@ export class LugnEngine {
   private readonly manualLightingWhileEmpty = new Set<string>();
   private lastConfirmedPresence: 'occupied' | 'confirmed_empty' | 'unknown' =
     'unknown';
+  private presenceTransitionGeneration = 0;
   private quietHoursSuppressedForCurrentVisit = false;
   private readonly intentByRevision = new Map<number, IntentProvenance>();
   private readonly fastPathEventByCommand = new Map<string, string>();
+  private readonly acceptedLightingCommandIds = new Set<string>();
+  private readonly inFlightLightingCommandIds = new Set<string>();
   private readonly fastPathMonotonicOrigins = new Map<string, number>();
   private readonly fastPathTimeoutTimers = new Map<string, TimerHandle>();
   private readonly fastPathPrelightExpectedValues = new Map<
@@ -169,7 +177,9 @@ export class LugnEngine {
   private activePrelightFastPathEventId: string | undefined;
   private confirmedEmptyFastPathEventId: string | undefined;
   private prelightActive = false;
+  private prelightPreviewActive = false;
   private prelightTimer: TimerHandle | undefined;
+  private prelightFinishPromise: Promise<Set<string>> | undefined;
   private prelightSnapshot = new Map<string, LightingValues>();
   private prelightAppliedValues = new Map<string, LightingValues>();
   private restoredIntentAwaitingOccupancy = false;
@@ -710,7 +720,10 @@ export class LugnEngine {
     this.quietHoursSuppressedForCurrentVisit = false;
     if (sceneId !== 'scene.all_off' && sceneId !== 'scene.sleep')
       this.lastNonOffSceneId = sceneId;
-    if (this.prelightActive) await this.finishPrelight(true, scene);
+    const restoredTargets =
+      this.prelightActive || this.prelightFinishPromise
+        ? await this.finishPrelight(true, scene)
+        : new Set<string>();
     this.beginScene(scene, {
       actor,
       source,
@@ -727,7 +740,11 @@ export class LugnEngine {
             .map(([target]) => target),
         ),
       );
-    await this.reconcileScene(this.state.lighting.sceneRevision);
+    await this.reconcileScene(
+      this.state.lighting.sceneRevision,
+      undefined,
+      restoredTargets,
+    );
     return this.state.lighting.sceneRevision;
   }
 
@@ -802,6 +819,22 @@ export class LugnEngine {
       if (device.availability === 'degraded') device.availability = 'available';
     }
     const now = this.clock.now();
+    const deviceBeforeUpdate = this.requireDevice(target);
+    if (
+      provenance.actor.type === 'user' &&
+      values.power === true &&
+      deviceBeforeUpdate.effectiveDesired.power === false
+    ) {
+      for (const property of ['brightness', 'colorTemperature'] as const) {
+        if (
+          values[property] === undefined &&
+          deviceBeforeUpdate.ownership[property]?.kind === 'scene'
+        ) {
+          delete deviceBeforeUpdate.effectiveDesired[property];
+          delete deviceBeforeUpdate.ownership[property];
+        }
+      }
+    }
     if (this.shouldRemainPhysicallyEmpty() && provenance.actor.type === 'user')
       for (const [lightingTarget, targetValues] of updates) {
         if (targetValues.power === true)
@@ -913,25 +946,46 @@ export class LugnEngine {
 
   async handlePresence(event: PresenceEvent): Promise<void> {
     const normalizedEvent = PresenceEventSchema.parse(event);
+    const transitionGeneration =
+      normalizedEvent.presence === 'occupied' ||
+      normalizedEvent.presence === 'confirmed_empty'
+        ? ++this.presenceTransitionGeneration
+        : this.presenceTransitionGeneration;
     const receivedAt = this.clock.now();
     const previous = this.state.presence.state;
     const lastConfirmedBeforeEvent = this.lastConfirmedPresence;
     const prelightWasActive = this.prelightActive;
+    let restoredTargets = new Set<string>();
     const createsEmptyTiming =
       normalizedEvent.presence === 'confirmed_empty' &&
       (lastConfirmedBeforeEvent !== 'confirmed_empty' || prelightWasActive);
     if (normalizedEvent.presence === 'confirmed_empty') {
       if (lastConfirmedBeforeEvent !== 'confirmed_empty')
         this.manualLightingWhileEmpty.clear();
+      this.state.presence.state = normalizedEvent.presence;
+      this.state.presence.personCount = normalizedEvent.personCount ?? 0;
+      this.lastConfirmedPresence = normalizedEvent.presence;
       this.clearPrelight();
       this.quietHoursSuppressedForCurrentVisit = false;
-    } else if (normalizedEvent.presence === 'occupied' && this.prelightActive) {
+      if (this.prelightFinishPromise) await this.prelightFinishPromise;
+    } else if (normalizedEvent.presence === 'occupied') {
+      // Publish occupancy to concurrent event handlers before waiting for
+      // any prelight restoration already in flight.
+      this.state.presence.state = normalizedEvent.presence;
+      this.state.presence.personCount = normalizedEvent.personCount ?? null;
+      this.lastConfirmedPresence = normalizedEvent.presence;
+      this.prelightPreviewActive = false;
       const scene =
         this.scenes.get(
-          this.state.lighting.currentScene ?? this.lastNonOffSceneId ?? '',
+          this.defaultSceneOnOccupancy?.id ??
+            this.state.lighting.currentScene ??
+            this.lastNonOffSceneId ??
+            '',
         ) ?? this.scenes.get('scene.everyday_light');
-      await this.finishPrelight(true, scene);
+      if (this.prelightActive || this.prelightFinishPromise)
+        restoredTargets = await this.finishPrelight(true, scene);
     }
+    if (transitionGeneration !== this.presenceTransitionGeneration) return;
     if (normalizedEvent.presence === 'occupied' || createsEmptyTiming)
       this.terminateAllFastPathEvents();
     this.state.presence.state = normalizedEvent.presence;
@@ -1017,6 +1071,7 @@ export class LugnEngine {
           },
         ),
       );
+      if (transitionGeneration !== this.presenceTransitionGeneration) return;
       this.tryCompleteConfirmedEmptyFastPath();
       this.publish(['commands', 'diagnostics', 'timings']);
       return;
@@ -1106,6 +1161,7 @@ export class LugnEngine {
       await this.reconcileScene(
         this.state.lighting.sceneRevision,
         timing.eventId,
+        restoredTargets,
       );
       return;
     }
@@ -1176,10 +1232,33 @@ export class LugnEngine {
 
   async handlePrelight(event: PrelightEvent): Promise<void> {
     const normalizedEvent = PrelightEventSchema.parse(event);
-    if (normalizedEvent.active === this.prelightActive) return;
+    if (normalizedEvent.active === this.prelightPreviewActive) return;
+
+    this.prelightPreviewActive = normalizedEvent.active;
 
     if (!normalizedEvent.active) {
-      await this.finishPrelight(this.state.presence.state !== 'occupied');
+      if (!this.prelightActive) return;
+      if (this.state.presence.state === 'occupied') {
+        await this.finishPrelight(false);
+        return;
+      }
+      this.addDiagnostic(
+        'presence.prelight_waiting_for_confirmation',
+        'Preview ended; holding temporary lighting until entry is confirmed or its existing maximum duration expires',
+        { maximumDurationMs: this.prelightMaxDurationMs },
+      );
+      this.publish(['diagnostics']);
+      return;
+    }
+
+    if (this.prelightActive) return;
+    if (this.prelightFinishPromise) {
+      this.addDiagnostic(
+        'presence.prelight_suppressed',
+        'Temporary prelight was suppressed while a prior prelight restore is still completing',
+        { reason: 'prelight_restore_pending' },
+      );
+      this.publish(['diagnostics']);
       return;
     }
 
@@ -1211,7 +1290,8 @@ export class LugnEngine {
       quietHours ||
       suppressedVisit ||
       roomAlreadyLit ||
-      homeAway
+      homeAway ||
+      this.state.presence.state === 'occupied'
     ) {
       this.addDiagnostic(
         'presence.prelight_suppressed',
@@ -1226,7 +1306,9 @@ export class LugnEngine {
                 ? 'quiet_hours_visit'
                 : roomAlreadyLit
                   ? 'room_already_lit'
-                  : 'home_away',
+                  : homeAway
+                    ? 'home_away'
+                    : 'already_occupied',
         },
       );
       this.publish(['diagnostics']);
@@ -1263,7 +1345,7 @@ export class LugnEngine {
           values,
           this.state.lighting.sceneRevision,
           normalizedEvent.source ?? 'prelight',
-          'Possible entry: temporary prelight',
+          prelightCommandReason,
           systemActor,
           undefined,
           eventId,
@@ -1307,6 +1389,7 @@ export class LugnEngine {
   async reconcileScene(
     revision = this.state.lighting.sceneRevision,
     eventId?: string,
+    forceTargets: ReadonlySet<string> = new Set(),
   ): Promise<void> {
     if (
       revision !== this.state.lighting.sceneRevision ||
@@ -1317,9 +1400,9 @@ export class LugnEngine {
         this.manualLightingWhileEmpty.size === 0)
     )
       return;
-    const retryEventId = this.retryTimers.get(
-      String(revision),
-    )?.fastPathEventId;
+    const retryEventId = this.retryTimers
+      .get(String(revision))
+      ?.modes.get('scene')?.fastPathEventId;
     const candidateEventId =
       eventId && this.fastPathMonotonicOrigins.has(eventId)
         ? eventId
@@ -1357,11 +1440,20 @@ export class LugnEngine {
         if (
           value === undefined ||
           (value === device.observed[property] &&
+            !forceTargets.has(target) &&
             !(forceOff && property === 'power' && value === false))
         )
           continue;
         const pending = this.ledger.latestPending(target, property, value);
-        if (pending && now - pending.issuedAt < this.retryDelayMs) continue;
+        if (
+          pending &&
+          (now - pending.issuedAt < this.retryDelayMs ||
+            this.inFlightLightingCommandIds.has(pending.id) ||
+            (pending.reason === prelightCommandReason &&
+              this.acceptedLightingCommandIds.has(pending.id) &&
+              now - pending.issuedAt < this.convergenceTimeoutMs))
+        )
+          continue;
         Object.assign(desired, { [property]: value });
       }
       if (Object.keys(desired).length === 0) continue;
@@ -1550,6 +1642,7 @@ export class LugnEngine {
       this.clock.clearTimeout(this.prelightTimer);
     this.prelightTimer = undefined;
     this.prelightActive = false;
+    this.prelightPreviewActive = false;
     this.prelightSnapshot.clear();
     this.prelightAppliedValues.clear();
     if (this.activePrelightFastPathEventId)
@@ -1557,16 +1650,18 @@ export class LugnEngine {
     this.activePrelightFastPathEventId = undefined;
   }
 
-  private async finishPrelight(
+  private finishPrelight(
     restore: boolean,
     scene?: LightingScene,
     excludedProperties: Map<string, Set<string>> = new Map(),
-  ): Promise<void> {
-    if (!this.prelightActive) return;
+  ): Promise<Set<string>> {
+    if (this.prelightFinishPromise) return this.prelightFinishPromise;
+    if (!this.prelightActive) return Promise.resolve(new Set());
     if (this.prelightTimer !== undefined)
       this.clock.clearTimeout(this.prelightTimer);
     this.prelightTimer = undefined;
     this.prelightActive = false;
+    this.prelightPreviewActive = false;
     if (this.activePrelightFastPathEventId)
       this.terminateFastPathEvent(this.activePrelightFastPathEventId);
     this.activePrelightFastPathEventId = undefined;
@@ -1574,9 +1669,29 @@ export class LugnEngine {
     this.prelightSnapshot = new Map();
     const appliedValues = this.prelightAppliedValues;
     this.prelightAppliedValues = new Map();
-    if (!restore) return;
+    const finish = this.restorePrelightSnapshot(
+      restore,
+      scene,
+      excludedProperties,
+      snapshot,
+      appliedValues,
+    );
+    this.prelightFinishPromise = finish.finally(() => {
+      this.prelightFinishPromise = undefined;
+    });
+    return this.prelightFinishPromise;
+  }
 
+  private async restorePrelightSnapshot(
+    restore: boolean,
+    scene: LightingScene | undefined,
+    excludedProperties: Map<string, Set<string>>,
+    snapshot: Map<string, LightingValues>,
+    appliedValues: Map<string, LightingValues>,
+  ): Promise<Set<string>> {
+    if (!restore) return new Set();
     const dispatches: Promise<void>[] = [];
+    const restoredTargets = new Set<string>();
     for (const [target, previousValues] of snapshot) {
       const device = this.state.lighting.devices[target];
       if (!device) continue;
@@ -1600,7 +1715,8 @@ export class LugnEngine {
           continue;
         Object.assign(values, { [property]: previousValues[property] });
       }
-      if (Object.keys(values).length > 0)
+      if (Object.keys(values).length > 0) {
+        restoredTargets.add(target);
         dispatches.push(
           this.dispatch(
             target,
@@ -1611,8 +1727,10 @@ export class LugnEngine {
             systemActor,
           ),
         );
+      }
     }
     await Promise.all(dispatches);
+    return restoredTargets;
   }
 
   private beginScene(scene: LightingScene, intent: IntentProvenance): void {
@@ -1625,6 +1743,22 @@ export class LugnEngine {
     this.clearLightingDeliveryAttempts();
     this.ledger.supersedePending(
       `Superseded by scene revision ${priorRevision + 1}`,
+      undefined,
+      (command) => {
+        if (command.reason !== prelightCommandReason) return false;
+        const sceneValues = scene.lighting[command.target];
+        return (
+          sceneValues !== undefined &&
+          LightingProperties.some(
+            (property) => command.desired[property] !== undefined,
+          ) &&
+          LightingProperties.every(
+            (property) =>
+              command.desired[property] === undefined ||
+              command.desired[property] === sceneValues[property],
+          )
+        );
+      },
     );
     this.state.lighting.sceneRevision += 1;
     this.state.lighting.currentScene = scene.id;
@@ -1690,6 +1824,8 @@ export class LugnEngine {
       command.id,
       this.clock.setTimeout(() => {
         this.lightingFeedbackTimers.delete(command.id);
+        this.inFlightLightingCommandIds.delete(command.id);
+        this.acceptedLightingCommandIds.delete(command.id);
         if (
           !this.ledger.cancel(
             command.id,
@@ -1703,6 +1839,8 @@ export class LugnEngine {
           { commandId: command.id, target },
         );
         this.publish(['commands', 'diagnostics']);
+        if (command.reason === prelightCommandReason)
+          void this.reconcileScene(this.state.lighting.sceneRevision);
       }, this.convergenceTimeoutMs),
     );
     this.state.commands = this.ledger.records;
@@ -1718,13 +1856,16 @@ export class LugnEngine {
     }
     let dispatchFailed = false;
     let dispatchError: unknown;
+    this.inFlightLightingCommandIds.add(command.id);
     try {
       await this.adapter.dispatch({ id: command.id, target, values });
     } catch (error) {
       dispatchFailed = true;
       dispatchError = error;
     }
+    this.inFlightLightingCommandIds.delete(command.id);
     if (dispatchFailed && isLightingDeliveryUnknownError(dispatchError)) {
+      this.acceptedLightingCommandIds.delete(command.id);
       if (command.status === 'pending')
         command.diagnosticReason =
           'Lighting adapter did not confirm delivery; the requested state may still have taken effect';
@@ -1759,6 +1900,7 @@ export class LugnEngine {
       return;
     }
     if (dispatchFailed) {
+      this.acceptedLightingCommandIds.delete(command.id);
       command.status = 'failed';
       command.diagnosticReason =
         dispatchError instanceof Error
@@ -1786,6 +1928,7 @@ export class LugnEngine {
       this.publish(['commands', 'lighting', 'diagnostics']);
       return;
     }
+    this.acceptedLightingCommandIds.add(command.id);
     if (this.isCurrentLightingDeliveryIntent(command, retryMode)) {
       command.diagnosticReason =
         'Lighting adapter accepted the request; device state has not yet been observed';
@@ -1817,6 +1960,10 @@ export class LugnEngine {
   private handleObservation(observation: LightingObservation): void {
     const device = this.state.lighting.devices[observation.target];
     if (!device) return;
+    if (observation.commandId) {
+      this.inFlightLightingCommandIds.delete(observation.commandId);
+      this.acceptedLightingCommandIds.delete(observation.commandId);
+    }
     if (observation.availability === 'unavailable') {
       const changed = device.availability !== 'unavailable';
       device.availability = 'unavailable';
@@ -1888,6 +2035,7 @@ export class LugnEngine {
       : undefined;
     let effectiveIntentChanged = false;
     let attributedStaleCommand = false;
+    let activePrelightPowerFeedback = false;
     for (const property of LightingProperties) {
       const value = observation.values[property];
       if (value === undefined) continue;
@@ -1921,6 +2069,13 @@ export class LugnEngine {
         attributedStaleCommand = true;
       if (command && !fastPathEventId)
         fastPathEventId = this.fastPathEventByCommand.get(command.id);
+      if (
+        property === 'power' &&
+        value === true &&
+        this.prelightActive &&
+        command?.reason === prelightCommandReason
+      )
+        activePrelightPowerFeedback = true;
       if (
         !command &&
         !supersededCommand &&
@@ -2030,10 +2185,19 @@ export class LugnEngine {
         'Feedback arrived for a superseded command; current intent remains authoritative',
         { commandId: observation.commandId },
       );
+    if (activePrelightPowerFeedback)
+      this.addDiagnostic(
+        'presence.prelight_feedback_honored',
+        'Prelight ON feedback is allowed while the preview is awaiting occupancy confirmation',
+        { target: observation.target },
+      );
     this.publish(['lighting', 'commands', 'diagnostics', 'timings']);
     if (
       (!this.shouldRemainPhysicallyEmpty() ||
-        this.manualLightingWhileEmpty.has(observation.target)) &&
+        this.targetIntentCanRunWhileEmpty(
+          this.state.lighting.sceneRevision,
+          observation.target,
+        )) &&
       !this.restoredIntentAwaitingOccupancy
     ) {
       void this.reconcileScene(
@@ -2043,7 +2207,11 @@ export class LugnEngine {
     } else if (
       this.shouldRemainPhysicallyEmpty() &&
       observation.values.power === true &&
-      !this.manualLightingWhileEmpty.has(observation.target)
+      !this.targetIntentCanRunWhileEmpty(
+        this.state.lighting.sceneRevision,
+        observation.target,
+      ) &&
+      !activePrelightPowerFeedback
     ) {
       void this.dispatch(
         observation.target,
@@ -2249,12 +2417,12 @@ export class LugnEngine {
       if (mappedEventId === eventId)
         this.fastPathEventByCommand.delete(commandId);
     }
-    for (const [revision, retry] of this.retryTimers) {
-      if (retry.fastPathEventId === eventId)
-        this.retryTimers.set(revision, {
-          handle: retry.handle,
-          modes: retry.modes,
-        });
+    for (const retry of this.retryTimers.values()) {
+      for (const [mode, scheduled] of retry.modes) {
+        if (scheduled.fastPathEventId === eventId) {
+          retry.modes.set(mode, { dueAt: scheduled.dueAt });
+        }
+      }
     }
   }
 
@@ -2264,6 +2432,7 @@ export class LugnEngine {
       ...this.fastPathEventByCommand.values(),
       ...this.fastPathPrelightExpectedValues.keys(),
       ...[...this.retryTimers.values()]
+        .flatMap((retry) => [...retry.modes.values()])
         .map((retry) => retry.fastPathEventId)
         .filter((eventId): eventId is string => eventId !== undefined),
       ...(this.activePrelightFastPathEventId === undefined
@@ -2392,6 +2561,9 @@ export class LugnEngine {
         .filter((command) => command.status === 'pending')
         .map((command) => command.id),
     );
+    for (const commandId of this.acceptedLightingCommandIds)
+      if (!pendingLightingIds.has(commandId))
+        this.acceptedLightingCommandIds.delete(commandId);
     for (const [commandId, timer] of this.lightingFeedbackTimers) {
       if (!pendingLightingIds.has(commandId)) {
         this.clock.clearTimeout(timer);
@@ -2458,48 +2630,85 @@ export class LugnEngine {
     mode: LightingRetryMode = 'scene',
   ): void {
     const key = String(revision);
-    const existing = this.retryTimers.get(key);
-    if (existing !== undefined) this.clock.clearTimeout(existing.handle);
-    const modes = new Set(existing?.modes ?? []);
-    modes.add(mode);
-    const scheduledEventId = fastPathEventId ?? existing?.fastPathEventId;
-    const handle = this.clock.setTimeout(() => {
-      const retry = this.retryTimers.get(key);
-      if (!retry || retry.handle !== handle) return;
-      this.retryTimers.delete(key);
-      const activeEventId =
-        retry.fastPathEventId &&
-        this.fastPathMonotonicOrigins.has(retry.fastPathEventId)
-          ? retry.fastPathEventId
+    const retry = this.retryTimers.get(key) ?? { modes: new Map() };
+    const existingMode = retry.modes.get(mode);
+    const dueAt = Math.min(
+      existingMode?.dueAt ?? Number.POSITIVE_INFINITY,
+      this.clock.now() + Math.max(0, delayMs),
+    );
+    const eventId =
+      existingMode?.fastPathEventId &&
+      this.fastPathMonotonicOrigins.has(existingMode.fastPathEventId)
+        ? existingMode.fastPathEventId
+        : fastPathEventId && this.fastPathMonotonicOrigins.has(fastPathEventId)
+          ? fastPathEventId
           : undefined;
-      void (async () => {
-        for (const retryMode of retry.modes)
-          await this.runScheduledLightingRetry(
-            revision,
-            retryMode,
-            activeEventId,
-          );
-      })();
-    }, delayMs);
-    this.retryTimers.set(key, {
-      handle,
-      modes,
-      ...(scheduledEventId === undefined
-        ? {}
-        : { fastPathEventId: scheduledEventId }),
+    retry.modes.set(mode, {
+      dueAt,
+      ...(eventId === undefined ? {} : { fastPathEventId: eventId }),
     });
+    this.retryTimers.set(key, retry);
+    this.armRetryTimer(revision, retry);
+  }
+
+  private armRetryTimer(revision: number, retry: ScheduledRetry): void {
+    const key = String(revision);
+    if (retry.modes.size === 0) {
+      if (retry.handle !== undefined) this.clock.clearTimeout(retry.handle);
+      if (this.retryTimers.get(key) === retry) this.retryTimers.delete(key);
+      return;
+    }
+    const dueAt = Math.min(
+      ...[...retry.modes.values()].map((scheduled) => scheduled.dueAt),
+    );
+    if (
+      retry.handle !== undefined &&
+      retry.armedAt !== undefined &&
+      retry.armedAt <= dueAt
+    )
+      return;
+    if (retry.handle !== undefined) this.clock.clearTimeout(retry.handle);
+    retry.armedAt = dueAt;
+    const handle = this.clock.setTimeout(
+      () => {
+        const current = this.retryTimers.get(key);
+        if (!current || current !== retry || current.handle !== handle) return;
+        delete current.handle;
+        delete current.armedAt;
+        const now = this.clock.now();
+        const dueModes = [...current.modes].filter(
+          ([, scheduled]) => scheduled.dueAt <= now,
+        );
+        for (const [mode] of dueModes) current.modes.delete(mode);
+        this.armRetryTimer(revision, current);
+        void (async () => {
+          for (const [mode, scheduled] of dueModes) {
+            const eventId = scheduled.fastPathEventId;
+            await this.runScheduledLightingRetry(
+              revision,
+              mode,
+              eventId && this.fastPathMonotonicOrigins.has(eventId)
+                ? eventId
+                : undefined,
+            );
+          }
+        })();
+      },
+      Math.max(0, dueAt - this.clock.now()),
+    );
+    retry.handle = handle;
   }
 
   private clearRetryTimer(revision: number): void {
     const key = String(revision);
     const retry = this.retryTimers.get(key);
-    if (retry !== undefined) this.clock.clearTimeout(retry.handle);
+    if (retry?.handle !== undefined) this.clock.clearTimeout(retry.handle);
     this.retryTimers.delete(key);
   }
 
   private cancelRetryTimers(): void {
     for (const retry of this.retryTimers.values())
-      this.clock.clearTimeout(retry.handle);
+      if (retry.handle !== undefined) this.clock.clearTimeout(retry.handle);
     this.retryTimers.clear();
   }
 

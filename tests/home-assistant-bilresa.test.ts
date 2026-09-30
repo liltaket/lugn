@@ -47,7 +47,7 @@ describe('Home Assistant BILRESA adapter', () => {
       delivered.push(event);
     });
 
-    for (const { entityId, button } of controllerEntities) {
+    for (const { entityId } of controllerEntities) {
       for (const gesture of supportedGestures) {
         expect(
           adapter.acceptStateChangedFrame(stateChangedFrame(entityId, gesture)),
