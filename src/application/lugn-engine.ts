@@ -276,6 +276,25 @@ export class LugnEngine {
         device.effectiveDesired = { ...intent.effectiveDesired };
         device.ownership = structuredClone(intent.ownership);
       }
+      const restoredScene = activeRestoredIntent.currentScene
+        ? this.scenes.get(activeRestoredIntent.currentScene)
+        : undefined;
+      for (const [target, values] of Object.entries(
+        restoredScene?.lighting ?? {},
+      )) {
+        const colorTemperature = values.colorTemperature;
+        const device = devices[target];
+        if (!device || values.power === false || colorTemperature === undefined)
+          continue;
+        // Older snapshots may contain a per-light color-temperature override.
+        // Restore the current scene's shared Kelvin value instead.
+        device.baselineDesired.colorTemperature = colorTemperature;
+        device.effectiveDesired.colorTemperature = colorTemperature;
+        device.ownership.colorTemperature = {
+          kind: 'scene',
+          revision: activeRestoredIntent.sceneRevision,
+        };
+      }
     }
     const switches: Record<string, DeviceSwitchState> = {};
     for (const id of options.switchDeviceIds ?? []) {
@@ -613,54 +632,98 @@ export class LugnEngine {
       requestId?: string;
     },
   ): Promise<void> {
-    const device = this.requireDevice(target);
+    this.requireDevice(target);
+    const scene = this.state.lighting.currentScene
+      ? this.scenes.get(this.state.lighting.currentScene)
+      : undefined;
+    const synchronizedTemperatureTargets =
+      values.colorTemperature === undefined
+        ? []
+        : Object.entries(scene?.lighting ?? {})
+            .filter(
+              ([, sceneValues]) =>
+                sceneValues.power !== false &&
+                sceneValues.colorTemperature !== undefined,
+            )
+            .map(([sceneTarget]) => sceneTarget);
+    const targets = synchronizedTemperatureTargets.includes(target)
+      ? synchronizedTemperatureTargets
+      : [target];
+    const updates = new Map<string, LightingValues>(
+      targets.map((lightingTarget) => [
+        lightingTarget,
+        lightingTarget === target
+          ? { ...values }
+          : { colorTemperature: values.colorTemperature },
+      ]),
+    );
     await this.finishPrelight(
       true,
       undefined,
-      new Map([[target, new Set(Object.keys(values))]]),
+      new Map(
+        [...updates].map(([lightingTarget, targetValues]) => [
+          lightingTarget,
+          new Set(Object.keys(targetValues)),
+        ]),
+      ),
     );
     this.terminateAllFastPathEvents();
     const source = provenance.source ?? 'capability';
     const reason = provenance.reason ?? 'Explicit lighting adjustment';
-    this.ledger.supersedePending(
-      'Superseded by explicit property adjustment',
-      target,
-    );
-    this.clearLightingDeliveryAttempts(target);
+    for (const lightingTarget of targets) {
+      this.ledger.supersedePending(
+        'Superseded by explicit property adjustment',
+        lightingTarget,
+      );
+      this.clearLightingDeliveryAttempts(lightingTarget);
+    }
     this.convergenceStartedAt.set(
       this.state.lighting.sceneRevision,
       this.clock.now(),
     );
     const now = this.clock.now();
-    for (const property of LightingProperties) {
-      const value = values[property];
-      if (value === undefined) continue;
-      Object.assign(device.effectiveDesired, { [property]: value });
-      device.ownership[property] = {
-        kind: 'override',
-        actor: provenance.actor,
-        ...(provenance.source === undefined
-          ? {}
-          : { source: provenance.source }),
-        reason,
-        createdAt: now,
-      };
+    for (const [lightingTarget, targetValues] of updates) {
+      const device = this.requireDevice(lightingTarget);
+      for (const property of LightingProperties) {
+        const value = targetValues[property];
+        if (value === undefined) continue;
+        Object.assign(device.effectiveDesired, { [property]: value });
+        device.ownership[property] = {
+          kind: 'override',
+          actor: provenance.actor,
+          ...(provenance.source === undefined
+            ? {}
+            : { source: provenance.source }),
+          reason,
+          createdAt: now,
+        };
+      }
     }
     this.addDiagnostic(
       'lighting.set',
       `Explicit property adjustment for ${target}`,
-      { target, values, source, reason },
+      {
+        target,
+        values,
+        source,
+        reason,
+        ...(targets.length > 1 ? { synchronizedTargets: targets } : {}),
+      },
     );
     this.publish(['lighting', 'commands', 'diagnostics']);
     if (this.state.presence.state !== 'confirmed_empty')
-      await this.dispatch(
-        target,
-        values,
-        this.state.lighting.sceneRevision,
-        source,
-        reason,
-        provenance.actor,
-        provenance.requestId,
+      await Promise.all(
+        [...updates].map(([lightingTarget, targetValues]) =>
+          this.dispatch(
+            lightingTarget,
+            targetValues,
+            this.state.lighting.sceneRevision,
+            source,
+            reason,
+            provenance.actor,
+            provenance.requestId,
+          ),
+        ),
       );
   }
 
@@ -1529,25 +1592,51 @@ export class LugnEngine {
         previouslyObserved !== value
       ) {
         this.terminateAllFastPathEvents();
-        Object.assign(device.effectiveDesired, { [property]: value });
-        effectiveIntentChanged = true;
-        device.ownership[property] = {
-          kind: 'override',
-          actor: observation.provenance?.actor ?? { type: 'user' },
-          source: observation.provenance?.source ?? 'external_observation',
-          reason: 'Observed change did not match a recent Lugn command',
-          createdAt: feedbackTime,
-        };
-        this.addDiagnostic(
-          'lighting.override',
-          `${observation.target}.${property} externally changed`,
-          {
-            target: observation.target,
-            property,
-            value,
-            reason: 'No matching recent command in ledger',
-          },
-        );
+        const synchronizedTemperature =
+          property === 'colorTemperature'
+            ? this.expectedSceneColorTemperature(observation.target, device)
+            : undefined;
+        if (synchronizedTemperature !== undefined) {
+          // A room scene owns Kelvin as a shared value. Keep the external
+          // observation visible, but do not turn a single lamp's drift into a
+          // permanent per-light override.
+          device.effectiveDesired.colorTemperature = synchronizedTemperature;
+          if (device.ownership.colorTemperature?.kind !== 'override')
+            device.ownership.colorTemperature = {
+              kind: 'scene',
+              revision: this.state.lighting.sceneRevision,
+            };
+          effectiveIntentChanged = true;
+          this.addDiagnostic(
+            'lighting.color_temperature_reasserted',
+            `${observation.target} color temperature will return to the room setting`,
+            {
+              target: observation.target,
+              observed: value,
+              desired: synchronizedTemperature,
+            },
+          );
+        } else {
+          Object.assign(device.effectiveDesired, { [property]: value });
+          effectiveIntentChanged = true;
+          device.ownership[property] = {
+            kind: 'override',
+            actor: observation.provenance?.actor ?? { type: 'user' },
+            source: observation.provenance?.source ?? 'external_observation',
+            reason: 'Observed change did not match a recent Lugn command',
+            createdAt: feedbackTime,
+          };
+          this.addDiagnostic(
+            'lighting.override',
+            `${observation.target}.${property} externally changed`,
+            {
+              target: observation.target,
+              property,
+              value,
+              reason: 'No matching recent command in ledger',
+            },
+          );
+        }
       } else if (command?.status === 'confirmed') {
         this.addDiagnostic(
           'command.confirmed',
@@ -1610,6 +1699,25 @@ export class LugnEngine {
         'confirmed_empty_off',
       );
     }
+  }
+
+  private expectedSceneColorTemperature(
+    target: string,
+    device: DeviceRuntime,
+  ): number | undefined {
+    const sceneId = this.state.lighting.currentScene;
+    const sceneValues = sceneId
+      ? this.scenes.get(sceneId)?.lighting[target]
+      : undefined;
+    if (
+      !sceneValues ||
+      sceneValues.power === false ||
+      sceneValues.colorTemperature === undefined
+    )
+      return undefined;
+    return (
+      device.effectiveDesired.colorTemperature ?? sceneValues.colorTemperature
+    );
   }
 
   private latestCommandId(target: string): string | undefined {

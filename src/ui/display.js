@@ -142,26 +142,17 @@ function getSceneList(payload) {
       unique.set(scene.id, { id: scene.id, name: scene.name });
     }
   }
-  const roomOrder =
-    roleName(payload.role) === 'bed'
-      ? [
-          'scene.all_off',
-          'scene.soft_light',
-          'scene.everyday_light',
-          'scene.movie_light',
-          'scene.focus_light',
-        ]
-      : [
-          'scene.all_off',
-          'scene.focus_light',
-          'scene.everyday_light',
-          'scene.soft_light',
-          'scene.movie_light',
-        ];
+  const sceneOrder = [
+    'scene.all_off',
+    'scene.soft_light',
+    'scene.everyday_light',
+    'scene.movie_light',
+    'scene.focus_light',
+  ];
   return [...unique.values()].sort((a, b) => {
     const rank = (id) => {
-      const index = roomOrder.indexOf(id);
-      return index < 0 ? roomOrder.length : index;
+      const index = sceneOrder.indexOf(id);
+      return index < 0 ? sceneOrder.length : index;
     };
     const difference = rank(a.id) - rank(b.id);
     return difference || a.name.localeCompare(b.name, 'sv');

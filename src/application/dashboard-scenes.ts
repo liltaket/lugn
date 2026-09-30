@@ -1,12 +1,15 @@
 import { SceneSchema, type LightingScene } from '../core/schemas.js';
 
+const ROOM_CCT_MIN_KELVIN = 2700;
+const ROOM_CCT_MAX_KELVIN = 6500;
+
 /** Room-wide presets that remain valid for any set of configured light targets. */
 export function withRoomPresets(
   scenes: readonly LightingScene[],
   targets: readonly string[],
 ): LightingScene[] {
   const validatedScenes = scenes.map((scene) => SceneSchema.parse(scene));
-  if (targets.length === 0) return validatedScenes;
+  if (targets.length === 0) return normalizeRoomScenes(validatedScenes);
 
   const ceilingTarget = findCeilingTarget(targets);
 
@@ -42,10 +45,59 @@ export function withRoomPresets(
     'scene.everyday',
     ...presets.map((scene) => scene.id),
   ]);
-  return [
+  return normalizeRoomScenes([
     ...validatedScenes.filter((scene) => !presetIds.has(scene.id)),
     ...presets.map((scene) => SceneSchema.parse(scene)),
-  ];
+  ]);
+}
+
+/**
+ * Keeps active lights in the installed room's shared CCT range and lifts WLED.
+ */
+function normalizeRoomScenes(
+  scenes: readonly LightingScene[],
+): LightingScene[] {
+  return scenes.map((scene) => {
+    if (scene.id === 'scene.all_off') return scene;
+    const cct = mostCommonSceneColorTemperature(scene);
+    const lighting = Object.fromEntries(
+      Object.entries(scene.lighting).map(([target, values]) => {
+        const next = { ...values };
+        if (values.power !== false && cct !== undefined)
+          next.colorTemperature = cct;
+        if (values.power !== false && target.toLowerCase().includes('wled'))
+          next.brightness = Math.min(100, (values.brightness ?? 12) + 6);
+        return [target, next];
+      }),
+    );
+    return SceneSchema.parse({ ...scene, lighting });
+  });
+}
+
+function mostCommonSceneColorTemperature(
+  scene: LightingScene,
+): number | undefined {
+  const counts = new Map<number, number>();
+  for (const values of Object.values(scene.lighting)) {
+    if (values.power === false || values.colorTemperature === undefined)
+      continue;
+    counts.set(
+      values.colorTemperature,
+      (counts.get(values.colorTemperature) ?? 0) + 1,
+    );
+  }
+
+  let selected: number | undefined;
+  let highestCount = 0;
+  for (const [temperature, count] of counts) {
+    if (count > highestCount) {
+      selected = temperature;
+      highestCount = count;
+    }
+  }
+  return selected === undefined
+    ? undefined
+    : Math.min(ROOM_CCT_MAX_KELVIN, Math.max(ROOM_CCT_MIN_KELVIN, selected));
 }
 
 /** Maps the retired `scene.everyday` id to its current room preset. */

@@ -15,13 +15,13 @@ Lighting is one of Lugn's most latency-sensitive and user-visible domains.
 
 The runtime adds these room-wide presets for the configured light targets:
 
-| Preset      | Current behavior                                                               |
-| ----------- | ------------------------------------------------------------------------------ |
-| Helt släckt | All configured lights off.                                                     |
-| Mysljus     | Warm accent lights at low brightness (12%); ceiling light off.                 |
-| Vardagsljus | Warm accent lights at 55%; ceiling light off.                                  |
-| Filmkväll   | Warm accents at 6%; ceiling/front light/Cleverio bar off; monitor backlight on. |
-| Fokus       | All configured lights on at 100% and 4000 K.                                   |
+| Preset      | Current behavior                                                                                   |
+| ----------- | -------------------------------------------------------------------------------------------------- |
+| Helt släckt | All configured lights off.                                                                         |
+| Mysljus     | Accent lights at 12% and 2700 K; ceiling light off. WLED is 18%.                                   |
+| Vardagsljus | Accent lights at 55% and 2700 K; ceiling light off. WLED is 61%.                                   |
+| Filmkväll   | Accents at 6% and 2700 K; ceiling/front light/Cleverio bar off; monitor backlight on. WLED is 12%. |
+| Fokus       | All configured lights on at 100% and 4000 K. WLED is 100%.                                         |
 
 Map the WLED CCT white strip as a normal Home Assistant light, for example:
 
@@ -30,11 +30,21 @@ Map the WLED CCT white strip as a normal Home Assistant light, for example:
 ```
 
 The built-in room presets include every configured light target, so the WLED
-strip follows the same scene at 0% for Helt släckt, 12% for Mysljus, 55% for
-Vardagsljus, 6% for Filmkväll, and 100% for Fokus. The WLED entity must expose
+strip follows the same scene at 0% for Helt släckt, 18% for Mysljus, 61% for
+Vardagsljus, 12% for Filmkväll, and 100% for Fokus. The WLED entity must expose
 color-temperature support in Home Assistant for its scene color temperature to
-be applied. Custom scenes should specify their own WLED brightness and color
-temperature when the strip should stay on.
+be applied. When WLED is active in a scene, its configured brightness gets a
+6-point increase, capped at 100%; if brightness is omitted, Lugn starts at
+12%. Helt släckt is unchanged. For any scene with active lights and an
+explicit color temperature, Lugn synchronizes every active light (power not
+explicitly off) to the most common Kelvin value among active scene entries
+(ties use the first value in scene order), clamped to the installed room's
+common 2700–6500 K range. This keeps room CCT synchronized: an external
+per-light color-temperature change is reconciled back to the shared value, and
+an explicit color-temperature adjustment applies to every active light in the
+current scene. Power and brightness overrides keep their existing behavior.
+Custom scenes should specify their own WLED brightness and color temperature
+when the strip should stay on.
 
 The dashboard presents these presets as its primary controls. Other scenes
 from configuration can still be exposed, but only the listed room presets
