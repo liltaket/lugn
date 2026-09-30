@@ -34,9 +34,11 @@ separate secret URL path. The dashboard listener is configured independently
 from the bearer-protected, loopback-only capability API. Keep the display
 listener on a trusted LAN and do not publish it to the internet.
 
-The custom dashboard does not use Clerk. Clerk is still planned for a future
-human-facing configuration website; Hub access currently uses per-Hub path
-tokens.
+The custom Hub dashboard does not use Clerk; it uses a separate secret path
+for each receiver. The local operational control panel at `/ui/` supports
+optional Clerk sign-in. The machine API continues to use its bearer token, and
+the full visual configuration editor remains future work. See
+[Running Lugn](OPERATIONS.md#control-panel-authentication) for Clerk setup.
 
 See [Running Lugn](OPERATIONS.md#lugn-nest-hub-dashboards) for configuration,
 token setup, ports and receiver requirements.
@@ -60,10 +62,10 @@ Hub's fresh displayed error/poll, the display listener's reachability from
 that Hub, and its status on Lugn's dashboard. Do not diagnose receiver
 rendering only from an HTTP response on the Lugn host.
 
-## Future web configuration
+## Operational control panel and future configuration editor
 
-A general daily web app and configuration editor are not part of the current
-Hub dashboard. Planned human login uses Clerk; device and Home Assistant
-connections continue to use their own machine credentials. Future settings can
-include scenes, home-presence mapping, music policy, routines, receiver roles
-and diagnostics, but should continue to use the typed Lugn capability layer.
+The `/ui/` operational control panel can use Clerk for human sign-in; device
+and Home Assistant connections continue to use their own machine credentials.
+A full visual settings editor is not part of the current delivery. Future
+settings can include scenes, home-presence mapping, music policy, routines,
+receiver roles and diagnostics, using the typed Lugn capability layer.

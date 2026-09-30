@@ -57,9 +57,9 @@ still needs work before Lugn is a broadly configurable, finished product.
 
 ## Still outside this MVP
 
-- A general-purpose Clerk-authenticated web app for editing configuration.
-  The current custom Hub pages use their own per-Hub secret path and do not use
-  Clerk.
+- A full visual configuration editor. The local operational control panel
+  supports optional Clerk sign-in; custom Hub pages use their own per-Hub
+  secret paths, and machine API routes retain bearer-token authentication.
 - A routine editor/scheduler, BILRESA binding UI, or broad configuration UI.
 - Direct WiiM transport. Music control uses Home Assistant media-player
   entities and remains subject to the services and feedback those entities

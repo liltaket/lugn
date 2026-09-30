@@ -79,7 +79,7 @@ The detailed presence/continuity path is included in this implementation because
 - Bed Hub and Desk Hub are separate display roles.
 - Lugn should manage DashCast lifecycle.
 - deliberate external casting should temporarily override the dashboard.
-- The current runtime serves custom Bed/Desk Hub dashboards and manages them through DashCast; this is separate from a future Clerk-authenticated configuration website.
+- The current runtime serves custom Bed/Desk Hub dashboards through DashCast and an optional Clerk-authenticated operational control panel; visual configuration editing remains future work.
 
 ### Computer
 

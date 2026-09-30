@@ -30,8 +30,8 @@ for implementation detail and evidence boundaries.
 
 ### Configuration and access
 
-- Build the general human-facing configuration site and finish its Clerk
-  authentication flow.
+- Build the general human-facing configuration editor on top of the existing
+  optional Clerk-authenticated operational control panel.
 - Support safe edits to Home Assistant entity maps, display roles, light
   presets, quiet hours and home-presence entity without hand-editing JSON.
 - Document how operators rotate HA, MQTT, API and Hub secrets.

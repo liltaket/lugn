@@ -69,8 +69,15 @@ Example:
 Likewise for music:
 
     playback -> automation
-    volume   -> user
+    volume baseline -> user
+    volume offset   -> automation
     source   -> automation
+
+The most recent volume changer and automatic-policy status are separate facts.
+A user volume change becomes the new baseline; when the room is occupied and
+the resident is not away, Lugn can still apply the daily and person offsets to
+that baseline. The dashboard reports who last changed the volume separately
+from whether automatic adjustment is active and what target it calculates.
 
 This avoids coarse global "passive mode" flags.
 

@@ -37,8 +37,9 @@ Cast receiver rendered its page, or that a physical device reached its target.
   off overlay that retains logical intent.
 - Music policy includes Spotify DJ preset 1, Optical preset 4, confirmed-empty
   pause, short-context resume, no automatic playback at/after 23:00, a
-  Europe/Stockholm daily volume curve, and a 10-point reduction when more than
-  one person is in the room.
+  Europe/Stockholm daily volume curve, and a 10-point reduction when the
+  STL27L snapshot count is greater than one. An unknown count adds no person
+  offset.
 - The custom Hub dashboard is served separately from the loopback capability
   API. DashCast manager launches the Bed/Desk pages, monitors receiver state
   and yields to an active external cast.
@@ -48,12 +49,9 @@ Cast receiver rendered its page, or that a physical device reached its target.
 
 ## Current integration evidence and limits
 
-- The `device_tracker.lustigkurre` entity was read from Home Assistant during a
-  read-only check and reported `home`. This verifies the configured entity can
-  be observed at that time; it does not verify away transitions or the
-  automation response end to end.
-- No device service calls or physical light/music checks are part of this
-  documentation update.
+- Home-presence state and physical device behavior are live evidence, not
+  durable properties of this delivery map. Query the configured Home Assistant
+  entity and check current Lugn observations when commissioning.
 - An accepted Home Assistant service call is not physical-device feedback.
   Check Lugn's observed state and command status, then confirm the actual
   device separately when commissioning.
@@ -73,9 +71,9 @@ Cast receiver rendered its page, or that a physical device reached its target.
 - Per-receiver confirmation that Bed and Desk dashboards continue rendering
   and that recovery behaves correctly after an external cast or service
   restart.
-- A general Clerk-authenticated configuration UI, routines, and bindings for
-  remote types beyond the configured BILRESA buttons remain outside the current
-  delivered slice.
+- A full visual configuration editor, routines, and bindings for remote types
+  beyond the configured BILRESA buttons remain outside the current delivered
+  slice. The operational control panel supports optional Clerk sign-in.
 - Validate the installed HA media integration's preset, Optical, playback and
   feedback behavior. Direct WiiM transport and verified fade trajectories are
   not implemented.

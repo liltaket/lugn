@@ -15,9 +15,14 @@
           <time id="clock-time" class="clock-time" aria-label="Klockan"
             >—:—</time
           >
-          <time id="clock-date" class="clock-date" datetime=""
-            >Hämtar datum …</time
-          >
+          <div class="clock-meta">
+            <time id="clock-date" class="clock-date" datetime=""
+              >Hämtar datum …</time
+            >
+            <span id="room-presence" class="room-presence" role="status"
+              >Närvaro okänd</span
+            >
+          </div>
         </div>
         <div
           class="environment-grid"
@@ -139,7 +144,9 @@
                 ><span id="music-volume-baseline-label">Basnivå</span>
                 <strong id="music-volume-baseline">—</strong></span
               >
-              <span id="music-volume-adjustments">Dygn — · personer —</span>
+              <span id="music-volume-adjustments"
+                >Dygn — · Personer (—): —</span
+              >
             </div>
           </div>
           <div class="music-transport">

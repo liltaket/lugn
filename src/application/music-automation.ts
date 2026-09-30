@@ -39,6 +39,7 @@ export type MusicAutomationOptions = {
 export class MusicAutomation {
   private readonly baselines = new Map<string, number>();
   private readonly explicitBaselines = new Set<string>();
+  private readonly volumeControllers = new Map<string, 'you' | 'lugn'>();
   private readonly resumeUntil = new Map<string, number>();
   private timer: TimerHandle | undefined;
   private presence: Presence = 'unknown';
@@ -136,8 +137,12 @@ export class MusicAutomation {
     if (request.property === 'volume') {
       const offset = this.currentOffset();
       this.baselines.set(target, this.clamp(request.value - offset));
-      if (provenance.actor.type === 'user') this.explicitBaselines.add(target);
-      else this.explicitBaselines.delete(target);
+      if (provenance.actor.type === 'user') {
+        this.explicitBaselines.add(target);
+        this.volumeControllers.set(target, 'you');
+      } else {
+        this.explicitBaselines.delete(target);
+      }
     }
   }
 
@@ -146,6 +151,7 @@ export class MusicAutomation {
     if (this.disposed || !Number.isFinite(volume)) return;
     this.baselines.set(target, this.clamp(volume - this.currentOffset()));
     this.explicitBaselines.add(target);
+    this.volumeControllers.set(target, 'you');
     this.applyVolumePolicy();
   }
 
@@ -164,7 +170,9 @@ export class MusicAutomation {
       this.homePresence !== 'away' &&
       targetVolume !== null;
     return {
-      controller: automatic ? 'lugn' : 'you',
+      controller: automatic
+        ? (this.volumeControllers.get(target) ?? 'lugn')
+        : 'you',
       automatic,
       baselineSource:
         baseline === undefined
@@ -219,6 +227,7 @@ export class MusicAutomation {
       const desired = this.clamp(baseline + offset);
       const current = device.requested.volume ?? device.observed.volume;
       if (current !== null && Math.abs(current - desired) < 0.005) continue;
+      this.volumeControllers.set(target, 'lugn');
       this.send(
         target,
         { property: 'volume', value: desired },

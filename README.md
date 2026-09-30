@@ -8,9 +8,10 @@ restarts, and serves a purpose-built dashboard to Nest Hubs through DashCast.
 It is designed to be understandable when an automation makes a decision and
 safe to use alongside physical controls and Home Assistant.
 
-> **Current scope:** a working local runtime and custom Hub dashboard. A
-> general Clerk-authenticated configuration website, editable routines and
-> direct WiiM transport are not part of the current runtime.
+> **Current scope:** a working local runtime, custom Hub dashboard and
+> operational control panel with optional Clerk sign-in. A general visual
+> configuration editor, editable routines and direct WiiM transport are not
+> part of the current runtime.
 
 ## What works
 
@@ -19,9 +20,9 @@ safe to use alongside physical controls and Home Assistant.
 | Room presence | Consumes normalized STL27L occupancy and prelight events over MQTT. `occupied`, `confirmed_empty` and `unknown` stay distinct.                                                                                                      |
 | Home/away     | Reads a configured Home Assistant `person.*` or `device_tracker.*` entity. The example defaults to `device_tracker.lustigkurre`. Explicit `away` blocks automatic room activation and music; unknown status does not count as away. |
 | Lights        | Home Assistant light mappings, room presets, temporary prelight, confirmed-empty shutoff, scene convergence and retries, and persisted logical lighting intent.                                                                     |
-| BILRESA       | Home Assistant event entities trigger scene/off controls, a sleep/Bilresa toggle and a separate automatic music-volume toggle.                                                                                                      |
-| Music         | Home Assistant `media_player.*` mappings, Spotify DJ preset 1, Optical preset 4, play/pause, observed state, volume buttons and a time-of-day volume curve.                                                                         |
-| Hub dashboard | Custom Bed/Desk room dashboards served by Lugn and cast/monitored with DashCast. They are not Home Assistant dashboards.                                                                                                            |
+| BILRESA       | Button 1 toggles room scenes and Sleep; Button 2 short press toggles volume automation, and long press toggles Bilresa mode.                                                                                                        |
+| Music         | HA player mappings, DJ/Optical presets, controls, volume curve and owner/target status; STL27L count above one adds a 10-point reduction.                                                                                           |
+| Hub dashboard | Custom Bed/Desk DashCast pages with room occupancy and count.                                                                                                                                                                       |
 | Room data     | Temperature, humidity, CO₂ and PM2.5 from configured Home Assistant sensor mappings.                                                                                                                                                |
 | Local API     | Loopback-only HTTP health, state and typed capability routes.                                                                                                                                                                       |
 
@@ -50,13 +51,13 @@ See [Music](docs/MUSIC.md) and [Presence](docs/PRESENCE.md) for exact rules.
 
 The room dashboard offers five large buttons:
 
-| Preset      | Effect                                                                   |
-| ----------- | ------------------------------------------------------------------------ |
-| Helt släckt | Turns every configured room light off.                                   |
-| Mysljus     | Warm, low accent lights; ceiling light off.                              |
-| Vardagsljus | Brighter warm accent lights; ceiling light off.                          |
+| Preset      | Effect                                                                        |
+| ----------- | ----------------------------------------------------------------------------- |
+| Helt släckt | Turns every configured room light off.                                        |
+| Mysljus     | Warm, low accent lights; ceiling light off.                                   |
+| Vardagsljus | Brighter warm accent lights; ceiling light off.                               |
 | Filmkväll   | Warm accents dim; ceiling/front light/Cleverio bar off; monitor backlight on. |
-| Fokus       | All configured lights on at 100% and 4000 K.                             |
+| Fokus       | All configured lights on at 100% and 4000 K.                                  |
 
 The exact semantic light target for the ceiling is selected from configured
 targets; if no target looks like a ceiling light, Lugn uses the first configured
@@ -115,10 +116,10 @@ store. Do not commit `config.json` or `lugn.env`.
 
 ## Dashboard
 
-The Hub view puts the room presets first, with a clock/date, room and home
-status, temperature, humidity, CO₂, PM2.5, and compact music controls. Music
-buttons start Spotify DJ preset 1 or Optical preset 4; volume controls change
-by 5 percentage points. The screen is designed to fit without scrolling.
+The Hub view puts the room presets first, with a clock/date, live room count,
+home status, temperature, humidity, CO₂, PM2.5, and compact music controls.
+Music buttons start Spotify DJ preset 1 or Optical preset 4; volume controls
+change by 5 percentage points. The screen is designed to fit without scrolling.
 
 Each Hub has a separate role and private path token. Lugn starts DashCast on
 configured Cast receivers, yields while another cast is active, and can restore

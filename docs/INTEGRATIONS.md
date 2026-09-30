@@ -20,10 +20,10 @@ dispatches through the REST API. `HomeAssistantWebSocketTransport` handles
 authentication, `state_changed` subscription and bounded reconnects; the host
 supplies credentials and forwards events to the adapters. Startup also makes
 one read-only `/api/states` query to seed configured observations. Transport
-creation and HTTP fetch are injectable. A read-only check confirmed that the
-configured home-presence entity `device_tracker.lustigkurre` returned state
-`home` at the time of the check. This does not verify a future away transition,
-automatic response, or any physical device output.
+creation and HTTP fetch are injectable. Live state is time-dependent: query
+Home Assistant and Lugn when checking a current home/away state; this document
+does not claim that the resident is home or that a physical device reached a
+requested state.
 
 ### Home and room presence
 

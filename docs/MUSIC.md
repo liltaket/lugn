@@ -61,18 +61,21 @@ while the room is occupied and the resident is not confirmed away:
 
 The curve rises linearly from −15 points at midnight to baseline at 06:00, stays
 at baseline through 22:00, then falls linearly back to −15 points at midnight.
-When the sensor reports more than one person in the room, Lugn subtracts a
-further 10 points. These adjustments stack and the automatic result is clamped
-to 5–80%.
+When the STL27L snapshot count is greater than one, Lugn subtracts a further
+10 points. An unknown count adds no person offset. These adjustments stack and
+the automatic result is clamped to 5–80%.
 
 Dashboard volume changes set a new user baseline after accounting for the
 current automatic offset. Thus a manual `+` or `−` remains a five-point step
 even when the daily curve is active.
 
-The Hub volume panel distinguishes the observed player volume from Lugn's
-calculated target and shows whether Lugn currently applies the target or the
-volume is under manual control. It also shows the baseline source and active
-daily/person adjustments.
+The Hub volume panel distinguishes the player's current volume from Lugn's
+calculated target. It reports who last changed the volume, whether automatic
+adjustment is active, the user baseline, and the current daily adjustment. The
+person adjustment includes the reported room count, such as `Personer (2):
+−10 pp` or `Personer (1): 0 pp`. The dashboard also shows the room count beside
+the clock; an unavailable count is shown as unknown instead of reusing a stale
+value.
 
 ## State and command confirmation
 

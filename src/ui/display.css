@@ -96,6 +96,19 @@ button[aria-busy='true'] {
   font-size: clamp(20px, 2.3vw, 28px);
   line-height: 1.2;
 }
+.clock-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px 16px;
+  min-width: 0;
+}
+.room-presence {
+  color: var(--accent);
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: 570;
+}
 .environment-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -505,6 +518,9 @@ h2 {
   .clock-date {
     font-size: 20px;
   }
+  .room-presence {
+    font-size: 14px;
+  }
   .environment-grid {
     gap: 8px 20px;
   }
@@ -542,6 +558,12 @@ h2 {
   }
   .clock-date {
     font-size: 16px;
+  }
+  .clock-meta {
+    gap: 4px 10px;
+  }
+  .room-presence {
+    font-size: 12px;
   }
   .glance {
     grid-template-columns: 1fr 1.1fr;

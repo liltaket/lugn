@@ -29,8 +29,10 @@ values. Keep the installation's `config.json` out of source control.
 Provide the referenced environment variables in the service manager or shell.
 For example, use your secret manager or a protected service environment to set
 `HOME_ASSISTANT_TOKEN`, `MQTT_USERNAME`, `MQTT_PASSWORD`, and
-`LUGN_API_TOKEN`. The API token should be a long random value. If MQTT uses
-anonymous access, remove both MQTT credential references from the config.
+`LUGN_API_TOKEN`. Onboarding may instead configure names ending in `_B64`,
+which must contain base64url-encoded values. The API token should be a long
+random value. If MQTT uses anonymous access, remove both MQTT credential
+references from the config.
 For a local checkout, a repo-root `lugn.env` is git-ignored; keep it mode
 `0600` and never commit it.
 
@@ -125,8 +127,8 @@ that the browser rendered the page; the dashboard reports that distinction.
 The display listener is the only Lugn service configured for LAN access. It
 accepts requests only for its configured host and per-Hub secret path, and its
 control POSTs require a same-origin browser request. Do not port-forward it to
-the public internet. A user-facing site and Clerk login remain on the regular
-web/API surface.
+the public internet. The separate operational control panel is served at
+`/ui/` on the loopback HTTP listener and supports optional Clerk sign-in.
 
 ## Build and start
 
@@ -282,6 +284,31 @@ registered typed operations. `POST /capabilities/<name>` validates its `input`
 with the same schema used by the in-process capability registry. Invalid
 requests return `400`; unknown operations return `404`. There is no arbitrary
 Home Assistant service-call endpoint.
+
+## Control panel authentication
+
+The operational control panel at `/ui/` can use Clerk for human sign-in. Add
+this optional section under `http` in `config.json`:
+
+```json
+"clerk": {
+  "publishableKeyEnv": "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+  "secretKeyEnv": "CLERK_SECRET_KEY",
+  "allowedUserIdsEnv": "CLERK_ALLOWED_USER_IDS"
+}
+```
+
+Set those three variables in the protected service environment. The allowlist
+value can be `*` to allow any Clerk-authenticated user, or a comma-separated
+list of Clerk user IDs such as `user_...` to restrict access. Clerk project
+settings separately control which accounts can sign up. Use matching test or
+live Clerk key pairs. Keep the secret key and `LUGN_API_TOKEN` private; the
+publishable key is exposed to the browser for Clerk sign-in.
+
+Enabling Clerk does not remove machine authentication: set `bearerTokenEnv` to
+a long random API token variable. `/ui/` uses Clerk sessions, while `/health`,
+`/state` and capability routes use the bearer token. Hub dashboards use their
+own per-Hub URL tokens and do not use Clerk.
 
 ### Home Assistant buttons
 

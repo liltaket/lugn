@@ -25,6 +25,10 @@ lighting and music actions; home status is separate from room occupancy. See
 [Presence](PRESENCE.md) for the behavior and [Operations](OPERATIONS.md) for
 the full config shape.
 
+The `/ui/` operational control panel can optionally use Clerk for human
+sign-in. This does not provide a visual configuration editor; settings still
+come from the validated JSON file. See [Control panel authentication](OPERATIONS.md#control-panel-authentication).
+
 Credentials are named in JSON but supplied through the process environment or
 a protected secret file. Never put credential values in checked-in config.
 

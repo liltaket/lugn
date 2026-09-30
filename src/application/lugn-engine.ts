@@ -795,8 +795,9 @@ export class LugnEngine {
     if (normalizedEvent.presence === 'occupied' || createsEmptyTiming)
       this.terminateAllFastPathEvents();
     this.state.presence.state = normalizedEvent.presence;
-    if (normalizedEvent.personCount !== undefined)
-      this.state.presence.personCount = normalizedEvent.personCount;
+    this.state.presence.personCount =
+      normalizedEvent.personCount ??
+      (normalizedEvent.presence === 'confirmed_empty' ? 0 : null);
     this.musicAutomation.handlePresence(
       previous,
       normalizedEvent.presence,

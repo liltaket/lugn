@@ -10,6 +10,7 @@ const root = document.querySelector('#app-root');
 const refs = {
   clockTime: document.querySelector('#clock-time'),
   clockDate: document.querySelector('#clock-date'),
+  roomPresence: document.querySelector('#room-presence'),
   connection: document.querySelector('#connection-notice'),
   connectionMessage: document.querySelector('#connection-message'),
   retry: document.querySelector('#retry-button'),
@@ -269,6 +270,27 @@ function renderEnvironment(environment) {
   }
 }
 
+function renderRoomPresence(state) {
+  const presence = state?.presence;
+  if (presence?.state === 'confirmed_empty') {
+    setText(refs.roomPresence, 'Rummet är tomt');
+    return;
+  }
+  if (presence?.state !== 'occupied') {
+    setText(refs.roomPresence, 'Närvaro okänd');
+    return;
+  }
+  const count = presence.personCount;
+  if (!Number.isInteger(count) || count < 1) {
+    setText(refs.roomPresence, 'I rummet · antal okänt');
+    return;
+  }
+  setText(
+    refs.roomPresence,
+    `I rummet · ${count} ${count === 1 ? 'person' : 'personer'}`,
+  );
+}
+
 function musicDevices(payload) {
   const devices = payload?.state?.music?.devices;
   if (!devices || typeof devices !== 'object') return [];
@@ -300,35 +322,35 @@ function renderMusicVolumePolicy(payload, target) {
   const baseline = volumeFraction(policy?.baseline);
   const goal = volumeFraction(policy?.target);
   const controller =
-    policy?.automatic === true && policy.controller === 'lugn'
-      ? 'lugn'
-      : policy?.automatic === false && policy.controller === 'you'
-        ? 'you'
-        : 'unknown';
+    policy?.controller === 'lugn' || policy?.controller === 'you'
+      ? policy.controller
+      : 'unknown';
   refs.musicVolumePolicy.dataset.controller = controller;
   setText(
     refs.musicVolumeController,
-    controller === 'lugn'
-      ? 'Lugn styr volymen'
-      : controller === 'you'
-        ? 'Du styr volymen'
-        : 'Volymstyrning okänd',
+    controller === 'lugn' && policy?.automatic === true
+      ? 'Lugn justerar volymen'
+      : controller === 'you' && policy?.automatic === true
+        ? 'Du ändrade volymen'
+        : controller === 'you'
+          ? 'Du styr volymen'
+          : 'Volymstyrning okänd',
   );
   setText(
     refs.musicVolumeTargetLabel,
-    controller === 'you' ? 'Beräknat mål' : 'Mål',
+    policy?.automatic === true ? 'Automatiskt mål' : 'Mål',
   );
   setText(refs.musicVolumeTarget, formatVolume(goal));
   const explanation =
     goal === null
       ? 'Mål saknas'
-      : controller === 'you'
-        ? 'Manuellt läge · målet styr inte spelaren'
-        : controller === 'lugn' && policy?.baselineSource === 'user'
-          ? 'Din bas · Lugn anpassar efter dygn och antal personer'
-          : controller === 'unknown'
-            ? 'Väntar på volymregel'
-            : '';
+      : policy?.automatic === true && policy?.baselineSource === 'user'
+        ? 'Din bas · Lugn anpassar efter dygn och antal personer'
+        : policy?.automatic === true
+          ? 'Målet följer dygn och antal personer'
+          : controller === 'you'
+            ? 'Automatiken är pausad'
+            : 'Väntar på volymregel';
   setText(refs.musicVolumeTargetState, explanation);
   refs.musicVolumeTargetState.hidden = !explanation;
   setText(
@@ -340,9 +362,15 @@ function renderMusicVolumePolicy(payload, target) {
         : 'Basnivå',
   );
   setText(refs.musicVolumeBaseline, formatVolume(baseline));
+  const presence = payload?.state?.presence;
+  const personCount =
+    Number.isInteger(presence?.personCount) && presence.personCount >= 0
+      ? presence.personCount
+      : null;
+  const personCountLabel = personCount === null ? 'okänt' : personCount;
   setText(
     refs.musicVolumeAdjustments,
-    `Dygn ${formatVolumeOffset(policy?.dailyOffset)} · 2 pers ${formatVolumeOffset(policy?.personOffset)}`,
+    `Dygn: ${formatVolumeOffset(policy?.dailyOffset)} · Personer (${personCountLabel}): ${formatVolumeOffset(policy?.personOffset)}`,
   );
 }
 
@@ -450,6 +478,7 @@ function render(payload) {
   setRole(payload?.role);
   renderScenes(payload);
   renderEnvironment(payload?.environment);
+  renderRoomPresence(payload?.state);
   renderMusic(payload);
 }
 

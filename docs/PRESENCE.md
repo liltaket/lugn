@@ -44,9 +44,16 @@ Examples that can produce unknown:
 
 ## Person count
 
-Person count can be known or unknown independently from occupancy.
+Person count can be known or unknown independently from occupancy. The current
+MQTT adapter reads the STL27L snapshot count; a different sensor integration
+should preserve unknown count when it cannot count people rather than invent
+one.
 
-A simpler sensor should not be forced to pretend it can count people.
+When occupied state includes a valid count, Lugn shows that count on the Hub
+dashboard and labels the music adjustment with the same number. If an event
+does not include a count, Lugn clears the prior count and shows it as unknown
+instead of reusing a stale value. A confirmed-empty event with no count is
+normalized to zero people.
 
 ## STL27L role
 
