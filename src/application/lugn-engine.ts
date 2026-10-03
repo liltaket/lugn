@@ -168,6 +168,7 @@ export class LugnEngine {
     'unknown';
   private presenceTransitionGeneration = 0;
   private quietHoursSuppressedForCurrentVisit = false;
+  private readonly manualLightingDuringQuietVisit = new Set<string>();
   private readonly intentByRevision = new Map<number, IntentProvenance>();
   private readonly fastPathEventByCommand = new Map<string, string>();
   private readonly acceptedLightingCommandIds = new Set<string>();
@@ -723,6 +724,7 @@ export class LugnEngine {
     const scene = this.scenes.get(sceneId);
     if (!scene) throw new Error(`Unknown scene: ${sceneId}`);
     this.quietHoursSuppressedForCurrentVisit = false;
+    this.manualLightingDuringQuietVisit.clear();
     if (sceneId !== 'scene.all_off' && sceneId !== 'scene.sleep')
       this.lastNonOffSceneId = sceneId;
     const restoredTargets =
@@ -856,6 +858,11 @@ export class LugnEngine {
         now,
       );
     for (const [lightingTarget, targetValues] of updates) {
+      if (
+        provenance.actor.type === 'user' &&
+        this.quietHoursSuppressedForCurrentVisit
+      )
+        this.manualLightingDuringQuietVisit.add(lightingTarget);
       const device = this.requireDevice(lightingTarget);
       for (const property of LightingProperties) {
         const value = targetValues[property];
@@ -972,6 +979,7 @@ export class LugnEngine {
       this.lastConfirmedPresence = normalizedEvent.presence;
       this.clearPrelight();
       this.quietHoursSuppressedForCurrentVisit = false;
+      this.manualLightingDuringQuietVisit.clear();
       if (this.prelightFinishPromise) await this.prelightFinishPromise;
     } else if (normalizedEvent.presence === 'occupied') {
       // Publish occupancy to concurrent event handlers before waiting for
@@ -1094,8 +1102,10 @@ export class LugnEngine {
     }
     if (normalizedEvent.presence === 'occupied') {
       this.manualLightingWhileEmpty.clear();
-      if (lastConfirmedBeforeEvent !== 'occupied')
+      if (lastConfirmedBeforeEvent !== 'occupied') {
         this.quietHoursSuppressedForCurrentVisit = this.isLightingQuietHours();
+        this.manualLightingDuringQuietVisit.clear();
+      }
       this.suppressInitialEmptyContinuity = false;
       this.restoredContinuityPending = false;
       const expiry = this.state.presence.continuityExpiresAt;
@@ -1123,7 +1133,11 @@ export class LugnEngine {
       );
       this.state.timings.push(timing);
       this.publish(['presence', 'diagnostics', 'timings']);
-      if (this.isLightingQuietHours()) {
+      if (
+        this.isLightingQuietHours() &&
+        (lastConfirmedBeforeEvent !== 'occupied' ||
+          this.quietHoursSuppressedForCurrentVisit)
+      ) {
         this.quietHoursSuppressedForCurrentVisit = true;
         this.addDiagnostic(
           'presence.lighting_suppressed_quiet_hours',
@@ -1433,6 +1447,7 @@ export class LugnEngine {
         !this.manualLightingWhileEmpty.has(target)
       )
         continue;
+      if (!this.canReconcileLightingTarget(target)) continue;
       const targetStartedAt =
         this.targetConvergenceStartedAt.get(
           this.lightingDeliveryKey(revision, target),
@@ -2840,6 +2855,14 @@ export class LugnEngine {
     );
   }
 
+  private canReconcileLightingTarget(target: string): boolean {
+    return (
+      !this.quietHoursSuppressedForCurrentVisit ||
+      this.manualLightingDuringQuietVisit.has(target) ||
+      this.state.lighting.devices[target]?.effectiveDesired.power === false
+    );
+  }
+
   private hasRetryableLightingMismatch(revision: number): boolean {
     if (
       revision !== this.state.lighting.sceneRevision ||
@@ -2857,6 +2880,7 @@ export class LugnEngine {
         !this.manualLightingWhileEmpty.has(target)
       )
         continue;
+      if (!this.canReconcileLightingTarget(target)) continue;
       const hasMismatch = LightingProperties.some((property) => {
         if (device.effectiveDesired.power === false && property !== 'power')
           return false;
@@ -2885,6 +2909,7 @@ export class LugnEngine {
       .filter(([target, device]) => {
         const key = this.lightingDeliveryKey(revision, target);
         return (
+          this.canReconcileLightingTarget(target) &&
           (!this.shouldRemainPhysicallyEmpty() ||
             this.sceneIntentCanRunWhileEmpty(revision) ||
             this.manualLightingWhileEmpty.has(target)) &&
@@ -2929,6 +2954,7 @@ export class LugnEngine {
       )
         continue;
       if (device.availability !== 'unavailable') continue;
+      if (!this.canReconcileLightingTarget(target)) continue;
       const hasMismatch = LightingProperties.some((property) => {
         if (device.effectiveDesired.power === false && property !== 'power')
           return false;
@@ -2967,6 +2993,7 @@ export class LugnEngine {
         Object.keys(command.desired).length === 1 &&
         device.observed.power !== false
       );
+    if (!this.canReconcileLightingTarget(command.target)) return false;
     if (
       this.shouldRemainPhysicallyEmpty() &&
       !this.targetIntentCanRunWhileEmpty(command.revision, command.target)

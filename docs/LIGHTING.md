@@ -58,6 +58,11 @@ Unknown home status does not count as away. Manual dashboard scene/light
 requests remain available while away. Confirmed-empty light-off remains active
 regardless of home status.
 
+A visit suppressed during quiet hours stays suppressed through device recovery,
+observations and retries, including after 06:00 until a fresh confirmed entry.
+An explicit scene clears that visit suppression. An explicit light adjustment
+allows only its affected targets to converge; the other targets stay suppressed.
+
 Temporary prelight is suppressed when any configured light is already on, the
 current scene requests every configured light off, quiet hours are active, or
 the home-presence entity reports away. This prevents an entry hint from
