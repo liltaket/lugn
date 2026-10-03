@@ -1154,9 +1154,7 @@ export class LugnEngine {
         this.publish(['diagnostics']);
         return;
       }
-      const defaultScene = newConfirmedEntry
-        ? this.defaultSceneOnOccupancy
-        : undefined;
+      const defaultScene = this.defaultSceneOnOccupancy;
       if (defaultScene) {
         this.defaultSceneOnOccupancy = undefined;
         this.beginScene(defaultScene, {
@@ -1208,7 +1206,7 @@ export class LugnEngine {
     }
     this.publish(['presence', 'music', 'diagnostics']);
     if (
-      normalized === 'home' &&
+      normalized !== 'away' &&
       previous === 'away' &&
       this.state.presence.state === 'occupied' &&
       !this.quietHoursSuppressedForCurrentVisit &&
@@ -1470,6 +1468,10 @@ export class LugnEngine {
         Object.assign(desired, { [property]: value });
       }
       if (Object.keys(desired).length === 0) continue;
+      // Off observations deliberately omit brightness/CCT. The remembered
+      // values are not evidence of what a lamp will restore on its next ON.
+      if (desired.power === true)
+        Object.assign(desired, device.effectiveDesired);
       if (device.availability === 'degraded') continue;
       if (now - targetStartedAt >= this.convergenceTimeoutMs) {
         device.availability = 'degraded';
@@ -2080,8 +2082,35 @@ export class LugnEngine {
       this.publish(['lighting', 'commands', 'diagnostics']);
       return;
     }
-    const recovered = device.availability !== 'available';
-    device.availability = 'available';
+    const feedbackTime = this.clock.now();
+    // Capture before attributing any properties: an ON echo can confirm power
+    // while the same HA event still contains an intermediate brightness.
+    const pendingHaProperties = new Set(
+      observation.commandId === undefined &&
+        observation.provenance?.actor.type === 'home_assistant'
+        ? LightingProperties.filter((property) => {
+            const desired = device.effectiveDesired[property];
+            if (desired === undefined) return false;
+            const pending = this.ledger.latestPending(
+              observation.target,
+              property,
+              desired,
+            );
+            return (
+              pending !== undefined &&
+              pending.id === this.latestCommandId(observation.target) &&
+              feedbackTime - pending.issuedAt < this.convergenceTimeoutMs
+            );
+          })
+        : [],
+    );
+    const recovered =
+      device.availability !== 'available' &&
+      !(device.availability === 'degraded' && pendingHaProperties.size > 0);
+    // Partial feedback for our final attempt is not an independent recovery
+    // event: it must not grant another three deliveries or remove degradation.
+    if (device.availability !== 'degraded' || recovered)
+      device.availability = 'available';
     if (recovered) {
       this.startConvergenceAttempt(
         this.state.lighting.sceneRevision,
@@ -2096,7 +2125,6 @@ export class LugnEngine {
         },
       );
     }
-    const feedbackTime = this.clock.now();
     let fastPathEventId = observation.commandId
       ? this.fastPathEventByCommand.get(observation.commandId)
       : undefined;
@@ -2150,6 +2178,7 @@ export class LugnEngine {
       if (
         !command &&
         !supersededCommand &&
+        !pendingHaProperties.has(property) &&
         !(
           property === 'power' &&
           value === true &&
@@ -2234,6 +2263,7 @@ export class LugnEngine {
               desired === undefined || desired === device.observed[property]
             );
           });
+    if (currentIntentConfirmed) device.availability = 'available';
     if (effectiveIntentChanged || currentIntentConfirmed)
       this.clearLightingDeliveryAttempts(observation.target);
     if (fastPathEventId) {
