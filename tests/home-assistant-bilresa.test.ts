@@ -18,16 +18,27 @@ const supportedGestures = [
   'long_press',
 ] as const;
 
+let eventSequence = 0;
+
 function stateChangedFrame(entityId: string, gesture: string) {
+  const timestamp =
+    Date.parse('2026-10-03T18:00:00.000+00:00') + ++eventSequence;
   return {
     type: 'event',
     id: 1,
     event: {
       event_type: 'state_changed',
+      time_fired: new Date(timestamp).toISOString(),
       data: {
         entity_id: entityId,
+        old_state: {
+          entity_id: entityId,
+          state: new Date(timestamp - 1).toISOString(),
+          attributes: { event_type: gesture },
+        },
         new_state: {
           entity_id: entityId,
+          state: new Date(timestamp).toISOString(),
           attributes: { event_type: gesture },
         },
       },
@@ -36,6 +47,181 @@ function stateChangedFrame(entityId: string, gesture: string) {
 }
 
 describe('Home Assistant BILRESA adapter', () => {
+  const entityId = controllerEntities[0].entityId;
+  const beforeEventAt = '2026-10-03T17:59:00.000+00:00';
+  const eventAt = '2026-10-03T18:00:00.000+00:00';
+  const nextEventAt = '2026-10-03T18:00:01.000+00:00';
+  const state = (timestamp: string, eventType = 'multi_press_1') => ({
+    entity_id: entityId,
+    state: timestamp,
+    attributes: { event_type: eventType },
+  });
+  const frame = (oldState: unknown, newState: unknown) => ({
+    type: 'event',
+    id: 1,
+    event: {
+      event_type: 'state_changed',
+      data: { entity_id: entityId, old_state: oldState, new_state: newState },
+    },
+  });
+
+  it('ignores restoration on first observation and delivers the next real press', () => {
+    const delivered: HomeAssistantBilresaEvent[] = [];
+    const adapter = new HomeAssistantBilresaAdapter(
+      {},
+      new FakeClock(0),
+      (e) => {
+        delivered.push(e);
+      },
+    );
+    expect(adapter.acceptStateChangedFrame(frame(null, state(eventAt)))).toBe(
+      false,
+    );
+    expect(
+      adapter.acceptStateChangedFrame(
+        frame(state(eventAt), state(nextEventAt)),
+      ),
+    ).toBe(true);
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('accepts the first physical event from a never-pressed unknown entity', () => {
+    const delivered: HomeAssistantBilresaEvent[] = [];
+    const adapter = new HomeAssistantBilresaAdapter(
+      {},
+      new FakeClock(0),
+      (e) => {
+        delivered.push(e);
+      },
+    );
+    expect(
+      adapter.acceptStateChangedFrame(
+        frame(state('unknown', ''), state(eventAt)),
+      ),
+    ).toBe(true);
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('learns the old timestamp while becoming unavailable even without a gesture', () => {
+    const delivered: HomeAssistantBilresaEvent[] = [];
+    const adapter = new HomeAssistantBilresaAdapter(
+      {},
+      new FakeClock(0),
+      (e) => {
+        delivered.push(e);
+      },
+    );
+    const unavailable = {
+      entity_id: entityId,
+      state: 'unavailable',
+      attributes: { friendly_name: 'BILRESA' },
+    };
+    expect(
+      adapter.acceptStateChangedFrame(frame(state(eventAt), unavailable)),
+    ).toBe(false);
+    expect(
+      adapter.acceptStateChangedFrame(frame(unavailable, state(eventAt))),
+    ).toBe(false);
+    expect(
+      adapter.acceptStateChangedFrame(frame(unavailable, state(nextEventAt))),
+    ).toBe(true);
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('treats recovery without an observed event baseline as historical', () => {
+    const adapter = new HomeAssistantBilresaAdapter(
+      {},
+      new FakeClock(0),
+      () => {
+        throw new Error('Recovery is not a press');
+      },
+    );
+    expect(
+      adapter.acceptStateChangedFrame(
+        frame(state('unavailable', ''), state(eventAt)),
+      ),
+    ).toBe(false);
+  });
+
+  it('ignores attribute-only updates, duplicate deliveries, and older event timestamps', () => {
+    const delivered: HomeAssistantBilresaEvent[] = [];
+    const adapter = new HomeAssistantBilresaAdapter(
+      {},
+      new FakeClock(0),
+      (e) => {
+        delivered.push(e);
+      },
+    );
+    const genuine = frame(state(beforeEventAt), state(eventAt));
+    expect(adapter.acceptStateChangedFrame(genuine)).toBe(true);
+    expect(adapter.acceptStateChangedFrame(genuine)).toBe(false);
+    expect(
+      adapter.acceptStateChangedFrame(
+        frame(state(eventAt), {
+          ...state(eventAt),
+          attributes: {
+            event_type: 'multi_press_2',
+            friendly_name: 'Desk remote',
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      adapter.acceptStateChangedFrame(
+        frame(state(beforeEventAt), state(beforeEventAt)),
+      ),
+    ).toBe(false);
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('normalizes equivalent offsets and keeps distinct submillisecond timestamps', () => {
+    const delivered: HomeAssistantBilresaEvent[] = [];
+    const adapter = new HomeAssistantBilresaAdapter(
+      {},
+      new FakeClock(0),
+      (e) => {
+        delivered.push(e);
+      },
+    );
+    expect(
+      adapter.acceptStateChangedFrame(
+        frame(state('2026-10-03T20:00:00.000+02:00'), state(eventAt)),
+      ),
+    ).toBe(false);
+    expect(
+      adapter.acceptStateChangedFrame(
+        frame(state(eventAt), state('2026-10-03T18:00:00.000001+00:00')),
+      ),
+    ).toBe(true);
+    expect(
+      adapter.acceptStateChangedFrame(
+        frame(
+          state('2026-10-03T18:00:00.000001+00:00'),
+          state('2026-10-03T18:00:00.000002+00:00'),
+        ),
+      ),
+    ).toBe(true);
+    expect(delivered).toHaveLength(2);
+  });
+
+  it.each(['not-a-timestamp', 'unknown', 'unavailable'])(
+    'rejects a gesture with non-event state %s',
+    (timestamp) => {
+      const adapter = new HomeAssistantBilresaAdapter(
+        {},
+        new FakeClock(0),
+        () => {
+          throw new Error('Non-event state is not a press');
+        },
+      );
+      expect(
+        adapter.acceptStateChangedFrame(
+          frame(state(beforeEventAt), state(timestamp)),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it('maps both physical controller entity pairs to the correct logical button and gestures', () => {
     const clock = new FakeClock(1_000);
     const delivered: Array<{
