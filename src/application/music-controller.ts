@@ -353,12 +353,12 @@ export class MusicController {
   }
   dispose(): void {
     this.unsubscribe();
+    this.attributedSupersededVolumeCommands.clear();
     for (const timer of this.timers.values()) this.clock.clearTimeout(timer);
     this.timers.clear();
     for (const fade of this.fades.values()) this.clearFadeTimer(fade);
     this.fades.clear();
     this.issuedSequence.clear();
-    this.attributedSupersededVolumeCommands.clear();
   }
 
   private scheduleFade(
@@ -655,7 +655,8 @@ export class MusicController {
       previousVolume !== null &&
       observedVolume !== null &&
       Math.abs(observedVolume - previousVolume) > 0.005 + Number.EPSILON &&
-      !this.matchesRecentVolumeCommand(observation, observedVolume);
+      !this.matchesRecentPendingVolumeCommand(observation, observedVolume) &&
+      !this.attributeSupersededVolumeObservation(observation, observedVolume);
     const externalPlaybackChange =
       observation.available &&
       previousPlayback !== 'unknown' &&
@@ -753,11 +754,11 @@ export class MusicController {
     this.pruneHistory(confirmedIds);
     this.publish();
   }
-  private matchesRecentVolumeCommand(
+  private matchesRecentPendingVolumeCommand(
     observation: MusicObservation,
     observedVolume: number,
   ): boolean {
-    const matchesPending = this.state.commands.some(
+    return this.state.commands.some(
       (command) =>
         command.target === observation.target &&
         command.requested.property === 'volume' &&
@@ -767,7 +768,11 @@ export class MusicController {
         Math.abs(observedVolume - command.requested.value) <=
           0.005 + Number.EPSILON,
     );
-    if (matchesPending) return true;
+  }
+  private attributeSupersededVolumeObservation(
+    observation: MusicObservation,
+    observedVolume: number,
+  ): boolean {
     const superseded = [...this.state.commands]
       .reverse()
       .find(
