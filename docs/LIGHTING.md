@@ -58,6 +58,10 @@ Unknown home status does not count as away. Manual dashboard scene/light
 requests remain available while away. Confirmed-empty light-off remains active
 regardless of home status.
 
+If room entry was blocked by `away`, clearing that gate to `home` or `unknown`
+reconciles the occupied room immediately. It does not wait for another count
+change from the room sensor. Quiet-hours suppression still takes precedence.
+
 Temporary prelight is suppressed when any configured light is already on, the
 current scene requests every configured light off, quiet hours are active, or
 the home-presence entity reports away. This prevents an entry hint from
@@ -112,6 +116,24 @@ does not include Lugn command IDs, so values matching a command superseded in
 the last 10 seconds are treated as delayed feedback while a different current
 scene value is desired; older or unrelated values can still become manual
 overrides.
+
+Turning a scene light on includes its effective brightness and color
+temperature, even if those values were observed before the light switched off.
+An off light's remembered attributes do not prove what its next turn-on will
+restore.
+
+While a current command is pending, mismatching Home Assistant feedback for
+its requested properties is treated as intermediate device state rather than
+a new manual override. This protection ends when the command is confirmed or
+its feedback deadline expires. Explicit Lugn user adjustments remain effective
+during convergence. External adjustments become overrides after convergence as
+before; during a pending command, unidentified external changes to its requested
+properties cannot be distinguished from partial device feedback. Home Assistant's
+`context.user_id` is not sufficient to resolve this ambiguity, because its
+[REST service calls](https://github.com/home-assistant/core/blob/dev/homeassistant/components/api/__init__.py)
+also use the authenticated request's context. Partial
+feedback from the final delivery attempt does not reset the retry budget;
+complete feedback can still confirm that attempt and clear degraded status.
 
 ## Manual adjustment after scene application
 

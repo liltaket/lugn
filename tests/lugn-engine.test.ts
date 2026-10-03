@@ -1706,7 +1706,7 @@ describe('Lugn deterministic lighting slice', () => {
     await engine.activateScene(finalScene.id, user);
     expect(adapter.dispatched.map(({ values }) => values)).toEqual([
       { power: true, brightness: 80, colorTemperature: 3000 },
-      { power: true, brightness: 35 },
+      { power: true, brightness: 35, colorTemperature: 3000 },
     ]);
     expect(
       adapter.dispatched.some((command) => command.values.power === false),
