@@ -1,115 +1,174 @@
-# lugn
+# Lugn
 
-A local-first room intelligence engine for spaces that should simply understand what is happening and behave correctly.
+**A local-first room controller for lights, music, presence and room displays.**
 
-Lugn is designed around a simple idea:
+Lugn combines fast room-presence events with a deterministic state engine. It
+controls configured Home Assistant devices, remembers lighting intent across
+restarts, and serves a purpose-built dashboard to Nest Hubs through DashCast.
+It is designed to be understandable when an automation makes a decision and
+safe to use alongside physical controls and Home Assistant.
 
-> Automation should help until a person makes an intentional change. Then it should respect that change instead of fighting it.
+> **Current scope:** a working local runtime, custom Hub dashboard and
+> operational control panel with optional Clerk sign-in. A general visual
+> configuration editor, editable routines and direct WiiM transport are not
+> part of the current runtime.
 
-The long-term goal is a room that can increasingly understand context and infer what the user probably wants, while keeping the core deterministic, fast, inspectable, and usable without AI.
+## What works
 
-## Status
+| Area          | Current behavior                                                                                                                                                                                                                    |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Room presence | Consumes normalized STL27L occupancy and prelight events over MQTT. `occupied`, `confirmed_empty` and `unknown` stay distinct.                                                                                                      |
+| Home/away     | Reads a configured Home Assistant `person.*` or `device_tracker.*` entity. The example defaults to `device_tracker.lustigkurre`. Explicit `away` blocks automatic room activation and music; unknown status does not count as away. |
+| Lights        | Home Assistant light mappings, room presets, temporary prelight, confirmed-empty shutoff, scene convergence and retries, and persisted logical lighting intent.                                                                     |
+| BILRESA       | Button 1 toggles room scenes and Sleep; Button 2 short press toggles volume automation, and long press toggles Bilresa mode.                                                                                                        |
+| Music         | HA player mappings, DJ/Optical presets, controls, volume curve and owner/target status; STL27L count above one adds a 10-point reduction.                                                                                           |
+| Hub dashboard | Custom Bed/Desk DashCast pages with room occupancy and count.                                                                                                                                                                       |
+| Room data     | Temperature, humidity, CO₂ and PM2.5 from configured Home Assistant sensor mappings.                                                                                                                                                |
+| Local API     | Loopback-only HTTP health, state and typed capability routes.                                                                                                                                                                       |
 
-**Design / pre-implementation.**
+### Automatic behavior
 
-This repository currently documents the behavior, architecture, interfaces, and MVP before implementation starts. The intention is to make the core contracts clear enough that implementation can proceed without repeatedly redesigning the system.
+- A confirmed empty room turns configured lights off and pauses configured
+  music while retaining room intent for a short return.
+- A confirmed occupied event can restore the current light scene, except
+  during quiet hours (23:00–06:00), when the selected scene is **Helt släckt**,
+  or when Home Assistant explicitly reports **Borta**.
+- Prelight is temporary and is suppressed if the room is already lit, the
+  selected scene is fully off, quiet hours are active, or Home Assistant
+  reports **Borta**.
+- An explicit Home Assistant `away` state pauses playing music and blocks
+  presence-driven music starts and automatic volume adjustments. Home status
+  `unknown` is shown separately and does not itself block room automation.
+- Manual dashboard actions remain available while away. The gate applies to
+  automatic actions only.
+- Music never starts or resumes automatically at or after 23:00. The daily
+  volume curve lowers the baseline overnight and early morning; two or more
+  people in the room add a further 10 percentage-point reduction.
 
-No runtime AI is planned for the first version.
+See [Music](docs/MUSIC.md) and [Presence](docs/PRESENCE.md) for exact rules.
 
-## Core principles
+### Built-in light presets
 
-- **Instant where latency matters.** Presence-triggered lighting gets a dedicated fast path.
-- **Physical state and remembered state are separate.** Leaving the room can turn things off immediately without forgetting the previous scene, overrides, or media context.
-- **Manual control wins.** Physical buttons, vendor apps, Home Assistant, the web UI, remotes, and other external controls should be respected.
-- **Desired state is verified.** When a scene is selected, Lugn should actively converge devices toward that scene and retry unresponsive devices for a configurable period.
-- **Context survives short absences.** A bathroom break should not behave like returning home hours later.
-- **Deterministic core, pluggable intelligence.** Rules, voice assistants, small decision models, LLMs, and agents should all use the same typed capability layer.
-- **Adapters, not hard dependencies.** Home Assistant, MQTT, WiiM, HASS.Agent, Matter devices, sensors, and future integrations connect through adapters.
-- **Observable and debuggable.** The system should make it obvious what it believed, what it decided, what it commanded, and why.
-- **Local-first and efficient.** The room must remain useful without a cloud model or external agent.
+The room dashboard offers five large buttons:
 
-## Reference deployment
+| Preset      | Effect                                                                        |
+| ----------- | ----------------------------------------------------------------------------- |
+| Helt släckt | Turns every configured room light off.                                        |
+| Mysljus     | Warm, low accent lights; ceiling light off.                                   |
+| Vardagsljus | Brighter warm accent lights; ceiling light off.                               |
+| Filmkväll   | Warm accents dim; ceiling/front light/Cleverio bar off; monitor backlight on. |
+| Fokus       | All configured lights on at 100% and 4000 K.                                  |
 
-The initial deployment is expected to include a subset of:
+The exact semantic light target for the ceiling is selected from configured
+targets; if no target looks like a ceiling light, Lugn uses the first configured
+target.
 
-- STL27L-based room presence / people counting
-- Home Assistant
-- smart lights and scenes
-- WiiM audio
-- two Nest Hub displays
-- IKEA BILRESA remotes
-- a Windows 11 PC through HASS.Agent or an equivalent adapter
-- optional smart-plug power telemetry for monitor-state inference
-- future environmental sensors
+## Quick start
 
-The architecture should remain general enough that none of these exact products are mandatory.
+Requires Node.js 22 or newer.
 
-## High-level architecture
+```sh
+npm ci
+cp config.example.json config.json
+npm run onboard
+npm run config:check
+npm run build
+npm start
+```
 
-    sensors / devices / external systems
-                  |
-               adapters
-                  |
-        normalized state + events
-                  |
-          deterministic room engine
-          /          |            \
-     decisions   ownership     routines
-          \          |            /
-           command + convergence
-                  |
-            capability API
-        /       /       \        \
-      web      HA      inputs    future AI/voice
+The onboarding wizard writes configuration and a protected local environment
+file. It discovers Home Assistant lights and asks for MQTT details, but it
+does not call device services, publish MQTT, or start the service. Review the
+generated config and update entity mappings to match your installation before
+starting Lugn. See [Running Lugn](docs/OPERATIONS.md) for full setup, systemd,
+Hub and recovery instructions.
 
-Future intelligence should sit above the same capability API used by the UI and ordinary automation. It must not become a parallel control system.
+For interactive first-time setup, run `npm run onboard`. The wizard discovers
+current Home Assistant lights, lets you assign semantic IDs, configures the
+STL27L MQTT feed and optional entry lighting, and stores credentials in a
+protected local env file. It does not send device commands or start Lugn. Run
+`npm run config:check` to validate the generated configuration without
+contacting Home Assistant, MQTT or a device. See [Running Lugn](docs/OPERATIONS.md#interactive-first-run-setup).
+
+To use an existing protected `lugn.env` for a local run:
+
+```sh
+chmod 600 lugn.env
+node --env-file=./lugn.env dist/runtime/main.js
+```
+
+The standard capability API listens on `127.0.0.1:8787`. The optional custom
+Nest Hub display listener is configured separately (example port `8788`) and
+is intended for the trusted local network only.
+
+## Home Assistant configuration
+
+The example configuration maps home status to:
+
+```json
+"homePresence": {
+  "entity": "device_tracker.lustigkurre"
+}
+```
+
+Change that ID to the `person.*` or `device_tracker.*` entity that represents
+the resident for your installation. Home/away is independent from STL27L room
+occupancy: a person can be home while the room is empty, or away while a stale
+room signal still says occupied. Lugn seeds the value from Home Assistant's
+initial state query and follows later WebSocket state changes.
+
+Credentials are referenced by environment variable name in the JSON config;
+keep token and broker values in a protected environment file or service secret
+store. Do not commit `config.json` or `lugn.env`.
+
+## Dashboard
+
+The Hub view puts the room presets first, with a clock/date, live room count,
+home status, temperature, humidity, CO₂, PM2.5, and compact music controls.
+Music buttons start Spotify DJ preset 1 or Optical preset 4; volume controls
+change by 5 percentage points. The screen is designed to fit without scrolling.
+
+Each Hub has a separate role and private path token. Lugn starts DashCast on
+configured Cast receivers, yields while another cast is active, and can restore
+its dashboard after the receiver is idle. DashCast control confirms that Lugn
+started the cast app; it does not prove that the browser rendered the page.
+See [UI, Nest Hubs and DashCast](docs/UI.md).
+
+## Development
+
+```sh
+npm ci
+npm run build
+npm run typecheck
+```
+
+The core and runtime use typed state and capability schemas. The runtime keeps
+physical observations separate from logical intent. Its local lighting
+snapshot persists the selected scene, desired values, property-level overrides
+and confirmed-empty continuity deadline. It does not restore old observations
+or replay pending device commands after restart.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Behavior model](docs/BEHAVIOR.md)
-- [Presence and continuity](docs/PRESENCE.md)
-- [Lighting](docs/LIGHTING.md)
-- [Music](docs/MUSIC.md)
-- [Routines and suggestions](docs/ROUTINES.md)
-- [Capability and tool API](docs/TOOLS.md)
-- [UI, Nest Hubs and DashCast](docs/UI.md)
-- [Integrations](docs/INTEGRATIONS.md)
-- [Persistence and configuration](docs/CONFIGURATION.md)
-- [MVP and implementation order](docs/MVP.md)
+- [Running Lugn](docs/OPERATIONS.md) — onboarding, config, startup, dashboards
+  and operational boundaries
+- [Behavior model](docs/BEHAVIOR.md) — desired state, observed state and
+  overrides
+- [Presence and continuity](docs/PRESENCE.md) — room occupancy versus home
+  status, prelight and short absences
+- [Lighting](docs/LIGHTING.md) — presets, scene behavior and fast path
+- [Music](docs/MUSIC.md) — presets, away gate, 23:00 rule and volume curve
+- [UI, Nest Hubs and DashCast](docs/UI.md) — custom dashboard and receiver
+  lifecycle
+- [Integrations](docs/INTEGRATIONS.md) — Home Assistant, STL27L/MQTT and
+  supported boundaries
+- [Configuration and persistence](docs/CONFIGURATION.md)
+- [MVP status](docs/MVP.md)
 - [Roadmap](docs/ROADMAP.md)
-- [Testing strategy](docs/TESTING.md)
-- [Glossary](docs/GLOSSARY.md)
-- [Future intelligence](docs/FUTURE.md)
 - [Decisions and open questions](docs/DECISIONS.md)
-
-## A useful mental model
-
-Lugn separates three concepts that are often accidentally mixed together:
-
-1. **Physical state** — what devices are doing right now.
-2. **Logical state** — scene, source, desired values, overrides, routines, and other intent.
-3. **Continuity** — whether the current visit is still considered the same room context after an absence.
-
-Example:
-
-- the last person leaves;
-- lights turn off immediately;
-- music pauses immediately;
-- Cozy remains the logical scene;
-- a manually adjusted desk light remains remembered;
-- the current media choice remains remembered;
-- if the person returns shortly, the room restores that effective state;
-- after a sufficiently long confirmed absence, selected pieces of context expire according to policy.
-
-In short:
-
-> **Presence controls whether the room is active. Continuity controls what the room remembers.**
+- [Testing strategy](docs/TESTING.md)
 
 ## License
 
-Lugn is **source-available under the [PolyForm Small Business License 1.0.0](LICENSE)**.
-
-The license permits use, modification, and distribution for qualifying small businesses and other permitted uses under its terms. Larger commercial use is not automatically granted by this license; contact the project owner to discuss separate commercial licensing.
-
-This is a source-available license rather than an OSI-approved open-source license.
+Lugn is source-available under the [PolyForm Small Business License 1.0.0](LICENSE).
+This is not an OSI-approved open-source license.

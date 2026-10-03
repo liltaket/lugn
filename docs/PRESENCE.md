@@ -6,6 +6,26 @@ Continuity answers "should the room still remember what was happening before the
 
 These must be separate concepts.
 
+Home/away is a third, independent signal. It answers whether the resident's
+configured Home Assistant person or tracker is at home; it does not replace
+room occupancy.
+
+## Home and room presence
+
+The runtime reads one Home Assistant `person.*` or `device_tracker.*` entity,
+configured as `homeAssistant.homePresence.entity`. The example defaults to
+`device_tracker.lustigkurre`. Its state is normalized to `home`, `away` or
+`unknown` and displayed separately from STL27L room occupancy.
+
+Only a confirmed `away` state blocks automatic room activation. It suppresses
+presence-triggered scene reconciliation, prelight and music automation. If
+music is already playing, Lugn pauses it. Confirmed-empty still turns lights
+off and pauses music. Home status `unknown` is not treated as away.
+
+The gate applies to automation. Explicit dashboard scene, light and music
+requests remain usable while away. That lets a person intentionally control a
+room remotely without allowing a passer-by sensor event to reactivate it.
+
 ## Normalized presence state
 
 At minimum:
@@ -24,9 +44,16 @@ Examples that can produce unknown:
 
 ## Person count
 
-Person count can be known or unknown independently from occupancy.
+Person count can be known or unknown independently from occupancy. The current
+MQTT adapter reads the STL27L snapshot count; a different sensor integration
+should preserve unknown count when it cannot count people rather than invent
+one.
 
-A simpler sensor should not be forced to pretend it can count people.
+When occupied state includes a valid count, Lugn shows that count on the Hub
+dashboard and labels the music adjustment with the same number. If an event
+does not include a count, Lugn clears the prior count and shows it as unknown
+instead of reusing a stale value. A confirmed-empty event with no count is
+normalized to zero people.
 
 ## STL27L role
 
@@ -95,12 +122,21 @@ A short bathroom break should therefore not be treated as returning home hours l
 
 Decay timers should normally begin from confirmed_empty, not from unknown.
 
+An `unknown` sample between two `confirmed_empty` samples does not count as a
+second exit: it must not extend the continuity deadline or reset the music
+resume window. A real exit is based on the last confirmed room state, so
+`occupied -> unknown -> confirmed_empty` still starts one.
+
 Sensor tracking loss must not cause:
 
 - clearing overrides
 - starting a new room session
 - unwanted Spotify autostart on rediscovery
 - shutting down a monitor while someone is watching or playing
+
+After a restart, a retained expired sleep scene may remain the logical scene,
+but its positive light output waits for a fresh confirmed occupied event.
+Explicit all-off intent remains safe to reassert while presence is unknown.
 
 ## Last known position
 
@@ -120,9 +156,19 @@ Prelight is separate from confirmed occupancy.
 
 Desired behavior:
 
-    possible entry -> immediate minimal useful lighting
-    confirmed entry -> normal room state
-    no confirmation -> revert prelight according to policy
+    possible entry -> preview the selected scene's on-lights only
+    confirmed entry -> apply the selected scene, including explicit off states
+    preview OFF -> keep the temporary output until entry is confirmed or the
+                    existing maximum duration expires
+    no confirmation by timeout -> restore the physical state observed before prelight
+
+When no scene is selected, prelight uses the Vardagsljus preset. It must never
+use a static target list that can turn on a light excluded by that scene. The
+prelight snapshot gives current device observations precedence over remembered
+desired state, and timeout restoration is sent even when the preview receives
+no device feedback. Occupancy and explicit user intent take over only after any
+restore already in flight completes, then reconcile the final scene so an old
+restore cannot leave the room off.
 
 Prelight must not:
 
@@ -130,6 +176,11 @@ Prelight must not:
 - increment person count
 - clear manual overrides
 - pretend occupancy is confirmed
+
+In addition, prelight is suppressed when Home Assistant explicitly reports
+away, during lighting quiet hours (23:00–06:00), when the active scene requests
+all configured lights off, or when a configured room light is already on. The
+exact gate is reported in the runtime diagnostics.
 
 ## Future computer-intent inference
 

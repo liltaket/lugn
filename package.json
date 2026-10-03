@@ -1,0 +1,49 @@
+{
+  "name": "lugn",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local-first room intelligence engine.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-web-assets.mjs",
+    "start": "node dist/runtime/main.js",
+    "config:check": "npm run build --silent && node dist/runtime/config-check.js",
+    "ha:discover": "npm run build --silent && node dist/runtime/ha-discover.js",
+    "onboard": "if [ ! -f dist/runtime/onboard.js ]; then npm run build --silent || exit 1; fi; node dist/runtime/onboard.js",
+    "preflight": "npm run build --silent && node dist/runtime/preflight.js",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run && bash tests/install-user-service.test.sh"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@clerk/backend": "^3.20.1",
+    "castv2-client": "^1.2.0",
+    "mqtt": "^5.16.0",
+    "zod": "^4.6.5"
+  },
+  "overrides": {
+    "protobufjs": "^7.6.6"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "eslint": "^10.11.0",
+    "prettier": "^3.9.9",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^4.1.11"
+  }
+}

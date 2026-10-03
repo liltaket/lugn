@@ -1,6 +1,6 @@
 # Contributing
 
-Lugn is currently in the design / pre-implementation stage.
+Lugn is under active implementation. The design documents remain the product contract; update them deliberately when a concrete implementation choice settles an open question.
 
 Before implementing a subsystem, read the relevant documents in docs/ and preserve the behavioral contracts they describe.
 

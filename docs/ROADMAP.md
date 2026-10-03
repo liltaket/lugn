@@ -1,135 +1,71 @@
 # Roadmap
 
-This roadmap describes order, not calendar dates.
+This roadmap separates the local vertical slice that exists from the work that
+would make Lugn easier to configure, validate and extend. It does not imply
+that live devices are currently controlled by this checkout.
 
-## Phase 0 - Freeze contracts
+## In the current runtime
 
-Before writing substantial device code:
+- Deterministic room engine with normalized occupied, confirmed-empty and
+  unknown states, short-absence continuity and per-property light overrides.
+- Direct STL27L service input through MQTT for occupancy and prelight; raw
+  serial/perception work stays in `liltaket/stl27-presence`.
+- Home Assistant REST/WebSocket adapters for mapped lights, switches, buttons,
+  media players, environment sensors and home/away status.
+- Confirmed-away gating for automatic light/prelight activation and music
+  automation, while preserving explicit dashboard controls.
+- Built-in light presets and room-scene convergence; local persistence for
+  logical lighting intent only.
+- Music presets, play/pause and volume policy through HA media-player entities,
+  including the 23:00 start cutoff and Stockholm daily volume curve.
+- Custom Bed/Desk room dashboard, separate from Home Assistant, served and
+  monitored through DashCast.
+- Local onboarding, configuration validation, read-only commissioning
+  preflight and systemd user-service support.
 
-- finalize normalized state/event shapes;
-- finalize ownership/override semantics;
-- finalize scene revision and convergence semantics;
-- finalize command-ledger contract;
-- define capability/tool schema conventions;
-- define routine schema;
-- define persistence boundaries.
+See [MVP status](MVP.md), [Operations](OPERATIONS.md) and the [delivery map](DELIVERY_MAP.md)
+for implementation detail and evidence boundaries.
 
-The documents in this repository are the current input to that work.
+## Next product work
 
-## Phase 1 - Simulated core
+### Configuration and access
 
-Build the smallest possible vertical slice without physical hardware:
+- Build the general human-facing configuration editor on top of the existing
+  optional Clerk-authenticated operational control panel.
+- Support safe edits to Home Assistant entity maps, display roles, light
+  presets, quiet hours and home-presence entity without hand-editing JSON.
+- Document how operators rotate HA, MQTT, API and Hub secrets.
 
-- simulated presence
-- simulated light
-- one scene
-- one property override
-- command ledger
-- convergence/retry
-- Reapply Scene
-- continuity memory
-- structured diagnostic trace
+### Routines and inputs
 
-Goal: prove the state model before integration complexity arrives.
+- Add declarative Good Morning / Good Night routines, scheduling and
+  cancellation.
+- Add configurable capability bindings for other remotes and input sources.
+- Keep routine or button-triggered actions routed through the typed capability
+  layer.
 
-## Phase 2 - Fast real lighting
+### Music integration
 
-Connect real presence and lighting:
+- Validate preset selection, Optical behavior, volume feedback and pause/resume
+  against the installed Home Assistant media-player integration.
+- Decide whether direct WiiM transport adds useful capabilities beyond HA.
+- Tune fade and command-attribution policy only with measured device feedback.
 
-- STL27L or normalized equivalent
-- prelight
-- confirmed occupied
-- confirmed empty
-- immediate light off
-- latency instrumentation
-- scene restore after short absence
+### Operations and diagnosis
 
-Goal: make entry lighting both fast and trustworthy.
+- Add integration acceptance for live event freshness, mapped entities, Hub
+  rendering and physical device response.
+- Make receiver-specific dashboard errors and service health easier to inspect.
+- Consider migrations or a small database if configuration and persisted
+  state outgrow the current JSON/runtime boundary.
 
-## Phase 3 - Real scene engine
+## Later, after deterministic behavior is dependable
 
-Expand lighting:
+- Computer context through HASS.Agent or another existing Home Assistant
+  integration.
+- Optional trajectory-based intent, personal schedules, voice and learned
+  scene suggestions.
+- More environment or air-purifier automation.
 
-- multiple devices
-- multiple properties
-- external changes
-- per-property overrides
-- one-minute-ish configurable convergence
-- device-unavailable handling
-- persisted scenes and overrides
-- configuration UI
-
-Goal: Lugn can own a real room without fighting the user.
-
-## Phase 4 - WiiM music
-
-Add:
-
-- presets
-- playback
-- source/Optical
-- fades
-- fade trajectory attribution
-- continuity
-- manual playback/volume/source ownership
-- event-driven entry/exit behavior
-
-Goal: music feels helpful rather than stubborn.
-
-## Phase 5 - Routines and BILRESA
-
-Add:
-
-- Good Morning
-- Good Night
-- schedule UI
-- declarative routine schema
-- cancellation
-- two BILRESA remotes
-- stable/contextual bindings
-
-Goal: useful daily interaction without AI.
-
-## Phase 6 - Web and Nest Hubs
-
-Add:
-
-- Clerk-authenticated web app
-- Bed Hub role
-- Desk Hub role
-- realtime state
-- DashCast lifecycle management
-- external-cast yielding
-- diagnostics UI
-
-Goal: the system is easy to live with and configure.
-
-## Phase 7 - Optional environment / PC context
-
-As useful:
-
-- temperature/humidity/air quality
-- HASS.Agent context
-- fullscreen/media/game state
-- prompts such as Gaming-scene suggestion
-- optional monitor power telemetry
-
-These features must not destabilize the core.
-
-## Later - intelligence
-
-Only after the deterministic system is excellent:
-
-- smarter suggestions
-- automatic scene inference
-- typed probabilistic decision models
-- voice
-- LLM tool calling
-- personal wake/home/calendar context
-- opt-in learned automation
-
-## Release philosophy
-
-Prefer small vertical releases where behavior is testable end-to-end.
-
-Do not wait for every planned integration before proving the central room model.
+These remain optional; core lighting, presence and music must stay usable
+without AI or a cloud decision service.

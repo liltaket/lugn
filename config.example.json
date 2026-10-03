@@ -1,0 +1,102 @@
+{
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "bearerTokenEnv": "LUGN_API_TOKEN",
+    "trustedOrigins": []
+  },
+  "homeAssistant": {
+    "baseUrl": "http://homeassistant.local:8123",
+    "tokenEnv": "HOME_ASSISTANT_TOKEN",
+    "homePresence": {
+      "entity": "device_tracker.lustigkurre"
+    },
+    "entities": {
+      "lighting.ceiling": "light.living_room_ceiling",
+      "lighting.desk": "light.living_room_desk",
+      "lighting.wled_cct": "light.wled_cct"
+    },
+    "buttons": {},
+    "bilresa": {
+      "button1Entities": [
+        "event.bilresa_dual_button_knapp_1",
+        "event.bilresa_dual_button_knapp_1_2"
+      ],
+      "button2Entities": [
+        "event.bilresa_dual_button_knapp_2",
+        "event.bilresa_dual_button_knapp_2_2"
+      ]
+    },
+    "switches": {},
+    "music": {},
+    "environment": {
+      "temperature": "sensor.alpstuga_air_quality_monitor_temperatur",
+      "humidity": "sensor.alpstuga_air_quality_monitor_luftfuktighet",
+      "co2": "sensor.alpstuga_air_quality_monitor_koldioxid",
+      "pm25": "sensor.alpstuga_air_quality_monitor_pm25"
+    }
+  },
+  "mqtt": {
+    "url": "mqtt://homeassistant.local:1883",
+    "usernameEnv": "MQTT_USERNAME",
+    "passwordEnv": "MQTT_PASSWORD",
+    "clientId": "lugn-controller",
+    "baseTopic": "bruno/doorway",
+    "maxAgeMs": 7000
+  },
+  "prelight": {
+    "targets": {
+      "lighting.ceiling": {
+        "power": true,
+        "brightness": 55,
+        "colorTemperature": 2700
+      }
+    },
+    "maxDurationMs": 5000
+  },
+  "scenes": [
+    {
+      "id": "scene.cozy",
+      "name": "Cozy",
+      "lighting": {
+        "lighting.ceiling": {
+          "power": true,
+          "brightness": 60,
+          "colorTemperature": 2400
+        },
+        "lighting.desk": {
+          "power": true,
+          "brightness": 30,
+          "colorTemperature": 2400
+        },
+        "lighting.wled_cct": {
+          "power": true,
+          "brightness": 35,
+          "colorTemperature": 2600
+        }
+      }
+    },
+    {
+      "id": "scene.movie",
+      "name": "Movie",
+      "lighting": {
+        "lighting.ceiling": {
+          "power": true,
+          "brightness": 18,
+          "colorTemperature": 2200
+        },
+        "lighting.desk": {
+          "power": false,
+          "brightness": 0,
+          "colorTemperature": 2200
+        },
+        "lighting.wled_cct": {
+          "power": true,
+          "brightness": 4,
+          "colorTemperature": 2200
+        }
+      }
+    }
+  ],
+  "defaultSceneId": "scene.cozy"
+}

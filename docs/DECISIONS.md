@@ -4,6 +4,27 @@ This document separates what has effectively been agreed from what still needs e
 
 ## Current decisions
 
+### Phase 0 + Phase 1 implementation choices (2026-09)
+
+- The current implementation is a dependency-light TypeScript local service with real Home Assistant and MQTT adapters; core decisions remain separate from network transports. The runtime has no database.
+- Zod schemas define runtime-validated domain and capability contracts. TypeScript is strict, and Vitest runs deterministic unit scenarios with an injected clock.
+- Semantic light identifiers use `lighting.<name>`. A scene's `lighting` map is its explicit baseline. Effective desired values are stored separately and each controlled property has its own scene ownership or external override.
+- Selecting or reapplying a scene increments `sceneRevision`, clears lighting overrides, supersedes pending commands, and starts immediate reconciliation. Commands group the changed properties for one semantic light/controller.
+- The command ledger retains individual records in memory for diagnostics. Feedback is attributable by command ID when available; otherwise the first slice conservatively matches pending target/property/value within a configurable attribution window (60 seconds by default). A mismatched observation becomes a property-scoped user override. No ledger data is persisted or replayed after restart.
+- Convergence uses event feedback plus a cancellable timer for retries, with a configurable timeout. The initial implementation values are 2 seconds between retries, 60 seconds to degrade, and 20 minutes of confirmed-empty continuity; they are configuration defaults, not measured device behavior.
+- State updates start from a full typed snapshot, then publish typed domain patches with monotonically increasing revisions and bounded history. A client whose revision has fallen out of history receives a full snapshot.
+- Fast-path timing records preserve wall-clock timestamps and use a monotonic clock for elapsed time from local MQTT callback receipt through decision, first command dispatch, first attributable device feedback, and full convergence. Home Assistant feedback without a command ID can still be attributed by the command ledger. These are instrumentation points, not benchmark claims; sensor-to-process/network delay and physical lamp response still require live measurement.
+- Home Assistant lighting commands and state events stay behind adapters: REST fetch and WebSocket creation are injected, semantic/entity mappings come from host configuration, and the event socket owns authentication, subscription, and bounded reconnects. Unknown or unavailable light states are not interpreted as off.
+- Raw STL27L serial/perception processing stays outside Lugn. The existing sensor service exposes a normalized, non-retained MQTT preview state (`bruno/doorway/preview`, `ON`/`OFF`, QoS 0); Lugn consumes that event without routing presence through Home Assistant. Sensor health or retained recovery state is not inferred from this ephemeral topic.
+- Prelight is a distinct temporary `presence.prelight` input, not occupancy. Hosts configure a small set of targets/values and a bounded maximum duration. Preview OFF alone does not prove a false positive: Lugn holds the preview until occupancy or the existing timeout, then restores known prior values. `occupied`, `confirmed_empty`, explicit scenes, and manual light changes take control of the overlay; an in-flight restore completes before newer intent is reconciled.
+- Occupied can trigger scene reconciliation unless quiet hours or confirmed home-away policy suppresses it. Confirmed empty triggers physical off regardless of home status. Ordinary occupancy is not used to infer prelight.
+- Home Assistant home/away is a separate fact from room occupancy. The configured `person.*` or `device_tracker.*` entity defaults to `device_tracker.lustigkurre`; confirmed away blocks automatic room activation and music policy, but leaves explicit dashboard actions available. Unknown home status is visible but is not treated as away.
+- Confirmed empty overlays physical `power: false` commands without modifying baseline/effective intent or ownership. Occupied before continuity expiry reconciles the remembered effective values; unknown does not start or clear continuity.
+- The runtime's first durable slice stores only logical lighting intent in a versioned, atomically replaced private JSON file. Device observations, presence counts, and command history stay ephemeral, and stale physical commands are never replayed. This is an incremental persistence boundary, not a commitment against moving to SQLite.
+- Scene and continuity logic live in `LugnEngine` for the first slice, while schemas, clock, state stream, adapter, command ledger, and capability registry remain separately replaceable modules. As the domain grows, presence/lighting policies should be split out before this engine becomes a general service.
+
+The detailed presence/continuity path is included in this implementation because the first implementation brief requires it, even though the original roadmap listed it as a later slice.
+
 ### Product
 
 - Lugn is a room intelligence engine, not merely a set of Home Assistant automations.
@@ -41,6 +62,8 @@ This document separates what has effectively been agreed from what still needs e
 - command attribution must account for fade trajectories and settling time.
 - self-generated WiiM feedback must not create false passive/manual state.
 - explicit user changes should be respected.
+- confirmed-empty pauses music; eligible room entry may resume recent context or start Spotify DJ preset 1 before 23:00, but never automatically starts or resumes playback at or after 23:00.
+- automatic music volume follows the Stockholm daily curve and applies a further 10-point reduction when the room reports more than one person.
 
 ### Routines
 
@@ -56,6 +79,7 @@ This document separates what has effectively been agreed from what still needs e
 - Bed Hub and Desk Hub are separate display roles.
 - Lugn should manage DashCast lifecycle.
 - deliberate external casting should temporarily override the dashboard.
+- The current runtime serves custom Bed/Desk Hub dashboards through DashCast and an optional Clerk-authenticated operational control panel; visual configuration editing remains future work.
 
 ### Computer
 

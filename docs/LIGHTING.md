@@ -13,7 +13,59 @@ Lighting is one of Lugn's most latency-sensitive and user-visible domains.
 
 ## Scenes
 
-Initial known scene names may include:
+The runtime adds these room-wide presets for the configured light targets:
+
+| Preset      | Current behavior                                                                                   |
+| ----------- | -------------------------------------------------------------------------------------------------- |
+| Helt släckt | All configured lights off.                                                                         |
+| Mysljus     | Accent lights at 12% and 2700 K; ceiling light off. WLED is 18%.                                   |
+| Vardagsljus | Accent lights at 55% and 2700 K; ceiling light off. WLED is 61%.                                   |
+| Filmkväll   | Accents at 6% and 2700 K; ceiling/front light/Cleverio bar off; monitor backlight on. WLED is 12%. |
+| Fokus       | All configured lights on at 100% and 4000 K. WLED is 100%.                                         |
+
+Map the WLED CCT white strip as a normal Home Assistant light, for example:
+
+```json
+"lighting.wled_cct": "light.wled_cct"
+```
+
+The built-in room presets include every configured light target, so the WLED
+strip follows the same scene at 0% for Helt släckt, 18% for Mysljus, 61% for
+Vardagsljus, 12% for Filmkväll, and 100% for Fokus. The WLED entity must expose
+color-temperature support in Home Assistant for its scene color temperature to
+be applied. When WLED is active in a scene, its configured brightness gets a
+6-point increase, capped at 100%; if brightness is omitted, Lugn starts at
+12%. Helt släckt is unchanged. For any scene with active lights and an
+explicit color temperature, Lugn synchronizes every active light (power not
+explicitly off) to the most common Kelvin value among active scene entries
+(ties use the first value in scene order), clamped to the installed room's
+common 2700–6500 K range. This keeps room CCT synchronized: an external
+per-light color-temperature change is reconciled back to the shared value, and
+an explicit color-temperature adjustment applies to every active light in the
+current scene. Power and brightness overrides keep their existing behavior.
+Custom scenes should specify their own WLED brightness and color temperature
+when the strip should stay on.
+
+The dashboard presents these presets as its primary controls. Other scenes
+from configuration can still be exposed, but only the listed room presets
+have these built-in room-wide definitions.
+
+## Automatic entry policy
+
+Automatic occupied-entry scene reconciliation is suppressed during quiet hours
+(23:00–06:00) and when Home Assistant explicitly reports the resident away.
+Unknown home status does not count as away. Manual dashboard scene/light
+requests remain available while away. Confirmed-empty light-off remains active
+regardless of home status.
+
+Temporary prelight is suppressed when any configured light is already on, the
+current scene requests every configured light off, quiet hours are active, or
+the home-presence entity reports away. This prevents an entry hint from
+turning on additional lights when the room already has a usable scene.
+
+## Scene definitions
+
+Configured scene names may include:
 
 - Desk
 - Cozy
@@ -42,11 +94,24 @@ When a scene is explicitly selected:
 - dispatch commands immediately;
 - verify observed state;
 - retry devices that have not reached their target;
-- keep retrying with controlled backoff for a configurable convergence window;
-- default convergence window is expected to be around one minute;
+- retry unavailable devices at the normal retry interval instead of waiting
+  until the convergence deadline;
+- stop retries at the convergence deadline or after three total delivery
+  attempts per light and scene revision;
+- default convergence window is 60 seconds, with a 2-second retry interval;
 - surface devices that still fail as degraded/unreachable.
 
-A later device recovery can trigger convergence toward the current effective desired state.
+A later device recovery starts a fresh bounded convergence attempt for that
+device only. It must not clear another light's retry count or degraded status;
+a new scene or confirmed room entry starts a fresh room-wide attempt.
+
+Home Assistant `unknown` and `unavailable` light states invalidate the last
+observed values and mark the device unavailable. A later valid state restores
+availability and starts a fresh convergence attempt. Home Assistant feedback
+does not include Lugn command IDs, so values matching a command superseded in
+the last 10 seconds are treated as delayed feedback while a different current
+scene value is desired; older or unrelated values can still become manual
+overrides.
 
 ## Manual adjustment after scene application
 
@@ -84,6 +149,12 @@ A change may come from:
 - a direct device interaction
 
 If Lugn observes the resulting state and it cannot be attributed to a pending Lugn command, it can become an override.
+
+An explicit user `power: true` command from the dashboard is allowed even while
+presence is `confirmed_empty`. That light stays on until the user turns it off
+or a new confirmed occupancy cycle begins. This exception does not infer room
+occupancy and does not allow automatic presence-driven scenes to turn lights on
+in an empty room. Brightness or color adjustments alone never turn a light on.
 
 ## Leaving the room
 
