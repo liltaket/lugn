@@ -135,6 +135,13 @@ Within that bounded window, a separate external pause to the same state can be
 indistinguishable; exact attribution requires a correlated Home Assistant
 WebSocket service context.
 
+Within the command feedback timeout, the first changed volume observation
+matching an accepted, superseded volume request is attributed to that older
+request without clearing a newer pending target. This attribution is consumed
+once; subsequent physical changes, including a return to that level, remain
+external. Without a causal HA context, an external change to that exact older
+level can be indistinguishable from its first delayed feedback.
+
 Each target must map to a distinct `media_player.*` entity. Preset IDs default
 to Spotify DJ `1` and Optical `4`; exact source names are allowlisted per
 target. The adapter uses fixed `media_player` services and does not accept an

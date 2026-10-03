@@ -60,7 +60,7 @@ let latestPayload;
 let lastFreshAt = 0;
 let sceneOrderKey = null;
 let musicTarget = '';
-let polling = false;
+let polling = null;
 let timer;
 let clockTimer;
 let toastTimer;
@@ -519,9 +519,22 @@ function showToast(message, state) {
   }, 8000);
 }
 
-async function refresh() {
-  if (polling || stopped || document.visibilityState === 'hidden') return;
-  polling = true;
+async function refresh(afterCommand = false) {
+  if (stopped || (!afterCommand && document.visibilityState === 'hidden'))
+    return;
+  if (polling) {
+    if (!afterCommand) return polling;
+    await polling;
+    // A poll already in flight can contain a snapshot from before acceptance.
+    // Start a new read before the command's controls become available again.
+    return refresh(true);
+  }
+  window.clearTimeout(timer);
+  polling = readState();
+  return polling;
+}
+
+async function readState() {
   try {
     const payload = await getState();
     if (!payload || typeof payload !== 'object' || !payload.state)
@@ -548,7 +561,7 @@ async function refresh() {
     renderScenes(latestPayload);
     renderMusic(latestPayload);
   } finally {
-    polling = false;
+    polling = null;
     if (!stopped) timer = window.setTimeout(refresh, POLL_MS);
   }
 }
@@ -594,7 +607,7 @@ async function runCommand(key, body) {
         ? MUSIC_PRESET_URL
         : MUSIC_URL;
     await postJson(url, body);
-    await refresh();
+    await refresh(true);
   } catch (error) {
     if (error?.status === 401 || error?.status === 403) {
       setConnection(
@@ -607,7 +620,7 @@ async function runCommand(key, body) {
         'Kvittens saknas. Kommandot kan ha nått enheten; status uppdateras när den svarar.',
         'pending',
       );
-      await refresh();
+      await refresh(true);
     } else {
       showToast('Kommandot nådde inte Lugn. Försök igen.', 'error');
     }

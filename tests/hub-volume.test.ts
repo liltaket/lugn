@@ -92,6 +92,17 @@ function dashboard(initialVolume = 0.3) {
     target: string;
     request: { property: string; value: number | string };
   }> = [];
+  let nextStateGate: Promise<void> | undefined;
+  let nextStateStatus = 200;
+  let stateReads = 0;
+  const holdNextState = (status = 200) => {
+    nextStateStatus = status;
+    let release = () => {};
+    nextStateGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return release;
+  };
   const fetch = async (
     url: string,
     options: { method: string; body?: string },
@@ -102,7 +113,13 @@ function dashboard(initialVolume = 0.3) {
       const snapshot = JSON.parse(
         JSON.stringify({ state: engine.state, scenes: [], role: 'desk' }),
       ) as unknown;
-      return { ok: true, json: async () => snapshot };
+      stateReads += 1;
+      const gate = nextStateGate;
+      const status = nextStateStatus;
+      nextStateGate = undefined;
+      nextStateStatus = 200;
+      if (gate) await gate;
+      return { ok: status === 200, status, json: async () => snapshot };
     }
     const body = JSON.parse(options.body ?? '{}') as {
       target: string;
@@ -159,6 +176,8 @@ function dashboard(initialVolume = 0.3) {
     get,
     apiCalls,
     context,
+    holdNextState,
+    stateReads: () => stateReads,
   };
 }
 
@@ -167,6 +186,82 @@ afterEach(() => {
 });
 
 describe('Hub volume steps preserve accepted user intent', () => {
+  it.each([200, 503])(
+    'reads fresh state after acceptance while an older background poll returns %s',
+    async (status) => {
+      vi.useFakeTimers();
+      const ui = dashboard();
+      const releases: Array<() => void> = [];
+      try {
+        await microtasks();
+        const releaseBackground = ui.holdNextState(status);
+        releases.push(releaseBackground);
+        const backgroundPoll = runInContext('refresh()', ui.context);
+        await microtasks();
+        expect(ui.stateReads()).toBe(2);
+        ui.get('#music-volume-up').click();
+        await microtasks();
+        expect(ui.apiCalls.map((call) => call.request.value)).toEqual([0.35]);
+        expect(ui.get('#music-volume-up').disabled).toBe(true);
+        const releaseFreshState = ui.holdNextState();
+        releases.push(releaseFreshState);
+        releaseBackground();
+        await backgroundPoll;
+        await microtasks();
+        expect(ui.stateReads()).toBe(3);
+        expect(ui.get('#music-volume-up').disabled).toBe(true);
+        releaseFreshState();
+        await microtasks();
+        expect(ui.get('#music-volume-up').disabled).toBe(false);
+        ui.clock.advanceBy(500);
+        ui.get('#music-volume-up').click();
+        await microtasks();
+        expect(ui.apiCalls.map((call) => call.request.value)).toEqual([
+          0.35, 0.4,
+        ]);
+        const reads = ui.stateReads();
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(ui.stateReads()).toBe(reads + 1);
+      } finally {
+        for (const release of releases) release();
+        await microtasks();
+        ui.engine.dispose();
+      }
+    },
+  );
+
+  it('steps to 45% after late feedback for an older accepted 35% request', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      ui.get('#music-volume-up').click();
+      await microtasks();
+      ui.clock.advanceBy(500);
+      ui.get('#music-volume-up').click();
+      await microtasks();
+      ui.clock.advanceBy(500);
+      ui.adapter.observe('music.room', {
+        playback: 'paused',
+        volume: 0.35,
+        source: 'Optical',
+        title: null,
+      });
+      await runInContext('refresh()', ui.context);
+      expect(
+        ui.engine.state.music.devices['music.room']?.requested.volume,
+      ).toBe(0.4);
+      expect(ui.get('#music-volume-value').textContent).toBe('35%');
+      ui.get('#music-volume-up').click();
+      await microtasks();
+      expect(ui.apiCalls.map((call) => call.request.value)).toEqual([
+        0.35, 0.4, 0.45,
+      ]);
+    } finally {
+      ui.engine.dispose();
+    }
+  });
+
   it.each(['expiry', 'external change', 'rejection'] as const)(
     'returns to the freshest observation after %s',
     async (lifecycle) => {

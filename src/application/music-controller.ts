@@ -81,6 +81,7 @@ export class MusicController {
   private readonly timers = new Map<string, TimerHandle>();
   private readonly observedSequence = new Map<string, number>();
   private readonly issuedSequence = new Map<string, number>();
+  private readonly attributedSupersededVolumeCommands = new Set<string>();
   private readonly lastObservations = new Map<string, MusicObservation>();
   private onExternalVolumeChange:
     ((target: string, volume: number) => void) | undefined;
@@ -357,6 +358,7 @@ export class MusicController {
     for (const fade of this.fades.values()) this.clearFadeTimer(fade);
     this.fades.clear();
     this.issuedSequence.clear();
+    this.attributedSupersededVolumeCommands.clear();
   }
 
   private scheduleFade(
@@ -592,6 +594,7 @@ export class MusicController {
   private releaseTracking(id: string): void {
     this.clearTimer(id);
     this.issuedSequence.delete(id);
+    this.attributedSupersededVolumeCommands.delete(id);
   }
   private pruneHistory(protectedIds: ReadonlySet<string> = new Set()): void {
     let terminalCount = this.state.commands.reduce(
@@ -652,7 +655,7 @@ export class MusicController {
       previousVolume !== null &&
       observedVolume !== null &&
       Math.abs(observedVolume - previousVolume) > 0.005 + Number.EPSILON &&
-      !this.matchesRecentPendingVolumeCommand(observation, observedVolume);
+      !this.matchesRecentVolumeCommand(observation, observedVolume);
     const externalPlaybackChange =
       observation.available &&
       previousPlayback !== 'unknown' &&
@@ -750,11 +753,11 @@ export class MusicController {
     this.pruneHistory(confirmedIds);
     this.publish();
   }
-  private matchesRecentPendingVolumeCommand(
+  private matchesRecentVolumeCommand(
     observation: MusicObservation,
     observedVolume: number,
   ): boolean {
-    return this.state.commands.some(
+    const matchesPending = this.state.commands.some(
       (command) =>
         command.target === observation.target &&
         command.requested.property === 'volume' &&
@@ -764,6 +767,29 @@ export class MusicController {
         Math.abs(observedVolume - command.requested.value) <=
           0.005 + Number.EPSILON,
     );
+    if (matchesPending) return true;
+    const superseded = [...this.state.commands]
+      .reverse()
+      .find(
+        (command) =>
+          command.target === observation.target &&
+          command.requested.property === 'volume' &&
+          command.status === 'superseded' &&
+          command.acceptedAt !== undefined &&
+          observation.observedAt >= command.issuedAt &&
+          this.clock.now() - command.issuedAt < this.timeoutMs &&
+          (observation.commandId === undefined ||
+            observation.commandId === command.id) &&
+          !this.attributedSupersededVolumeCommands.has(command.id) &&
+          Math.abs(observedVolume - command.requested.value) <=
+            0.005 + Number.EPSILON,
+      );
+    if (!superseded) return false;
+    // HA may report an accepted older step after it has been superseded. Consume
+    // that attribution once, without confirming or discarding the newer target.
+    // A later physical adjustment to the same level remains external.
+    this.attributedSupersededVolumeCommands.add(superseded.id);
+    return true;
   }
   private attributeLatePauseBeforeNewerIntent(
     observation: MusicObservation,
