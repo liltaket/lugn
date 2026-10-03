@@ -417,6 +417,7 @@ function renderMusic(payload) {
   const volume = volumeAvailable
     ? Math.min(1, Math.max(0, observed.volume))
     : null;
+  const controlVolume = musicVolumeForControl(device);
   renderMusicVolumePolicy(payload, musicTarget);
 
   refs.musicPlayback.disabled = !canControl;
@@ -437,8 +438,10 @@ function renderMusic(payload) {
   refs.musicPlayback.setAttribute('aria-pressed', String(isPlaying));
   setText(refs.musicPlaybackIcon, isPlaying ? 'Ⅱ' : '▶');
   setText(refs.musicPlaybackLabel, isPlaying ? 'Pausa' : 'Spela');
-  refs.musicVolumeDown.disabled = !canControl || volume === null || volume <= 0;
-  refs.musicVolumeUp.disabled = !canControl || volume === null || volume >= 1;
+  refs.musicVolumeDown.disabled =
+    !canControl || controlVolume === null || controlVolume <= 0;
+  refs.musicVolumeUp.disabled =
+    !canControl || controlVolume === null || controlVolume >= 1;
   setText(
     refs.musicVolumeObservedLabel,
     availability === 'available' ? 'Nu' : 'Senast',
@@ -649,12 +652,17 @@ refs.musicPresetOptical.addEventListener('click', () => {
   selectMusicPreset(4);
 });
 
+function musicVolumeForControl(device) {
+  const volume = device?.requested?.volume ?? device?.observed?.volume;
+  return typeof volume === 'number' && Number.isFinite(volume)
+    ? Math.min(1, Math.max(0, volume))
+    : null;
+}
+
 function stepMusicVolume(direction) {
   const device = latestPayload?.state?.music?.devices?.[musicTarget];
-  const volume = device?.observed?.volume;
-  if (!musicTarget || typeof volume !== 'number' || !Number.isFinite(volume)) {
-    return;
-  }
+  const volume = musicVolumeForControl(device);
+  if (!musicTarget || volume === null) return;
   const value =
     Math.round(Math.min(1, Math.max(0, volume + direction * 0.05)) * 100) / 100;
   if (value === volume) return;
