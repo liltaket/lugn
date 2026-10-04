@@ -38,8 +38,11 @@ class Element {
     this.children = children;
   }
   querySelector(selector: string): Element | undefined {
-    return this.children.find(
-      (child) => child.className === selector.replace(/^\./, ''),
+    return (
+      this.children.find(
+        (child) => child.className === selector.replace(/^\./, ''),
+      ) ??
+      this.children.map((child) => child.querySelector(selector)).find(Boolean)
     );
   }
   addEventListener(type: string, listener: Listener): void {
@@ -224,6 +227,72 @@ afterEach(() => {
 });
 
 describe('Hub live state with resilient polling fallback', () => {
+  it('keeps a periodic verification poll despite continuing stream heartbeats', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard(0.3, true);
+    try {
+      await microtasks();
+      ui.streams[0]!.emit({
+        ...ui.payload(),
+        instanceId: 'runtime-a',
+        deliveryRevision: 2,
+      });
+      const reads = ui.stateReads();
+      for (const deliveryRevision of [3, 4]) {
+        await vi.advanceTimersByTimeAsync(5000);
+        ui.streams[0]!.emit({
+          ...ui.payload(),
+          instanceId: 'runtime-a',
+          deliveryRevision,
+        });
+      }
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(ui.stateReads()).toBe(reads + 1);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('does not claim a pending default scene is confirmed before device feedback', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard(0.3, true);
+    try {
+      await microtasks();
+      const payload = {
+        ...ui.payload(),
+        scenes: [{ id: 'scene.focus_light', name: 'Fokus', lighting: {} }],
+      };
+      payload.state.lighting.currentScene = 'scene.focus_light';
+      payload.state.revision += 1;
+      ui.streams[0]!.emit({
+        ...payload,
+        instanceId: 'runtime-a',
+        deliveryRevision: 2,
+      });
+      const button = ui.get('#scene-grid').children[0]!;
+      expect(button.querySelector('.scene-status')?.textContent).toBe('Valt');
+      payload.state.lighting.devices['lighting.desk'] = {
+        effectiveDesired: { power: true },
+        baselineDesired: { power: true },
+        observed: { power: true },
+        ownership: {},
+        availability: 'available',
+      };
+      payload.state.revision += 1;
+      ui.streams[0]!.emit({
+        ...payload,
+        instanceId: 'runtime-a',
+        deliveryRevision: 3,
+      });
+      expect(button.querySelector('.scene-status')?.textContent).toBe(
+        'Bekräftat',
+      );
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
   it('renders pushed presence and volume intent immediately while keeping observed volume separate', async () => {
     vi.useFakeTimers();
     const ui = dashboard(0.3, true);

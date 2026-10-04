@@ -154,12 +154,15 @@ function connectStream() {
     if (source !== eventSource || stopped) return;
     try {
       if (!acceptPayload(JSON.parse(event.data))) return;
+      const wasHealthy = streamHealthy;
       streamHealthy = true;
       reconnectDelay = 1000;
       window.clearTimeout(streamWatchdog);
       streamWatchdog = window.setTimeout(retryStream, STREAM_CHECK_MS);
-      window.clearTimeout(timer);
-      timer = window.setTimeout(refresh, STREAM_CHECK_MS);
+      if (!wasHealthy) {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(refresh, STREAM_CHECK_MS);
+      }
     } catch {
       retryStream();
     }
@@ -325,6 +328,9 @@ function renderScenes(payload) {
       );
     const confirmed =
       selected &&
+      Object.values(payload?.state?.lighting?.devices ?? {}).some(
+        (device) => Object.keys(device.effectiveDesired ?? {}).length > 0,
+      ) &&
       Object.values(payload?.state?.lighting?.devices ?? {}).every((device) =>
         Object.entries(device.effectiveDesired ?? {}).every(
           ([property, value]) =>
