@@ -491,9 +491,9 @@ export class LugnEngine {
       for (const [target, device] of Object.entries(devices)) {
         if (device.effectiveDesired.power === false)
           this.holds.set('lighting.activation', target, {
-            actor: { type: 'user' },
+            actor: { type: 'automation', id: 'lugn.restore' },
             source: 'restored_lighting_intent',
-            reason: 'Retained explicit off scene',
+            reason: 'Retained off scene; original actor is not persisted',
           });
       }
     }
