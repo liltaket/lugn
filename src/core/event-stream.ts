@@ -64,6 +64,7 @@ export function applyStateUpdate(
 ): RoomState {
   const {
     presence,
+    session,
     lighting,
     switches,
     music,
@@ -75,6 +76,7 @@ export function applyStateUpdate(
   return {
     ...structuredClone(state),
     ...(presence === undefined ? {} : { presence: structuredClone(presence) }),
+    ...(session === undefined ? {} : { session: structuredClone(session) }),
     ...(lighting === undefined ? {} : { lighting: structuredClone(lighting) }),
     ...(switches === undefined ? {} : { switches: structuredClone(switches) }),
     ...(music === undefined ? {} : { music: structuredClone(music) }),

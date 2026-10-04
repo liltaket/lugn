@@ -376,9 +376,21 @@ export const FastPathTimingSchema = z.object({
 });
 export type FastPathTiming = z.infer<typeof FastPathTimingSchema>;
 
+export const RoomSessionSchema = z.object({
+  id: z.string().uuid(),
+  state: z.enum(['active', 'suspended', 'ended']),
+  startedAt: z.number().nonnegative(),
+  lastActiveAt: z.number().nonnegative(),
+  suspendedAt: z.number().nonnegative().nullable(),
+  expiresAt: z.number().nonnegative().nullable(),
+  endedAt: z.number().nonnegative().nullable(),
+});
+export type RoomSession = z.infer<typeof RoomSessionSchema>;
+
 export const RoomStateSchema = z.object({
   revision: z.number().int().nonnegative(),
   updatedAt: z.number().nonnegative(),
+  session: RoomSessionSchema.nullable(),
   presence: z.object({
     state: PresenceSchema,
     personCount: z.number().int().nonnegative().nullable(),
@@ -410,6 +422,7 @@ export const StateUpdateSchema = z.object({
   domains: z.array(
     z.enum([
       'presence',
+      'session',
       'lighting',
       'switches',
       'music',
@@ -421,6 +434,7 @@ export const StateUpdateSchema = z.object({
   ),
   patch: z.object({
     presence: RoomStateSchema.shape.presence.optional(),
+    session: RoomStateSchema.shape.session.optional(),
     lighting: RoomStateSchema.shape.lighting.optional(),
     switches: RoomStateSchema.shape.switches.optional(),
     music: RoomStateSchema.shape.music.optional(),

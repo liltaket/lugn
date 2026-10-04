@@ -24,6 +24,7 @@ import {
 } from '../adapters/simulated-switch.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
 import { StateEventStream } from '../core/event-stream.js';
+import { RoomSessions } from './room-sessions.js';
 import {
   LightingProperties,
   LightingIntentSnapshotSchema,
@@ -64,6 +65,7 @@ export type EngineOptions = {
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
   continuityMs?: number;
+  roomSessionContinuityMs?: number;
   commandAttributionWindowMs?: number;
   adapter?: LightingAdapter;
   switchDeviceIds?: string[];
@@ -142,6 +144,7 @@ export class LugnEngine {
   private readonly holds: AutomationHolds;
   private readonly musicController: MusicController;
   private readonly musicAutomation: MusicAutomation;
+  private readonly roomSessions: RoomSessions;
   private lastNonOffSceneId: string | null = null;
   private bilresaPriorVolumeAutomation: boolean | null = null;
   private readonly convergenceTimeoutMs: number;
@@ -426,6 +429,7 @@ export class LugnEngine {
     this.state = {
       revision: 0,
       updatedAt: clock.now(),
+      session: null,
       presence: {
         state: 'unknown',
         personCount: null,
@@ -457,6 +461,20 @@ export class LugnEngine {
       diagnostics: [],
       timings: [],
     };
+    this.roomSessions = new RoomSessions(
+      clock,
+      options.roomSessionContinuityMs ?? 20 * 60_000,
+      (session, transition) => {
+        this.state.session = session;
+        if (transition)
+          this.addDiagnostic(
+            `session.${transition}`,
+            `Room session ${transition}`,
+            { ...session },
+          );
+        this.publish(['presence', 'session', 'diagnostics']);
+      },
+    );
     if (expiredRestoredSceneToPreserve) {
       const revision = this.state.lighting.sceneRevision;
       this.intentByRevision.set(revision, {
@@ -507,6 +525,7 @@ export class LugnEngine {
     );
     this.publish([
       'presence',
+      'session',
       'lighting',
       'switches',
       'music',
@@ -1032,6 +1051,7 @@ export class LugnEngine {
       this.state.presence.state = normalizedEvent.presence;
       this.state.presence.personCount = normalizedEvent.personCount ?? 0;
       this.lastConfirmedPresence = normalizedEvent.presence;
+      this.roomSessions.handlePresence(normalizedEvent.presence);
       this.clearPrelight();
       this.quietHoursSuppressedForCurrentVisit = false;
       this.manualLightingDuringQuietVisit.clear();
@@ -1042,6 +1062,7 @@ export class LugnEngine {
       this.state.presence.state = normalizedEvent.presence;
       this.state.presence.personCount = normalizedEvent.personCount ?? null;
       this.lastConfirmedPresence = normalizedEvent.presence;
+      this.roomSessions.handlePresence(normalizedEvent.presence);
       this.prelightPreviewActive = false;
       const scene =
         this.scenes.get(
@@ -1115,6 +1136,7 @@ export class LugnEngine {
         {
           currentScene: this.state.lighting.currentScene,
           expiresAt: this.state.presence.continuityExpiresAt,
+          sessionId: this.state.session?.id ?? null,
         },
       );
       this.publish(['presence', 'commands', 'diagnostics', 'timings']);
@@ -1178,7 +1200,10 @@ export class LugnEngine {
         returned
           ? 'Room occupied again; restoring remembered effective lighting'
           : 'Room is occupied',
-        { restoredContinuity: returned },
+        {
+          restoredContinuity: returned,
+          sessionId: this.state.session?.id ?? null,
+        },
       );
       const eventId = `presence-${++this.nextEventId}`;
       const timing = this.createFastPathTiming(
@@ -1660,6 +1685,7 @@ export class LugnEngine {
   }
 
   dispose(): void {
+    this.roomSessions.dispose();
     this.cancelRetryTimers();
     this.cancelContinuityTimer();
     this.clearPrelight();
@@ -2489,6 +2515,7 @@ export class LugnEngine {
       {
         retainedScene: retainedExplicitScene?.id ?? null,
         nextDefaultScene: this.defaultSceneOnOccupancy?.id ?? null,
+        sessionId: this.state.session?.id ?? null,
       },
     );
     this.publish(['presence', 'lighting', 'commands', 'diagnostics']);
@@ -2734,6 +2761,7 @@ export class LugnEngine {
   private publish(
     domains: Array<
       | 'presence'
+      | 'session'
       | 'lighting'
       | 'switches'
       | 'music'

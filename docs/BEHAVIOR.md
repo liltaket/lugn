@@ -176,6 +176,40 @@ Shortly returning can restore:
 
 Only expiry/reset policy determines when those memories are cleared.
 
+## Room sessions
+
+The normal state API exposes `session`, initially `null`. A confirmed occupied
+sample starts an `active` room session with a UUID, `startedAt` and
+`lastActiveAt`. Further occupied samples update `lastActiveAt` without changing
+the ID. Confirmed empty suspends the session, recording `suspendedAt` and an
+absolute `expiresAt`. Returning strictly before that deadline resumes the same
+session; reaching the deadline ends it, and the next confirmed entry starts a
+new ID. Repeated empty samples do not extend the deadline.
+
+The shared visit window defaults to 20 minutes and can be set independently
+with the engine's `roomSessionContinuityMs` option (1 ms to 24 hours). Unknown
+presence neither creates nor suspends a session and does not renew or cancel a
+confirmed absence deadline. An active session therefore survives an unknown
+gap; a previously suspended session can still expire during that gap. Home/away,
+prelight and explicit device actions do not create room sessions.
+
+Sessions provide a common visit reference, not a common reset policy. Lighting's
+`presence.continuityExpiresAt` and music's 20-minute resume window still track
+their own confirmed-empty transition and may expire before or after the shared
+session. Session end alone does not clear scenes, overrides, manual music Pause,
+volume baselines or source selection. Presence and lighting-continuity decisions
+include the session ID so their separate policies can be inspected together.
+`session.started`, `session.suspended`, `session.resumed` and `session.ended`
+diagnostics contain lifecycle timestamps; state-stream updates include the
+`session` domain, including timer-driven expiry.
+
+Sessions are process-local. Restart is an explicit new visit boundary: startup
+state has no session, and only fresh confirmed occupancy starts a new UUID.
+The lighting intent store can restore domain intent and its absolute continuity
+deadline, but never restores a session, sensor presence or device observations.
+An ended session remains visible until the next entry for diagnostics; disposal
+cancels its timer without manufacturing a physical exit.
+
 ## Decay policies
 
 Different state should be allowed different reset policies.
