@@ -29,6 +29,23 @@ describe('runtime configuration cross references', () => {
     },
     scenes: [],
   };
+  it('validates per-light control modes and requires mapped targets', () => {
+    expect(loadConfig(minimal).lightingControlModes).toEqual({});
+    expect(
+      loadConfig({
+        ...minimal,
+        lightingControlModes: { 'lighting.ceiling': 'enforce' },
+      }).lightingControlModes,
+    ).toEqual({ 'lighting.ceiling': 'enforce' });
+    for (const lightingControlModes of [
+      { 'lighting.missing': 'enforce' },
+      { 'lighting.ceiling': 'unsupported' },
+      { 'switch.ceiling': 'enforce' },
+    ])
+      expect(() => loadConfig({ ...minimal, lightingControlModes })).toThrow(
+        'Invalid configuration',
+      );
+  });
   it('defaults absent music mappings to empty and resolves configured music sources', () => {
     expect(loadConfig(minimal).homeAssistant.buttons).toEqual({});
     expect(loadConfig(minimal).homeAssistant.music).toEqual({});

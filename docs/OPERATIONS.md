@@ -446,8 +446,8 @@ Replace these examples with actual installation entities and source names.
 The Home Assistant integration must support the requested action. Lugn does
 not create a media integration. With a configured player, it applies the
 automatic rules in [Music](MUSIC.md): pause on confirmed empty, short-context
-resume or Spotify DJ preset 1 on a qualifying entry before 23:00, no automatic
-start/resume at or after 23:00, and away-state suppression. The dashboard's
+resume or Spotify DJ preset 1 on a qualifying entry between 06:00 and 23:00, no
+automatic start/resume from 23:00 until 06:00 (Europe/Stockholm), and away-state suppression. The dashboard's
 playback and preset controls are explicit manual requests and remain enabled
 while away.
 

@@ -35,7 +35,7 @@ not be implied by their labels.
   and the calculated target.
 - Dashboard controls remain touch-friendly and available independently from
   automatic home/away gates.
-- Automatic music playback must not start after 23:00.
+- Automatic music playback must not start or resume from 23:00 until 06:00 (Europe/Stockholm).
 - Routine connection, Cast and refresh status should not consume dashboard
   space; actionable failures may be shown when needed.
 - The dashboard must not scroll in either direction.

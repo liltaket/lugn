@@ -103,6 +103,7 @@ export class MusicAutomation {
       if (
         this.homePresence !== 'away' &&
         returningFromEmpty &&
+        this.localHour() >= 6 &&
         this.localHour() < 23
       ) {
         for (const target of this.options.targets) {

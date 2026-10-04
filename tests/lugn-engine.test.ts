@@ -2599,7 +2599,7 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
-  it('waits for a new confirmed entry after a quiet-hours-suppressed visit', async () => {
+  it('activates the default on a night entry and keeps it through dawn', async () => {
     const clock = new FakeClock(Date.parse('2026-09-30T05:55:00+02:00'));
     const adapter = new SimulatedLightingAdapter(clock);
     const engine = new LugnEngine(clock, {
@@ -2625,8 +2625,9 @@ describe('Lugn deterministic lighting slice', () => {
       presence: 'occupied',
       personCount: 1,
     });
-    expect(engine.defaultScenePending).toBe(true);
-    expect(adapter.dispatched).toEqual([]);
+    expect(engine.defaultScenePending).toBe(false);
+    expect(adapter.observed.get('lighting.ceiling')?.power).toBe(true);
+    expect(adapter.dispatched).toHaveLength(1);
 
     await engine.handlePresence({
       type: 'presence.changed',

@@ -285,7 +285,7 @@ describe('room entry lighting reliability', () => {
     },
   );
 
-  it('keeps entry blocked while away and does not activate at night when the away gate clears', async () => {
+  it('keeps entry blocked while away and activates at night when the away gate clears', async () => {
     const { clock, engine, requests, feedback } = setup();
     clock.advanceBy(13 * 60 * 60 * 1000);
     await engine.handleHomePresence('away');
@@ -295,13 +295,16 @@ describe('room entry lighting reliability', () => {
     });
     await engine.handleHomePresence('unknown');
     await engine.handleHomePresence('home');
-    expect(requests).toHaveLength(0);
+    expect(requests).toHaveLength(2);
+    feedback('light.desk', 'on');
+    feedback('light.strip', 'on');
+    await flush();
     clock.advanceBy(6 * 60 * 60 * 1000);
     await engine.handlePresence({
       type: 'presence.changed',
       presence: 'occupied',
     });
-    expect(requests).toHaveLength(0);
+    expect(requests).toHaveLength(2);
     await engine.handlePresence({
       type: 'presence.changed',
       presence: 'confirmed_empty',
@@ -314,6 +317,6 @@ describe('room entry lighting reliability', () => {
     });
     expect(
       requests.filter((request) => request.brightness_pct !== undefined),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
   });
 });

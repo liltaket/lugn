@@ -30,9 +30,9 @@ safe to use alongside physical controls and Home Assistant.
 
 - A confirmed empty room turns configured lights off and pauses configured
   music while retaining room intent for a short return.
-- A confirmed occupied event can restore the current light scene, except
-  during quiet hours (23:00–06:00), when the selected scene is **Helt släckt**,
-  or when Home Assistant explicitly reports **Borta**.
+- A confirmed occupied event restores the current light scene, including at
+  night. **Helt släckt** remains off, and Home Assistant **Borta** blocks
+  automatic activation.
 - Prelight is temporary and is suppressed if the room is already lit, the
   selected scene is fully off, quiet hours are active, or Home Assistant
   reports **Borta**.
@@ -41,11 +41,14 @@ safe to use alongside physical controls and Home Assistant.
   `unknown` is shown separately and does not itself block room automation.
 - Manual dashboard actions remain available while away. The gate applies to
   automatic actions only.
-- Music never starts or resumes automatically at or after 23:00. The daily
+- Music never starts or resumes automatically from 23:00 until 06:00
+  (Europe/Stockholm), including after midnight. The daily
   volume curve lowers the baseline overnight and early morning; two or more
   people in the room add a further 10 percentage-point reduction.
 
 See [Music](docs/MUSIC.md) and [Presence](docs/PRESENCE.md) for exact rules.
+For stubborn lights, per-light `lightingControlModes` can opt into continued
+enforcement of the desired state; see [Lighting](docs/LIGHTING.md#lighting-control-modes).
 
 ### Built-in light presets
 

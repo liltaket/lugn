@@ -15,6 +15,8 @@ import {
   SemanticLightingIdSchema,
   SemanticSwitchIdSchema,
   LightingValuesSchema,
+  LightingControlModesSchema,
+  type LightingControlModes,
   type LightingScene,
   type LightingValues,
 } from '../core/schemas.js';
@@ -244,6 +246,7 @@ const FileConfigSchema = z
       .strict()
       .default({ host: '127.0.0.1', port: 8787, trustedOrigins: [] }),
     homeAssistant: HomeAssistantConfigSchema,
+    lightingControlModes: LightingControlModesSchema.default({}),
     mqtt: MqttConfigSchema.optional(),
     display: DisplayConfigSchema.optional(),
     prelight: z
@@ -302,6 +305,14 @@ const FileConfigSchema = z
         message: `Prelight target ${target} is not mapped in homeAssistant.entities`,
       });
     }
+    for (const target of Object.keys(config.lightingControlModes)) {
+      if (configuredLights.has(target)) continue;
+      context.addIssue({
+        code: 'custom',
+        path: ['lightingControlModes', target],
+        message: `Lighting control target ${target} is not mapped in homeAssistant.entities`,
+      });
+    }
   });
 
 /** Validates an in-memory configuration with the same strict schema as the runtime. */
@@ -316,6 +327,7 @@ export function validateRuntimeFileConfig(value: unknown): void {
 }
 
 export type RuntimeConfig = {
+  lightingControlModes?: LightingControlModes;
   http: {
     host: string;
     port: number;
@@ -506,6 +518,7 @@ export function loadRuntimeConfig(
     ...(mqtt === undefined ? {} : { mqtt }),
     ...(display === undefined ? {} : { display }),
     prelight: fileConfig.prelight,
+    lightingControlModes: fileConfig.lightingControlModes,
     ...(fileConfig.scenes === undefined ? {} : { scenes: fileConfig.scenes }),
     ...(fileConfig.defaultSceneId === undefined
       ? {}

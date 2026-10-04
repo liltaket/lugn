@@ -71,6 +71,12 @@ export const SemanticLightingIdSchema = z
   .string()
   .regex(/^lighting\.[a-z0-9][a-z0-9._-]*$/);
 
+export const LightingControlModesSchema = z.record(
+  SemanticLightingIdSchema,
+  z.enum(['respect_manual', 'enforce']),
+);
+export type LightingControlModes = z.infer<typeof LightingControlModesSchema>;
+
 export const SemanticSwitchIdSchema = z
   .string()
   .regex(/^switch\.[a-z0-9][a-z0-9._-]*$/);

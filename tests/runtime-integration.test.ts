@@ -3,6 +3,7 @@ import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { HomeAssistantLightingAdapter } from '../src/adapters/home-assistant-lighting.js';
 import type {
   HomeAssistantSocket,
   HomeAssistantSocketMessageEvent,
@@ -254,6 +255,7 @@ describe('composed runtime integration', () => {
           tokenEnv: 'LUGN_TEST_HA_TOKEN',
           entities: { 'lighting.entry': 'light.entry' },
         },
+        lightingControlModes: { 'lighting.entry': 'enforce' },
         mqtt: {
           url: 'mqtt://mqtt.invalid:1883',
           baseTopic: 'bruno/doorway',
@@ -323,6 +325,33 @@ describe('composed runtime integration', () => {
         requests.find(({ url }) => url.includes('/api/services/'))?.url,
       ).toBe('http://home-assistant.invalid:8123/api/services/light/turn_on');
       expect(runtime.engine.state.presence.state).toBe('occupied');
+      const lighting = runtime.engine.adapter as HomeAssistantLightingAdapter;
+      const desired =
+        runtime.engine.state.lighting.devices['lighting.entry']!
+          .effectiveDesired;
+      lighting.acceptStateChangedEvent({
+        entity_id: 'light.entry',
+        new_state: {
+          entity_id: 'light.entry',
+          state: 'on',
+          attributes: {
+            brightness: Math.round(((desired.brightness ?? 55) * 255) / 100),
+            color_temp_kelvin: desired.colorTemperature,
+          },
+        },
+      });
+      lighting.acceptStateChangedEvent({
+        entity_id: 'light.entry',
+        new_state: { entity_id: 'light.entry', state: 'off', attributes: {} },
+      });
+      expect(
+        runtime.engine.state.lighting.devices['lighting.entry']
+          ?.effectiveDesired.power,
+      ).toBe(true);
+      expect(
+        runtime.engine.state.lighting.devices['lighting.entry']?.ownership.power
+          ?.kind,
+      ).toBe('scene');
     } finally {
       await runtime.stop();
       await rm(directory, { recursive: true, force: true });
