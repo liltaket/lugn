@@ -86,10 +86,15 @@ export type HomeAssistantBilresaEvent = {
 
 const StateSchema = z.object({
   entity_id: BilresaEntityIdSchema,
-  attributes: z.object({ event_type: z.unknown() }).passthrough().optional(),
+  state: z.string(),
+  attributes: z
+    .object({ event_type: z.unknown().optional() })
+    .passthrough()
+    .optional(),
 });
 const EventDataSchema = z.object({
   entity_id: BilresaEntityIdSchema,
+  old_state: StateSchema.nullable(),
   new_state: StateSchema.nullable(),
 });
 const StateChangedFrameSchema = z.object({
@@ -105,13 +110,23 @@ const DefaultMirrorWindowMs = 100;
 const LongPressReleaseDuplicateWindowMs = 5_000;
 const MirrorWindowMsSchema = z.number().int().positive().max(500);
 
+const EventTimestampSchema = z.iso
+  .datetime({ offset: true })
+  .transform((value) => {
+    // Normalize offsets while retaining fractional precision beyond Date's
+    // milliseconds, used by older HA event entities. These keys sort by time.
+    const fraction = /\.(\d+)/.exec(value)?.[1]?.replace(/0+$/, '') ?? '';
+    return `${new Date(value).toISOString().slice(0, 19)}.${fraction.padEnd(9, '0')}`;
+  });
+
 /**
  * Extracts the two physical keys from the HA event entities. Mirrored HA
- * entities for a key are deduplicated only across different entity IDs; a
- * successive event from the same entity is always emitted.
+ * entities for a key are deduplicated only across different entity IDs;
+ * successive event timestamps from the same entity remain separate presses.
  */
 export class HomeAssistantBilresaAdapter {
   private readonly buttonByEntity: Map<string, BilresaButton>;
+  private readonly lastTimestampByEntity = new Map<string, string>();
   private readonly lastGestureByButton = new Map<
     BilresaButton,
     { gesture: BilresaGesture; entityId: string; receivedAt: number }
@@ -147,9 +162,47 @@ export class HomeAssistantBilresaAdapter {
     const parsed = StateChangedFrameSchema.safeParse(payload);
     if (!parsed.success) return false;
 
-    const { entity_id: entityId, new_state: newState } = parsed.data.event.data;
+    const {
+      entity_id: entityId,
+      old_state: oldState,
+      new_state: newState,
+    } = parsed.data.event.data;
     const button = this.buttonByEntity.get(entityId);
-    if (!button || !newState || newState.entity_id !== entityId) return false;
+    if (
+      !button ||
+      (oldState && oldState.entity_id !== entityId) ||
+      (newState && newState.entity_id !== entityId)
+    )
+      return false;
+
+    // A state_changed frame can describe availability, restoration or an
+    // attribute update. Remember event timestamps even without a supported
+    // gesture, so recovery cannot replay the last action. old_state supplies
+    // the baseline when subscribing to an already-active entity.
+    const oldTimestamp = EventTimestampSchema.safeParse(oldState?.state);
+    let previousTimestamp = this.lastTimestampByEntity.get(entityId);
+    if (
+      oldTimestamp.success &&
+      (!previousTimestamp || oldTimestamp.data > previousTimestamp)
+    ) {
+      previousTimestamp = oldTimestamp.data;
+      this.lastTimestampByEntity.set(entityId, previousTimestamp);
+    }
+    const newTimestamp = EventTimestampSchema.safeParse(newState?.state);
+    if (!newTimestamp.success) return false;
+    if (previousTimestamp && newTimestamp.data <= previousTimestamp)
+      return false;
+    this.lastTimestampByEntity.set(entityId, newTimestamp.data);
+
+    // Null old_state is entity creation/restoration, not evidence of a press.
+    // With no earlier timestamp, availability recovery only establishes a
+    // baseline. The first event from HA's never-pressed `unknown` state works.
+    if (
+      !oldState ||
+      !newState ||
+      (!previousTimestamp && oldState.state !== 'unknown')
+    )
+      return false;
 
     const rawGesture = newState.attributes?.event_type;
     if (typeof rawGesture !== 'string') return false;

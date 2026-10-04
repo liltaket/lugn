@@ -188,6 +188,12 @@ The four default entity IDs preserve the two event entities per physical button
 used by the previous Bruno Intelligence Engine; deployments can override those
 IDs in `homeAssistant.bilresa`.
 
+Only an advancing event entity timestamp counts as a new remote action.
+Availability changes, attribute updates, and restored historical states establish
+or retain the timestamp baseline without replaying a gesture. Repeated presses
+from one entity remain supported; the adapter separately deduplicates mirrored
+entities and paired long-press/release events.
+
 The room remote has these fixed, predictable actions:
 
 | Input                                   | Action                                                                                                                               |

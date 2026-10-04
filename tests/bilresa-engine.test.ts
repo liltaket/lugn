@@ -15,16 +15,23 @@ const allOff = {
   lighting: { 'lighting.ceiling': { power: false, brightness: 0 } },
 };
 
-function changed(entityId: string, eventType: string) {
+function changed(entityId: string, eventType: string, timestamp: number) {
   return {
     type: 'event',
     id: 7,
     event: {
       event_type: 'state_changed',
+      time_fired: new Date(timestamp).toISOString(),
       data: {
         entity_id: entityId,
+        old_state: {
+          entity_id: entityId,
+          state: new Date(timestamp - 1).toISOString(),
+          attributes: { event_type: eventType },
+        },
         new_state: {
           entity_id: entityId,
+          state: new Date(timestamp).toISOString(),
           attributes: { event_type: eventType },
         },
       },
@@ -56,7 +63,11 @@ describe('BILRESA remote to room actions', () => {
 
     expect(
       remote.acceptStateChangedFrame(
-        changed('event.bilresa_dual_button_knapp_1', 'multi_press_1'),
+        changed(
+          'event.bilresa_dual_button_knapp_1',
+          'multi_press_1',
+          clock.now(),
+        ),
       ),
     ).toBe(true);
     await Promise.all(actions.splice(0));
@@ -65,7 +76,11 @@ describe('BILRESA remote to room actions', () => {
     clock.advanceBy(101);
     expect(
       remote.acceptStateChangedFrame(
-        changed('event.bilresa_dual_button_knapp_1_2', 'multi_press_1'),
+        changed(
+          'event.bilresa_dual_button_knapp_1_2',
+          'multi_press_1',
+          clock.now(),
+        ),
       ),
     ).toBe(true);
     await Promise.all(actions.splice(0));
