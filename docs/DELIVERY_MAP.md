@@ -36,7 +36,7 @@ Cast receiver rendered its page, or that a physical device reached its target.
   immediate dispatch and bounded convergence; confirmed-empty is a physical
   off overlay that retains logical intent.
 - Music policy includes Spotify DJ preset 1, Optical preset 4, confirmed-empty
-  pause, short-context resume, no automatic playback at/after 23:00, a
+  pause, short-context resume, no automatic playback from 23:00 until 06:00, a
   Europe/Stockholm daily volume curve, and a 10-point reduction when the
   STL27L snapshot count is greater than one. An unknown count adds no person
   offset.

@@ -44,6 +44,7 @@
     "baseTopic": "bruno/doorway",
     "maxAgeMs": 7000
   },
+  "lightingControlModes": {},
   "prelight": {
     "targets": {
       "lighting.ceiling": {

@@ -34,8 +34,8 @@ still needs work before Lugn is a broadly configurable, finished product.
   them.
 - Confirmed room-empty pauses music. On a confirmed away state, active music is
   paused and automatic music starts/resumes and volume adjustment are gated.
-- A confirmed room return before 23:00 resumes recent playing context or starts
-  Spotify DJ preset 1. At or after 23:00, automatic start and resume are
+- A confirmed room return between 06:00 and 23:00 resumes recent playing context or starts
+  Spotify DJ preset 1. From 23:00 until 06:00, automatic start and resume are
   suppressed.
 - The daily volume curve, two-person reduction and manual dashboard ±5-point
   volume controls are implemented; the exact curve is in [Music](MUSIC.md).
@@ -82,7 +82,7 @@ still needs work before Lugn is a broadly configurable, finished product.
   fully off, quiet hours are active, or the resident is away.
 - The dashboard is self-contained and does not route users into Home Assistant
   dashboards.
-- Music stays silent from automatic start/resume after 23:00; user-selected
+- Music stays silent from automatic start/resume between 23:00 and 06:00; user-selected
   preset and playback controls remain manual actions.
 - The fast entry-light command is dispatched without waiting for persistence or
   UI work. Confirmed empty turns lights off immediately while retaining the

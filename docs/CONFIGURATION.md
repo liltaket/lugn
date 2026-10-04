@@ -13,6 +13,8 @@ Current configuration covers:
 
 - Home Assistant URL/token environment name;
 - semantic light, switch, button and media-player mappings;
+- per-light `lightingControlModes` (`respect_manual` by default or opt-in
+  `enforce` for continued retries; see [Lighting](LIGHTING.md#lighting-control-modes));
 - one Home Assistant home-presence `person.*` or `device_tracker.*` entity;
 - Home Assistant temperature, humidity, CO₂ and PM2.5 mappings;
 - MQTT connection, topic and freshness window for STL27L events;

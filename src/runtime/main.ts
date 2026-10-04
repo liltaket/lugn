@@ -143,6 +143,9 @@ export async function startRuntime(
     ...(defaultSceneId === undefined ? {} : { defaultSceneId }),
     ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
     prelight: config.prelight,
+    ...(config.lightingControlModes === undefined
+      ? {}
+      : { lightingControlModes: config.lightingControlModes }),
     ...(homeAssistantMusic === undefined
       ? {}
       : {

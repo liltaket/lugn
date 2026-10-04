@@ -465,7 +465,10 @@ describe('semantic music control', () => {
   });
 
   it('does not mistake a late confirmed Lugn pause for a manual pause', async () => {
-    const { clock, adapter, controller, automation } = automationSetup(0, 100);
+    const { clock, adapter, controller, automation } = automationSetup(
+      Date.parse('2026-10-04T12:00:00+02:00'),
+      100,
+    );
     adapter.observe('music.room', { ...values, playback: 'playing' });
     automation.handlePresence('unknown', 'occupied', 1);
     await flushMicrotasks();

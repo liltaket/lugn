@@ -22,7 +22,7 @@ presence-triggered scene reconciliation, prelight and music automation. If
 music is already playing, Lugn pauses it. Confirmed-empty still turns lights
 off and pauses music. Home status `unknown` is not treated as away.
 When `away` clears to `home` or `unknown` while the room is occupied, lighting
-reconciles immediately, subject to quiet hours, without another sensor entry.
+reconciles immediately, including at night, without another sensor entry.
 
 The gate applies to automation. Explicit dashboard scene, light and music
 requests remain usable while away. That lets a person intentionally control a

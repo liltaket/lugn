@@ -69,11 +69,13 @@ automatic adjustment, baseline and target.
 
 1. A confirmed room-empty transition pauses each configured player and records
    whether it was playing so a short return can preserve continuity.
-2. A confirmed room-entry transition from `confirmed_empty`, before 23:00
+2. A confirmed room-entry transition from `confirmed_empty`, from 06:00 until 23:00
    Europe/Stockholm time, resumes the recent playing context when it is still
    within 20 minutes. Otherwise, if nothing is playing, it starts Spotify DJ
    preset 1.
-3. At or after 23:00, Lugn does not automatically start or resume playback.
+3. From 23:00 until 06:00 (Europe/Stockholm), including after midnight, Lugn
+   does not automatically start or resume playback. Reaching 06:00 alone
+   does not start music; a new eligible entry is required.
 4. A Home Assistant `away` observation immediately pauses currently playing
    music, prevents later presence-driven starts/resumes, and cancels automatic
    volume adjustments. Returning to `home` while the room is occupied restores

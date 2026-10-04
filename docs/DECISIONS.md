@@ -17,7 +17,7 @@ This document separates what has effectively been agreed from what still needs e
 - Home Assistant lighting commands and state events stay behind adapters: REST fetch and WebSocket creation are injected, semantic/entity mappings come from host configuration, and the event socket owns authentication, subscription, and bounded reconnects. Unknown or unavailable light states are not interpreted as off.
 - Raw STL27L serial/perception processing stays outside Lugn. The existing sensor service exposes a normalized, non-retained MQTT preview state (`bruno/doorway/preview`, `ON`/`OFF`, QoS 0); Lugn consumes that event without routing presence through Home Assistant. Sensor health or retained recovery state is not inferred from this ephemeral topic.
 - Prelight is a distinct temporary `presence.prelight` input, not occupancy. Hosts configure a small set of targets/values and a bounded maximum duration. Preview OFF alone does not prove a false positive: Lugn holds the preview until occupancy or the existing timeout, then restores known prior values. `occupied`, `confirmed_empty`, explicit scenes, and manual light changes take control of the overlay; an in-flight restore completes before newer intent is reconciled.
-- Occupied can trigger scene reconciliation unless quiet hours or confirmed home-away policy suppresses it. Confirmed empty triggers physical off regardless of home status. Ordinary occupancy is not used to infer prelight.
+- Occupied can trigger scene reconciliation at any hour unless confirmed home-away policy suppresses it. Confirmed empty triggers physical off regardless of home status. Ordinary occupancy is not used to infer prelight.
 - Home Assistant home/away is a separate fact from room occupancy. The configured `person.*` or `device_tracker.*` entity defaults to `device_tracker.lustigkurre`; confirmed away blocks automatic room activation and music policy, but leaves explicit dashboard actions available. Unknown home status is visible but is not treated as away.
 - Confirmed empty overlays physical `power: false` commands without modifying baseline/effective intent or ownership. Occupied before continuity expiry reconciles the remembered effective values; unknown does not start or clear continuity.
 - The runtime's first durable slice stores only logical lighting intent in a versioned, atomically replaced private JSON file. Device observations, presence counts, and command history stay ephemeral, and stale physical commands are never replayed. This is an incremental persistence boundary, not a commitment against moving to SQLite.
@@ -62,7 +62,7 @@ The detailed presence/continuity path is included in this implementation because
 - command attribution must account for fade trajectories and settling time.
 - self-generated WiiM feedback must not create false passive/manual state.
 - explicit user changes should be respected.
-- confirmed-empty pauses music; eligible room entry may resume recent context or start Spotify DJ preset 1 before 23:00, but never automatically starts or resumes playback at or after 23:00.
+- confirmed-empty pauses music; eligible room entry may resume recent context or start Spotify DJ preset 1 between 06:00 and 23:00, but never automatically starts or resumes playback from 23:00 until 06:00 (Europe/Stockholm).
 - automatic music volume follows the Stockholm daily curve and applies a further 10-point reduction when the room reports more than one person.
 
 ### Routines

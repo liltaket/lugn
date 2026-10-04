@@ -130,7 +130,7 @@ config. The Hub dashboard exposes those two preset actions, play/pause and
 5-point volume buttons, but no source selector.
 
 The `MusicAutomation` policy handles room-empty pause, short-context resume,
-entry autostart before 23:00, confirmed-away gating and the daily volume curve.
+entry autostart between 06:00 and 23:00, confirmed-away gating and the daily volume curve.
 See [Music](MUSIC.md) for exact behavior. The selected preset cannot be
 confirmed from current Home Assistant observations. Direct WiiM transport is
 not implemented, and software fade timing has not been measured against the

@@ -52,25 +52,55 @@ have these built-in room-wide definitions.
 
 ## Automatic entry policy
 
-Automatic occupied-entry scene reconciliation is suppressed during quiet hours
-(23:00–06:00) and when Home Assistant explicitly reports the resident away.
+Confirmed entry activates the current/default lighting scene at any hour,
+including 03:00. Automatic occupied-entry scene reconciliation is suppressed
+when Home Assistant explicitly reports the resident away.
 Unknown home status does not count as away. Manual dashboard scene/light
 requests remain available while away. Confirmed-empty light-off remains active
 regardless of home status.
 
 If room entry was blocked by `away`, clearing that gate to `home` or `unknown`
 reconciles the occupied room immediately. It does not wait for another count
-change from the room sensor. Quiet-hours suppression still takes precedence.
-
-A visit suppressed during quiet hours stays suppressed through device recovery,
-observations and retries, including after 06:00 until a fresh confirmed entry.
-An explicit scene clears that visit suppression. An explicit light adjustment
-allows only its affected targets to converge; the other targets stay suppressed.
+change from the room sensor. An explicitly selected all-off or sleep scene
+continues to apply its configured values on entry. Nighttime does not block
+confirmed-entry lighting, device recovery or convergence retries.
 
 Temporary prelight is suppressed when any configured light is already on, the
 current scene requests every configured light off, quiet hours are active, or
 the home-presence entity reports away. This prevents an entry hint from
 turning on additional lights when the room already has a usable scene.
+
+## Lighting control modes
+
+Lights default to `respect_manual`: external power/brightness changes become
+overrides once ordinary command convergence finishes. For a light that is
+never adjusted externally, set its semantic ID to `enforce` in `config.json`:
+
+```json
+"lightingControlModes": {
+  "lighting.cleverio_bar": "enforce"
+}
+```
+
+Every key must be mapped in `homeAssistant.entities`. Restart Lugn after
+changing configuration. Saved desired values remain intact; select a scene
+to replace any older overrides. This setting is opt-in and also works for other
+lights; it does not depend on the Cleverio entity name.
+
+In `enforce` mode, external observations update the actual state but do not
+replace the desired state with manual overrides. Explicit Lugn scene and light
+requests still set a new goal. After the usual bounded convergence attempts,
+Lugn checks every 30 seconds and starts another bounded attempt for each
+enforced light that still differs. Attempts continue until feedback confirms
+the current goal, including OFF for a confirmed-empty room and unavailable
+lights. Each batch retains the normal three-delivery limit; repeated mismatching
+feedback cannot trigger unbounded rapid retries. Converged lights receive no
+periodic commands, and enforcement does not overlap an active transport call.
+
+Home-away gating, restored intent waiting for confirmed occupancy, and active
+temporary prelight still apply. Confirmed-empty OFF enforcement retains the
+remembered scene for a later return. Other lights keep their ordinary retry
+budgets and manual overrides.
 
 ## Scene definitions
 
@@ -105,7 +135,7 @@ When a scene is explicitly selected:
 - retry devices that have not reached their target;
 - retry unavailable devices at the normal retry interval instead of waiting
   until the convergence deadline;
-- stop retries at the convergence deadline or after three total delivery
+- in the default `respect_manual` mode, stop retries at the convergence deadline or after three total delivery
   attempts per light and scene revision;
 - default convergence window is 60 seconds, with a 2-second retry interval;
 - surface devices that still fail as degraded/unreachable.
