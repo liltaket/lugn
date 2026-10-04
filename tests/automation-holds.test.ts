@@ -216,6 +216,18 @@ describe('scoped human automation holds', () => {
         await expect(
           engine.setLighting('lighting.desk', values, { actor: auto }),
         ).rejects.toThrow('held');
+      const beforeBrightness = lights.dispatched.length;
+      await engine.setLighting(
+        'lighting.desk',
+        { brightness: 25 },
+        { actor: user },
+      );
+      expect(lights.dispatched).toHaveLength(beforeBrightness);
+      expect(
+        engine.state.intent.holds.filter(
+          (h) => h.scope === 'lighting.activation',
+        ),
+      ).toHaveLength(2);
       await engine.setLighting(
         'lighting.desk',
         { power: true },

@@ -1921,7 +1921,6 @@ export class LugnEngine {
   ): Promise<void> {
     if (Object.keys(values).length === 0) return;
     if (
-      !isHumanActor(actor) &&
       values.power !== false &&
       this.holds.blocks('lighting.activation', target)
     )
