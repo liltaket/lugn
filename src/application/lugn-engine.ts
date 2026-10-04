@@ -1,4 +1,5 @@
 import { MusicController, type MusicOptions } from './music-controller.js';
+import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
   MusicAutomation,
   type MusicVolumePolicySnapshot,
@@ -23,7 +24,6 @@ import {
 } from '../adapters/simulated-switch.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
 import { StateEventStream } from '../core/event-stream.js';
-import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
   LightingProperties,
   LightingIntentSnapshotSchema,
