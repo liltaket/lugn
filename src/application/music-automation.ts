@@ -81,7 +81,9 @@ export class MusicAutomation {
             device.requested.playback === 'playing';
           this.resumeUntil.set(
             target,
-            wasPlaying ? this.options.clock.now() + musicContinuityMs : 0,
+            wasPlaying && !this.manuallyPaused.has(target)
+              ? this.options.clock.now() + musicContinuityMs
+              : 0,
           );
           this.send(target, { property: 'playback', value: 'paused' }, 'pause');
         }
@@ -100,6 +102,7 @@ export class MusicAutomation {
         this.localHour() < 23
       ) {
         for (const target of this.options.targets) {
+          if (this.manuallyPaused.has(target)) continue;
           if ((this.resumeUntil.get(target) ?? 0) > this.options.clock.now()) {
             this.send(
               target,
@@ -168,8 +171,15 @@ export class MusicAutomation {
       request.property === 'playback' &&
       provenance.actor.type === 'user'
     ) {
-      if (request.value === 'paused') this.manuallyPaused.add(target);
-      else this.manuallyPaused.delete(target);
+      if (request.value === 'paused') {
+        this.manuallyPaused.add(target);
+        this.resumeUntil.set(target, 0);
+      } else this.manuallyPaused.delete(target);
+    } else if (
+      request.property === 'preset' &&
+      provenance.actor.type === 'user'
+    ) {
+      this.manuallyPaused.delete(target);
     }
   }
 

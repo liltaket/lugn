@@ -82,6 +82,10 @@ export class MusicController {
   private readonly observedSequence = new Map<string, number>();
   private readonly issuedSequence = new Map<string, number>();
   private readonly lastObservations = new Map<string, MusicObservation>();
+  // Intent/transition ordering must outlive command timeout and bounded ledger
+  // history. A metadata-only HA snapshot cannot cancel a user's playback intent.
+  private readonly latestPlaybackIntentAt = new Map<string, number>();
+  private readonly latestPlaybackChangedAt = new Map<string, number>();
   private onExternalVolumeChange:
     ((target: string, volume: number) => void) | undefined;
   private onExternalPlaybackChange:
@@ -308,6 +312,8 @@ export class MusicController {
         reason: normalizedProvenance.reason ?? 'Explicit music adjustment',
       },
     };
+    if (requested.property === 'playback' || requested.property === 'preset')
+      this.latestPlaybackIntentAt.set(target, command.issuedAt);
     Object.assign(device.requested, { [requested.property]: requested.value });
     this.state.commands.push(command);
     this.issuedSequence.set(command.id, this.observedSequence.get(target) ?? 0);
@@ -357,6 +363,8 @@ export class MusicController {
     for (const fade of this.fades.values()) this.clearFadeTimers(fade);
     this.fades.clear();
     this.issuedSequence.clear();
+    this.latestPlaybackIntentAt.clear();
+    this.latestPlaybackChangedAt.clear();
   }
 
   private scheduleFade(
@@ -649,6 +657,26 @@ export class MusicController {
     const previousPlayback = device.observed.playback;
     const observedVolume = observation.values.volume;
     const observedPlayback = observation.values.playback;
+    const newPlaybackTransition = this.isNewPlaybackTransition(
+      observation,
+      previousPlayback,
+    );
+    const playbackChangedAt = observation.playbackChangedAt;
+    if (
+      observation.available &&
+      observedPlayback !== 'unknown' &&
+      playbackChangedAt !== undefined &&
+      Number.isFinite(playbackChangedAt) &&
+      playbackChangedAt >= 0 &&
+      playbackChangedAt <= this.clock.now()
+    )
+      this.latestPlaybackChangedAt.set(
+        observation.target,
+        Math.max(
+          this.latestPlaybackChangedAt.get(observation.target) ?? 0,
+          playbackChangedAt,
+        ),
+      );
     const latePausePredatesNewerIntent =
       this.attributeLatePauseBeforeNewerIntent(observation, observedPlayback);
     const externalVolumeChange =
@@ -661,7 +689,7 @@ export class MusicController {
       observation.available &&
       previousPlayback !== 'unknown' &&
       observedPlayback !== 'unknown' &&
-      observedPlayback !== previousPlayback &&
+      newPlaybackTransition &&
       !latePausePredatesNewerIntent &&
       !this.matchesRecentPendingPlaybackCommand(observation, observedPlayback);
     device.observed = structuredClone(observation.values);
@@ -719,40 +747,36 @@ export class MusicController {
       }
       delete device.requested.playback;
       this.onExternalPlaybackChange?.(observation.target, observedPlayback);
-    } else if (
-      !latePausePredatesNewerIntent &&
-      device.requested.playback !== undefined &&
-      observedPlayback !== device.requested.playback &&
-      this.state.commands.some(
-        (command) =>
-          command.target === observation.target &&
-          command.requested.property === 'playback' &&
-          command.status === 'pending' &&
-          command.acceptedAt !== undefined,
-      )
-    ) {
-      // Once HA accepted a playback request, a newer contradictory state is
-      // authoritative even when the transition's previous value was unknown.
-      for (const command of this.state.commands) {
-        if (
-          command.target !== observation.target ||
-          command.requested.property !== 'playback' ||
-          command.status !== 'pending'
-        )
-          continue;
-        command.status = 'superseded';
-        command.diagnosticReason =
-          'Observed playback state superseded this request';
-        this.releaseTracking(command.id);
-        confirmedIds.add(command.id);
-      }
-      delete device.requested.playback;
-      this.onExternalPlaybackChange?.(observation.target, observedPlayback);
     }
     const fade = this.fades.get(observation.target);
     if (fade) this.acceptFadeObservation(fade, observation, sequence);
     this.pruneHistory(confirmedIds);
     this.publish();
+  }
+  private isNewPlaybackTransition(
+    observation: MusicObservation,
+    previousPlayback: MusicObservation['values']['playback'],
+  ): boolean {
+    const changedAt = observation.playbackChangedAt;
+    if (changedAt === undefined)
+      return observation.values.playback !== previousPlayback;
+    if (
+      !Number.isFinite(changedAt) ||
+      changedAt < 0 ||
+      changedAt > this.clock.now()
+    )
+      return false;
+    // last_updated advances for title/volume/availability snapshots too.
+    // Only a playback transition newer than both the last intent and previous
+    // transition can supersede intent, even if an intermediate state was missed.
+    return (
+      changedAt >
+        (this.latestPlaybackIntentAt.get(observation.target) ??
+          Number.NEGATIVE_INFINITY) &&
+      changedAt >
+        (this.latestPlaybackChangedAt.get(observation.target) ??
+          Number.NEGATIVE_INFINITY)
+    );
   }
   private matchesRecentPendingVolumeCommand(
     observation: MusicObservation,

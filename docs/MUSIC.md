@@ -84,6 +84,15 @@ automatic adjustment, baseline and target.
 Manual play, pause and preset requests still work while away. A confirmed-empty
 room continues to pause music regardless of home status.
 
+An explicit user Pause cancels automatic resume eligibility immediately, even
+if playback feedback is delayed or the room is already empty. Room re-entry
+does not resume or start a preset until the user explicitly plays or starts a
+preset again, or a genuinely newer physical Playing transition is observed.
+Metadata-only Home Assistant updates keep the reported state visible but do not
+cancel that Pause, including after command timeout or history pruning. Playback
+transition ordering uses `last_changed`, rather than attribute-update time
+`last_updated`. Physical pauses also cancel automatic resume eligibility.
+
 ## Volume policy
 
 The automatic volume offset uses Europe/Stockholm local time and is applied
