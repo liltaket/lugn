@@ -1,9 +1,11 @@
 const BASE_PATH = location.pathname.replace(/\/?$/, '/');
 const STATE_URL = `${BASE_PATH}display-api/state`;
+const EVENTS_URL = `${BASE_PATH}display-api/events`;
 const SCENE_URL = `${BASE_PATH}display-api/scene`;
 const MUSIC_URL = `${BASE_PATH}display-api/music`;
 const MUSIC_PRESET_URL = `${BASE_PATH}display-api/music-preset`;
 const POLL_MS = 2000;
+const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
 
 const root = document.querySelector('#app-root');
@@ -65,6 +67,110 @@ let timer;
 let clockTimer;
 let toastTimer;
 let stopped = false;
+let eventSource;
+let streamHealthy = false;
+let reconnectTimer;
+let reconnectDelay = 1000;
+let streamWatchdog;
+let latestDeliveryRevision = -1;
+let currentInstanceId;
+let instanceGeneration = 0;
+const retiredInstances = new Set();
+
+function acceptPayload(payload) {
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    !payload.state ||
+    !Number.isInteger(payload.state.revision) ||
+    payload.state.revision < 0
+  )
+    throw new Error('invalid_state');
+  if (
+    typeof payload.instanceId === 'string' &&
+    payload.instanceId !== currentInstanceId
+  ) {
+    if (retiredInstances.has(payload.instanceId)) return false;
+    if (currentInstanceId) retiredInstances.add(currentInstanceId);
+    if (retiredInstances.size > 16)
+      retiredInstances.delete(retiredInstances.values().next().value);
+    currentInstanceId = payload.instanceId;
+    instanceGeneration += 1;
+    latestPayload = undefined;
+    latestDeliveryRevision = -1;
+  }
+  const currentRevision = latestPayload?.state?.revision ?? -1;
+  if (payload.state.revision < currentRevision) return false;
+  if (
+    payload.state.revision === currentRevision &&
+    Number.isInteger(payload.deliveryRevision) &&
+    payload.deliveryRevision < latestDeliveryRevision
+  )
+    return false;
+  latestDeliveryRevision = Number.isInteger(payload.deliveryRevision)
+    ? payload.deliveryRevision
+    : latestDeliveryRevision;
+  setConnection('connected', 'Lugn ansluten');
+  render(payload);
+  lastFreshAt = Date.now();
+  return true;
+}
+
+function disconnectStream() {
+  streamHealthy = false;
+  eventSource?.close();
+  eventSource = undefined;
+  window.clearTimeout(streamWatchdog);
+}
+
+function retryStream() {
+  disconnectStream();
+  if (stopped || document.visibilityState === 'hidden') return;
+  window.clearTimeout(reconnectTimer);
+  reconnectTimer = window.setTimeout(connectStream, reconnectDelay);
+  reconnectDelay = Math.min(30000, reconnectDelay * 2);
+  void refresh();
+}
+
+function connectStream() {
+  if (
+    stopped ||
+    eventSource ||
+    document.visibilityState === 'hidden' ||
+    typeof window.EventSource !== 'function'
+  )
+    return;
+  let source;
+  try {
+    source = new window.EventSource(EVENTS_URL);
+  } catch {
+    retryStream();
+    return;
+  }
+  eventSource = source;
+  // Also bound a socket that opens but never supplies usable state.
+  streamWatchdog = window.setTimeout(retryStream, STREAM_CHECK_MS);
+  source.onmessage = (event) => {
+    if (source !== eventSource || stopped) return;
+    try {
+      if (!acceptPayload(JSON.parse(event.data))) return;
+      const wasHealthy = streamHealthy;
+      streamHealthy = true;
+      reconnectDelay = 1000;
+      window.clearTimeout(streamWatchdog);
+      streamWatchdog = window.setTimeout(retryStream, STREAM_CHECK_MS);
+      if (!wasHealthy) {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(refresh, STREAM_CHECK_MS);
+      }
+    } catch {
+      retryStream();
+    }
+  };
+  source.onerror = () => {
+    if (source === eventSource) retryStream();
+  };
+}
 
 function setText(element, value) {
   if (!element) return;
@@ -173,6 +279,9 @@ function sceneButtonFor(scene) {
   const name = document.createElement('span');
   name.className = 'scene-name';
   copy.append(name);
+  const status = document.createElement('span');
+  status.className = 'scene-status';
+  copy.append(status);
   const mark = document.createElement('span');
   mark.className = 'scene-current-mark';
   mark.setAttribute('aria-hidden', 'true');
@@ -210,6 +319,37 @@ function renderScenes(payload) {
     button.disabled = isUnavailable() || isPending;
     button.setAttribute('aria-busy', String(isPending));
     const selected = scene.id === current;
+    const awaitingDevices =
+      selected &&
+      payload?.state?.commands?.some(
+        (command) =>
+          command.revision === payload.state.lighting.sceneRevision &&
+          command.status === 'pending',
+      );
+    const confirmed =
+      selected &&
+      Object.values(payload?.state?.lighting?.devices ?? {}).some(
+        (device) => Object.keys(device.effectiveDesired ?? {}).length > 0,
+      ) &&
+      Object.values(payload?.state?.lighting?.devices ?? {}).every((device) =>
+        Object.entries(device.effectiveDesired ?? {}).every(
+          ([property, value]) =>
+            (device.effectiveDesired.power === false && property !== 'power') ||
+            (device.availability === 'available' &&
+              device.observed?.[property] === value),
+        ),
+      );
+    const status = isPending
+      ? 'Skickar …'
+      : !selected
+        ? ''
+        : awaitingDevices
+          ? 'Valt · väntar på lampor'
+          : confirmed
+            ? 'Bekräftat'
+            : 'Valt';
+    setText(button.querySelector('.scene-status'), status);
+    button.querySelector('.scene-status').hidden = !status;
     if (button.getAttribute('aria-pressed') !== String(selected))
       button.setAttribute('aria-pressed', String(selected));
     ordered.push(button);
@@ -320,7 +460,10 @@ function formatVolumeOffset(value) {
 function renderMusicVolumePolicy(payload, target) {
   const policy = target ? payload?.musicVolumePolicies?.[target] : null;
   const baseline = volumeFraction(policy?.baseline);
-  const goal = volumeFraction(policy?.target);
+  const requested = volumeFraction(
+    payload?.state?.music?.devices?.[target]?.requested?.volume,
+  );
+  const goal = requested ?? volumeFraction(policy?.target);
   const controller =
     policy?.controller === 'lugn' || policy?.controller === 'you'
       ? policy.controller
@@ -338,19 +481,29 @@ function renderMusicVolumePolicy(payload, target) {
   );
   setText(
     refs.musicVolumeTargetLabel,
-    policy?.automatic === true ? 'Automatiskt mål' : 'Mål',
+    requested !== null
+      ? 'Begärt mål'
+      : policy?.automatic === true
+        ? 'Automatiskt mål'
+        : 'Mål',
   );
   setText(refs.musicVolumeTarget, formatVolume(goal));
   const explanation =
-    goal === null
-      ? 'Mål saknas'
-      : policy?.automatic === true && policy?.baselineSource === 'user'
-        ? 'Din bas · Lugn anpassar efter dygn och antal personer'
-        : policy?.automatic === true
-          ? 'Målet följer dygn och antal personer'
-          : controller === 'you'
-            ? 'Automatiken är pausad'
-            : 'Väntar på volymregel';
+    requested !== null &&
+    Math.abs(
+      requested -
+        (payload?.state?.music?.devices?.[target]?.observed?.volume ?? -1),
+    ) > 0.005
+      ? 'Begärt · väntar på spelaren'
+      : goal === null
+        ? 'Mål saknas'
+        : policy?.automatic === true && policy?.baselineSource === 'user'
+          ? 'Din bas · Lugn anpassar efter dygn och antal personer'
+          : policy?.automatic === true
+            ? 'Målet följer dygn och antal personer'
+            : controller === 'you'
+              ? 'Automatiken är pausad'
+              : 'Väntar på volymregel';
   setText(refs.musicVolumeTargetState, explanation);
   refs.musicVolumeTargetState.hidden = !explanation;
   setText(
@@ -535,15 +688,19 @@ async function refresh(afterCommand = false) {
 }
 
 async function readState() {
+  const readGeneration = instanceGeneration;
   try {
     const payload = await getState();
-    if (!payload || typeof payload !== 'object' || !payload.state)
-      throw new Error('invalid_state');
-    setConnection('connected', 'Lugn ansluten');
-    render(payload);
-    lastFreshAt = Date.now();
+    if (
+      readGeneration !== instanceGeneration &&
+      payload?.instanceId !== currentInstanceId
+    )
+      return;
+    acceptPayload(payload);
   } catch (error) {
+    if (streamHealthy && error?.status !== 401 && error?.status !== 403) return;
     if (error?.status === 401 || error?.status === 403) {
+      disconnectStream();
       setConnection(
         'unauthorized',
         'Kontrollpanelen saknar åtkomst. Öppna den igen från Lugn.',
@@ -562,7 +719,12 @@ async function readState() {
     renderMusic(latestPayload);
   } finally {
     polling = null;
-    if (!stopped) timer = window.setTimeout(refresh, POLL_MS);
+    window.clearTimeout(timer);
+    if (!stopped)
+      timer = window.setTimeout(
+        refresh,
+        streamHealthy ? STREAM_CHECK_MS : POLL_MS,
+      );
   }
 }
 
@@ -701,12 +863,18 @@ refs.retry.addEventListener('click', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     window.clearTimeout(timer);
+    connectStream();
     void refresh();
+  } else {
+    disconnectStream();
+    window.clearTimeout(reconnectTimer);
   }
 });
 
 window.addEventListener('pagehide', () => {
   stopped = true;
+  disconnectStream();
+  window.clearTimeout(reconnectTimer);
   window.clearTimeout(timer);
   window.clearInterval(clockTimer);
   window.clearTimeout(toastTimer);
@@ -715,3 +883,4 @@ window.addEventListener('pagehide', () => {
 setClock();
 clockTimer = window.setInterval(setClock, 1000);
 void refresh();
+connectStream();

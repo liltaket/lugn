@@ -308,6 +308,7 @@ export async function startRuntime(
         capabilities,
         scenes: Array.from(engine.scenes.values()),
         stateProvider: () => engine.state,
+        stateStream: engine.stream,
         musicVolumePoliciesProvider: () =>
           engine.getMusicVolumePolicySnapshots(),
         environmentProvider: () => homeAssistantEnvironment.snapshot(),

@@ -1,5 +1,26 @@
 # UI, Nest Hubs and DashCast
 
+## Live Hub state
+
+Hub displays subscribe to the existing runtime state stream through their private
+`/k/<token>/display-api/events` path. Each connection receives a current full
+snapshot and coalesced state changes; five-second heartbeat snapshots also
+refresh environment and Cast status. A reconnect receives current truth rather
+than replaying obsolete commands. The same Host, path credential and Origin
+checks protect the stream; connections are limited to two per configured Hub.
+
+The display rejects older state/delivery revisions within a server instance.
+An instance ID allows recovery after runtime restart while delayed reads from
+retired instances remain ignored. Streaming silence or errors trigger polling
+every two seconds and reconnect backoff from one to thirty seconds. Displays
+without EventSource keep polling. Healthy streams retain a fifteen-second
+verification poll; hidden pages close the stream and visible pages reconnect.
+
+Selected scenes show sending, waiting for lamps, and confirmed states separately.
+Reported music volume remains labelled `Nu`; a requested target is labelled
+`Begärt mål` and waits for device feedback. Command acceptance still triggers a
+fresh status read and never invents an observed state or physical convergence.
+
 ## Operational control panel
 
 The initial web surface is a focused lighting panel. It shows current presence,
