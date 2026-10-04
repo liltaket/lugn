@@ -56,12 +56,15 @@
           Kontrollerar inloggning…
         </p>
         <form class="login-form" id="login-form" hidden>
-          <label for="api-token">Åtkomsttoken</label>
+          <label for="api-token"
+            >Åtkomsttoken <span aria-hidden="true">*</span></label
+          >
           <input
             id="api-token"
             name="token"
             type="password"
             inputmode="text"
+            placeholder="Lugn-token"
             autocomplete="off"
             autocapitalize="off"
             spellcheck="false"

@@ -223,6 +223,7 @@ async function startSession(credential, automatic) {
 
   loginSubmit.disabled = true;
   loginSubmit.textContent = 'Ansluter…';
+  loginSubmit.setAttribute('aria-busy', 'true');
   tokenInput.disabled = authProvider === 'clerk';
   setLoginError('');
   setLiveStatus('Skapar session', 'warn');
@@ -300,6 +301,7 @@ async function startSession(credential, automatic) {
     tokenInput.disabled = authProvider === 'clerk';
     loginSubmit.disabled = authProvider === 'clerk';
     loginSubmit.textContent = 'Anslut';
+    loginSubmit.removeAttribute('aria-busy');
   }
 }
 
