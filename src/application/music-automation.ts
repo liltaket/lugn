@@ -1,4 +1,5 @@
 import type { Clock, TimerHandle } from '../core/clock.js';
+import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import type {
   DeviceMusicState,
   HomePresence,
@@ -34,6 +35,7 @@ export type MusicVolumePolicySnapshot = {
 export type MusicAutomationOptions = {
   targets: string[];
   clock: Clock;
+  holds?: AutomationHolds;
   getState: (target: string) => DeviceMusicState;
   request: (
     target: string,
@@ -50,7 +52,7 @@ export class MusicAutomation {
   private readonly volumeControllers = new Map<string, 'you' | 'lugn'>();
   private readonly resumeUntil = new Map<string, number>();
   private readonly activeFades = new Map<string, ActiveFade>();
-  private readonly manuallyPaused = new Set<string>();
+  private readonly holds: AutomationHolds;
   private timer: TimerHandle | undefined;
   private presence: Presence = 'unknown';
   private homePresence: HomePresence = 'unknown';
@@ -59,7 +61,9 @@ export class MusicAutomation {
   private disposed = false;
   private lastConfirmedPresence: Presence = 'unknown';
 
-  constructor(private readonly options: MusicAutomationOptions) {}
+  constructor(private readonly options: MusicAutomationOptions) {
+    this.holds = options.holds ?? new AutomationHolds(options.clock);
+  }
 
   handlePresence(
     _previous: Presence,
@@ -81,7 +85,7 @@ export class MusicAutomation {
             device.requested.playback === 'playing';
           this.resumeUntil.set(
             target,
-            wasPlaying && !this.manuallyPaused.has(target)
+            wasPlaying && !this.holds.blocks('music.playback', target)
               ? this.options.clock.now() + musicContinuityMs
               : 0,
           );
@@ -102,7 +106,7 @@ export class MusicAutomation {
         this.localHour() < 23
       ) {
         for (const target of this.options.targets) {
-          if (this.manuallyPaused.has(target)) continue;
+          if (this.holds.blocks('music.playback', target)) continue;
           if ((this.resumeUntil.get(target) ?? 0) > this.options.clock.now()) {
             this.send(
               target,
@@ -110,7 +114,7 @@ export class MusicAutomation {
               'resume',
             );
           } else if (
-            !this.manuallyPaused.has(target) &&
+            !this.holds.blocks('music.playback', target) &&
             !this.isPlaying(this.options.getState(target))
           ) {
             this.send(
@@ -169,17 +173,17 @@ export class MusicAutomation {
       }
     } else if (
       request.property === 'playback' &&
-      provenance.actor.type === 'user'
+      isHumanActor(provenance.actor)
     ) {
       if (request.value === 'paused') {
-        this.manuallyPaused.add(target);
+        this.holds.set('music.playback', target, provenance);
         this.resumeUntil.set(target, 0);
-      } else this.manuallyPaused.delete(target);
+      } else this.holds.clear('music.playback', target);
     } else if (
       request.property === 'preset' &&
-      provenance.actor.type === 'user'
+      isHumanActor(provenance.actor)
     ) {
-      this.manuallyPaused.delete(target);
+      this.holds.clear('music.playback', target);
     }
   }
 
@@ -236,14 +240,18 @@ export class MusicAutomation {
   noteExternalPlaybackChange(
     target: string,
     playback: DeviceMusicState['observed']['playback'],
+    provenance: Provenance = {
+      actor: { type: 'home_assistant' },
+      source: 'external_observation',
+    },
   ): void {
     if (this.disposed) return;
     if (playback === 'playing') {
-      this.manuallyPaused.delete(target);
+      this.holds.clear('music.playback', target);
       return;
     }
     if (playback === 'paused') {
-      this.manuallyPaused.add(target);
+      this.holds.set('music.playback', target, provenance);
       this.resumeUntil.set(target, 0);
     }
   }
@@ -410,6 +418,12 @@ export class MusicAutomation {
   }
 
   private send(target: string, request: MusicRequest, operation: string): void {
+    if (
+      this.holds.blocks('music.playback', target) &&
+      (request.property === 'preset' ||
+        (request.property === 'playback' && request.value === 'playing'))
+    )
+      return;
     void this.options
       .request(target, request, {
         actor: automationActor,

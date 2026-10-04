@@ -71,7 +71,7 @@ function automationSetup(startAt = 0, feedbackTimeoutMs = 100) {
 function automationInternals(automation: MusicAutomation) {
   return automation as unknown as {
     resumeUntil: Map<string, number>;
-    manuallyPaused: Set<string>;
+    holds: { blocks(scope: 'music.playback', target: string): boolean };
   };
 }
 
@@ -564,7 +564,10 @@ describe('semantic music control', () => {
       'playing',
     );
     expect(
-      automationInternals(automation).manuallyPaused.has('music.room'),
+      automationInternals(automation).holds.blocks(
+        'music.playback',
+        'music.room',
+      ),
     ).toBe(false);
 
     adapter.observe(
@@ -590,7 +593,10 @@ describe('semantic music control', () => {
       clock.now(),
     );
     expect(
-      automationInternals(automation).manuallyPaused.has('music.room'),
+      automationInternals(automation).holds.blocks(
+        'music.playback',
+        'music.room',
+      ),
     ).toBe(true);
     automation.dispose();
     controller.dispose();

@@ -11,6 +11,7 @@ export * from './application/lugn-engine.js';
 export * from './core/clock.js';
 export * from './core/event-stream.js';
 export * from './core/schemas.js';
+export * from './core/automation-holds.js';
 export * from './execution/command-ledger.js';
 export * from './adapters/home-assistant-music.js';
 export * from './adapters/simulated-music.js';

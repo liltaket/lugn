@@ -93,6 +93,7 @@ export class MusicController {
     | ((
         target: string,
         playback: MusicObservation['values']['playback'],
+        provenance: Provenance,
       ) => void)
     | undefined;
   private onFadeLifecycle:
@@ -154,6 +155,7 @@ export class MusicController {
     handler: (
       target: string,
       playback: MusicObservation['values']['playback'],
+      provenance: Provenance,
     ) => void,
   ): void {
     this.onExternalPlaybackChange = handler;
@@ -750,7 +752,11 @@ export class MusicController {
         confirmedIds.add(command.id);
       }
       delete device.requested.playback;
-      this.onExternalPlaybackChange?.(observation.target, observedPlayback);
+      this.onExternalPlaybackChange?.(
+        observation.target,
+        observedPlayback,
+        device.observedProvenance,
+      );
     }
     const fade = this.fades.get(observation.target);
     if (fade) this.acceptFadeObservation(fade, observation, sequence);
