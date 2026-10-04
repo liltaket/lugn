@@ -354,7 +354,7 @@ export class MusicController {
     this.unsubscribe();
     for (const timer of this.timers.values()) this.clock.clearTimeout(timer);
     this.timers.clear();
-    for (const fade of this.fades.values()) this.clearFadeTimer(fade);
+    for (const fade of this.fades.values()) this.clearFadeTimers(fade);
     this.fades.clear();
     this.issuedSequence.clear();
   }
@@ -372,9 +372,13 @@ export class MusicController {
     }, delayMs);
   }
 
-  private clearFadeTimer(runtime: MusicFadeRuntime): void {
+  private clearFadeStepTimer(runtime: MusicFadeRuntime): void {
     if (runtime.timer !== undefined) this.clock.clearTimeout(runtime.timer);
     runtime.timer = undefined;
+  }
+
+  private clearFadeTimers(runtime: MusicFadeRuntime): void {
+    this.clearFadeStepTimer(runtime);
     if (runtime.deadlineTimer !== undefined)
       this.clock.clearTimeout(runtime.deadlineTimer);
     runtime.deadlineTimer = undefined;
@@ -505,7 +509,7 @@ export class MusicController {
         command?.status === 'confirmed' &&
         Math.abs(volume - state.issuedVolume) <= MUSIC_FADE_TOLERANCE
       ) {
-        this.clearFadeTimer(runtime);
+        this.clearFadeStepTimer(runtime);
         runtime.stepIndex += 1;
         runtime.previousObservedVolume = volume;
         runtime.commandId = undefined;
@@ -537,7 +541,7 @@ export class MusicController {
   }
 
   private beginSettling(runtime: MusicFadeRuntime): void {
-    this.clearFadeTimer(runtime);
+    this.clearFadeStepTimer(runtime);
     runtime.state.status = 'settling';
     runtime.state.expectedVolume = runtime.state.targetVolume;
     runtime.state.settlingUntil = this.clock.now() + MUSIC_FADE_SETTLING_MS;
@@ -552,7 +556,7 @@ export class MusicController {
     diagnosticReason?: string,
   ): void {
     if (this.fades.get(runtime.state.target) !== runtime) return;
-    this.clearFadeTimer(runtime);
+    this.clearFadeTimers(runtime);
     runtime.state.status = status;
     delete runtime.state.settlingUntil;
     if (diagnosticReason === undefined) delete runtime.state.diagnosticReason;
@@ -570,7 +574,7 @@ export class MusicController {
   ): void {
     const runtime = this.fades.get(target);
     if (!runtime) return;
-    this.clearFadeTimer(runtime);
+    this.clearFadeTimers(runtime);
     runtime.state.status = status;
     runtime.state.diagnosticReason = reason;
     delete runtime.state.settlingUntil;
