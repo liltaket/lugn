@@ -1,0 +1,3 @@
+## 2024-05-14 - Selective cloning in state reducers
+**Learning:** In highly active event stream reducers (like `applyStateUpdate` in `src/core/event-stream.ts`), deep cloning the entire state tree with `structuredClone` on every update is extremely expensive. This codebase initially cloned the whole state and then additionally cloned the incoming patch domains.
+**Action:** Replace `...structuredClone(state)` with a shallow copy `...state` and only `structuredClone` the incoming modified domains. This preserves reference identity for unchanged branches (aiding potential downstream UI memoization) and drastically reduces CPU cycles and GC pressure.

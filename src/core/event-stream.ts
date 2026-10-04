@@ -73,20 +73,20 @@ export function applyStateUpdate(
     diagnostics,
     timings,
   } = update.patch;
-  return {
-    ...structuredClone(state),
-    ...(presence === undefined ? {} : { presence: structuredClone(presence) }),
-    ...(session === undefined ? {} : { session: structuredClone(session) }),
-    ...(lighting === undefined ? {} : { lighting: structuredClone(lighting) }),
-    ...(switches === undefined ? {} : { switches: structuredClone(switches) }),
-    ...(music === undefined ? {} : { music: structuredClone(music) }),
-    ...(intent === undefined ? {} : { intent: structuredClone(intent) }),
-    ...(commands === undefined ? {} : { commands: structuredClone(commands) }),
-    ...(diagnostics === undefined
-      ? {}
-      : { diagnostics: structuredClone(diagnostics) }),
-    ...(timings === undefined ? {} : { timings: structuredClone(timings) }),
+  const newState = {
+    ...state,
     revision: update.revision,
     updatedAt: update.at,
   };
+  if (presence !== undefined) newState.presence = structuredClone(presence);
+  if (session !== undefined) newState.session = structuredClone(session);
+  if (lighting !== undefined) newState.lighting = structuredClone(lighting);
+  if (switches !== undefined) newState.switches = structuredClone(switches);
+  if (music !== undefined) newState.music = structuredClone(music);
+  if (intent !== undefined) newState.intent = structuredClone(intent);
+  if (commands !== undefined) newState.commands = structuredClone(commands);
+  if (diagnostics !== undefined)
+    newState.diagnostics = structuredClone(diagnostics);
+  if (timings !== undefined) newState.timings = structuredClone(timings);
+  return newState;
 }
