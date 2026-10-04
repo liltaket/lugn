@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import {
@@ -22,6 +22,7 @@ import {
 } from '../core/schemas.js';
 import type { EnvironmentSnapshot } from '../adapters/home-assistant-environment.js';
 import type { MusicVolumePolicySnapshot } from '../application/music-automation.js';
+import type { StateEventStream } from '../core/event-stream.js';
 
 const MAX_REQUEST_BYTES = 8 * 1024;
 const DisplaySceneRequestSchema = z
@@ -75,6 +76,7 @@ export type LugnDisplayServerOptions = {
   capabilities: CapabilityRegistry;
   scenes: readonly LightingScene[];
   stateProvider: () => RoomState;
+  stateStream?: StateEventStream;
   musicVolumePoliciesProvider?: () => Record<string, MusicVolumePolicySnapshot>;
   environmentProvider?: () => EnvironmentSnapshot;
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
@@ -113,6 +115,9 @@ export class LugnDisplayServer {
   private readonly acceptedHosts: ReadonlySet<string>;
   private readonly lastHubPollAt = new Map<string, number>();
   private readonly observedDisplayRequests = new Set<string>();
+  private readonly eventStreams = new Map<ServerResponse, string>();
+  private nextDeliveryRevision = 0;
+  private readonly instanceId = randomUUID();
 
   constructor(private readonly options: LugnDisplayServerOptions) {
     validateOptions(options);
@@ -150,6 +155,7 @@ export class LugnDisplayServer {
   async stop(): Promise<void> {
     const server = this.server;
     this.server = undefined;
+    for (const response of this.eventStreams.keys()) response.destroy();
     if (!server?.listening) return;
     const closed = new Promise<void>((resolvePromise, rejectPromise) => {
       server.close((error) =>
@@ -238,6 +244,17 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'GET' &&
+        hubRequest.route === '/display-api/events'
+      ) {
+        if (request.headers.origin && !this.validatedOrigin(request, host)) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        this.startEventStream(request, response, hubRequest.hub);
+        return;
+      }
+      if (
+        request.method === 'GET' &&
         hubRequest.route === '/display-api/state'
       ) {
         const sourceAddress = request.socket.remoteAddress ?? 'unknown';
@@ -248,19 +265,7 @@ export class LugnDisplayServer {
         if (matchesHub) {
           this.lastHubPollAt.set(hubRequest.hub.id, Date.now());
         }
-        const castStatus = this.options.castStatus?.(hubRequest.hub.id) ?? {
-          state: 'unknown',
-        };
-        sendJson(response, 200, {
-          state: this.options.stateProvider(),
-          musicVolumePolicies:
-            this.options.musicVolumePoliciesProvider?.() ?? {},
-          scenes: this.options.scenes,
-          role: hubRequest.hub.role,
-          castStatus,
-          environment:
-            this.options.environmentProvider?.() ?? emptyEnvironmentSnapshot(),
-        });
+        sendJson(response, 200, this.snapshot(hubRequest.hub));
         return;
       }
       if (
@@ -312,6 +317,82 @@ export class LugnDisplayServer {
       }
       sendJson(response, 500, { error: 'internal_error' });
     }
+  }
+
+  private snapshot(hub: LugnDisplayHub) {
+    return {
+      state: this.options.stateProvider(),
+      deliveryRevision: ++this.nextDeliveryRevision,
+      instanceId: this.instanceId,
+      musicVolumePolicies: this.options.musicVolumePoliciesProvider?.() ?? {},
+      scenes: this.options.scenes,
+      role: hub.role,
+      castStatus: this.options.castStatus?.(hub.id) ?? { state: 'unknown' },
+      environment:
+        this.options.environmentProvider?.() ?? emptyEnvironmentSnapshot(),
+    };
+  }
+
+  private startEventStream(
+    request: IncomingMessage,
+    response: ServerResponse,
+    hub: LugnDisplayHub,
+  ): void {
+    const stream = this.options.stateStream;
+    if (
+      !stream ||
+      [...this.eventStreams.values()].filter((id) => id === hub.id).length >= 2
+    ) {
+      sendJson(response, 503, { error: 'stream_unavailable' });
+      return;
+    }
+    response.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    this.eventStreams.set(response, hub.id);
+    const send = (): void => {
+      if (response.destroyed) return;
+      // A slow kiosk reconnects to a fresh snapshot instead of buffering history.
+      if (response.writableNeedDrain) {
+        response.destroy();
+        return;
+      }
+      if (
+        matchesConfiguredHubAddress(
+          request.socket.remoteAddress ?? '',
+          hub.castHost,
+        )
+      )
+        this.lastHubPollAt.set(hub.id, Date.now());
+      try {
+        const payload = this.snapshot(hub);
+        response.write(
+          `id: ${payload.state.revision}\ndata: ${JSON.stringify(payload)}\n\n`,
+        );
+      } catch {
+        response.destroy();
+      }
+    };
+    let pendingUpdate: NodeJS.Immediate | undefined;
+    const unsubscribe = stream.subscribe(() => {
+      if (pendingUpdate) return;
+      pendingUpdate = setImmediate(() => {
+        pendingUpdate = undefined;
+        send();
+      });
+    });
+    const heartbeat = setInterval(send, 5_000);
+    response.once('close', () => {
+      unsubscribe();
+      clearInterval(heartbeat);
+      if (pendingUpdate) clearImmediate(pendingUpdate);
+      this.eventStreams.delete(response);
+    });
+    // Reconnect always sends current truth, including after a revision history gap.
+    send();
   }
 
   private logFirstDisplayRequest(

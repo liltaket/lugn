@@ -54,7 +54,7 @@ async function microtasks(): Promise<void> {
   for (let i = 0; i < 30; i++) await Promise.resolve();
 }
 
-function dashboard(initialVolume = 0.3) {
+function dashboard(initialVolume = 0.3, streaming = false) {
   const clock = new FakeClock(Date.parse('2026-10-03T12:00:00Z'));
   const adapter = new SimulatedMusicAdapter(clock);
   const engine = new LugnEngine(clock, {
@@ -77,6 +77,26 @@ function dashboard(initialVolume = 0.3) {
     elements.set(selector, created);
     return created;
   };
+  const documentListeners = new Map<string, Listener>();
+  const windowListeners = new Map<string, Listener>();
+  const streams: TestEventSource[] = [];
+  class TestEventSource {
+    onmessage: ((event: { data: string }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    closed = false;
+    constructor(readonly url: string) {
+      streams.push(this);
+    }
+    close() {
+      this.closed = true;
+    }
+    emit(payload: unknown) {
+      this.onmessage?.({ data: JSON.stringify(payload) });
+    }
+    fail() {
+      this.onerror?.();
+    }
+  }
   const document = {
     visibilityState: 'visible',
     querySelector: get,
@@ -86,7 +106,8 @@ function dashboard(initialVolume = 0.3) {
       node.textContent = text;
       return node;
     },
-    addEventListener: () => {},
+    addEventListener: (type: string, listener: Listener) =>
+      documentListeners.set(type, listener),
   };
   const apiCalls: Array<{
     target: string;
@@ -111,7 +132,13 @@ function dashboard(initialVolume = 0.3) {
       // HTTP serializes the real engine state. A successful control response does
       // not fabricate a media-player observation; the adapter controls feedback.
       const snapshot = JSON.parse(
-        JSON.stringify({ state: engine.state, scenes: [], role: 'desk' }),
+        JSON.stringify({
+          state: engine.state,
+          scenes: [],
+          role: 'desk',
+          instanceId: 'runtime-a',
+          deliveryRevision: stateReads + 1,
+        }),
       ) as unknown;
       stateReads += 1;
       const gate = nextStateGate;
@@ -162,7 +189,9 @@ function dashboard(initialVolume = 0.3) {
       clearTimeout,
       setInterval,
       clearInterval,
-      addEventListener: () => {},
+      addEventListener: (type: string, listener: Listener) =>
+        windowListeners.set(type, listener),
+      ...(streaming ? { EventSource: TestEventSource } : {}),
     },
   });
   runInContext(
@@ -178,11 +207,186 @@ function dashboard(initialVolume = 0.3) {
     context,
     holdNextState,
     stateReads: () => stateReads,
+    streams,
+    document,
+    documentListeners,
+    windowListeners,
+    payload: () => ({
+      state: structuredClone(engine.state),
+      scenes: [],
+      role: 'desk',
+    }),
   };
 }
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('Hub live state with resilient polling fallback', () => {
+  it('renders pushed presence and volume intent immediately while keeping observed volume separate', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard(0.3, true);
+    try {
+      await microtasks();
+      const reads = ui.stateReads();
+      const payload = ui.payload();
+      payload.state.presence.state = 'occupied';
+      payload.state.presence.personCount = 2;
+      payload.state.music.devices['music.room']!.requested.volume = 0.35;
+      payload.state.revision += 1;
+      ui.streams[0]!.emit({
+        ...payload,
+        instanceId: 'runtime-a',
+        deliveryRevision: 2,
+      });
+      expect(ui.get('#room-presence').textContent).toContain('2 personer');
+      expect(ui.get('#music-volume-value').textContent).toBe('30%');
+      expect(ui.get('#music-volume-target').textContent).toBe('35%');
+      expect(ui.get('#music-volume-target-label').textContent).toBe(
+        'Begärt mål',
+      );
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(ui.stateReads()).toBe(reads);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('falls back to polling on disconnect and reconnects with bounded delay', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard(0.3, true);
+    try {
+      await microtasks();
+      ui.streams[0]!.emit({
+        ...ui.payload(),
+        instanceId: 'runtime-a',
+        deliveryRevision: 2,
+      });
+      const reads = ui.stateReads();
+      ui.streams[0]!.fail();
+      await microtasks();
+      expect(ui.streams[0]!.closed).toBe(true);
+      expect(ui.stateReads()).toBe(reads + 1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(ui.streams).toHaveLength(2);
+      expect(ui.streams[1]!.url).toContain('/display-api/events');
+      ui.streams[1]!.emit({
+        ...ui.payload(),
+        instanceId: 'runtime-a',
+        deliveryRevision: 4,
+      });
+      const afterReconnect = ui.stateReads();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(ui.stateReads()).toBe(afterReconnect);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('cannot replace newer stream state with an old in-flight poll or replay', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard(0.3, true);
+    let release = () => {};
+    try {
+      await microtasks();
+      release = ui.holdNextState();
+      const poll = runInContext('refresh()', ui.context);
+      await microtasks();
+      const current = ui.payload();
+      current.state.revision += 10;
+      current.state.music.devices['music.room']!.observed.volume = 0.6;
+      ui.streams[0]!.emit({
+        ...current,
+        instanceId: 'runtime-a',
+        deliveryRevision: 20,
+      });
+      release();
+      await poll;
+      ui.streams[0]!.emit({
+        ...ui.payload(),
+        instanceId: 'runtime-a',
+        deliveryRevision: 1,
+      });
+      expect(ui.get('#music-volume-value').textContent).toBe('60%');
+    } finally {
+      release();
+      await microtasks();
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('accepts a restarted runtime with lower revisions and ignores delayed retired-instance state', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard(0.3, true);
+    let release = () => {};
+    try {
+      await microtasks();
+      const old = ui.payload();
+      old.state.revision = 100;
+      ui.streams[0]!.emit({
+        ...old,
+        instanceId: 'runtime-a',
+        deliveryRevision: 100,
+      });
+      release = ui.holdNextState();
+      const poll = runInContext('refresh()', ui.context);
+      await microtasks();
+      const fresh = ui.payload();
+      fresh.state.revision = 1;
+      fresh.state.music.devices['music.room']!.observed.volume = 0.45;
+      ui.streams[0]!.emit({
+        ...fresh,
+        instanceId: 'runtime-b',
+        deliveryRevision: 1,
+      });
+      release();
+      await poll;
+      old.state.revision = 200;
+      ui.streams[0]!.emit({
+        ...old,
+        instanceId: 'runtime-a',
+        deliveryRevision: 200,
+      });
+      expect(ui.get('#music-volume-value').textContent).toBe('45%');
+      expect(runInContext('latestPayload.state.revision', ui.context)).toBe(1);
+    } finally {
+      release();
+      await microtasks();
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('releases streams when hidden or closed and bounds sockets that never deliver state', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard(0.3, true);
+    try {
+      await microtasks();
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(ui.streams[0]!.closed).toBe(true);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(ui.streams).toHaveLength(2);
+      ui.document.visibilityState = 'hidden';
+      ui.documentListeners.get('visibilitychange')?.();
+      expect(ui.streams[1]!.closed).toBe(true);
+      ui.document.visibilityState = 'visible';
+      ui.documentListeners.get('visibilitychange')?.();
+      await microtasks();
+      expect(ui.streams).toHaveLength(3);
+      ui.windowListeners.get('pagehide')?.();
+      expect(ui.streams[2]!.closed).toBe(true);
+      const reads = ui.stateReads();
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(ui.stateReads()).toBe(reads);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
 });
 
 describe('Hub volume steps preserve accepted user intent', () => {
