@@ -23,6 +23,7 @@ import {
 } from '../adapters/simulated-switch.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
 import { StateEventStream } from '../core/event-stream.js';
+import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
   LightingProperties,
   LightingIntentSnapshotSchema,
@@ -51,6 +52,7 @@ import {
   type PrelightEvent,
   type RoomState,
   type StateUpdate,
+  MusicRequestSchema,
 } from '../core/schemas.js';
 import { CommandLedger } from '../execution/command-ledger.js';
 
@@ -137,6 +139,7 @@ export class LugnEngine {
   readonly switchAdapter: SwitchAdapter;
   readonly scenes: ReadonlyMap<string, LightingScene>;
   readonly state: RoomState;
+  private readonly holds: AutomationHolds;
   private readonly musicController: MusicController;
   private readonly musicAutomation: MusicAutomation;
   private lastNonOffSceneId: string | null = null;
@@ -198,6 +201,7 @@ export class LugnEngine {
   ) {
     this.convergenceTimeoutMs = options.convergenceTimeoutMs ?? 60_000;
     this.retryDelayMs = options.retryDelayMs ?? 2_000;
+    this.holds = new AutomationHolds(clock);
     this.continuityMs = options.continuityMs ?? 20 * 60_000;
     this.switchFeedbackTimeoutMs = options.switchFeedbackTimeoutMs ?? 10_000;
     if (
@@ -392,6 +396,7 @@ export class LugnEngine {
     this.musicAutomation = new MusicAutomation({
       targets: Object.keys(options.music?.targets ?? {}),
       clock,
+      holds: this.holds,
       getState: (target) => this.musicController.getState(target),
       request: (target, request, provenance) =>
         this.musicController.request(target, request, provenance),
@@ -407,8 +412,13 @@ export class LugnEngine {
     this.musicController.setExternalVolumeChangeHandler((target, volume) =>
       this.musicAutomation.noteExternalVolumeChange(target, volume),
     );
-    this.musicController.setExternalPlaybackChangeHandler((target, playback) =>
-      this.musicAutomation.noteExternalPlaybackChange(target, playback),
+    this.musicController.setExternalPlaybackChangeHandler(
+      (target, playback, provenance) =>
+        this.musicAutomation.noteExternalPlaybackChange(
+          target,
+          playback,
+          provenance,
+        ),
     );
     this.musicController.setFadeLifecycleHandler((event) =>
       this.musicAutomation.handleFadeLifecycle(event),
@@ -442,6 +452,7 @@ export class LugnEngine {
       },
       switches: { devices: switches, commands: [] },
       music: this.musicController.state,
+      intent: { holds: [] },
       commands: this.ledger.records,
       diagnostics: [],
       timings: [],
@@ -476,6 +487,16 @@ export class LugnEngine {
       this.lastNonOffSceneId = restoredScene;
     if (this.state.presence.continuityExpiresAt !== null)
       this.scheduleContinuityExpiry(this.state.presence.continuityExpiresAt);
+    if (restoredScene === 'scene.all_off' || restoredScene === 'scene.sleep') {
+      for (const [target, device] of Object.entries(devices)) {
+        if (device.effectiveDesired.power === false)
+          this.holds.set('lighting.activation', target, {
+            actor: { type: 'user' },
+            source: 'restored_lighting_intent',
+            reason: 'Retained explicit off scene',
+          });
+      }
+    }
     this.unsubscribers.push(
       this.adapter.subscribe((observation) =>
         this.handleObservation(observation),
@@ -623,8 +644,19 @@ export class LugnEngine {
     requested: MusicRequest,
     provenance: Provenance,
   ): Promise<MusicCommandRecord> {
+    requested = MusicRequestSchema.parse(requested);
+    provenance = ProvenanceSchema.parse(provenance);
+    this.musicController.getState(target);
+    if (
+      !isHumanActor(provenance.actor) &&
+      this.holds.blocks('music.playback', target) &&
+      (requested.property === 'preset' ||
+        (requested.property === 'playback' && requested.value === 'playing'))
+    )
+      throw new Error('Automatic playback is held by explicit human pause');
     const command = this.musicController.request(target, requested, provenance);
     this.musicAutomation.noteExplicitRequest(target, requested, provenance);
+    this.publish(['intent']);
     return command;
   }
 
@@ -723,6 +755,18 @@ export class LugnEngine {
   ): Promise<number> {
     const scene = this.scenes.get(sceneId);
     if (!scene) throw new Error(`Unknown scene: ${sceneId}`);
+    if (
+      !isHumanActor(actor) &&
+      Object.entries(scene.lighting).some(
+        ([target, values]) =>
+          Object.keys(values).length > 0 &&
+          values.power !== false &&
+          this.holds.blocks('lighting.activation', target),
+      )
+    )
+      throw new Error(
+        'Automatic lighting is held by explicit human off intent',
+      );
     this.quietHoursSuppressedForCurrentVisit = false;
     this.manualLightingDuringQuietVisit.clear();
     if (sceneId !== 'scene.all_off' && sceneId !== 'scene.sleep')
@@ -776,6 +820,15 @@ export class LugnEngine {
     },
   ): Promise<void> {
     this.requireDevice(target);
+    if (
+      !isHumanActor(provenance.actor) &&
+      Object.keys(values).length > 0 &&
+      values.power !== false &&
+      this.holds.blocks('lighting.activation', target)
+    )
+      throw new Error(
+        'Automatic lighting is held by explicit human off intent',
+      );
     const scene = this.state.lighting.currentScene
       ? this.scenes.get(this.state.lighting.currentScene)
       : undefined;
@@ -828,7 +881,7 @@ export class LugnEngine {
     const now = this.clock.now();
     const deviceBeforeUpdate = this.requireDevice(target);
     if (
-      provenance.actor.type === 'user' &&
+      isHumanActor(provenance.actor) &&
       values.power === true &&
       deviceBeforeUpdate.effectiveDesired.power === false
     ) {
@@ -842,7 +895,7 @@ export class LugnEngine {
         }
       }
     }
-    if (this.shouldRemainPhysicallyEmpty() && provenance.actor.type === 'user')
+    if (this.shouldRemainPhysicallyEmpty() && isHumanActor(provenance.actor))
       for (const [lightingTarget, targetValues] of updates) {
         if (targetValues.power === true)
           this.manualLightingWhileEmpty.add(lightingTarget);
@@ -858,8 +911,10 @@ export class LugnEngine {
         now,
       );
     for (const [lightingTarget, targetValues] of updates) {
+      if (isHumanActor(provenance.actor) && targetValues.power !== undefined)
+        this.holds.clear('lighting.activation', lightingTarget);
       if (
-        provenance.actor.type === 'user' &&
+        isHumanActor(provenance.actor) &&
         this.quietHoursSuppressedForCurrentVisit
       )
         this.manualLightingDuringQuietVisit.add(lightingTarget);
@@ -895,7 +950,7 @@ export class LugnEngine {
       [...updates].map(([lightingTarget, targetValues]) =>
         !this.shouldRemainPhysicallyEmpty() ||
         targetValues.power === false ||
-        (provenance.actor.type === 'user' &&
+        (isHumanActor(provenance.actor) &&
           (targetValues.power === true ||
             (targetValues.power === undefined &&
               this.manualLightingWhileEmpty.has(lightingTarget))))
@@ -1785,6 +1840,14 @@ export class LugnEngine {
   }
 
   private beginScene(scene: LightingScene, intent: IntentProvenance): void {
+    if (isHumanActor(intent.actor)) {
+      for (const target of Object.keys(this.state.lighting.devices))
+        this.holds.clear('lighting.activation', target);
+      if (scene.id === 'scene.all_off' || scene.id === 'scene.sleep')
+        for (const [target, values] of Object.entries(scene.lighting))
+          if (values.power === false)
+            this.holds.set('lighting.activation', target, intent);
+    }
     this.manualLightingWhileEmpty.clear();
     this.defaultSceneOnOccupancy = undefined;
     this.restoredIntentAwaitingOccupancy = false;
@@ -1857,6 +1920,12 @@ export class LugnEngine {
     retryMode: LightingRetryMode = 'scene',
   ): Promise<void> {
     if (Object.keys(values).length === 0) return;
+    if (
+      !isHumanActor(actor) &&
+      values.power !== false &&
+      this.holds.blocks('lighting.activation', target)
+    )
+      return;
     const deliveryKey = this.lightingDeliveryKey(revision, target);
     const deliveryAttempt =
       (this.lightingDeliveryAttempts.get(deliveryKey) ?? 0) + 1;
@@ -2207,6 +2276,8 @@ export class LugnEngine {
         previouslyObserved !== value
       ) {
         this.terminateAllFastPathEvents();
+        if (property === 'power' && value === true)
+          this.holds.clear('lighting.activation', observation.target);
         const synchronizedTemperature =
           property === 'colorTemperature'
             ? this.expectedSceneColorTemperature(observation.target, device)
@@ -2667,11 +2738,46 @@ export class LugnEngine {
       | 'lighting'
       | 'switches'
       | 'music'
+      | 'intent'
       | 'commands'
       | 'diagnostics'
       | 'timings'
     >,
   ): void {
+    // Property holds are views of existing ownership, never a second ledger.
+    const activeHolds = [
+      ...this.holds.snapshot(),
+      ...Object.entries(this.state.lighting.devices).flatMap(
+        ([target, device]) =>
+          LightingProperties.flatMap((property) => {
+            const owner = device.ownership[property];
+            const value = device.effectiveDesired[property];
+            return owner?.kind === 'override' && value !== undefined
+              ? [
+                  {
+                    scope: 'lighting.property' as const,
+                    target,
+                    property,
+                    intent: value,
+                    provenance: {
+                      actor: owner.actor,
+                      source: owner.source,
+                      reason: owner.reason,
+                    },
+                    createdAt: owner.createdAt,
+                    resetPolicy: 'lighting_continuity' as const,
+                  },
+                ]
+              : [];
+          }),
+      ),
+    ];
+    if (
+      JSON.stringify(activeHolds) !== JSON.stringify(this.state.intent.holds)
+    ) {
+      this.state.intent.holds = activeHolds;
+      if (!domains.includes('intent')) domains.push('intent');
+    }
     const pendingLightingIds = new Set(
       this.ledger.records
         .filter((command) => command.status === 'pending')
@@ -2887,9 +2993,12 @@ export class LugnEngine {
 
   private canReconcileLightingTarget(target: string): boolean {
     return (
-      !this.quietHoursSuppressedForCurrentVisit ||
-      this.manualLightingDuringQuietVisit.has(target) ||
-      this.state.lighting.devices[target]?.effectiveDesired.power === false
+      (!this.holds.blocks('lighting.activation', target) ||
+        this.state.lighting.devices[target]?.effectiveDesired.power ===
+          false) &&
+      (!this.quietHoursSuppressedForCurrentVisit ||
+        this.manualLightingDuringQuietVisit.has(target) ||
+        this.state.lighting.devices[target]?.effectiveDesired.power === false)
     );
   }
 

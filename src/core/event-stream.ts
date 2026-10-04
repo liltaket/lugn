@@ -67,6 +67,7 @@ export function applyStateUpdate(
     lighting,
     switches,
     music,
+    intent,
     commands,
     diagnostics,
     timings,
@@ -77,6 +78,7 @@ export function applyStateUpdate(
     ...(lighting === undefined ? {} : { lighting: structuredClone(lighting) }),
     ...(switches === undefined ? {} : { switches: structuredClone(switches) }),
     ...(music === undefined ? {} : { music: structuredClone(music) }),
+    ...(intent === undefined ? {} : { intent: structuredClone(intent) }),
     ...(commands === undefined ? {} : { commands: structuredClone(commands) }),
     ...(diagnostics === undefined
       ? {}

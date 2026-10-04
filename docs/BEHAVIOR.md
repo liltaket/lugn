@@ -54,6 +54,29 @@ Example:
 
 The effective desired state then becomes 47 for that property while the rest of Cozy can remain intact.
 
+## Scoped human intent
+
+`state.intent.holds` exposes typed automation holds with scope, target,
+provenance, creation time and reset policy. Explicit commands from a user,
+physical remote or Home Assistant share this model. External observations enter
+only after existing command attribution identifies a genuine external change.
+
+An explicit pause holds `music.playback` for that player until a later explicit
+Play/preset or an attributed newer physical Play. Presence, command timeout and
+continuity expiry do not release it. Volume remains independent. Playback holds
+are process-local and reset on restart, as music continuity already does.
+
+An explicit all-off or Sleep scene holds `lighting.activation` for its off
+targets until another explicit scene, a power adjustment to that target, or an
+attributed physical On. Presence, prelight, retries and recovery cannot turn
+held targets on. Retained off scenes reconstruct their holds from the existing
+lighting snapshot after restart; observations and pending commands are never
+restored. Individual adjustments release only the affected target.
+
+`lighting.property` holds are a view of existing property ownership, with its
+existing scene/reapply and lighting continuity reset rules. They add no separate
+property ledger and do not disable unrelated automation.
+
 ## Property-level ownership
 
 Ownership should be as narrow as practical.

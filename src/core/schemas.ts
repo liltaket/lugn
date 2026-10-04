@@ -32,6 +32,26 @@ export const ProvenanceSchema = z.object({
 });
 export type Provenance = z.infer<typeof ProvenanceSchema>;
 
+export const AutomationHoldSchema = z.object({
+  scope: z.enum(['music.playback', 'lighting.activation', 'lighting.property']),
+  target: z.string(),
+  property: z.enum(['power', 'brightness', 'colorTemperature']).optional(),
+  intent: z.union([
+    z.literal('paused'),
+    z.literal('off'),
+    z.boolean(),
+    z.number(),
+  ]),
+  provenance: ProvenanceSchema,
+  createdAt: z.number().nonnegative(),
+  resetPolicy: z.enum([
+    'explicit_playback',
+    'explicit_lighting',
+    'lighting_continuity',
+  ]),
+});
+export type AutomationHold = z.infer<typeof AutomationHoldSchema>;
+
 export const LightingProperties = [
   'power',
   'brightness',
@@ -375,6 +395,9 @@ export const RoomStateSchema = z.object({
   }),
   switches: SwitchStateSchema,
   music: MusicStateSchema,
+  intent: z
+    .object({ holds: z.array(AutomationHoldSchema) })
+    .default({ holds: [] }),
   commands: z.array(CommandRecordSchema),
   diagnostics: z.array(DiagnosticSchema),
   timings: z.array(FastPathTimingSchema),
@@ -390,6 +413,7 @@ export const StateUpdateSchema = z.object({
       'lighting',
       'switches',
       'music',
+      'intent',
       'commands',
       'diagnostics',
       'timings',
@@ -400,6 +424,7 @@ export const StateUpdateSchema = z.object({
     lighting: RoomStateSchema.shape.lighting.optional(),
     switches: RoomStateSchema.shape.switches.optional(),
     music: RoomStateSchema.shape.music.optional(),
+    intent: RoomStateSchema.shape.intent.removeDefault().optional(),
     commands: RoomStateSchema.shape.commands.optional(),
     diagnostics: RoomStateSchema.shape.diagnostics.optional(),
     timings: RoomStateSchema.shape.timings.optional(),
