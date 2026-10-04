@@ -60,7 +60,7 @@ let latestPayload;
 let lastFreshAt = 0;
 let sceneOrderKey = null;
 let musicTarget = '';
-let polling = false;
+let polling = null;
 let timer;
 let clockTimer;
 let toastTimer;
@@ -417,6 +417,7 @@ function renderMusic(payload) {
   const volume = volumeAvailable
     ? Math.min(1, Math.max(0, observed.volume))
     : null;
+  const controlVolume = musicVolumeForControl(device);
   renderMusicVolumePolicy(payload, musicTarget);
 
   refs.musicPlayback.disabled = !canControl;
@@ -437,8 +438,10 @@ function renderMusic(payload) {
   refs.musicPlayback.setAttribute('aria-pressed', String(isPlaying));
   setText(refs.musicPlaybackIcon, isPlaying ? 'Ⅱ' : '▶');
   setText(refs.musicPlaybackLabel, isPlaying ? 'Pausa' : 'Spela');
-  refs.musicVolumeDown.disabled = !canControl || volume === null || volume <= 0;
-  refs.musicVolumeUp.disabled = !canControl || volume === null || volume >= 1;
+  refs.musicVolumeDown.disabled =
+    !canControl || controlVolume === null || controlVolume <= 0;
+  refs.musicVolumeUp.disabled =
+    !canControl || controlVolume === null || controlVolume >= 1;
   setText(
     refs.musicVolumeObservedLabel,
     availability === 'available' ? 'Nu' : 'Senast',
@@ -516,9 +519,22 @@ function showToast(message, state) {
   }, 8000);
 }
 
-async function refresh() {
-  if (polling || stopped || document.visibilityState === 'hidden') return;
-  polling = true;
+async function refresh(afterCommand = false) {
+  if (stopped || (!afterCommand && document.visibilityState === 'hidden'))
+    return;
+  if (polling) {
+    if (!afterCommand) return polling;
+    await polling;
+    // A poll already in flight can contain a snapshot from before acceptance.
+    // Start a new read before the command's controls become available again.
+    return refresh(true);
+  }
+  window.clearTimeout(timer);
+  polling = readState();
+  return polling;
+}
+
+async function readState() {
   try {
     const payload = await getState();
     if (!payload || typeof payload !== 'object' || !payload.state)
@@ -545,7 +561,7 @@ async function refresh() {
     renderScenes(latestPayload);
     renderMusic(latestPayload);
   } finally {
-    polling = false;
+    polling = null;
     if (!stopped) timer = window.setTimeout(refresh, POLL_MS);
   }
 }
@@ -591,7 +607,7 @@ async function runCommand(key, body) {
         ? MUSIC_PRESET_URL
         : MUSIC_URL;
     await postJson(url, body);
-    await refresh();
+    await refresh(true);
   } catch (error) {
     if (error?.status === 401 || error?.status === 403) {
       setConnection(
@@ -604,7 +620,7 @@ async function runCommand(key, body) {
         'Kvittens saknas. Kommandot kan ha nått enheten; status uppdateras när den svarar.',
         'pending',
       );
-      await refresh();
+      await refresh(true);
     } else {
       showToast('Kommandot nådde inte Lugn. Försök igen.', 'error');
     }
@@ -649,12 +665,17 @@ refs.musicPresetOptical.addEventListener('click', () => {
   selectMusicPreset(4);
 });
 
+function musicVolumeForControl(device) {
+  const volume = device?.requested?.volume ?? device?.observed?.volume;
+  return typeof volume === 'number' && Number.isFinite(volume)
+    ? Math.min(1, Math.max(0, volume))
+    : null;
+}
+
 function stepMusicVolume(direction) {
   const device = latestPayload?.state?.music?.devices?.[musicTarget];
-  const volume = device?.observed?.volume;
-  if (!musicTarget || typeof volume !== 'number' || !Number.isFinite(volume)) {
-    return;
-  }
+  const volume = musicVolumeForControl(device);
+  if (!musicTarget || volume === null) return;
   const value =
     Math.round(Math.min(1, Math.max(0, volume + direction * 0.05)) * 100) / 100;
   if (value === volume) return;

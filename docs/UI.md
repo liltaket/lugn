@@ -50,6 +50,14 @@ There are no individual light sliders or source selector on this Hub view.
 Home/away gates automatic lighting and music behavior only; the explicit
 preset, playback and volume controls remain available while away.
 
+Volume steps and their boundary buttons use the latest pending requested volume,
+falling back to the reported volume after confirmation, failure, expiry or an
+external change. The displayed current volume remains the player's observation.
+
+After command acceptance the Hub waits for a new status read started after
+acceptance before enabling the controls again. An earlier background poll is
+allowed to finish first, but cannot replace that fresh read.
+
 ## Hub roles and access
 
 Each configured Hub has a role (`bed` or `desk`), a Cast receiver IP and a
