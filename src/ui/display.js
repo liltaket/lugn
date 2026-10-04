@@ -140,7 +140,13 @@ function connectStream() {
     typeof window.EventSource !== 'function'
   )
     return;
-  const source = new window.EventSource(EVENTS_URL);
+  let source;
+  try {
+    source = new window.EventSource(EVENTS_URL);
+  } catch {
+    retryStream();
+    return;
+  }
   eventSource = source;
   // Also bound a socket that opens but never supplies usable state.
   streamWatchdog = window.setTimeout(retryStream, STREAM_CHECK_MS);
