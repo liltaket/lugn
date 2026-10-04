@@ -93,6 +93,143 @@ async function exhaust(clock: FakeClock) {
 }
 
 describe('opt-in lighting enforcement', () => {
+  it('immediately dispatches a human OFF scene while an old ON transport is pending', async () => {
+    const { engine, report, transport, requests } = setup();
+    let resolve!: (response: Response) => void;
+    transport.mockImplementationOnce(
+      () =>
+        new Promise<Response>((done) => {
+          resolve = done;
+        }),
+    );
+    const entry = engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+    });
+    report(manual, 'on');
+    await flush();
+    const before = transport.mock.calls.length;
+    await engine.activateScene('scene.off', { type: 'user' });
+    expect(transport).toHaveBeenCalledTimes(before + 2);
+    expect(requests).toContainEqual({
+      entity: 'light.bar',
+      service: 'turn_off',
+      brightness: undefined,
+    });
+    resolve(new Response(null, { status: 200 }));
+    await entry;
+    expect(engine.state.lighting.currentScene).toBe('scene.off');
+    expect(
+      engine.state.lighting.devices[enforced]?.effectiveDesired.power,
+    ).toBe(false);
+  });
+
+  it.each([
+    ['away', false],
+    ['away', true],
+    ['restored', false],
+    ['restored', true],
+  ] as const)(
+    'continues explicit power=%s/%s without releasing other automatic lights',
+    async (gate, power) => {
+      const initial = setup();
+      await initial.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+      });
+      const active =
+        gate === 'restored'
+          ? setup({
+              restoredLightingIntent:
+                initial.engine.getLightingIntentSnapshot(),
+              lightingControlModes: {
+                [enforced]: 'enforce',
+                [manual]: 'enforce',
+              },
+            })
+          : initial;
+      const { clock, engine, report, requests } = active;
+      report(enforced, 'on');
+      report(manual, 'on');
+      await flush();
+      if (gate === 'away') await engine.handleHomePresence('away');
+      if (power) report(enforced, 'off');
+      // The other light retains automatic ON intent only in restored mode;
+      // either way an explicit command to the bar must not activate it.
+      if (gate === 'restored') report(manual, 'off');
+      await flush();
+      const before = requests.length;
+      await engine.setLighting(
+        enforced,
+        { power },
+        { actor: { type: 'user' }, source: 'dashboard' },
+      );
+      await exhaust(clock);
+      expect(requests.slice(before)).toHaveLength(3);
+      clock.advanceBy(30_000 - 750);
+      await flush();
+      expect(requests.slice(before)).toHaveLength(4);
+      expect(
+        requests
+          .slice(before)
+          .every(
+            (r) =>
+              r.entity === 'light.bar' &&
+              r.service === (power ? 'turn_on' : 'turn_off'),
+          ),
+      ).toBe(true);
+      expect(
+        engine.state.lighting.devices[enforced]?.effectiveDesired.power,
+      ).toBe(power);
+    },
+  );
+
+  it.each(['scene', 'empty'] as const)(
+    'does not overlap %s OFF transports when feedback confirms before the response',
+    async (mode) => {
+      const { clock, engine, report, transport, requests } = setup();
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+      });
+      report(enforced, 'on');
+      report(manual, 'on');
+      await flush();
+      let resolve!: (response: Response) => void;
+      transport.mockImplementationOnce(
+        () =>
+          new Promise<Response>((done) => {
+            resolve = done;
+          }),
+      );
+      const before = transport.mock.calls.length;
+      const off =
+        mode === 'scene'
+          ? engine.activateScene('scene.off', { type: 'user' })
+          : engine.handlePresence({
+              type: 'presence.changed',
+              presence: 'confirmed_empty',
+            });
+      report(manual, 'off');
+      report(enforced, 'off');
+      await flush();
+      report(enforced, 'on');
+      await flush();
+      clock.advanceBy(30_000);
+      await flush();
+      expect(transport).toHaveBeenCalledTimes(before + 2);
+      resolve(new Response(null, { status: 200 }));
+      await off;
+      // An expired scene batch may wait for the next periodic check.
+      clock.advanceBy(30_000);
+      await flush();
+      expect(transport).toHaveBeenCalledTimes(before + 3);
+      expect(requests.at(-1)).toMatchObject({
+        entity: 'light.bar',
+        service: 'turn_off',
+      });
+    },
+  );
   it('waits for occupancy after restart but continues empty-room OFF enforcement', async () => {
     const initial = setup();
     await initial.engine.handlePresence({

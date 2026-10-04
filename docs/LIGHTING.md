@@ -95,10 +95,15 @@ enforced light that still differs. Attempts continue until feedback confirms
 the current goal, including OFF for a confirmed-empty room and unavailable
 lights. Each batch retains the normal three-delivery limit; repeated mismatching
 feedback cannot trigger unbounded rapid retries. Converged lights receive no
-periodic commands, and enforcement does not overlap an active transport call.
+periodic commands. Automatic retries wait for an active transport call to finish,
+even when state feedback arrives before its response. Explicit new goals can
+still supersede an older command.
 
 Home-away gating, restored intent waiting for confirmed occupancy, and active
-temporary prelight still apply. Confirmed-empty OFF enforcement retains the
+temporary prelight still apply. Explicit power commands exempt only their
+affected targets from automatic activation gates; OFF can always converge.
+After restart, remembered ON targets still wait for confirmed occupancy unless
+explicitly controlled in the new process. Confirmed-empty OFF enforcement retains the
 remembered scene for a later return. Other lights keep their ordinary retry
 budgets and manual overrides.
 

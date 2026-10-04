@@ -201,6 +201,7 @@ export class LugnEngine {
   private prelightSnapshot = new Map<string, LightingValues>();
   private prelightAppliedValues = new Map<string, LightingValues>();
   private restoredIntentAwaitingOccupancy = false;
+  private readonly explicitPowerWhileAwaitingOccupancy = new Set<string>();
   private restoredContinuityPending = false;
   private suppressInitialEmptyContinuity = false;
 
@@ -829,6 +830,7 @@ export class LugnEngine {
       this.state.lighting.sceneRevision,
       undefined,
       restoredTargets,
+      { allowInFlight: isHumanActor(actor) },
     );
     return this.state.lighting.sceneRevision;
   }
@@ -945,8 +947,11 @@ export class LugnEngine {
         now,
       );
     for (const [lightingTarget, targetValues] of updates) {
-      if (isHumanActor(provenance.actor) && targetValues.power !== undefined)
+      if (isHumanActor(provenance.actor) && targetValues.power !== undefined) {
         this.holds.clear('lighting.activation', lightingTarget);
+        if (this.restoredIntentAwaitingOccupancy)
+          this.explicitPowerWhileAwaitingOccupancy.add(lightingTarget);
+      }
       const device = this.requireDevice(lightingTarget);
       for (const property of LightingProperties) {
         const value = targetValues[property];
@@ -1462,12 +1467,13 @@ export class LugnEngine {
     revision = this.state.lighting.sceneRevision,
     eventId?: string,
     forceTargets: ReadonlySet<string> = new Set(),
-    onlyTargets?: ReadonlySet<string>,
+    options: {
+      onlyTargets?: ReadonlySet<string>;
+      allowInFlight?: boolean;
+    } = {},
   ): Promise<void> {
     if (
       revision !== this.state.lighting.sceneRevision ||
-      (this.state.presence.home.state === 'away' &&
-        this.intentByRevision.get(revision)?.source === 'presence') ||
       (this.shouldRemainPhysicallyEmpty() &&
         !this.sceneIntentCanRunWhileEmpty(revision) &&
         this.manualLightingWhileEmpty.size === 0)
@@ -1494,7 +1500,9 @@ export class LugnEngine {
       this.state.lighting.devices,
     )) {
       if (!this.canReconcileLightingTarget(target)) continue;
-      if (onlyTargets && !onlyTargets.has(target)) continue;
+      if (options.onlyTargets && !options.onlyTargets.has(target)) continue;
+      if (!options.allowInFlight && this.hasEnforcedLightingTransport(target))
+        continue;
       if (
         this.shouldRemainPhysicallyEmpty() &&
         !this.sceneIntentCanRunWhileEmpty(revision) &&
@@ -1845,6 +1853,7 @@ export class LugnEngine {
   }
 
   private beginScene(scene: LightingScene, intent: IntentProvenance): void {
+    this.explicitPowerWhileAwaitingOccupancy.clear();
     if (isHumanActor(intent.actor)) {
       for (const target of Object.keys(this.state.lighting.devices))
         this.holds.clear('lighting.activation', target);
@@ -2140,7 +2149,8 @@ export class LugnEngine {
       if (
         changed &&
         this.shouldRemainPhysicallyEmpty() &&
-        !this.manualLightingWhileEmpty.has(observation.target)
+        !this.manualLightingWhileEmpty.has(observation.target) &&
+        !this.hasEnforcedLightingTransport(observation.target)
       ) {
         void this.dispatch(
           observation.target,
@@ -2410,6 +2420,7 @@ export class LugnEngine {
         observation.target,
       ) &&
       !activePrelightPowerFeedback &&
+      !this.hasEnforcedLightingTransport(observation.target) &&
       (!this.enforcedLightingTargets.has(observation.target) ||
         (!this.ledger.records.some(
           (command) =>
@@ -2984,13 +2995,6 @@ export class LugnEngine {
       const emptyOff =
         this.shouldRemainPhysicallyEmpty() &&
         !this.targetIntentCanRunWhileEmpty(revision, target);
-      if (!emptyOff && this.restoredIntentAwaitingOccupancy) continue;
-      if (
-        !emptyOff &&
-        this.state.presence.home.state === 'away' &&
-        this.intentByRevision.get(revision)?.source === 'presence'
-      )
-        continue;
       if (!emptyOff && !this.canReconcileLightingTarget(target)) continue;
       const desired = emptyOff ? { power: false } : device.effectiveDesired;
       const mismatch = LightingProperties.some((property) => {
@@ -3004,7 +3008,7 @@ export class LugnEngine {
         (command) => command.target === target && command.status === 'pending',
       );
       if (
-        [...this.lightingTransportsInFlight.values()].includes(target) ||
+        this.hasEnforcedLightingTransport(target) ||
         (device.availability !== 'degraded' &&
           pending.some(
             (command) =>
@@ -3035,7 +3039,9 @@ export class LugnEngine {
     }
     if (sceneTargets.size > 0)
       dispatches.push(
-        this.reconcileScene(revision, undefined, new Set(), sceneTargets),
+        this.reconcileScene(revision, undefined, new Set(), {
+          onlyTargets: sceneTargets,
+        }),
       );
     await Promise.all(dispatches);
   }
@@ -3096,9 +3102,30 @@ export class LugnEngine {
   }
 
   private canReconcileLightingTarget(target: string): boolean {
+    const device = this.requireDevice(target);
+    // OFF never needs permission to activate a remembered scene.
+    if (device.effectiveDesired.power === false) return true;
+    if (this.holds.blocks('lighting.activation', target)) return false;
+    if (
+      this.restoredIntentAwaitingOccupancy &&
+      !this.explicitPowerWhileAwaitingOccupancy.has(target)
+    )
+      return false;
+    const powerOwner = device.ownership.power;
+    const explicitPower =
+      powerOwner?.kind === 'override' && isHumanActor(powerOwner.actor);
     return (
-      !this.holds.blocks('lighting.activation', target) ||
-      this.state.lighting.devices[target]?.effectiveDesired.power === false
+      this.state.presence.home.state !== 'away' ||
+      this.intentByRevision.get(this.state.lighting.sceneRevision)?.source !==
+        'presence' ||
+      explicitPower
+    );
+  }
+
+  private hasEnforcedLightingTransport(target: string): boolean {
+    return (
+      this.enforcedLightingTargets.has(target) &&
+      [...this.lightingTransportsInFlight.values()].includes(target)
     );
   }
 
@@ -3114,6 +3141,7 @@ export class LugnEngine {
       this.state.lighting.devices,
     )) {
       if (!this.canReconcileLightingTarget(target)) continue;
+      if (this.hasEnforcedLightingTransport(target)) continue;
       if (
         this.shouldRemainPhysicallyEmpty() &&
         !this.sceneIntentCanRunWhileEmpty(revision) &&
@@ -3149,6 +3177,7 @@ export class LugnEngine {
         const key = this.lightingDeliveryKey(revision, target);
         return (
           this.canReconcileLightingTarget(target) &&
+          !this.hasEnforcedLightingTransport(target) &&
           (!this.shouldRemainPhysicallyEmpty() ||
             this.sceneIntentCanRunWhileEmpty(revision) ||
             this.manualLightingWhileEmpty.has(target)) &&
@@ -3187,6 +3216,7 @@ export class LugnEngine {
       this.state.lighting.devices,
     )) {
       if (!this.canReconcileLightingTarget(target)) continue;
+      if (this.hasEnforcedLightingTransport(target)) continue;
       if (
         this.shouldRemainPhysicallyEmpty() &&
         !this.sceneIntentCanRunWhileEmpty(revision) &&
@@ -3273,6 +3303,7 @@ export class LugnEngine {
       if (
         device.observed.power === false ||
         this.manualLightingWhileEmpty.has(target) ||
+        this.hasEnforcedLightingTransport(target) ||
         (device.availability === 'unavailable' &&
           mode !== 'confirmed_empty_off')
       )
