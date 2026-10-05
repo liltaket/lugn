@@ -18,6 +18,7 @@ import {
   type Stl27lPresenceMqttSubscriber,
 } from '../adapters/stl27l-mqtt-presence.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
+import { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
 import {
   resolveRoomDefaultSceneId,
   withRoomPresets,
@@ -192,6 +193,13 @@ export async function startRuntime(
   );
   lightingIntentStore.start(engine);
   const capabilities = new CapabilityRegistry(engine, {
+    ...(config.presenceControl === undefined
+      ? {}
+      : {
+          presenceCountAdapter: new Stl27lPresenceControlAdapter(
+            config.presenceControl.baseUrl,
+          ),
+        }),
     ...(homeAssistantButton === undefined
       ? {}
       : { buttonAdapter: homeAssistantButton }),
@@ -316,6 +324,7 @@ export async function startRuntime(
           token,
         })),
         capabilities,
+        presenceCountCorrectionAvailable: config.presenceControl !== undefined,
         scenes: Array.from(engine.scenes.values()),
         stateProvider: () => engine.state,
         stateStream: engine.stream,

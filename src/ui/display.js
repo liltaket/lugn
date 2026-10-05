@@ -4,6 +4,7 @@ const EVENTS_URL = `${BASE_PATH}display-api/events`;
 const SCENE_URL = `${BASE_PATH}display-api/scene`;
 const MUSIC_URL = `${BASE_PATH}display-api/music`;
 const MUSIC_PRESET_URL = `${BASE_PATH}display-api/music-preset`;
+const PRESENCE_COUNT_URL = `${BASE_PATH}display-api/presence-count-one`;
 const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
@@ -13,6 +14,8 @@ const refs = {
   clockTime: document.querySelector('#clock-time'),
   clockDate: document.querySelector('#clock-date'),
   roomPresence: document.querySelector('#room-presence'),
+  presenceCountOne: document.querySelector('#presence-count-one'),
+  clockTop: document.querySelector('.clock-top'),
   connection: document.querySelector('#connection-notice'),
   connectionMessage: document.querySelector('#connection-message'),
   retry: document.querySelector('#retry-button'),
@@ -241,6 +244,7 @@ function setConnection(state, message, retry = false) {
   }
   syncFeedback();
   renderScenes(latestPayload);
+  renderPresenceCorrection(latestPayload);
   renderMusic(latestPayload);
 }
 
@@ -933,8 +937,19 @@ function render(payload) {
   renderScenes(payload);
   renderEnvironment(payload?.environment);
   renderRoomPresence(payload?.state);
+  renderPresenceCorrection(payload);
   renderMusic(payload);
   setClock();
+}
+
+function renderPresenceCorrection(payload) {
+  const available = payload?.presenceCountCorrectionAvailable === true;
+  const busy = pending.has('presence:one');
+  refs.presenceCountOne.hidden = !available;
+  refs.presenceCountOne.disabled = busy || isUnavailable();
+  refs.presenceCountOne.setAttribute('aria-busy', String(busy));
+  refs.clockTop.dataset.correction = String(available);
+  setText(refs.presenceCountOne, busy ? 'Sparar …' : 'Sätt till 1 person');
 }
 
 async function getState() {
@@ -1035,22 +1050,31 @@ function isUnavailable() {
 }
 
 async function postJson(url, body) {
-  const response = await fetch(url, {
-    method: 'POST',
-    cache: 'no-store',
-    credentials: 'same-origin',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const error = new Error(`command_${response.status}`);
-    error.status = response.status;
-    throw error;
+  const controller = url === PRESENCE_COUNT_URL ? new AbortController() : null;
+  const timeout = controller
+    ? window.setTimeout(() => controller.abort(), 8_000)
+    : null;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    if (!response.ok) {
+      const error = new Error(`command_${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return await response.json().catch(() => ({}));
+  } finally {
+    if (timeout !== null) window.clearTimeout(timeout);
   }
-  return response.json().catch(() => ({}));
 }
 
 async function runCommand(key, body) {
@@ -1059,15 +1083,24 @@ async function runCommand(key, body) {
   refs.toast.hidden = true;
   syncFeedback();
   pending.add(key);
+  renderPresenceCorrection(latestPayload);
   renderScenes(latestPayload);
   renderMusic(latestPayload);
   try {
-    const url = key.startsWith('scene:')
-      ? SCENE_URL
-      : key.startsWith('music-preset:')
-        ? MUSIC_PRESET_URL
-        : MUSIC_URL;
+    const url =
+      key === 'presence:one'
+        ? PRESENCE_COUNT_URL
+        : key.startsWith('scene:')
+          ? SCENE_URL
+          : key.startsWith('music-preset:')
+            ? MUSIC_PRESET_URL
+            : MUSIC_URL;
     await postJson(url, body);
+    if (key === 'presence:one')
+      showToast(
+        'Räknaren har bekräftat 1 person. Väntar på sensorstatus.',
+        'success',
+      );
     await refresh(true);
   } catch (error) {
     if (error?.status === 401 || error?.status === 403) {
@@ -1078,7 +1111,9 @@ async function runCommand(key, body) {
       );
     } else if (error?.status === 502 || error?.status === 504) {
       showToast(
-        'Kvittens saknas. Kommandot kan ha nått enheten; status uppdateras när den svarar.',
+        key === 'presence:one'
+          ? 'Räknaren kunde inte bekräfta ändringen. Kontrollera antalet och försök igen.'
+          : 'Kvittens saknas. Kommandot kan ha nått enheten; status uppdateras när den svarar.',
         'pending',
       );
       await refresh(true);
@@ -1087,10 +1122,15 @@ async function runCommand(key, body) {
     }
   } finally {
     pending.delete(key);
+    renderPresenceCorrection(latestPayload);
     renderScenes(latestPayload);
     renderMusic(latestPayload);
   }
 }
+
+refs.presenceCountOne.addEventListener('click', () => {
+  void runCommand('presence:one', {});
+});
 
 refs.sceneGrid.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-scene]');

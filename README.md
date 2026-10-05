@@ -133,6 +133,12 @@ change by 5 percentage points. The primary screen fits without scrolling; music
 Details separates controller authority, reported/requested values and typed
 reasons in a secondary scrollable pane.
 
+For a local STL27L sensor dashboard, optionally configure
+`"presenceControl": { "baseUrl": "http://127.0.0.1:8080" }` to show
+“Sätt till 1 person” on both Hub roles. It corrects the sensor's persistent
+ledger via `/api/manual`; MQTT then supplies the resulting room state.
+The button reports success only after the sensor acknowledges count 1.
+
 Each Hub has a separate role and private path token. Lugn starts DashCast on
 configured Cast receivers, yields while another cast is active, and can restore
 its dashboard after the receiver is idle. DashCast control confirms that Lugn

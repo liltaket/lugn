@@ -57,6 +57,17 @@ does not include a count, Lugn clears the prior count and shows it as unknown
 instead of reusing a stale value. A confirmed-empty event with no count is
 normalized to zero people.
 
+An optional `presenceControl.baseUrl` enables "Sätt till 1 person" on both
+authenticated Hub dashboards. The `presence.setCountOne` capability corrects
+the STL27L sensor's persistent ledger through `POST /api/manual` and requires
+an acknowledgement of count 1. Dashboard provenance uses the authenticated
+Hub role, independently from occupancy. Neither accepting the correction nor
+the sensor's HTTP acknowledgement updates Lugn's presence: MQTT remains the
+source of reported room state and automatic lighting/music decisions. The
+dashboard therefore confirms the ledger acknowledgement while waiting for
+sensor status. An unavailable sensor or invalid acknowledgement reports a
+failure; the control stays hidden when no URL is configured.
+
 ## STL27L role
 
 The STL27L path may provide:

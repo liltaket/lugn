@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
+import type { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
 import {
   DeviceLightingStateSchema,
   DeviceSwitchStateSchema,
@@ -85,6 +86,10 @@ export const CapabilitySchemas = {
       lastVolumeChange: MusicVolumeChangeSchema.nullable(),
       decisions: z.array(MusicDecisionSchema).max(128),
     }),
+  },
+  'presence.setCountOne': {
+    input: z.object({}).strict(),
+    output: z.object({ accepted: z.literal(true), count: z.literal(1) }),
   },
   'music.getState': {
     input: GetMusicInput,
@@ -174,6 +179,7 @@ export class CapabilityRegistry {
     private readonly engine: LugnEngine,
     private readonly adapters: {
       buttonAdapter?: HomeAssistantButtonAdapter;
+      presenceCountAdapter?: Stl27lPresenceControlAdapter;
     } = {},
   ) {}
 
@@ -189,6 +195,14 @@ export class CapabilityRegistry {
         const input = GetMusicInput.parse(rawInput);
         getMusicTarget(this.engine, input.target);
         output = this.engine.getMusicPolicySnapshot(input.target);
+        break;
+      }
+      case 'presence.setCountOne': {
+        CapabilitySchemas[name].input.parse(rawInput);
+        const adapter = this.adapters.presenceCountAdapter;
+        if (!adapter) throw new CapabilityInputError('target_not_configured');
+        await adapter.setCountOne();
+        output = { accepted: true, count: 1 };
         break;
       }
       case 'music.getState': {
