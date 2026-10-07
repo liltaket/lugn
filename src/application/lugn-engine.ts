@@ -2831,15 +2831,19 @@ export class LugnEngine {
     if (this.ledger.pruneTerminalRecords() && !domains.includes('commands'))
       domains.push('commands');
     let remainingTerminalSwitches = runtimeHistoryLimit;
-    const retainedSwitchCommands = [...this.state.switches.commands]
-      .reverse()
-      .filter((command) => {
-        if (command.status === 'pending') return true;
-        if (remainingTerminalSwitches === 0) return false;
-        remainingTerminalSwitches -= 1;
-        return true;
-      })
-      .reverse();
+    const retainedSwitchCommands = [];
+    for (let i = this.state.switches.commands.length - 1; i >= 0; i--) {
+      const command = this.state.switches.commands[i];
+      if (command) {
+        if (command.status === 'pending') {
+          retainedSwitchCommands.push(command);
+        } else if (remainingTerminalSwitches > 0) {
+          retainedSwitchCommands.push(command);
+          remainingTerminalSwitches -= 1;
+        }
+      }
+    }
+    retainedSwitchCommands.reverse();
     if (retainedSwitchCommands.length !== this.state.switches.commands.length) {
       this.state.switches.commands = retainedSwitchCommands;
       if (!domains.includes('switches')) domains.push('switches');

@@ -807,22 +807,27 @@ export class MusicController {
     observation: MusicObservation,
     observedVolume: number,
   ): boolean {
-    const superseded = [...this.state.commands]
-      .reverse()
-      .find(
-        (command) =>
-          command.target === observation.target &&
-          command.requested.property === 'volume' &&
-          command.status === 'superseded' &&
-          command.acceptedAt !== undefined &&
-          observation.observedAt >= command.issuedAt &&
-          this.clock.now() - command.issuedAt < this.timeoutMs &&
-          (observation.commandId === undefined ||
-            observation.commandId === command.id) &&
-          !this.attributedSupersededVolumeCommands.has(command.id) &&
-          Math.abs(observedVolume - command.requested.value) <=
-            0.005 + Number.EPSILON,
-      );
+    let superseded;
+    for (let i = this.state.commands.length - 1; i >= 0; i--) {
+      const command = this.state.commands[i];
+      if (
+        command &&
+        command.target === observation.target &&
+        command.requested.property === 'volume' &&
+        command.status === 'superseded' &&
+        command.acceptedAt !== undefined &&
+        observation.observedAt >= command.issuedAt &&
+        this.clock.now() - command.issuedAt < this.timeoutMs &&
+        (observation.commandId === undefined ||
+          observation.commandId === command.id) &&
+        !this.attributedSupersededVolumeCommands.has(command.id) &&
+        Math.abs(observedVolume - command.requested.value) <=
+          0.005 + Number.EPSILON
+      ) {
+        superseded = command;
+        break;
+      }
+    }
     if (!superseded) return false;
     // HA may report an accepted older step after it has been superseded. Consume
     // that attribution once, without confirming or discarding the newer target.
@@ -841,18 +846,23 @@ export class MusicController {
       !Number.isFinite(playbackChangedAt)
     )
       return false;
-    const pause = [...this.state.commands]
-      .reverse()
-      .find(
-        (command) =>
-          command.target === observation.target &&
-          command.requested.property === 'playback' &&
-          command.requested.value === 'paused' &&
-          command.status === 'unconfirmed' &&
-          command.acceptedAt !== undefined &&
-          playbackChangedAt >= command.issuedAt &&
-          this.clock.now() - command.issuedAt < LATE_PAUSE_ATTRIBUTION_MS,
-      );
+    let pause;
+    for (let i = this.state.commands.length - 1; i >= 0; i--) {
+      const command = this.state.commands[i];
+      if (
+        command &&
+        command.target === observation.target &&
+        command.requested.property === 'playback' &&
+        command.requested.value === 'paused' &&
+        command.status === 'unconfirmed' &&
+        command.acceptedAt !== undefined &&
+        playbackChangedAt >= command.issuedAt &&
+        this.clock.now() - command.issuedAt < LATE_PAUSE_ATTRIBUTION_MS
+      ) {
+        pause = command;
+        break;
+      }
+    }
     if (!pause) return false;
     const newerIntent = this.state.commands
       .slice(this.state.commands.indexOf(pause) + 1)
