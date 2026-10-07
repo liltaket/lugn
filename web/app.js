@@ -1669,6 +1669,7 @@ function renderBrightnessControl(target, device, disabled) {
 
   const slider = document.createElement('input');
   slider.type = 'range';
+  slider.id = `light-brightness-${target.replace(/[^a-zA-Z0-9_.-]/g, '-')}`;
   slider.min = '0';
   slider.max = '100';
   slider.step = '1';
@@ -1678,13 +1679,16 @@ function renderBrightnessControl(target, device, disabled) {
     'aria-label',
     `Önskad ljusstyrka för ${displayTarget(target)}`,
   );
+  slider.setAttribute('aria-valuetext', `${slider.value} procent`);
   slider.dataset.focusKey = `brightness:${target}`;
   const value = node(
-    'span',
+    'output',
     'brightness-value',
     Number.isInteger(current) ? `${current}%` : 'Okänd',
   );
+  value.htmlFor = slider.id;
   slider.addEventListener('input', () => {
+    slider.setAttribute('aria-valuetext', `${slider.value} procent`);
     value.textContent = `Nytt önskemål ${slider.value}%`;
   });
   slider.addEventListener('change', () => {
