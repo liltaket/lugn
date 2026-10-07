@@ -2,6 +2,11 @@
 
 Lugn's core behavior should be reproducible without physical devices.
 
+For implemented music ownership, restart, clock and reconnect coverage, see
+[Music verification](MUSIC-VERIFICATION.md). The scenarios below also describe
+future capabilities; source-context ownership and durable routines are not
+implemented guarantees.
+
 ## Deterministic domain tests
 
 Use an injectable clock and simulated events.
@@ -28,14 +33,18 @@ Core scenarios:
 
 ### Long absence
 
-Same setup, but advance the clock to configured expiry while presence is `unknown`. Verify remembered scene/overrides are cleared and a state-stream update is published; also verify an early occupied return cancels expiry.
+Same setup, first confirm the room empty, then advance the original continuity
+deadline while presence becomes `unknown`. Verify remembered scene/overrides
+are cleared and a state-stream update is published; an early occupied return
+cancels expiry. Unknown presence alone must never start that deadline.
 
 ### Presence uncertainty
 
 1. occupied;
 2. sensor becomes unknown;
 3. no destructive empty-room behavior occurs;
-4. continuity is not cleared;
+4. unknown alone does not start a continuity reset; an existing confirmed-absence
+   deadline is not renewed or cancelled by uncertainty;
 5. recovery does not create a false new visit.
 
 ### Device failure
@@ -53,9 +62,10 @@ Same setup, but advance the clock to configured expiry while presence is `unknow
 ### Self-generated fade
 
 1. observed volume 30;
-2. request fade to 50;
+2. request an automatic fade to 50 without an existing human hold;
 3. feed back values along the expected trajectory with realistic delay/rounding;
-4. verify no manual override is created.
+4. verify no manual ownership is created from its own feedback. An explicit
+   human fade intentionally claims manual volume ownership at request time.
 
 ### Manual interruption
 
@@ -65,7 +75,7 @@ Same setup, but advance the clock to configured expiry while presence is `unknow
 4. verify future fade steps are cancelled;
 5. new volume is respected.
 
-### Source ownership
+### Future source-context ownership
 
 1. PC context requests Optical;
 2. user chooses a preset;
@@ -80,7 +90,7 @@ Same setup, but advance the clock to configured expiry while presence is `unknow
 3. return quickly;
 4. verify context resumes rather than starting unrelated default music.
 
-## Routine tests
+## Future durable-routine tests
 
 - delayed steps can be cancelled;
 - restart restores durable routine state safely;

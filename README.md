@@ -3,7 +3,7 @@
 **A local-first room controller for lights, music, presence and room displays.**
 
 Lugn combines fast room-presence events with a deterministic state engine. It
-controls configured Home Assistant devices, remembers lighting intent across
+controls configured Home Assistant devices, remembers lighting and logical music intent across
 restarts, and serves a purpose-built dashboard to Nest Hubs through DashCast.
 It is designed to be understandable when an automation makes a decision and
 safe to use alongside physical controls and Home Assistant.
@@ -126,10 +126,12 @@ store. Do not commit `config.json` or `lugn.env`.
 
 ## Dashboard
 
-The Hub view puts the room presets first, with a clock/date, live room count,
+The Hub view prioritizes Bed or Desk actions, with a clock/date, live room count,
 home status, temperature, humidity, CO₂, PM2.5, and compact music controls.
 Music buttons start Spotify DJ preset 1 or Optical preset 4; volume controls
-change by 5 percentage points. The screen is designed to fit without scrolling.
+change by 5 percentage points. The primary screen fits without scrolling; music
+Details separates controller authority, reported/requested values and typed
+reasons in a secondary scrollable pane.
 
 Each Hub has a separate role and private path token. Lugn starts DashCast on
 configured Cast receivers, yields while another cast is active, and can restore
@@ -170,6 +172,8 @@ or replay pending device commands after restart.
 - [Roadmap](docs/ROADMAP.md)
 - [Decisions and open questions](docs/DECISIONS.md)
 - [Testing strategy](docs/TESTING.md)
+- [Music verification](docs/MUSIC-VERIFICATION.md) — scenario evidence, reset
+  contract and pending physical-device protocol
 
 ## License
 

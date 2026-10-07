@@ -95,6 +95,7 @@ class InertHomeAssistantSocket implements HomeAssistantSocket {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
 describe('composed runtime integration', () => {
@@ -674,6 +675,10 @@ describe('composed runtime integration', () => {
   });
 
   it('routes a live STL27L preview through prelight to the mapped HA light service', async () => {
+    // Keep real I/O/timers, but make the daytime prelight assertion independent
+    // of the developer machine's current Stockholm quiet-hours window.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-04T12:00:00+02:00'));
     const directory = await mkdtemp(join(tmpdir(), 'lugn-runtime-'));
     const port = await findEphemeralLoopbackPort();
     vi.stubEnv('LUGN_TEST_HA_TOKEN', 'test-ha-token');

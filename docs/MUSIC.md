@@ -28,10 +28,9 @@ Each target can also have an allowlist of exact source names copied from its
 Home Assistant `source_list`. The dashboard targets the first configured music
 player and does not expose a source selector.
 
-Preset requests use Home Assistant's `media_player.play_media` service with
-`media_content_type: "music"` and the configured numeric preset ID. This is the
-format used by Home Assistant's built-in WiiM integration to start a stored
-preset.
+Preset requests use Home Assistant's `wiim.play_preset` action with the mapped
+`entity_id` and configured numeric `preset`. The mapped integration must expose
+that action. Lugn does not send preset numbers through `media_player.play_media`.
 
 These are explicit user actions. They remain available when HA reports the
 resident away; the away gate controls automatic music actions.
@@ -304,6 +303,13 @@ target. The adapter uses fixed `media_player` services and does not accept an
 arbitrary entity ID or service call from a dashboard request.
 
 ## Current limitations
+
+See [Music verification](MUSIC-VERIFICATION.md) for deterministic scenario
+coverage, reset policies and the unperformed physical-device protocol. Daily
+offsets and automatic-start gates use Stockholm wall time at minute resolution;
+the curve follows skipped/repeated local hours at DST. Confirmed-absence
+deadlines use absolute elapsed milliseconds and retain the same 20-minute
+boundary across DST. Manual ownership suppresses volume commands throughout.
 
 - Music control depends on Home Assistant exposing and supporting the needed
   media-player service for the mapped device.
