@@ -84,7 +84,11 @@
       </div>
 
       <div class="control-layout">
-        <section class="scene-section" aria-labelledby="scene-heading">
+        <section
+          class="scene-section"
+          id="scene-section"
+          aria-labelledby="scene-heading"
+        >
           <h1 id="scene-heading">Ljuslägen</h1>
           <div class="scene-grid" id="scene-grid" aria-live="polite">
             <p class="section-empty">Hämtar ljuslägen …</p>
@@ -121,6 +125,15 @@
             >
               Optical
             </button>
+            <button
+              class="music-details-button"
+              id="music-details-button"
+              type="button"
+              aria-expanded="false"
+              aria-controls="music-details"
+            >
+              Detaljer
+            </button>
           </div>
           <div
             class="music-volume-policy"
@@ -139,15 +152,14 @@
             <span class="volume-policy-state" id="music-volume-target-state"
               >Väntar på volymregel</span
             >
-            <div class="volume-policy-detail">
-              <span
-                ><span id="music-volume-baseline-label">Basnivå</span>
-                <strong id="music-volume-baseline">—</strong></span
-              >
-              <span id="music-volume-adjustments"
-                >Dygn — · Personer (—): —</span
-              >
-            </div>
+            <span class="volume-policy-state" id="music-playback-policy"
+              >Autostartvillkor okända</span
+            >
+            <span
+              class="music-command-state"
+              id="music-command-state"
+              role="status"
+            ></span>
           </div>
           <div class="music-transport">
             <button
@@ -189,6 +201,56 @@
                 +
               </button>
             </div>
+          </div>
+        </section>
+        <section
+          class="music-details"
+          id="music-details"
+          aria-labelledby="music-details-heading"
+          hidden
+        >
+          <h2 id="music-details-heading">Varför och vilka nivåer?</h2>
+          <div class="music-details-scroll">
+            <dl class="music-facts">
+              <div>
+                <dt>Automatik aktiverad</dt>
+                <dd id="music-volume-policy-enabled">Okänt</dd>
+              </div>
+              <div>
+                <dt>Automatik just nu</dt>
+                <dd id="music-volume-policy-activity">Okänt</dd>
+              </div>
+              <div>
+                <dt>Senaste rapporterade volymändring</dt>
+                <dd id="music-volume-last-change">Okänd</dd>
+              </div>
+              <div>
+                <dt>Begärd volym</dt>
+                <dd id="music-volume-requested">—</dd>
+              </div>
+              <div>
+                <dt id="music-volume-baseline-label">Basnivå</dt>
+                <dd id="music-volume-baseline">—</dd>
+              </div>
+              <div>
+                <dt>Justeringar</dt>
+                <dd id="music-volume-adjustments">Dygn — · Personer —</dd>
+              </div>
+              <div>
+                <dt>Beräknat automål</dt>
+                <dd id="music-volume-automatic-target">—</dd>
+              </div>
+            </dl>
+            <p class="music-detail-note">
+              Automålet är en beräkning. Det skickas bara när Lugn har rätt att
+              styra volymen.
+            </p>
+            <p id="music-playback-eligibility"></p>
+            <p id="music-playback-quiet"></p>
+            <p id="music-playback-hold"></p>
+            <p id="music-resume-window"></p>
+            <h3>Senaste beslut</h3>
+            <ol id="music-decision-history" class="music-decision-history"></ol>
           </div>
         </section>
       </div>

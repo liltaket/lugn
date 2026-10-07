@@ -141,6 +141,9 @@ function dashboard(initialVolume = 0.3, streaming = false) {
           role: 'desk',
           instanceId: 'runtime-a',
           deliveryRevision: stateReads + 1,
+          generatedAt: clock.now(),
+          musicVolumePolicies: engine.getMusicVolumePolicySnapshots(),
+          musicPlaybackPolicies: engine.getMusicPlaybackPolicySnapshots(),
         }),
       ) as unknown;
       stateReads += 1;
@@ -153,18 +156,23 @@ function dashboard(initialVolume = 0.3, streaming = false) {
     }
     const body = JSON.parse(options.body ?? '{}') as {
       target: string;
-      request: { property: 'volume'; value: number };
+      request:
+        | { property: 'volume'; value: number }
+        | { property: 'playback'; value: 'playing' | 'paused' };
     };
     apiCalls.push(body);
-    if (
-      !url.endsWith('/display-api/music') ||
-      body.request.property !== 'volume'
-    )
-      throw new Error('Unexpected command in volume-only regression');
+    if (!url.endsWith('/display-api/music'))
+      throw new Error('Unexpected music command');
     try {
       const result = await registry.invoke(
-        'music.setVolume',
-        { target: body.target, volume: body.request.value },
+        body.request.property === 'volume'
+          ? 'music.setVolume'
+          : body.request.value === 'playing'
+            ? 'music.play'
+            : 'music.pause',
+        body.request.property === 'volume'
+          ? { target: body.target, volume: body.request.value }
+          : { target: body.target },
         {
           actor: { type: 'user', id: 'nest-dashboard' },
           source: 'lugn.cast_dashboard',
@@ -218,12 +226,380 @@ function dashboard(initialVolume = 0.3, streaming = false) {
       state: structuredClone(engine.state),
       scenes: [],
       role: 'desk',
+      generatedAt: clock.now(),
+      musicVolumePolicies: engine.getMusicVolumePolicySnapshots(),
+      musicPlaybackPolicies: engine.getMusicPlaybackPolicySnapshots(),
     }),
   };
 }
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+function explainedMusic(ui: ReturnType<typeof dashboard>) {
+  const now = Date.now();
+  const payload = ui.payload();
+  return {
+    ...payload,
+    generatedAt: now,
+    state: {
+      ...payload.state,
+      music: {
+        ...payload.state.music,
+        volumeChanges: {
+          'music.room': {
+            volume: 0.6,
+            observedAt: now,
+            provenance: { actor: { type: 'automation' }, source: 'lugn.music' },
+            attribution: 'matched',
+          },
+        },
+        decisions: payload.state.music.decisions ?? [],
+      },
+    },
+    musicVolumePolicies: {
+      'music.room': {
+        activeOwner: 'manual',
+        lastIntentActor: 'manual',
+        controller: 'you',
+        automatic: false,
+        policyEnabled: true,
+        policyActive: false,
+        activityReason: 'manual_hold',
+        manualHold: {
+          volume: 0.4,
+          createdAt: now,
+          expiresAt: now + 10 * 60_000,
+          provenance: { actor: { type: 'user' }, source: 'dashboard' },
+        },
+        baseline: 0.4,
+        baselineSource: 'user',
+        dailyOffset: -0.05,
+        personOffset: -0.1,
+        target: 0.25,
+        effectiveTarget: 0.4,
+      },
+    },
+    musicPlaybackPolicies: {
+      'music.room': {
+        activityReason: 'manual_pause',
+        entryEligible: false,
+        quietHours: true,
+        manualPause: { createdAt: now },
+        resumeExpiresAt: null,
+      },
+    },
+  };
+}
+
+describe('Hub music authority explanations', () => {
+  it('keeps an outstanding volume request visible after a newer playback request confirms', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const human = {
+        actor: { type: 'user' as const },
+        source: 'test.dashboard',
+      };
+      await ui.engine.requestMusic(
+        'music.room',
+        { property: 'volume', value: 0.4 },
+        human,
+      );
+      await ui.engine.requestMusic(
+        'music.room',
+        { property: 'playback', value: 'paused' },
+        human,
+      );
+      ui.adapter.observe('music.room', {
+        playback: 'paused',
+        volume: 0.3,
+        source: 'Optical',
+        title: null,
+      });
+      await runInContext('refresh()', ui.context);
+      expect(
+        ui.engine.state.music.commands.map((command) => command.status),
+      ).toEqual(['pending', 'confirmed']);
+      expect(ui.get('#music-command-state').textContent).toContain('Volym');
+      expect(ui.get('#music-command-state').textContent).toContain('inväntar');
+      expect(ui.get('#music-volume-value').textContent).toBe('30%');
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('marks cached controller authority and volume as stale after connection loss', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = explainedMusic(ui);
+      Object.assign(payload.musicPlaybackPolicies['music.room'], {
+        entryEligible: true,
+        quietHours: false,
+        manualPause: null,
+      });
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      runInContext(
+        "setConnection('offline', 'Lugn svarar inte'); renderMusic(latestPayload)",
+        ui.context,
+      );
+      expect(ui.get('#music-volume-controller').textContent).toBe(
+        'Styrning okänd',
+      );
+      expect(ui.get('#music-volume-policy-activity').textContent).toBe('Okänt');
+      expect(ui.get('#music-volume-observed-label').textContent).toBe('Senast');
+      expect(ui.get('#music-volume-value').textContent).toBe('30%');
+      expect(ui.get('#music-volume-up').disabled).toBe(true);
+      expect(ui.get('#music-playback-eligibility').textContent).toContain(
+        'okända',
+      );
+      expect(ui.get('#music-playback-quiet').textContent).toContain('okända');
+      expect(ui.get('#music-playback-hold').textContent).toContain('okänd');
+      expect(ui.get('#music-resume-window').textContent).toContain('okänt');
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('offers Play to release a failed Pause hold while retaining manual volume ownership', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const human = {
+        actor: { type: 'user' as const },
+        source: 'test.dashboard',
+      };
+      ui.adapter.observe('music.room', {
+        playback: 'playing',
+        volume: 0.3,
+        source: 'Optical',
+        title: null,
+      });
+      await ui.engine.requestMusic(
+        'music.room',
+        { property: 'volume', value: 0.4 },
+        human,
+      );
+      vi.spyOn(ui.adapter, 'dispatch').mockRejectedValueOnce(
+        new Error('pause failed'),
+      );
+      await expect(
+        ui.engine.requestMusic(
+          'music.room',
+          { property: 'playback', value: 'paused' },
+          human,
+        ),
+      ).rejects.toThrow('Music command failed');
+      await runInContext('refresh()', ui.context);
+      expect(ui.get('#music-playback-label').textContent).toBe('Spela');
+      expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(
+        'true',
+      );
+      expect(ui.get('#music-command-state').textContent).toContain(
+        'misslyckades',
+      );
+      ui.get('#music-playback').click();
+      await microtasks();
+      expect(ui.apiCalls.at(-1)?.request).toEqual({
+        property: 'playback',
+        value: 'playing',
+      });
+      expect(
+        ui.engine.getMusicPlaybackPolicySnapshots()['music.room']?.manualPause,
+      ).toBeNull();
+      expect(
+        ui.engine.getMusicVolumePolicySnapshots()['music.room']?.activeOwner,
+      ).toBe('manual');
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it.each(['pending', 'failed', 'unconfirmed'] as const)(
+    'explains a %s request without inventing reported playback or volume',
+    async (status) => {
+      vi.useFakeTimers();
+      const ui = dashboard();
+      try {
+        await microtasks();
+        const payload = explainedMusic(ui);
+        payload.state.music.commands.push({
+          id: 'latest',
+          target: 'music.room',
+          requested: { property: 'playback', value: 'playing' },
+          issuedAt: Date.now(),
+          acceptedAt: Date.now(),
+          status,
+          provenance: { actor: { type: 'user' }, source: 'test' },
+        });
+        runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+        expect(ui.get('#music-command-state').textContent).toContain(
+          {
+            pending: 'inväntar',
+            failed: 'misslyckades',
+            unconfirmed: 'Kvittens saknas',
+          }[status],
+        );
+        expect(ui.get('#music-player-status').textContent).toBe('Pausad');
+        expect(ui.get('#music-volume-value').textContent).toBe('30%');
+      } finally {
+        ui.windowListeners.get('pagehide')?.();
+        ui.engine.dispose();
+      }
+    },
+  );
+
+  it('shows only the selected player’s newest eight typed decisions', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = explainedMusic(ui);
+      payload.state.music.decisions = Array.from(
+        { length: 12 },
+        (_, index) => ({
+          target: index === 11 ? 'music.other' : 'music.room',
+          at: Date.now() + index,
+          reason: {
+            kind: 'volume' as const,
+            value:
+              index === 10 ? ('manual_hold' as const) : ('active' as const),
+          },
+          owner: 'manual' as const,
+          policyEnabled: true,
+          manualExpiresAt: null,
+          resumeExpiresAt: null,
+        }),
+      );
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      const rows = ui.get('#music-decision-history').children;
+      expect(rows).toHaveLength(8);
+      expect(rows[0]?.children[1]?.textContent).toContain('Manuellt val');
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-decision-history').children[0]).toBe(rows[0]);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('separates manual authority, last reported changer, enable state and every volume value', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = explainedMusic(ui);
+      payload.state.music.devices['music.room']!.requested.volume = 0.55;
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-volume-controller').textContent).toBe(
+        'Manuell volym',
+      );
+      expect(ui.get('#music-volume-last-change').textContent).toContain(
+        'Matchar Lugn',
+      );
+      expect(ui.get('#music-volume-policy-enabled').textContent).toBe('På');
+      expect(ui.get('#music-volume-policy-activity').textContent).toBe(
+        'Pausad',
+      );
+      expect(ui.get('#music-volume-value').textContent).toBe('30%');
+      expect(ui.get('#music-volume-requested').textContent).toBe('55%');
+      expect(ui.get('#music-volume-baseline').textContent).toBe('40%');
+      expect(ui.get('#music-volume-automatic-target').textContent).toBe('25%');
+      expect(ui.get('#music-volume-target').textContent).toBe('40%');
+      expect(ui.get('#music-volume-target-state').textContent).toContain(
+        '10 min',
+      );
+      expect(ui.get('#music-playback-policy').textContent).toContain(
+        'Manuell paus',
+      );
+      expect(ui.get('#music-playback-quiet').textContent).toContain('23–06');
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('never assigns authority from last intent while the automatic policy is active', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = explainedMusic(ui);
+      Object.assign(payload.musicVolumePolicies['music.room'], {
+        activeOwner: 'lugn',
+        policyActive: true,
+        automatic: true,
+        activityReason: 'active',
+        manualHold: null,
+        effectiveTarget: 0.25,
+      });
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-volume-controller').textContent).toBe(
+        'Lugn styr volymen',
+      );
+      expect(ui.get('#music-volume-policy-activity').textContent).toBe('Aktiv');
+      expect(ui.get('#music-volume-target').textContent).toBe('25%');
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('uses server time for expiration and waits for backend authority at the boundary', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = explainedMusic(ui);
+      payload.generatedAt -= 24 * 60 * 60_000;
+      payload.musicVolumePolicies['music.room'].manualHold.expiresAt =
+        payload.generatedAt + 1_000;
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-volume-target-state').textContent).toContain(
+        '1 min',
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(ui.get('#music-volume-controller').textContent).toBe(
+        'Manuell volym',
+      );
+      expect(ui.get('#music-volume-target-state').textContent).toContain(
+        'inväntar',
+      );
+      expect(ui.apiCalls).toEqual([]);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('reveals details in place while retaining the music controls', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      ui.get('#music-details-button').click();
+      expect(ui.get('#music-details').hidden).toBe(false);
+      expect(ui.get('#scene-section').hidden).toBe(true);
+      expect(
+        ui.get('#music-details-button').getAttribute('aria-expanded'),
+      ).toBe('true');
+      expect(ui.get('#music-volume-up').disabled).toBe(false);
+      ui.get('#music-details-button').click();
+      expect(ui.get('#scene-section').hidden).toBe(false);
+      expect(ui.get('#music-details').hidden).toBe(true);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
 });
 
 describe('Hub live state with resilient polling fallback', () => {
@@ -311,9 +687,10 @@ describe('Hub live state with resilient polling fallback', () => {
       });
       expect(ui.get('#room-presence').textContent).toContain('2 personer');
       expect(ui.get('#music-volume-value').textContent).toBe('30%');
-      expect(ui.get('#music-volume-target').textContent).toBe('35%');
+      expect(ui.get('#music-volume-requested').textContent).toBe('35%');
+      expect(ui.get('#music-volume-target').textContent).toBe('—');
       expect(ui.get('#music-volume-target-label').textContent).toBe(
-        'Begärt mål',
+        'Aktivt mål',
       );
       await vi.advanceTimersByTimeAsync(2000);
       expect(ui.stateReads()).toBe(reads);

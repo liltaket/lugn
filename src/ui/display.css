@@ -257,6 +257,84 @@ h2 {
   justify-content: space-between;
   gap: 12px;
 }
+.music-heading h2 {
+  margin-right: auto;
+}
+.music-details-button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 14px;
+}
+.music-details-button[aria-expanded='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.screen[data-music-details='true'] .control-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+}
+.music-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  min-width: 0;
+}
+.music-details-scroll {
+  overflow-y: auto;
+  padding-right: 8px;
+  font-size: 15px;
+  line-height: 1.4;
+  scrollbar-color: var(--line) var(--ground);
+}
+.music-facts {
+  margin: 0;
+}
+.music-facts > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 14px;
+  padding-block: 7px;
+  border-bottom: 1px solid var(--line);
+}
+.music-facts dt {
+  color: var(--quiet);
+}
+.music-facts dd {
+  margin: 0;
+  font-weight: 570;
+  font-variant-numeric: tabular-nums;
+}
+.music-details p {
+  margin: 12px 0 0;
+  color: var(--quiet);
+}
+.music-details h3 {
+  margin: 22px 0 10px;
+  font-size: 16px;
+  font-weight: 570;
+}
+.music-decision-history {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.music-decision-history li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.music-decision-history time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 #music-player-status {
   min-width: 0;
   color: var(--warn);
@@ -288,7 +366,7 @@ h2 {
 }
 .music-presets {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
   gap: 10px;
 }
 .music-preset-button,
@@ -341,6 +419,11 @@ h2 {
   font-size: 14px;
   line-height: 1.2;
   color: var(--muted);
+}
+.music-command-state {
+  font-size: 13px;
+  line-height: 1.25;
+  color: var(--warn);
 }
 .volume-policy-detail {
   display: flex;
@@ -506,7 +589,7 @@ h2 {
     min-width: 88px;
   }
   .volume-control {
-    grid-template-columns: 44px minmax(40px, 1fr) 44px;
+    grid-template-columns: auto 44px minmax(40px, 1fr) 44px;
     gap: 5px;
   }
   .volume-label {
@@ -679,6 +762,10 @@ h2 {
   }
 }
 
+#music-volume-observed-label {
+  display: inline;
+}
+
 /* Feedback has its own row. On the shorter Hub, secondary policy details
    yield space while the clock, sensors, target and every control stay visible. */
 @media (max-height: 700px) {
@@ -694,5 +781,11 @@ h2 {
   }
   .screen[data-feedback='true'] .volume-policy-detail {
     display: none;
+  }
+}
+
+@media (max-height: 540px) and (min-width: 761px) {
+  .screen[data-feedback='true'] {
+    grid-template-rows: 108px 48px minmax(0, 1fr);
   }
 }
