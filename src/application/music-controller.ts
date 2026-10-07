@@ -747,9 +747,36 @@ export class MusicController {
       previousVolume !== null &&
       observedVolume !== null &&
       Math.abs(observedVolume - previousVolume) > 0.005 + Number.EPSILON;
+    // Report actual differences independently from the ownership noise tolerance.
+    const reportedVolumeChanged =
+      observation.available &&
+      previousVolume !== null &&
+      observedVolume !== null &&
+      observedVolume !== previousVolume;
     const currentCorrelatedVolumeFeedback =
       observedVolume !== null &&
       this.matchesCurrentCorrelatedVolumeCommand(observation, observedVolume);
+    const pendingVolumeCommand =
+      observedVolume === null
+        ? undefined
+        : this.matchesRecentPendingVolumeCommand(observation, observedVolume);
+    const olderVolumeCommand =
+      volumeChanged && !currentCorrelatedVolumeFeedback
+        ? this.attributeOlderAutomaticVolumeObservation(
+            observation,
+            observedVolume!,
+          )
+        : undefined;
+    const supersededVolumeCommand =
+      volumeChanged &&
+      !currentCorrelatedVolumeFeedback &&
+      !olderVolumeCommand &&
+      !pendingVolumeCommand
+        ? this.attributeSupersededVolumeObservation(
+            observation,
+            observedVolume!,
+          )
+        : undefined;
     const staleVolumeFeedback =
       !currentCorrelatedVolumeFeedback &&
       ((observation.available &&
@@ -758,25 +785,14 @@ export class MusicController {
         !volumeChanged &&
         this.lastObservations.get(observation.target)?.staleVolumeFeedback ===
           true &&
-        !this.matchesRecentPendingVolumeCommand(observation, observedVolume)) ||
+        !pendingVolumeCommand) ||
         (volumeChanged &&
-          (this.attributeOlderAutomaticVolumeObservation(
-            observation,
-            observedVolume,
-          ) ||
-            (!this.matchesRecentPendingVolumeCommand(
-              observation,
-              observedVolume,
-            ) &&
-              this.attributeSupersededVolumeObservation(
-                observation,
-                observedVolume,
-              )))));
+          Boolean(olderVolumeCommand || supersededVolumeCommand)));
     const externalVolumeChange =
       volumeChanged &&
       !staleVolumeFeedback &&
       !currentCorrelatedVolumeFeedback &&
-      !this.matchesRecentPendingVolumeCommand(observation, observedVolume);
+      !pendingVolumeCommand;
     const externalPlaybackChange =
       observation.available &&
       previousPlayback !== 'unknown' &&
@@ -793,6 +809,43 @@ export class MusicController {
         source: 'external_observation',
       },
     );
+    if (reportedVolumeChanged) {
+      const correlated =
+        observation.commandId === undefined
+          ? undefined
+          : this.state.commands.find(
+              (candidate) =>
+                candidate.id === observation.commandId &&
+                candidate.target === observation.target &&
+                candidate.requested.property === 'volume' &&
+                (candidate.acceptedAt !== undefined ||
+                  this.dispatchingCommands.has(candidate.id)) &&
+                observation.observedAt >= candidate.issuedAt &&
+                Math.abs(candidate.requested.value - observedVolume!) <=
+                  0.005 + Number.EPSILON,
+            );
+      const command =
+        correlated ??
+        olderVolumeCommand ??
+        supersededVolumeCommand ??
+        (observation.commandId === undefined ||
+        observation.commandId === pendingVolumeCommand?.id
+          ? pendingVolumeCommand
+          : undefined);
+      this.state.volumeChanges ??= {};
+      this.state.volumeChanges[observation.target] = {
+        volume: observedVolume!,
+        observedAt: observation.observedAt,
+        provenance: structuredClone(
+          command?.provenance ?? device.observedProvenance,
+        ),
+        attribution: command
+          ? observation.commandId === command.id
+            ? 'correlated'
+            : 'matched'
+          : 'external',
+      };
+    }
     const sequence = (this.observedSequence.get(observation.target) ?? 0) + 1;
     this.observedSequence.set(observation.target, sequence);
     this.lastObservations.set(observation.target, {
@@ -896,17 +949,19 @@ export class MusicController {
   private matchesRecentPendingVolumeCommand(
     observation: MusicObservation,
     observedVolume: number,
-  ): boolean {
-    return this.state.commands.some(
-      (command) =>
-        command.target === observation.target &&
-        command.requested.property === 'volume' &&
-        command.status === 'pending' &&
-        observation.observedAt >= command.issuedAt &&
-        this.clock.now() - command.issuedAt < this.timeoutMs &&
-        Math.abs(observedVolume - command.requested.value) <=
-          0.005 + Number.EPSILON,
-    );
+  ): MusicCommandRecord | undefined {
+    return [...this.state.commands]
+      .reverse()
+      .find(
+        (command) =>
+          command.target === observation.target &&
+          command.requested.property === 'volume' &&
+          command.status === 'pending' &&
+          observation.observedAt >= command.issuedAt &&
+          this.clock.now() - command.issuedAt < this.timeoutMs &&
+          Math.abs(observedVolume - command.requested.value) <=
+            0.005 + Number.EPSILON,
+      );
   }
   private matchesCurrentCorrelatedVolumeCommand(
     observation: MusicObservation,
@@ -940,7 +995,7 @@ export class MusicController {
   private attributeOlderAutomaticVolumeObservation(
     observation: MusicObservation,
     observedVolume: number,
-  ): boolean {
+  ): MusicCommandRecord | undefined {
     const intent = this.latestHumanVolumeIntent.get(observation.target);
     const latestVolume = [...this.state.commands]
       .reverse()
@@ -979,15 +1034,15 @@ export class MusicController {
                 LATE_VOLUME_ATTRIBUTION_MS &&
               !this.attributedOlderAutomaticVolumeCommands.has(candidate.id)),
       );
-    if (!command) return false;
+    if (!command) return undefined;
     if (observation.commandId === undefined)
       this.attributedOlderAutomaticVolumeCommands.add(command.id);
-    return true;
+    return command;
   }
   private attributeSupersededVolumeObservation(
     observation: MusicObservation,
     observedVolume: number,
-  ): boolean {
+  ): MusicCommandRecord | undefined {
     const superseded = [...this.state.commands]
       .reverse()
       .find(
@@ -1005,12 +1060,12 @@ export class MusicController {
           Math.abs(observedVolume - command.requested.value) <=
             0.005 + Number.EPSILON,
       );
-    if (!superseded) return false;
+    if (!superseded) return undefined;
     // HA may report an accepted older step after it has been superseded. Consume
     // that attribution once, without confirming or discarding the newer target.
     // A later physical adjustment to the same level remains external.
     this.attributedSupersededVolumeCommands.add(superseded.id);
-    return true;
+    return superseded;
   }
   private attributeLatePauseBeforeNewerIntent(
     observation: MusicObservation,

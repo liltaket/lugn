@@ -321,6 +321,8 @@ export async function startRuntime(
         stateStream: engine.stream,
         musicVolumePoliciesProvider: () =>
           engine.getMusicVolumePolicySnapshots(),
+        musicPlaybackPoliciesProvider: () =>
+          engine.getMusicPlaybackPolicySnapshots(),
         environmentProvider: () => homeAssistantEnvironment.snapshot(),
         castStatus: (hubId) => {
           const lastHubPollAt =
