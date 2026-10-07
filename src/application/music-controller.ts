@@ -743,27 +743,31 @@ export class MusicController {
       previousVolume !== null &&
       observedVolume !== null &&
       Math.abs(observedVolume - previousVolume) > 0.005 + Number.EPSILON;
+    const currentCorrelatedVolumeFeedback =
+      observedVolume !== null &&
+      this.matchesCurrentCorrelatedVolumeCommand(observation, observedVolume);
     const staleVolumeFeedback =
-      (observation.available &&
+      !currentCorrelatedVolumeFeedback &&
+      ((observation.available &&
         observedVolume !== null &&
         previousVolume !== null &&
         !volumeChanged &&
         this.lastObservations.get(observation.target)?.staleVolumeFeedback ===
           true &&
         !this.matchesRecentPendingVolumeCommand(observation, observedVolume)) ||
-      (volumeChanged &&
-        (this.attributeOlderAutomaticVolumeObservation(
-          observation,
-          observedVolume,
-        ) ||
-          (!this.matchesRecentPendingVolumeCommand(
+        (volumeChanged &&
+          (this.attributeOlderAutomaticVolumeObservation(
             observation,
             observedVolume,
-          ) &&
-            this.attributeSupersededVolumeObservation(
+          ) ||
+            (!this.matchesRecentPendingVolumeCommand(
               observation,
               observedVolume,
-            ))));
+            ) &&
+              this.attributeSupersededVolumeObservation(
+                observation,
+                observedVolume,
+              )))));
     const externalVolumeChange =
       volumeChanged &&
       !staleVolumeFeedback &&
@@ -899,6 +903,35 @@ export class MusicController {
           0.005 + Number.EPSILON,
     );
   }
+  private matchesCurrentCorrelatedVolumeCommand(
+    observation: MusicObservation,
+    volume: number,
+  ): boolean {
+    if (observation.commandId === undefined) return false;
+    const command = [...this.state.commands]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.target === observation.target &&
+          candidate.requested.property === 'volume',
+      );
+    const intent = this.latestHumanVolumeIntent.get(observation.target);
+    return (
+      command !== undefined &&
+      command.requested.property === 'volume' &&
+      command.id === observation.commandId &&
+      command.acceptedAt !== undefined &&
+      (command.status === 'pending' || command.status === 'confirmed') &&
+      observation.observedAt >= command.issuedAt &&
+      Math.abs(volume - command.requested.value) <= 0.005 + Number.EPSILON &&
+      !(
+        intent !== undefined &&
+        !isHumanActor(command.provenance.actor) &&
+        (this.commandSequences.get(command.id) ?? Infinity) <= intent.sequence
+      )
+    );
+  }
+
   private attributeOlderAutomaticVolumeObservation(
     observation: MusicObservation,
     observedVolume: number,

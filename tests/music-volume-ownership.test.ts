@@ -837,3 +837,41 @@ it.each(['cancelled', 'unconfirmed'] as const)(
     }
   },
 );
+
+it('accepts current correlated fade feedback after older same-destination feedback', async () => {
+  const s = setup('2026-10-04T12:00:00+02:00');
+  try {
+    await s.presence('occupied');
+    await s.engine.requestMusic(
+      'music.room',
+      { property: 'volume', value: 0.319 },
+      auto,
+    );
+    s.engine.startMusicFade(
+      { target: 'music.room', volume: 0.319, durationMs: 1_000 },
+      user,
+    );
+    s.clock.advanceBy(1_000);
+    await flush();
+    const current = s.volumeCommands().at(-1)!;
+    s.adapter.observe('music.room', { ...playing, volume: 0.319 });
+    expect(
+      s.engine.state.music.commands.find((command) => command.id === current.id)
+        ?.status,
+    ).toBe('confirmed');
+    s.adapter.observe(
+      'music.room',
+      { ...playing, volume: 0.319 },
+      true,
+      current.id,
+    );
+    s.clock.advanceBy(2_000);
+    expect(s.engine.state.music.fades['music.room']?.status).toBe('completed');
+    expect(s.policy()).toMatchObject({
+      baseline: 0.319,
+      effectiveTarget: 0.319,
+    });
+  } finally {
+    s.engine.dispose();
+  }
+});
