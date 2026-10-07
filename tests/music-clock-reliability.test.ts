@@ -72,6 +72,49 @@ const clockCases = [
   { time: '2026-10-25T01:00:00Z', quiet: true, offset: -0.1 },
 ];
 
+it('opens the 06:00 gate without starting an already occupied room, then permits a fresh entry', async () => {
+  const s = setup('2026-10-05T05:59:00+02:00', 'idle');
+  const positive = () =>
+    s.adapter.dispatched.filter(
+      (c) =>
+        c.requested.property === 'preset' ||
+        (c.requested.property === 'playback' &&
+          c.requested.value === 'playing'),
+    );
+  try {
+    await s.presence('occupied');
+    await s.manual(0.4);
+    const count = s.volumeCommands().length;
+    s.clock.advanceBy(61_000);
+    await flush();
+    expect(s.engine.getMusicPlaybackPolicySnapshots()[target]).toMatchObject({
+      quietHours: false,
+      entryEligible: false,
+      activityReason: 'awaiting_new_entry',
+    });
+    expect(positive()).toEqual([]);
+    expect(s.volumeCommands()).toHaveLength(count);
+    await s.presence('confirmed_empty');
+    expect(
+      s.engine.getMusicPlaybackPolicySnapshots()[target]?.entryEligible,
+    ).toBe(true);
+    await s.presence('occupied');
+    await flush();
+    expect(positive().map((c) => c.requested)).toEqual([
+      { property: 'preset', value: 'spotify_dj' },
+    ]);
+    expect(s.policy()).toMatchObject({
+      activeOwner: 'manual',
+      effectiveTarget: 0.4,
+      manualHold: { expiresAt: null },
+    });
+    expect(s.volumeCommands()).toHaveLength(count);
+  } finally {
+    s.engine.dispose();
+    expect(s.clock.pendingTimers()).toBe(0);
+  }
+});
+
 it.each(clockCases)(
   'uses Stockholm wall time for fresh-entry gates and offsets at $time',
   async ({ time, quiet, offset }) => {
