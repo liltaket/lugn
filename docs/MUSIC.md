@@ -214,6 +214,12 @@ are pruned, or outside the uncorrelated window, HA REST cannot distinguish delay
 feedback from a genuinely newer physical change to the same value. Such a change
 can update the baseline but never releases a manual hold.
 
+If older automatic feedback and a current human fade step have the same value,
+uncorrelated repeats can remain classified as stale. The current fade may then
+finish unconfirmed and retain its last trusted volume rather than claim success.
+Fresh correlated feedback resolves this ambiguity; the HA REST adapter currently
+provides no command correlation. Manual ownership remains in force either way.
+
 Each target must map to a distinct `media_player.*` entity. Preset IDs default
 to Spotify DJ `1` and Optical `4`; exact source names are allowlisted per
 target. The adapter uses fixed `media_player` services and does not accept an
