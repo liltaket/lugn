@@ -723,3 +723,117 @@ it('unavailable sensor/device feedback keeps human ownership and reports actual 
     s.engine.dispose();
   }
 });
+
+it.each(['deferred response', 'metadata repeat'] as const)(
+  'keeps stale classification through %s during a replacement human fade',
+  async (scenario) => {
+    const s = setup('2026-10-04T12:00:00+02:00');
+    let release = () => {};
+    try {
+      await s.presence('occupied');
+      const older = await s.engine.requestMusic(
+        'music.room',
+        { property: 'volume', value: 0.6 },
+        auto,
+      );
+      if (scenario === 'deferred response') {
+        const dispatch = s.adapter.dispatch.bind(s.adapter);
+        const response = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        vi.spyOn(s.adapter, 'dispatch').mockImplementationOnce(
+          async (command) => {
+            await dispatch(command);
+            await response;
+          },
+        );
+      }
+      s.engine.startMusicFade(
+        { target: 'music.room', volume: 0.319, durationMs: 1_000 },
+        user,
+      );
+      s.clock.advanceBy(1_000);
+      await flush();
+      s.adapter.observe(
+        'music.room',
+        { ...playing, volume: 0.6 },
+        true,
+        older.id,
+      );
+      expect(s.engine.state.music.fades['music.room']?.status).toBe('active');
+      if (scenario === 'deferred response') {
+        release();
+        await flush();
+      } else {
+        s.adapter.observe('music.room', {
+          ...playing,
+          volume: 0.6,
+          title: 'Next track',
+        });
+      }
+      expect(s.engine.state.music.fades['music.room']?.status).toBe('active');
+      expect(s.policy()).toMatchObject({
+        baseline: 0.3,
+        effectiveTarget: 0.319,
+      });
+      s.adapter.observe(
+        'music.room',
+        { ...playing, volume: 0.319 },
+        true,
+        s.volumeCommands().at(-1)?.id,
+      );
+      s.clock.advanceBy(2_000);
+      expect(s.engine.state.music.fades['music.room']?.status).toBe(
+        'completed',
+      );
+      expect(s.policy()).toMatchObject({
+        baseline: 0.319,
+        effectiveTarget: 0.319,
+      });
+    } finally {
+      release();
+      s.engine.dispose();
+    }
+  },
+);
+
+it.each(['cancelled', 'unconfirmed'] as const)(
+  'does not commit old automatic feedback as the terminal volume of a %s human fade',
+  async (status) => {
+    const s = setup('2026-10-04T12:00:00+02:00');
+    try {
+      await s.presence('occupied');
+      const older = await s.engine.requestMusic(
+        'music.room',
+        { property: 'volume', value: 0.6 },
+        auto,
+      );
+      s.engine.startMusicFade(
+        { target: 'music.room', volume: 0.319, durationMs: 1_000 },
+        user,
+      );
+      s.clock.advanceBy(1_000);
+      await flush();
+      s.adapter.observe(
+        'music.room',
+        { ...playing, volume: 0.6 },
+        true,
+        older.id,
+      );
+      if (status === 'cancelled') s.engine.cancelMusicFade('music.room');
+      else {
+        s.clock.advanceBy(10_001);
+        await flush();
+      }
+      expect(s.engine.state.music.fades['music.room']?.status).toBe(status);
+      expect(s.engine.getMusicState('music.room').observed.volume).toBe(0.6);
+      expect(s.policy()).toMatchObject({
+        activeOwner: 'manual',
+        baseline: 0.3,
+        effectiveTarget: 0.3,
+      });
+    } finally {
+      s.engine.dispose();
+    }
+  },
+);

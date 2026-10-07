@@ -84,7 +84,10 @@ export class MusicController {
   private readonly observedSequence = new Map<string, number>();
   private readonly issuedSequence = new Map<string, number>();
   private readonly attributedSupersededVolumeCommands = new Set<string>();
-  private readonly lastObservations = new Map<string, MusicObservation>();
+  private readonly lastObservations = new Map<
+    string,
+    { observation: MusicObservation; staleVolumeFeedback: boolean }
+  >();
   // Intent/transition ordering must outlive command timeout and bounded ledger
   // history. A metadata-only HA snapshot cannot cancel a user's playback intent.
   private readonly latestPlaybackIntentAt = new Map<string, number>();
@@ -375,7 +378,7 @@ export class MusicController {
       this.dispatchingCommands.add(command.id);
       await this.adapter.dispatch({ id: command.id, target, requested });
       command.acceptedAt = this.clock.now();
-      const observation = this.lastObservations.get(target);
+      const observation = this.lastObservations.get(target)?.observation;
       if (observation)
         confirmedFromDispatch = this.confirm(command, observation);
     } catch {
@@ -487,8 +490,12 @@ export class MusicController {
       });
       const latest = this.lastObservations.get(runtime.state.target);
       const sequence = this.observedSequence.get(runtime.state.target) ?? 0;
-      if (latest && sequence > runtime.baselineSequence)
-        this.acceptFadeObservation(runtime, latest, sequence);
+      if (
+        latest &&
+        !latest.staleVolumeFeedback &&
+        sequence > runtime.baselineSequence
+      )
+        this.acceptFadeObservation(runtime, latest.observation, sequence);
     } catch {
       this.finishFade(
         runtime,
@@ -737,16 +744,26 @@ export class MusicController {
       observedVolume !== null &&
       Math.abs(observedVolume - previousVolume) > 0.005 + Number.EPSILON;
     const staleVolumeFeedback =
-      volumeChanged &&
-      (this.attributeOlderAutomaticVolumeObservation(
-        observation,
-        observedVolume,
-      ) ||
-        (!this.matchesRecentPendingVolumeCommand(observation, observedVolume) &&
-          this.attributeSupersededVolumeObservation(
+      (observation.available &&
+        observedVolume !== null &&
+        previousVolume !== null &&
+        !volumeChanged &&
+        this.lastObservations.get(observation.target)?.staleVolumeFeedback ===
+          true &&
+        !this.matchesRecentPendingVolumeCommand(observation, observedVolume)) ||
+      (volumeChanged &&
+        (this.attributeOlderAutomaticVolumeObservation(
+          observation,
+          observedVolume,
+        ) ||
+          (!this.matchesRecentPendingVolumeCommand(
             observation,
             observedVolume,
-          )));
+          ) &&
+            this.attributeSupersededVolumeObservation(
+              observation,
+              observedVolume,
+            ))));
     const externalVolumeChange =
       volumeChanged &&
       !staleVolumeFeedback &&
@@ -769,7 +786,10 @@ export class MusicController {
     );
     const sequence = (this.observedSequence.get(observation.target) ?? 0) + 1;
     this.observedSequence.set(observation.target, sequence);
-    this.lastObservations.set(observation.target, structuredClone(observation));
+    this.lastObservations.set(observation.target, {
+      observation: structuredClone(observation),
+      staleVolumeFeedback,
+    });
     const confirmedIds = new Set<string>();
     for (const command of [...this.state.commands])
       if (
@@ -1107,8 +1127,10 @@ export class MusicController {
       phase,
       target: runtime.state.target,
       state: structuredClone(runtime.state),
-      actualVolume:
-        this.state.devices[runtime.state.target]?.observed.volume ?? null,
+      actualVolume: this.lastObservations.get(runtime.state.target)
+        ?.staleVolumeFeedback
+        ? runtime.state.observedVolume
+        : (this.state.devices[runtime.state.target]?.observed.volume ?? null),
       provenance: structuredClone(runtime.provenance),
     });
   }
