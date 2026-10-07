@@ -228,6 +228,27 @@ h2 {
   border-color: #b17768;
   color: #fff0ec;
 }
+.screen:is([data-role='bed'], [data-role='desk']) .scene-grid {
+  grid-template-rows: none;
+  grid-auto-rows: minmax(44px, 1fr);
+}
+.screen:is([data-role='bed'], [data-role='desk']) .scene-button {
+  min-height: 44px;
+  padding: 10px 16px;
+  grid-column: auto;
+}
+.screen:is([data-role='bed'], [data-role='desk']) .scene-name {
+  font-size: clamp(18px, 1.8vw, 23px);
+}
+.screen:is([data-role='bed'], [data-role='desk'])
+  .scene-button[data-featured='true'] {
+  grid-column: 1 / -1;
+}
+.screen:is([data-role='bed'], [data-role='desk'])
+  .scene-button[data-featured='true']
+  .scene-name {
+  font-size: clamp(23px, 2.35vw, 30px);
+}
 .scene-current-mark {
   width: 10px;
   height: 10px;

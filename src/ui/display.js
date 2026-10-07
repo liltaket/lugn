@@ -44,6 +44,7 @@ const refs = {
   musicTitle: document.querySelector('#music-title'),
   musicSource: document.querySelector('#music-source'),
   musicPresetDj: document.querySelector('#music-preset-dj'),
+  musicPresets: document.querySelector('#music-presets'),
   musicPresetOptical: document.querySelector('#music-preset-optical'),
   musicPlayback: document.querySelector('#music-playback'),
   musicPlaybackIcon: document.querySelector('#music-playback-icon'),
@@ -87,6 +88,7 @@ let musicDetailsOpen = false;
 let historyRenderKey;
 let lastFreshAt = 0;
 let sceneOrderKey = null;
+let presetRoleKey = null;
 let musicTarget = '';
 let polling = null;
 let timer;
@@ -209,7 +211,16 @@ function roleName(role) {
 }
 
 function setRole(role) {
-  root.dataset.role = roleName(role);
+  const resolved = roleName(role);
+  root.dataset.role = resolved;
+  if (refs.musicPresets && presetRoleKey !== resolved) {
+    const presets =
+      resolved === 'desk'
+        ? [refs.musicPresetOptical, refs.musicPresetDj]
+        : [refs.musicPresetDj, refs.musicPresetOptical];
+    refs.musicPresets.replaceChildren(...presets, refs.musicDetailsButton);
+    presetRoleKey = resolved;
+  }
 }
 
 function setConnection(state, message, retry = false) {
@@ -279,13 +290,20 @@ function getSceneList(payload) {
       unique.set(scene.id, { id: scene.id, name: scene.name });
     }
   }
-  const sceneOrder = [
+  const neutralOrder = [
     'scene.all_off',
     'scene.soft_light',
     'scene.everyday_light',
     'scene.movie_light',
     'scene.focus_light',
   ];
+  const role = roleName(payload?.role);
+  const sceneOrder =
+    role === 'bed'
+      ? ['scene.all_off', 'scene.soft_light', 'scene.sleep', ...neutralOrder]
+      : role === 'desk'
+        ? ['scene.focus_light', 'scene.everyday_light', ...neutralOrder]
+        : neutralOrder;
   return [...unique.values()].sort((a, b) => {
     const rank = (id) => {
       const index = sceneOrder.indexOf(id);
@@ -341,10 +359,13 @@ function renderScenes(payload) {
     return;
   }
   const ordered = [];
-  for (const scene of scenes) {
+  for (const [index, scene] of scenes.entries()) {
     const button = sceneButtonFor(scene);
     button.querySelector('.scene-name').textContent = scene.name;
     button.dataset.kind = scene.id === 'scene.all_off' ? 'off' : 'scene';
+    button.dataset.featured = String(
+      roleName(payload?.role) !== 'unknown' && scenes.length <= 6 && index < 2,
+    );
     const isPending = pending.has(`scene:${scene.id}`);
     button.disabled = isUnavailable() || isPending;
     button.setAttribute('aria-busy', String(isPending));
