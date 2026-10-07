@@ -86,12 +86,16 @@ mapping.
 
 ## Persistence
 
-The runtime stores versioned lighting intent in
+The runtime stores versioned lighting and music intent in
 `$HOME/.local/state/lugn/lighting-intent.json` by default. `statePath` in
 `config.json` or `LUGN_STATE_PATH` in `lugn.env` may select another direct-child
 file under `$HOME/.local/state/lugn/`. The file contains the selected scene,
 logical baseline/effective values, property ownership, and the absolute
-continuity expiry. It never contains sensor presence, observed device values,
+continuity expiry. An optional separately validated music section retains volume
+baselines and manual holds, explicit Pause, policy enable state, temporary BILRESA
+restore state and absolute music absence/resume deadlines. A saved confirmed
+absence marker preserves deadline ordering; it is not current sensor presence.
+The file never contains sensor measurements, observed device values,
 pending commands, or command history. Writes are atomic and restricted to
 mode `0600`. The systemd installer grants the service write access only to
 that state directory.
@@ -102,8 +106,13 @@ command ledger, and obtains fresh Home Assistant observations without issuing
 commands. It reconciles restored intent on the next confirmed occupancy unless
 continuity has expired. A confirmed-empty heartbeat immediately after restart
 still switches lights off but does not extend the restored deadline. Corrupt,
-unsupported, or device/scene-mismatched state is ignored safely. Music state and
-configuration are not part of this lighting-intent file. See [Lighting intent
+unsupported, or device/scene-mismatched state is ignored safely. Invalid music is
+ignored independently of valid lighting. Music intent is restored before HA
+seeding without replaying commands or fades. Explicit Pause remains independent
+of continuity; unknown startup presence preserves valid volume ownership.
+Music installations write version 2; the new reader accepts version 1, but old
+binaries reject version 2. Lighting-only installations retain version 1.
+Configuration remains separate. See [Lighting intent
 persistence](OPERATIONS.md#lighting-intent-persistence) for service setup.
 
 ## Later persistence needs

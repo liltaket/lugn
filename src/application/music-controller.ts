@@ -171,6 +171,10 @@ export class MusicController {
   ): void {
     this.volumeRequestGuard = handler;
   }
+  restorePauseIntent(target: string, createdAt: number): void {
+    this.requireTarget(target);
+    this.latestPlaybackIntentAt.set(target, createdAt);
+  }
   setExternalPlaybackChangeHandler(
     handler: (
       target: string,

@@ -7,6 +7,8 @@ import type {
   MusicRequest,
   Presence,
   Provenance,
+  MusicIntentSnapshot,
+  ManualVolumeHold,
 } from '../core/schemas.js';
 import type { MusicFadeLifecycleEvent } from './music-controller.js';
 
@@ -23,12 +25,7 @@ type ActiveFade = {
   manualRevision: number;
 };
 
-export type ManualVolumeHold = {
-  volume: number;
-  createdAt: number;
-  expiresAt: number | null;
-  provenance: Provenance;
-};
+export type { ManualVolumeHold } from '../core/schemas.js';
 
 export type VolumeActivityReason =
   | 'manual_hold'
@@ -91,6 +88,8 @@ export class MusicAutomation {
   private volumeAutomationEnabled = true;
   private disposed = false;
   private lastConfirmedPresence: Presence = 'unknown';
+  private restoredAbsenceAwaitingPresence = false;
+  private readonly restoredPlaybackContinuityTargets = new Set<string>();
 
   constructor(private readonly options: MusicAutomationOptions) {
     this.holds = options.holds ?? new AutomationHolds(options.clock);
@@ -109,22 +108,28 @@ export class MusicAutomation {
     const lastConfirmedBeforeEvent = this.lastConfirmedPresence;
     if (presence === 'confirmed_empty') {
       this.lastConfirmedPresence = 'confirmed_empty';
-      if (lastConfirmedBeforeEvent !== 'confirmed_empty') {
+      const newConfirmedAbsence =
+        lastConfirmedBeforeEvent !== 'confirmed_empty';
+      if (newConfirmedAbsence) {
         this.absenceExpiresAt = this.options.clock.now() + musicContinuityMs;
         for (const hold of this.manualVolumeHolds.values())
           hold.expiresAt = this.absenceExpiresAt;
         this.scheduleAbsenceExpiry();
+      }
+      if (newConfirmedAbsence || this.restoredAbsenceAwaitingPresence) {
+        this.restoredAbsenceAwaitingPresence = false;
         for (const target of this.options.targets) {
           const device = this.options.getState(target);
           const wasPlaying =
             device.observed.playback === 'playing' ||
             device.requested.playback === 'playing';
-          this.resumeUntil.set(
-            target,
-            wasPlaying && !this.holds.blocks('music.playback', target)
-              ? this.options.clock.now() + musicContinuityMs
-              : 0,
-          );
+          if (newConfirmedAbsence)
+            this.resumeUntil.set(
+              target,
+              wasPlaying && !this.holds.blocks('music.playback', target)
+                ? this.options.clock.now() + musicContinuityMs
+                : 0,
+            );
           this.send(target, { property: 'playback', value: 'paused' }, 'pause');
         }
       }
@@ -134,6 +139,7 @@ export class MusicAutomation {
     }
 
     if (presence === 'occupied') {
+      this.restoredAbsenceAwaitingPresence = false;
       this.absenceExpiresAt = null;
       this.cancelAbsenceTimer();
       for (const hold of this.manualVolumeHolds.values()) hold.expiresAt = null;
@@ -148,6 +154,11 @@ export class MusicAutomation {
       ) {
         for (const target of this.options.targets) {
           if (this.holds.blocks('music.playback', target)) continue;
+          if (
+            this.restoredPlaybackContinuityTargets.has(target) &&
+            this.options.getState(target).availability !== 'available'
+          )
+            continue;
           if ((this.resumeUntil.get(target) ?? 0) > this.options.clock.now()) {
             this.send(
               target,
@@ -166,6 +177,7 @@ export class MusicAutomation {
           }
         }
       }
+      this.restoredPlaybackContinuityTargets.clear();
       this.applyVolumePolicy();
       if (this.homePresence === 'away' || !this.volumeAutomationEnabled)
         this.cancelTimer();
@@ -399,6 +411,90 @@ export class MusicAutomation {
 
   get isVolumeAutomationEnabled(): boolean {
     return this.volumeAutomationEnabled;
+  }
+
+  getIntentSnapshot(
+    temporaryVolumeAutomationRestore: boolean | null,
+  ): MusicIntentSnapshot {
+    const pauses = new Map(
+      this.holds
+        .snapshot()
+        .filter((hold) => hold.scope === 'music.playback')
+        .map((hold) => [
+          hold.target,
+          { createdAt: hold.createdAt, provenance: hold.provenance },
+        ]),
+    );
+    return {
+      version: 1,
+      volumeAutomationEnabled: this.volumeAutomationEnabled,
+      temporaryVolumeAutomationRestore,
+      confirmedAbsence: this.lastConfirmedPresence === 'confirmed_empty',
+      absenceExpiresAt: this.absenceExpiresAt,
+      targets: Object.fromEntries(
+        this.options.targets.map((target) => {
+          const baseline = this.baselines.get(target);
+          return [
+            target,
+            {
+              baseline: baseline ?? null,
+              baselineSource:
+                baseline === undefined
+                  ? 'unknown'
+                  : this.explicitBaselines.has(target)
+                    ? 'user'
+                    : 'inferred',
+              lastIntentActor:
+                this.volumeControllers.get(target) === 'you'
+                  ? 'manual'
+                  : this.volumeControllers.has(target)
+                    ? 'lugn'
+                    : 'unknown',
+              manualVolume: structuredClone(
+                this.getManualVolumeHold(target) ?? null,
+              ),
+              pause: pauses.get(target) ?? null,
+              resumeUntil:
+                this.lastConfirmedPresence === 'confirmed_empty'
+                  ? (this.resumeUntil.get(target) ?? 0)
+                  : 0,
+            },
+          ];
+        }),
+      ),
+    };
+  }
+
+  /** Hydrate intent before HA seeding; current presence and device state remain unknown. */
+  restoreIntent(snapshot: MusicIntentSnapshot): void {
+    this.volumeAutomationEnabled = snapshot.volumeAutomationEnabled;
+    this.absenceExpiresAt = snapshot.absenceExpiresAt;
+    this.lastConfirmedPresence = snapshot.confirmedAbsence
+      ? 'confirmed_empty'
+      : 'unknown';
+    this.restoredAbsenceAwaitingPresence = snapshot.confirmedAbsence;
+    for (const [target, intent] of Object.entries(snapshot.targets)) {
+      if (intent.baseline !== null) this.baselines.set(target, intent.baseline);
+      if (intent.baselineSource === 'user') this.explicitBaselines.add(target);
+      if (intent.lastIntentActor !== 'unknown')
+        this.volumeControllers.set(
+          target,
+          intent.lastIntentActor === 'manual' ? 'you' : 'lugn',
+        );
+      const hold = intent.manualVolume;
+      if (
+        hold &&
+        (hold.expiresAt === null || this.options.clock.now() < hold.expiresAt)
+      ) {
+        this.manualVolumeHolds.set(target, structuredClone(hold));
+        this.manualRevisions.set(target, 1);
+      }
+      if (intent.pause) this.holds.restoreMusicPause(target, intent.pause);
+      this.resumeUntil.set(target, intent.resumeUntil);
+      if (snapshot.confirmedAbsence)
+        this.restoredPlaybackContinuityTargets.add(target);
+    }
+    this.scheduleAbsenceExpiry();
   }
 
   /** Shared authority gate for capability commands and every automatic fade step. */

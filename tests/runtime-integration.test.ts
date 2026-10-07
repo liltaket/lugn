@@ -14,6 +14,8 @@ import type {
 } from '../src/adapters/stl27l-mqtt-presence.js';
 import { startRuntime } from '../src/runtime/main.js';
 import type { MqttSubscriberStatus } from '../src/runtime/mqttjs-subscriber.js';
+import { LugnEngine } from '../src/application/lugn-engine.js';
+import { FakeClock } from '../src/core/clock.js';
 
 type MqttMessageHandler = (
   topic: string,
@@ -96,6 +98,122 @@ afterEach(() => {
 });
 
 describe('composed runtime integration', () => {
+  it('restores music intent before fresh HA seeding and first MQTT occupancy without replay', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = Date.parse('2026-10-04T12:00:00+02:00');
+    vi.setSystemTime(now);
+    const directory = await mkdtemp(join(tmpdir(), 'lugn-runtime-music-'));
+    const configPath = join(directory, 'runtime.json');
+    const statePath = join(directory, 'state.json');
+    let runtime: Awaited<ReturnType<typeof startRuntime>> | undefined;
+    const original = new LugnEngine(new FakeClock(now - 1_000), {
+      deviceIds: ['lighting.entry'],
+      scenes: [],
+      music: { targets: { 'music.room': [] } },
+    });
+    try {
+      const user = { actor: { type: 'user' as const }, source: 'dashboard' };
+      await original.requestMusic(
+        'music.room',
+        { property: 'volume', value: 0.95 },
+        user,
+      );
+      await original.requestMusic(
+        'music.room',
+        { property: 'playback', value: 'paused' },
+        user,
+      );
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          version: 2,
+          snapshot: original.getLightingIntentSnapshot(),
+          music: original.getMusicIntentSnapshot(),
+        }),
+      );
+      vi.stubEnv('LUGN_TEST_HA_TOKEN', 'test-ha-token');
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          http: { host: '127.0.0.1', port: await findEphemeralLoopbackPort() },
+          homeAssistant: {
+            baseUrl: 'http://home-assistant.invalid:8123',
+            tokenEnv: 'LUGN_TEST_HA_TOKEN',
+            entities: { 'lighting.entry': 'light.entry' },
+            music: { 'music.room': { entityId: 'media_player.room' } },
+          },
+          scenes: [],
+          mqtt: { url: 'mqtt://mqtt.invalid:1883', baseTopic: 'bruno/doorway' },
+        }),
+      );
+      const mqtt = new FakeMqttSubscriber();
+      mqtt.onStart = () => {
+        mqtt.publish('bruno/doorway/availability', 'online', true);
+        mqtt.publish(
+          'bruno/doorway/snapshot',
+          JSON.stringify({
+            schema_version: 1,
+            count: 1,
+            quality: 'CERTAIN',
+            confidence: 1,
+            updated_at: new Date(now).toISOString(),
+          }),
+          false,
+        );
+      };
+      const requests: string[] = [];
+      runtime = await startRuntime(configPath, {
+        lightingIntentPath: statePath,
+        createMqttSubscriber: () => mqtt,
+        createHomeAssistantSocket: () => new InertHomeAssistantSocket(),
+        homeAssistantFetch: async (input) => {
+          const url = String(input);
+          requests.push(url);
+          return url.endsWith('/api/states')
+            ? new Response(
+                JSON.stringify([
+                  {
+                    entity_id: 'media_player.room',
+                    state: 'playing',
+                    attributes: { volume_level: 0.3, source: 'Optical' },
+                    // Availability recovery can advance this; first seed still is not Play intent.
+                    last_updated: new Date(now).toISOString(),
+                    last_changed: new Date(now).toISOString(),
+                  },
+                ]),
+              )
+            : new Response(null, { status: 200 });
+        },
+      });
+      expect(runtime.engine.state.presence.state).toBe('occupied');
+      expect(runtime.engine.getMusicState('music.room')).toMatchObject({
+        observed: { playback: 'playing', volume: 0.3, source: 'Optical' },
+        requested: {},
+      });
+      expect(
+        runtime.engine.getMusicVolumePolicySnapshots()['music.room'],
+      ).toMatchObject({
+        activeOwner: 'manual',
+        effectiveTarget: 0.95,
+        baseline: 0.95,
+      });
+      expect(
+        runtime.engine.state.intent.holds.some(
+          (h) => h.scope === 'music.playback',
+        ),
+      ).toBe(true);
+      expect(runtime.engine.state.music.commands).toEqual([]);
+      expect(requests.filter((url) => url.includes('/api/services/'))).toEqual(
+        [],
+      );
+    } finally {
+      original.dispose();
+      await runtime?.stop();
+      vi.useRealTimers();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('seeds Home Assistant before MQTT startup processes cached and live occupancy', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'lugn-runtime-'));
     const port = await findEphemeralLoopbackPort();
