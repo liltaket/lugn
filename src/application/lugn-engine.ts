@@ -420,6 +420,8 @@ export class LugnEngine {
       getState: (target) => this.musicController.getState(target),
       request: (target, request, provenance) =>
         this.musicController.request(target, request, provenance),
+      cancelAutomaticFade: (target) => this.musicController.cancelFade(target),
+      onChange: () => this.publish(['music', 'intent']),
       onError: (target, operation) => {
         this.addDiagnostic(
           'music.automation_unconfirmed',
@@ -429,8 +431,16 @@ export class LugnEngine {
         this.publish(['music', 'diagnostics']);
       },
     });
-    this.musicController.setExternalVolumeChangeHandler((target, volume) =>
-      this.musicAutomation.noteExternalVolumeChange(target, volume),
+    this.musicController.setVolumeRequestGuard((target, provenance) =>
+      this.musicAutomation.assertVolumeRequestAllowed(target, provenance),
+    );
+    this.musicController.setExternalVolumeChangeHandler(
+      (target, volume, provenance) =>
+        this.musicAutomation.noteExternalVolumeChange(
+          target,
+          volume,
+          provenance,
+        ),
     );
     this.musicController.setExternalPlaybackChangeHandler(
       (target, playback, provenance) =>
@@ -617,6 +627,7 @@ export class LugnEngine {
         this.bilresaPriorVolumeAutomation = null;
         this.musicAutomation.setVolumeAutomationEnabled(
           restoreVolumeAutomation,
+          'restore',
         );
         await this.activateScene(
           this.lastNonOffSceneId ?? this.fallbackRemoteSceneId(),
@@ -691,8 +702,10 @@ export class LugnEngine {
         (requested.property === 'playback' && requested.value === 'playing'))
     )
       throw new Error('Automatic playback is held by explicit human pause');
-    const command = this.musicController.request(target, requested, provenance);
+    if (requested.property === 'volume')
+      this.musicAutomation.assertVolumeRequestAllowed(target, provenance);
     this.musicAutomation.noteExplicitRequest(target, requested, provenance);
+    const command = this.musicController.request(target, requested, provenance);
     this.publish(['intent']);
     return command;
   }

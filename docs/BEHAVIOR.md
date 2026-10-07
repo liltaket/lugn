@@ -93,14 +93,18 @@ Likewise for music:
 
     playback -> automation
     volume baseline -> user
-    volume offset   -> automation
+    volume owner    -> user during manual hold, otherwise eligible automation
     source   -> automation
 
 The most recent volume changer and automatic-policy status are separate facts.
-A user volume change becomes the new baseline; when the room is occupied and
-the resident is not away, Lugn can still apply the daily and person offsets to
-that baseline. The dashboard reports who last changed the volume separately
-from whether automatic adjustment is active and what target it calculates.
+A human volume change becomes the new baseline and temporarily owns volume,
+blocking daily/person adjustments and every nonhuman volume command. A short
+confirmed absence preserves this intent; at the absolute 20-minute absence
+deadline volume ownership is released, and eligible occupancy permits automatic
+offsets again. Unknown presence alone does not start or renew the deadline.
+Explicit Pause owns playback independently and does not expire with volume.
+See [Music](MUSIC.md#volume-policy) for transitions, deliberate automation
+hand-back and the BILRESA temporary restore exception.
 
 This avoids coarse global "passive mode" flags.
 
