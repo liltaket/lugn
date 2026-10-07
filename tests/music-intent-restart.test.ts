@@ -111,6 +111,52 @@ it.each([-1, 0, 1])(
   },
 );
 
+it('bounds restored distant deadlines to safe timer delays without extending expiry', async () => {
+  const s = setup();
+  let r: LugnEngine | undefined;
+  const maxTimerDelay = 2 ** 31 - 1;
+  try {
+    await s.engine.requestMusic(
+      'music.room',
+      { property: 'volume', value: 0.4 },
+      user,
+    );
+    await s.presence('confirmed_empty');
+    const snapshot = s.engine.getMusicIntentSnapshot();
+    const expiry = start + maxTimerDelay + 1_000;
+    snapshot.absenceExpiresAt = expiry;
+    snapshot.targets['music.room']!.manualVolume!.expiresAt = expiry;
+    const clock = new FakeClock(start);
+    const schedule = vi.spyOn(clock, 'setTimeout');
+    r = new LugnEngine(clock, {
+      deviceIds: [],
+      scenes: [],
+      music: { targets: { 'music.room': [] } },
+      restoredMusicIntent: snapshot,
+    });
+    expect(schedule.mock.calls.map(([, delay]) => delay)).toEqual([
+      maxTimerDelay,
+    ]);
+    clock.advanceBy(maxTimerDelay);
+    expect(schedule.mock.calls.map(([, delay]) => delay)).toEqual([
+      maxTimerDelay,
+      1_000,
+    ]);
+    expect(
+      r.getMusicVolumePolicySnapshots()['music.room']!.manualHold?.expiresAt,
+    ).toBe(expiry);
+    clock.advanceBy(1_000);
+    expect(
+      r.getMusicVolumePolicySnapshots()['music.room']!.manualHold,
+    ).toBeNull();
+    expect(r.state.music.commands).toEqual([]);
+  } finally {
+    s.engine.dispose();
+    r?.dispose();
+    vi.restoreAllMocks();
+  }
+});
+
 it('preserves original Pause age and protects stale startup Playing while accepting genuinely newer physical Play', async () => {
   const s = setup();
   let r: ReturnType<typeof setup> | undefined;

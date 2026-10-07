@@ -586,7 +586,12 @@ export class MusicAutomation {
         this.expireManualVolumeHolds();
         this.scheduleAbsenceExpiry();
       },
-      Math.max(0, Math.min(...deadlines) - this.options.clock.now()),
+      // Node overflows longer delays to 1 ms. Recheck distant restored
+      // deadlines in bounded chunks while retaining their absolute expiry.
+      Math.min(
+        2 ** 31 - 1,
+        Math.max(0, Math.min(...deadlines) - this.options.clock.now()),
+      ),
     );
   }
 
