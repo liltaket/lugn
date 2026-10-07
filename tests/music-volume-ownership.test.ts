@@ -875,3 +875,52 @@ it('accepts current correlated fade feedback after older same-destination feedba
     s.engine.dispose();
   }
 });
+
+it('keeps repeated current correlated feedback as feedback while a fade settles', async () => {
+  const s = setup('2026-10-04T12:00:00+02:00');
+  try {
+    await s.presence('occupied');
+    const older = await s.engine.requestMusic(
+      'music.room',
+      { property: 'volume', value: 0.6 },
+      auto,
+    );
+    s.engine.startMusicFade(
+      { target: 'music.room', volume: 0.319, durationMs: 1_000 },
+      user,
+    );
+    s.clock.advanceBy(1_000);
+    await flush();
+    const current = s.volumeCommands().at(-1)!;
+    s.adapter.observe(
+      'music.room',
+      { ...playing, volume: 0.319 },
+      true,
+      current.id,
+    );
+    expect(s.engine.state.music.fades['music.room']?.status).toBe('settling');
+    const hold = s.policy().manualHold;
+    s.adapter.observe(
+      'music.room',
+      { ...playing, volume: 0.6 },
+      true,
+      older.id,
+    );
+    s.adapter.observe(
+      'music.room',
+      { ...playing, volume: 0.319 },
+      true,
+      current.id,
+    );
+    expect(s.engine.state.music.fades['music.room']?.status).toBe('settling');
+    expect(s.policy().manualHold).toEqual(hold);
+    s.clock.advanceBy(2_000);
+    expect(s.engine.state.music.fades['music.room']?.status).toBe('completed');
+    expect(s.policy()).toMatchObject({
+      baseline: 0.319,
+      effectiveTarget: 0.319,
+    });
+  } finally {
+    s.engine.dispose();
+  }
+});

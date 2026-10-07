@@ -771,6 +771,7 @@ export class MusicController {
     const externalVolumeChange =
       volumeChanged &&
       !staleVolumeFeedback &&
+      !currentCorrelatedVolumeFeedback &&
       !this.matchesRecentPendingVolumeCommand(observation, observedVolume);
     const externalPlaybackChange =
       observation.available &&
