@@ -18,6 +18,7 @@ class Element {
   disabled = false;
   value = '';
   children: Element[] = [];
+  parentElement: Element | null = null;
   listeners = new Map<string, Listener>();
   classList = {
     contains: (name: string) => this.className.split(' ').includes(name),
@@ -32,10 +33,33 @@ class Element {
     return this.attributes.get(name);
   }
   append(...children: Element[]): void {
-    this.children.push(...children);
+    for (const child of children) {
+      child.remove();
+      child.parentElement = this;
+      this.children.push(child);
+    }
   }
   replaceChildren(...children: Element[]): void {
-    this.children = children;
+    for (const child of this.children) child.parentElement = null;
+    this.children = [];
+    this.append(...children);
+  }
+  remove(): void {
+    if (this.parentElement)
+      this.parentElement.children = this.parentElement.children.filter(
+        (child) => child !== this,
+      );
+    this.parentElement = null;
+  }
+  contains(element: Element): boolean {
+    return (
+      this === element || this.children.some((child) => child.contains(element))
+    );
+  }
+  closest(selector: string): Element | undefined {
+    return selector === 'button[data-scene]' && this.dataset['scene']
+      ? this
+      : this.parentElement?.closest(selector);
   }
   querySelector(selector: string): Element | undefined {
     return (
@@ -49,7 +73,12 @@ class Element {
     this.listeners.set(type, listener);
   }
   click(): void {
-    if (!this.disabled) this.listeners.get('click')?.();
+    if (this.disabled) return;
+    this.dispatchClick({ target: this });
+  }
+  private dispatchClick(event: { target: Element }): void {
+    this.listeners.get('click')?.(event);
+    this.parentElement?.dispatchClick(event);
   }
 }
 
@@ -80,6 +109,11 @@ function dashboard(initialVolume = 0.3, streaming = false) {
     elements.set(selector, created);
     return created;
   };
+  get('#music-presets').append(
+    get('#music-preset-dj'),
+    get('#music-preset-optical'),
+    get('#music-details-button'),
+  );
   const documentListeners = new Map<string, Listener>();
   const windowListeners = new Map<string, Listener>();
   const streams: TestEventSource[] = [];
@@ -235,6 +269,165 @@ function dashboard(initialVolume = 0.3, streaming = false) {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('Hub role action hierarchy', () => {
+  const sceneIds = [
+    'scene.movie_light',
+    'scene.soft_light',
+    'scene.focus_light',
+    'scene.all_off',
+    'scene.everyday_light',
+    'scene.sleep',
+  ];
+  it.each(['bed', 'desk'])(
+    'keeps larger configured scene sets paired for %s without hiding actions',
+    async (role) => {
+      vi.useFakeTimers();
+      const ui = dashboard();
+      try {
+        await microtasks();
+        const ids = [...sceneIds, 'scene.custom_a', 'scene.custom_b'];
+        runInContext(
+          `render(${JSON.stringify({ ...ui.payload(), role, scenes: ids.map((id) => ({ id, name: id, lighting: {} })) })})`,
+          ui.context,
+        );
+        const buttons = ui.get('#scene-grid').children;
+        expect(buttons).toHaveLength(8);
+        expect(
+          buttons.every((button) => button.dataset['featured'] === 'false'),
+        ).toBe(true);
+        expect(
+          buttons.slice(0, 2).map((button) => button.dataset['scene']),
+        ).toEqual(
+          role === 'bed'
+            ? ['scene.all_off', 'scene.soft_light']
+            : ['scene.focus_light', 'scene.everyday_light'],
+        );
+      } finally {
+        ui.engine.dispose();
+      }
+    },
+  );
+  it.each([
+    [
+      'bed',
+      [
+        'scene.all_off',
+        'scene.soft_light',
+        'scene.sleep',
+        'scene.everyday_light',
+        'scene.movie_light',
+        'scene.focus_light',
+      ],
+      true,
+    ],
+    [
+      'desk',
+      [
+        'scene.focus_light',
+        'scene.everyday_light',
+        'scene.all_off',
+        'scene.soft_light',
+        'scene.movie_light',
+        'scene.sleep',
+      ],
+      false,
+    ],
+    [
+      'unrecognized',
+      [
+        'scene.all_off',
+        'scene.soft_light',
+        'scene.everyday_light',
+        'scene.movie_light',
+        'scene.focus_light',
+        'scene.sleep',
+      ],
+      true,
+    ],
+  ] as const)(
+    'orders configured actions for %s with one-touch controls',
+    async (role, expected, djFirst) => {
+      vi.useFakeTimers();
+      const ui = dashboard();
+      try {
+        await microtasks();
+        const payload = {
+          ...ui.payload(),
+          role,
+          scenes: sceneIds.map((id) => ({ id, name: id, lighting: {} })),
+        };
+        runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+        expect(
+          ui
+            .get('#scene-grid')
+            .children.map((button) => button.dataset['scene']),
+        ).toEqual(expected);
+        expect(
+          ui
+            .get('#scene-grid')
+            .children.filter((button) => button.dataset['featured'] === 'true')
+            .map((button) => button.dataset['scene']),
+        ).toEqual(role === 'unrecognized' ? [] : expected.slice(0, 2));
+        expect(ui.get('#music-presets').children.slice(0, 2)).toEqual(
+          djFirst
+            ? [ui.get('#music-preset-dj'), ui.get('#music-preset-optical')]
+            : [ui.get('#music-preset-optical'), ui.get('#music-preset-dj')],
+        );
+        const before = structuredClone(ui.engine.state.presence);
+        ui.get('#music-playback').click();
+        await microtasks();
+        expect(ui.apiCalls).toHaveLength(1);
+        expect(ui.engine.state.presence).toEqual(before);
+      } finally {
+        ui.engine.dispose();
+      }
+    },
+  );
+  it('keeps missing preferred scenes and music honest while adapting roles', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = {
+        ...ui.payload(),
+        role: 'desk',
+        scenes: [
+          { id: 'scene.custom', name: 'Custom', lighting: {} },
+          { id: 'scene.soft_light', name: 'Mysljus', lighting: {} },
+        ],
+      };
+      payload.state.music.devices = {};
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(
+        ui.get('#scene-grid').children.map((button) => button.dataset['scene']),
+      ).toEqual(['scene.soft_light', 'scene.custom']);
+      expect(ui.get('#music-playback').disabled).toBe(true);
+      expect(ui.get('#music-preset-optical').disabled).toBe(true);
+      expect(ui.get('#music-preset-dj').disabled).toBe(true);
+      expect(ui.get('#app-root').dataset['role']).toBe('desk');
+      expect(
+        ui
+          .get('#scene-grid')
+          .children.some((button) => button.dataset['scene'] === 'scene.sleep'),
+      ).toBe(false);
+      const before = ui.get('#music-presets').children;
+      runInContext(
+        `render(${JSON.stringify({ ...payload, role: 'bed' })})`,
+        ui.context,
+      );
+      expect(ui.get('#music-presets').children[0]).toBe(
+        ui.get('#music-preset-dj'),
+      );
+      expect(ui.get('#music-presets').children).not.toBe(before);
+      expect(
+        ui.get('#scene-grid').children.map((button) => button.dataset['scene']),
+      ).toEqual(['scene.soft_light', 'scene.custom']);
+    } finally {
+      ui.engine.dispose();
+    }
+  });
 });
 
 function explainedMusic(ui: ReturnType<typeof dashboard>) {

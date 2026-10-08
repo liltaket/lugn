@@ -117,6 +117,26 @@ separate secret URL path. The dashboard listener is configured independently
 from the bearer-protected, loopback-only capability API. Keep the display
 listener on a trusted LAN and do not publish it to the internet.
 
+Bed prioritizes Helt släckt and Mysljus, followed by Sleep if that scene is
+configured, then the remaining available scenes. Desk prioritizes Fokus and
+Vardagsljus. With up to six scenes, the first two available scenes have larger
+full-width controls; larger sets use paired buttons to preserve space. All
+configured scenes remain available and require one touch. Missing preferred
+scenes are skipped rather than invented. Unknown roles retain the neutral scene
+order. Desk puts Optical before Spotify DJ in actual button and keyboard order;
+Bed and unknown roles keep Spotify DJ first. Playback, volume, Details and the
+same backend reasons remain available on both roles. The role adds no separate
+room state, PC capability, or inferred confirmed occupancy.
+The target layout covers the five built-in scenes plus optional Sleep, with a
+paired fallback for seven/eight scenes. Larger custom scene sets need separate
+viewport validation or future pagination.
+
+Scene, light, music and preset commands identify the authenticated role as actor
+`nest-dashboard:bed` / `nest-dashboard:desk` and source
+`lugn.cast_dashboard.bed` / `lugn.cast_dashboard.desk`. The server resolves that
+role from the Hub's secret path; client-supplied role/source fields are rejected,
+and headers cannot override it. This is action provenance, not presence evidence.
+
 The custom Hub dashboard does not use Clerk; it uses a separate secret path
 for each receiver. The local operational control panel at `/ui/` supports
 optional Clerk sign-in. The machine API continues to use its bearer token, and

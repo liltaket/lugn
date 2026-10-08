@@ -89,6 +89,14 @@ export type LugnDisplayServerOptions = {
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
 };
 
+/** Only the hub resolved from the authenticated secret path supplies provenance. */
+function hubProvenance(hub: LugnDisplayHub) {
+  return {
+    actor: { type: 'user' as const, id: `nest-dashboard:${hub.role}` },
+    source: `lugn.cast_dashboard.${hub.role}`,
+  };
+}
+
 type HubRequest = {
   hub: LugnDisplayHub;
   route: string;
@@ -279,28 +287,28 @@ export class LugnDisplayServer {
         request.method === 'POST' &&
         hubRequest.route === '/display-api/scene'
       ) {
-        await this.invokeScene(request, response);
+        await this.invokeScene(request, response, hubRequest.hub);
         return;
       }
       if (
         request.method === 'POST' &&
         hubRequest.route === '/display-api/light'
       ) {
-        await this.invokeLight(request, response);
+        await this.invokeLight(request, response, hubRequest.hub);
         return;
       }
       if (
         request.method === 'POST' &&
         hubRequest.route === '/display-api/music'
       ) {
-        await this.invokeMusic(request, response);
+        await this.invokeMusic(request, response, hubRequest.hub);
         return;
       }
       if (
         request.method === 'POST' &&
         hubRequest.route === '/display-api/music-preset'
       ) {
-        await this.invokeMusicPreset(request, response);
+        await this.invokeMusicPreset(request, response, hubRequest.hub);
         return;
       }
       if (request.method !== 'GET' && request.method !== 'POST') {
@@ -451,6 +459,7 @@ export class LugnDisplayServer {
   private async invokeScene(
     request: IncomingMessage,
     response: ServerResponse,
+    hub: LugnDisplayHub,
   ): Promise<void> {
     if (!isJsonRequest(request)) {
       sendJson(response, 415, {
@@ -463,12 +472,14 @@ export class LugnDisplayServer {
       'lighting.activateScene',
       input,
       response,
+      hub,
     );
   }
 
   private async invokeLight(
     request: IncomingMessage,
     response: ServerResponse,
+    hub: LugnDisplayHub,
   ): Promise<void> {
     if (!isJsonRequest(request)) {
       sendJson(response, 415, {
@@ -477,12 +488,13 @@ export class LugnDisplayServer {
       return;
     }
     const input = DisplayLightRequestSchema.parse(await readJsonBody(request));
-    await this.invokeLightingCapability('lighting.set', input, response);
+    await this.invokeLightingCapability('lighting.set', input, response, hub);
   }
 
   private async invokeMusic(
     request: IncomingMessage,
     response: ServerResponse,
+    hub: LugnDisplayHub,
   ): Promise<void> {
     if (!isJsonRequest(request)) {
       sendJson(response, 415, {
@@ -496,10 +508,7 @@ export class LugnDisplayServer {
       const result = await this.options.capabilities.invoke(
         capability.name,
         capability.input,
-        {
-          actor: { type: 'user', id: 'nest-dashboard' },
-          source: 'lugn.cast_dashboard',
-        },
+        hubProvenance(hub),
       );
       sendJson(response, 200, result);
     } catch (error) {
@@ -521,6 +530,7 @@ export class LugnDisplayServer {
   private async invokeMusicPreset(
     request: IncomingMessage,
     response: ServerResponse,
+    hub: LugnDisplayHub,
   ): Promise<void> {
     if (!isJsonRequest(request)) {
       sendJson(response, 415, {
@@ -538,10 +548,7 @@ export class LugnDisplayServer {
           target: input.target,
           preset: input.presetId === 1 ? 'spotify_dj' : 'optical',
         },
-        {
-          actor: { type: 'user', id: 'nest-dashboard' },
-          source: 'lugn.cast_dashboard',
-        },
+        hubProvenance(hub),
       );
       sendJson(response, 200, result);
     } catch (error) {
@@ -564,12 +571,14 @@ export class LugnDisplayServer {
     name: 'lighting.activateScene' | 'lighting.set',
     input: unknown,
     response: ServerResponse,
+    hub: LugnDisplayHub,
   ): Promise<void> {
     try {
-      const result = await this.options.capabilities.invoke(name, input, {
-        actor: { type: 'user', id: 'nest-dashboard' },
-        source: 'lugn.cast_dashboard',
-      });
+      const result = await this.options.capabilities.invoke(
+        name,
+        input,
+        hubProvenance(hub),
+      );
       sendJson(response, 200, result);
     } catch (error) {
       if (error instanceof ZodError) {
