@@ -5,6 +5,7 @@ import { SimulatedMusicAdapter } from '../src/adapters/simulated-music.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { FakeClock } from '../src/core/clock.js';
+import { MusicCommandRecoverySchema } from '../src/core/schemas.js';
 
 type Listener = (...args: unknown[]) => void;
 
@@ -696,6 +697,65 @@ describe('Hub music authority explanations', () => {
         );
         expect(ui.get('#music-player-status').textContent).toBe('Pausad');
         expect(ui.get('#music-volume-value').textContent).toBe('30%');
+      } finally {
+        ui.windowListeners.get('pagehide')?.();
+        ui.engine.dispose();
+      }
+    },
+  );
+
+  it.each([
+    ['verifying', null, 'läser HA-status'],
+    ['waiting_retry', null, 'ny kontroll om 2 s'],
+    ['retrying', null, 'Återförsök 2/3'],
+    ['awaiting_feedback', null, 'Försök 2/3'],
+    ['matched', null, 'HA-kontroll: 40% · matchar begäran, orsak okänd'],
+    ['stopped', 'attempt_limit', 'efter 3 försök'],
+    ['stopped', 'read_unavailable', 'statuskontroll stöds inte'],
+    ['stopped', 'policy_changed', 'ändrade villkor'],
+    ['stopped', 'newer_report', 'avstår återförsök'],
+    ['stopped', 'read_timeout', 'svarade inte i tid'],
+    ['stopped', 'deadline', 'Tidsgräns 60 s'],
+  ])(
+    'explains recovery %s/%s without replacing reported state',
+    async (stage, stopReason, message) => {
+      vi.useFakeTimers();
+      const ui = dashboard();
+      try {
+        await microtasks();
+        const payload = explainedMusic(ui);
+        payload.state.music.commands.push({
+          id: 'recovery',
+          target: 'music.room',
+          requested: { property: 'volume', value: 0.4 },
+          issuedAt: ui.clock.now(),
+          acceptedAt: ui.clock.now(),
+          status: 'unconfirmed',
+          provenance: { actor: { type: 'user' }, source: 'test' },
+          recovery: MusicCommandRecoverySchema.parse({
+            stage,
+            stopReason,
+            attemptCount:
+              stage === 'stopped' && stopReason === 'attempt_limit' ? 3 : 2,
+            lastAttemptAt: payload.generatedAt,
+            deadlineAt: payload.generatedAt + 60_000,
+            nextAttemptAt: payload.generatedAt + 2_000,
+            verifiedAt: payload.generatedAt,
+            reported: {
+              volume: 0.4,
+              playback: 'playing',
+              source: 'Optical',
+              title: null,
+            },
+          }),
+        });
+        runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+        expect(ui.get('#music-command-state').textContent).toContain(message);
+        expect(ui.get('#music-volume-value').textContent).toBe('30%');
+        expect(ui.get('#music-volume-observed-label').textContent).toBe(
+          'Senast',
+        );
+        expect(ui.get('#music-player-status').textContent).toBe('Pausad');
       } finally {
         ui.windowListeners.get('pagehide')?.();
         ui.engine.dispose();

@@ -18,7 +18,9 @@ import {
   type MusicState,
   type DeviceMusicState,
   type Provenance,
+  type MusicRecoveryStopReason,
 } from '../core/schemas.js';
+import { MusicCommandRecovery } from './music-command-recovery.js';
 
 const MAX_RETAINED_TERMINAL_COMMANDS = 128;
 const MUSIC_FADE_TOLERANCE = 0.02;
@@ -80,6 +82,18 @@ export class MusicController {
   readonly state: MusicState = { devices: {}, commands: [], fades: {} };
   private readonly adapter: MusicAdapter;
   private readonly timeoutMs: number;
+  private readonly recovery: MusicCommandRecovery;
+  private disposed = false;
+  private readonly intentGenerations = new Map<
+    string,
+    { volume: number; playback: number }
+  >();
+  private readonly recoveryGuards = new Map<
+    string,
+    () => MusicRecoveryStopReason | null
+  >();
+  private recoveryPolicyGuard:
+    ((command: MusicCommandRecord) => string | null) | undefined;
   private readonly timers = new Map<string, TimerHandle>();
   private readonly observedSequence = new Map<string, number>();
   private readonly issuedSequence = new Map<string, number>();
@@ -95,6 +109,14 @@ export class MusicController {
   private readonly latestHumanVolumeIntent = new Map<
     string,
     { sequence: number; at: number }
+  >();
+  private readonly latestExternalPlaybackIntent = new Map<
+    string,
+    {
+      sequence: number;
+      changedAt: number | undefined;
+      playback: 'playing' | 'paused';
+    }
   >();
   private readonly commandSequences = new Map<string, number>();
   private readonly dispatchingCommands = new Set<string>();
@@ -131,6 +153,76 @@ export class MusicController {
     )
       throw new Error('musicFeedbackTimeoutMs must be between 1 and 60000');
     this.adapter = options.adapter ?? new SimulatedMusicAdapter(clock);
+    this.recovery = new MusicCommandRecovery({
+      clock,
+      adapter: this.adapter,
+      feedbackTimeoutMs: this.timeoutMs,
+      publish: () => {
+        if (!this.disposed) this.publish();
+      },
+      onTimeout: (command, publish) => this.timeoutCommand(command, publish),
+      onRetry: async (command, signal, isAllowed) => {
+        if (this.recoveryGuards.get(command.id)?.() !== null)
+          throw new Error('Recovery intent is no longer valid');
+        command.status = 'pending';
+        Object.assign(this.requireTarget(command.target).requested, {
+          [command.requested.property]: command.requested.value,
+        });
+        this.issuedSequence.set(
+          command.id,
+          this.observedSequence.get(command.target) ?? 0,
+        );
+        this.dispatchingCommands.add(command.id);
+        this.publish();
+        try {
+          if (!isAllowed() || this.recoveryGuards.get(command.id)?.() !== null)
+            throw new Error(
+              'Recovery intent was superseded during publication',
+            );
+          await this.adapter.dispatch(
+            {
+              id: command.id,
+              target: command.target,
+              requested: command.requested,
+            },
+            signal,
+          );
+        } finally {
+          this.dispatchingCommands.delete(command.id);
+        }
+      },
+      onAccepted: (command) => {
+        const observation = this.lastObservations.get(
+          command.target,
+        )?.observation;
+        if (observation) this.confirm(command, observation);
+      },
+      validateRead: (command, observation) => {
+        const latest = this.lastObservations.get(command.target)?.observation
+          .sourceUpdatedAt;
+        if (
+          observation.target !== command.target ||
+          !MusicObservationValuesSchema.safeParse(observation.values).success ||
+          typeof observation.available !== 'boolean' ||
+          !Number.isFinite(observation.observedAt) ||
+          observation.observedAt > clock.now() ||
+          observation.observedAt <
+            (command.recovery?.lastAttemptAt ?? command.issuedAt) ||
+          (observation.sourceUpdatedAt !== undefined &&
+            (!Number.isFinite(observation.sourceUpdatedAt) ||
+              observation.sourceUpdatedAt < 0 ||
+              observation.sourceUpdatedAt > clock.now() ||
+              (latest !== undefined &&
+                observation.sourceUpdatedAt < latest))) ||
+          (observation.playbackChangedAt !== undefined &&
+            (!Number.isFinite(observation.playbackChangedAt) ||
+              observation.playbackChangedAt < 0 ||
+              observation.playbackChangedAt > clock.now()))
+        )
+          return 'invalid_readback';
+        return null;
+      },
+    });
     for (const [id, sources] of Object.entries(options.targets ?? {})) {
       const target = SemanticMusicIdSchema.parse(id);
       if (
@@ -170,6 +262,28 @@ export class MusicController {
     handler: (target: string, provenance: Provenance) => void,
   ): void {
     this.volumeRequestGuard = handler;
+  }
+  setRecoveryPolicyGuard(
+    handler: (command: MusicCommandRecord) => string | null,
+  ): void {
+    this.recoveryPolicyGuard = handler;
+  }
+  private intentDomain(request: MusicRequest): 'volume' | 'playback' {
+    return request.property === 'volume' ? 'volume' : 'playback';
+  }
+  private bumpIntent(target: string, domain: 'volume' | 'playback'): void {
+    const generations = this.intentGenerations.get(target) ?? {
+      volume: 0,
+      playback: 0,
+    };
+    generations[domain]++;
+    this.intentGenerations.set(target, generations);
+    for (const command of this.state.commands)
+      if (
+        command.target === target &&
+        this.intentDomain(command.requested) === domain
+      )
+        this.recovery.stop(command.id, 'superseded', false);
   }
   restorePauseIntent(target: string, createdAt: number): void {
     this.requireTarget(target);
@@ -238,6 +352,7 @@ export class MusicController {
         sequence: this.nextCommandId,
         at: this.clock.now(),
       });
+    this.bumpIntent(request.target, 'volume');
     this.stopFade(
       request.target,
       'Replaced by a newer volume fade',
@@ -299,6 +414,7 @@ export class MusicController {
 
   cancelFade(target: string): MusicFadeState | null {
     SemanticMusicIdSchema.parse(target);
+    this.bumpIntent(target, 'volume');
     const runtime = this.fades.get(target);
     if (!runtime) {
       const current = this.state.fades[target];
@@ -313,6 +429,7 @@ export class MusicController {
     target: string,
     rawRequest: MusicRequest,
     provenance: Provenance,
+    recover = true,
   ): Promise<MusicCommandRecord> {
     const device = this.requireTarget(target);
     const requested = MusicRequestSchema.parse(rawRequest);
@@ -324,6 +441,7 @@ export class MusicController {
       !device.allowedSources.includes(requested.value)
     )
       throw new Error(`Source is not allowed for ${target}`);
+    if (recover) this.bumpIntent(target, this.intentDomain(requested));
     const supersededIds = new Set<string>();
     for (const prior of this.state.commands) {
       if (
@@ -363,31 +481,64 @@ export class MusicController {
     Object.assign(device.requested, { [requested.property]: requested.value });
     this.state.commands.push(command);
     this.issuedSequence.set(command.id, this.observedSequence.get(target) ?? 0);
-    this.timers.set(
-      command.id,
-      this.clock.setTimeout(() => {
-        this.timers.delete(command.id);
-        if (command.status !== 'pending') return;
-        command.status = 'unconfirmed';
-        command.diagnosticReason = 'No matching music feedback before timeout';
-        this.issuedSequence.delete(command.id);
-        this.clearRequestedIfSettled(command);
-        this.pruneHistory(new Set([command.id]));
-        this.publish();
-      }, this.timeoutMs),
-    );
+    if (recover) {
+      const domain = this.intentDomain(requested);
+      const generation = this.intentGenerations.get(target)![domain];
+      const authorization =
+        this.recoveryPolicyGuard?.(command) ??
+        (this.recoveryPolicyGuard ? null : 'controller');
+      const valid = (): MusicRecoveryStopReason | null => {
+        if (this.disposed) return 'disposed';
+        if (this.intentGenerations.get(target)?.[domain] !== generation)
+          return 'superseded';
+        if (
+          authorization === null ||
+          (this.recoveryPolicyGuard &&
+            this.recoveryPolicyGuard(command) !== authorization)
+        )
+          return 'policy_changed';
+        return null;
+      };
+      this.recoveryGuards.set(command.id, valid);
+      this.recovery.start(
+        command,
+        valid,
+        requested.property === 'playback' &&
+          device.availability === 'available' &&
+          device.observed.source !== null &&
+          device.observed.source.length > 0
+          ? device.observed.source
+          : undefined,
+      );
+    } else
+      this.timers.set(
+        command.id,
+        this.clock.setTimeout(() => {
+          this.timers.delete(command.id);
+          if (command.status !== 'pending') return;
+          this.timeoutCommand(command);
+        }, this.timeoutMs),
+      );
     this.publish();
     let confirmedFromDispatch = false;
     try {
+      if (this.disposed || (recover && command.status !== 'pending'))
+        return structuredClone(command);
+      if (requested.property === 'volume')
+        this.volumeRequestGuard?.(target, normalizedProvenance);
       this.dispatchingCommands.add(command.id);
       await this.adapter.dispatch({ id: command.id, target, requested });
+      if (this.disposed) return structuredClone(command);
       command.acceptedAt = this.clock.now();
+      this.recovery.accepted(command.id);
       const observation = this.lastObservations.get(target)?.observation;
       if (observation)
         confirmedFromDispatch = this.confirm(command, observation);
     } catch {
+      if (this.disposed) throw new Error(`Music command failed for ${target}`);
       if (command.status === 'pending' || command.status === 'unconfirmed') {
         command.status = 'failed';
+        this.recovery.stop(command.id, 'dispatch_failed');
         command.diagnosticReason =
           'Music adapter rejected or failed the request';
         this.releaseTracking(command.id);
@@ -406,6 +557,8 @@ export class MusicController {
     return structuredClone(command);
   }
   dispose(): void {
+    this.disposed = true;
+    this.recovery.dispose();
     this.unsubscribe();
     this.attributedSupersededVolumeCommands.clear();
     for (const timer of this.timers.values()) this.clock.clearTimeout(timer);
@@ -416,9 +569,12 @@ export class MusicController {
     this.latestPlaybackIntentAt.clear();
     this.latestPlaybackChangedAt.clear();
     this.latestHumanVolumeIntent.clear();
+    this.latestExternalPlaybackIntent.clear();
     this.commandSequences.clear();
     this.dispatchingCommands.clear();
     this.attributedOlderAutomaticVolumeCommands.clear();
+    this.intentGenerations.clear();
+    this.recoveryGuards.clear();
   }
 
   private scheduleFade(
@@ -473,6 +629,7 @@ export class MusicController {
         runtime.state.target,
         { property: 'volume', value: volume },
         this.fadeProvenance(runtime, step),
+        false,
       );
       if (this.fades.get(runtime.state.target) !== runtime) return;
       runtime.commandId = command.id;
@@ -659,14 +816,28 @@ export class MusicController {
     if (timer !== undefined) this.clock.clearTimeout(timer);
     this.timers.delete(id);
   }
+  private timeoutCommand(command: MusicCommandRecord, publish = true): void {
+    if (command.status === 'pending') {
+      command.status = 'unconfirmed';
+      command.diagnosticReason = 'No matching music feedback before timeout';
+    }
+    this.issuedSequence.delete(command.id);
+    this.clearRequestedIfSettled(command);
+    this.pruneHistory(new Set([command.id]));
+    if (publish && !this.disposed) this.publish();
+  }
   private releaseTracking(id: string): void {
+    this.recovery.stop(id, 'feedback_confirmed', false);
+    this.recoveryGuards.delete(id);
     this.clearTimer(id);
     this.issuedSequence.delete(id);
     this.attributedSupersededVolumeCommands.delete(id);
   }
   private pruneHistory(protectedIds: ReadonlySet<string> = new Set()): void {
     let terminalCount = this.state.commands.reduce(
-      (count, command) => count + (command.status === 'pending' ? 0 : 1),
+      (count, command) =>
+        count +
+        (command.status === 'pending' || this.recovery.has(command.id) ? 0 : 1),
       0,
     );
     for (
@@ -678,6 +849,7 @@ export class MusicController {
       if (
         command &&
         command.status !== 'pending' &&
+        !this.recovery.has(command.id) &&
         !protectedIds.has(command.id)
       ) {
         this.state.commands.splice(index, 1);
@@ -694,7 +866,11 @@ export class MusicController {
     // by dropping the oldest terminal record as a last resort.
     for (let index = 0; terminalCount > MAX_RETAINED_TERMINAL_COMMANDS;) {
       const command = this.state.commands[index];
-      if (command && command.status !== 'pending') {
+      if (
+        command &&
+        command.status !== 'pending' &&
+        !this.recovery.has(command.id)
+      ) {
         this.state.commands.splice(index, 1);
         this.commandSequences.delete(command.id);
         this.attributedOlderAutomaticVolumeCommands.delete(command.id);
@@ -718,6 +894,14 @@ export class MusicController {
       return;
     const previousVolume = device.observed.volume;
     const previousPlayback = device.observed.playback;
+    const sourceChanged =
+      device.availability === 'available' &&
+      observation.available &&
+      device.observed.source !== null &&
+      device.observed.source.length > 0 &&
+      observation.values.source !== null &&
+      observation.values.source.length > 0 &&
+      device.observed.source !== observation.values.source;
     const observedVolume = observation.values.volume;
     const observedPlayback = observation.values.playback;
     const newPlaybackTransition = this.isNewPlaybackTransition(
@@ -859,7 +1043,12 @@ export class MusicController {
         this.confirm(command, observation)
       )
         confirmedIds.add(command.id);
+    // Source is in the playback ordering domain but is not a Play/Pause
+    // request. Preserve ordinary feedback matching, then cancel old recovery
+    // without manufacturing or releasing a Pause hold.
+    if (sourceChanged) this.bumpIntent(observation.target, 'playback');
     if (externalVolumeChange && observedVolume !== null) {
+      this.bumpIntent(observation.target, 'volume');
       this.latestHumanVolumeIntent.set(observation.target, {
         sequence: this.nextCommandId,
         at: this.clock.now(),
@@ -895,6 +1084,12 @@ export class MusicController {
       );
     }
     if (externalPlaybackChange) {
+      this.latestExternalPlaybackIntent.set(observation.target, {
+        sequence: this.nextCommandId,
+        changedAt: observation.playbackChangedAt,
+        playback: observedPlayback as 'playing' | 'paused',
+      });
+      this.bumpIntent(observation.target, 'playback');
       for (const command of this.state.commands) {
         if (
           command.target !== observation.target ||
@@ -934,6 +1129,33 @@ export class MusicController {
       changedAt > this.clock.now()
     )
       return false;
+    // HA timestamps lose sub-millisecond ordering when parsed. A known
+    // Playing -> Paused transition tied with the last request must yield to
+    // Pause; the reverse tie must never release a manual Pause hold.
+    if (
+      previousPlayback === 'playing' &&
+      observation.values.playback === 'paused' &&
+      changedAt === this.latestPlaybackIntentAt.get(observation.target) &&
+      changedAt >=
+        (this.latestPlaybackChangedAt.get(observation.target) ??
+          Number.NEGATIVE_INFINITY)
+    )
+      return true;
+    const external = this.latestExternalPlaybackIntent.get(observation.target);
+    // Equal HA timestamps can hide the ordering of physical Play then Pause.
+    // Yield to the later paused report without letting equal-time Playing
+    // feedback clear a manual Pause.
+    if (
+      previousPlayback === 'playing' &&
+      observation.values.playback === 'paused' &&
+      external?.playback === 'playing' &&
+      changedAt === external.changedAt &&
+      changedAt === this.latestPlaybackChangedAt.get(observation.target) &&
+      changedAt >
+        (this.latestPlaybackIntentAt.get(observation.target) ??
+          Number.NEGATIVE_INFINITY)
+    )
+      return true;
     // last_updated advances for title/volume/availability snapshots too.
     // Only a playback transition newer than both the last intent and previous
     // transition can supersede intent, even if an intermediate state was missed.
@@ -958,7 +1180,9 @@ export class MusicController {
           command.requested.property === 'volume' &&
           command.status === 'pending' &&
           observation.observedAt >= command.issuedAt &&
-          this.clock.now() - command.issuedAt < this.timeoutMs &&
+          this.clock.now() -
+            (command.recovery?.lastAttemptAt ?? command.issuedAt) <
+            this.timeoutMs &&
           Math.abs(observedVolume - command.requested.value) <=
             0.005 + Number.EPSILON,
       );
@@ -1030,7 +1254,8 @@ export class MusicController {
               (this.commandSequences.get(candidate.id) ?? Infinity) <=
                 intent.sequence &&
               this.clock.now() - intent.at < LATE_VOLUME_ATTRIBUTION_MS &&
-              this.clock.now() - candidate.issuedAt <
+              this.clock.now() -
+                (candidate.recovery?.lastAttemptAt ?? candidate.issuedAt) <
                 LATE_VOLUME_ATTRIBUTION_MS &&
               !this.attributedOlderAutomaticVolumeCommands.has(candidate.id)),
       );
@@ -1052,7 +1277,9 @@ export class MusicController {
           command.status === 'superseded' &&
           command.acceptedAt !== undefined &&
           observation.observedAt >= command.issuedAt &&
-          this.clock.now() - command.issuedAt < this.timeoutMs &&
+          this.clock.now() -
+            (command.recovery?.lastAttemptAt ?? command.issuedAt) <
+            this.timeoutMs &&
           (observation.commandId === undefined ||
             observation.commandId === command.id) &&
           !this.attributedSupersededVolumeCommands.has(command.id) &&
@@ -1066,6 +1293,24 @@ export class MusicController {
     // A later physical adjustment to the same level remains external.
     this.attributedSupersededVolumeCommands.add(superseded.id);
     return superseded;
+  }
+  private pauseAttributionPredatesExternalIntent(
+    command: MusicCommandRecord,
+    observation: MusicObservation,
+  ): boolean {
+    const external = this.latestExternalPlaybackIntent.get(command.target);
+    if (
+      !external ||
+      (this.commandSequences.get(command.id) ?? Infinity) > external.sequence
+    )
+      return true;
+    // Ordering survives equal issue times and bounded command history. Only
+    // explicitly historical feedback may still describe the older Pause.
+    return (
+      observation.playbackChangedAt !== undefined &&
+      external.changedAt !== undefined &&
+      observation.playbackChangedAt < external.changedAt
+    );
   }
   private attributeLatePauseBeforeNewerIntent(
     observation: MusicObservation,
@@ -1085,10 +1330,14 @@ export class MusicController {
           command.target === observation.target &&
           command.requested.property === 'playback' &&
           command.requested.value === 'paused' &&
-          command.status === 'unconfirmed' &&
+          (command.status === 'unconfirmed' ||
+            command.status === 'superseded') &&
           command.acceptedAt !== undefined &&
+          this.pauseAttributionPredatesExternalIntent(command, observation) &&
           playbackChangedAt >= command.issuedAt &&
-          this.clock.now() - command.issuedAt < LATE_PAUSE_ATTRIBUTION_MS,
+          this.clock.now() -
+            (command.recovery?.lastAttemptAt ?? command.issuedAt) <
+            LATE_PAUSE_ATTRIBUTION_MS,
       );
     if (!pause) return false;
     const newerIntent = this.state.commands
@@ -1124,15 +1373,22 @@ export class MusicController {
         observedPlayback !== command.requested.value
       )
         continue;
-      const age = this.clock.now() - command.issuedAt;
+      const age =
+        this.clock.now() -
+        (command.recovery?.lastAttemptAt ?? command.issuedAt);
       const matches =
         command.status === 'pending'
           ? age < this.timeoutMs
-          : command.status === 'unconfirmed' &&
+          : (command.status === 'unconfirmed' ||
+              command.status === 'superseded') &&
             command.acceptedAt !== undefined &&
             command.requested.value === 'paused' &&
             age < LATE_PAUSE_ATTRIBUTION_MS;
-      if (matches) {
+      if (
+        matches &&
+        (command.requested.value !== 'paused' ||
+          this.pauseAttributionPredatesExternalIntent(command, observation))
+      ) {
         commandIndex = index;
         break;
       }
@@ -1149,7 +1405,10 @@ export class MusicController {
             candidate.requested.property === 'preset'),
       );
     if (newerPlaybackIntent) return false;
-    if (command.status === 'unconfirmed') {
+    // A source selection cancels retries, but does not request Play/Pause.
+    // Consume accepted Pause feedback once, rather than creating or replacing a
+    // durable manual Pause. Newer playback/preset intent still takes priority.
+    if (command.status === 'unconfirmed' || command.status === 'superseded') {
       command.status = 'confirmed';
       command.confirmedAt = observation.observedAt;
       command.diagnosticReason =
@@ -1168,7 +1427,9 @@ export class MusicController {
       command.acceptedAt === undefined ||
       !observation.available ||
       observation.observedAt < command.issuedAt ||
-      this.clock.now() - command.issuedAt >= this.timeoutMs ||
+      this.clock.now() -
+        (command.recovery?.lastAttemptAt ?? command.issuedAt) >=
+        this.timeoutMs ||
       (this.observedSequence.get(command.target) ?? 0) <=
         (this.issuedSequence.get(command.id) ?? 0) ||
       (observation.commandId !== undefined &&

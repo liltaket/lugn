@@ -113,7 +113,7 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
       ]),
     );
   }
-  async dispatch(command: MusicCommand): Promise<void> {
+  async dispatch(command: MusicCommand, signal?: AbortSignal): Promise<void> {
     const target = SemanticMusicIdSchema.parse(command.target);
     const requested = MusicRequestSchema.parse(command.requested);
     const mapping = this.config.entities[target];
@@ -159,7 +159,9 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(10_000),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+            : AbortSignal.timeout(10_000),
         },
       );
     } catch {
@@ -176,13 +178,52 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  async readStatus(
+    rawTarget: string,
+    signal?: AbortSignal,
+  ): Promise<MusicObservation> {
+    const target = SemanticMusicIdSchema.parse(rawTarget);
+    const mapping = this.config.entities[target];
+    if (!mapping)
+      throw new Error('Music verification target is not configured');
+    const response = await this.transport(
+      `${this.config.baseUrl.replace(/\/+$/, '')}/api/states/${mapping.entityId}`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${this.config.token}`,
+          Accept: 'application/json',
+        },
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(5_000)])
+          : AbortSignal.timeout(5_000),
+        redirect: 'error',
+      },
+    );
+    if (!response.ok) throw new Error('Music verification request failed');
+    const state = StateSchema.parse(await response.json());
+    const updatedAt = parseObservationTime(state.last_updated);
+    const changedAt = parseObservationTime(state.last_changed);
+    if (
+      state.entity_id !== mapping.entityId ||
+      updatedAt === undefined ||
+      changedAt === undefined ||
+      updatedAt < 0 ||
+      changedAt < 0 ||
+      updatedAt > this.clock.now() ||
+      changedAt > this.clock.now() ||
+      updatedAt < (this.lastUpdatedByEntity.get(mapping.entityId) ?? 0)
+    )
+      throw new Error('Music verification report is invalid or stale');
+    // Pure read: do not emit, advance event watermarks, or invent a command ID.
+    return this.normalizeState(target, state, 'home_assistant.status_read');
+  }
   acceptState(payload: unknown): boolean {
     const result = StateSchema.safeParse(payload);
     if (!result.success) return false;
     const target = this.semanticByEntity.get(result.data.entity_id);
     if (!target) return false;
     const lastUpdated = parseObservationTime(result.data.last_updated);
-    const lastChanged = parseObservationTime(result.data.last_changed);
     const previousUpdate = this.lastUpdatedByEntity.get(result.data.entity_id);
     if (
       lastUpdated !== undefined &&
@@ -192,7 +233,23 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
       return true;
     if (lastUpdated !== undefined)
       this.lastUpdatedByEntity.set(result.data.entity_id, lastUpdated);
-    const { state, attributes = {} } = result.data;
+    const observation = this.normalizeState(
+      target,
+      result.data,
+      'home_assistant.state_changed',
+    );
+    for (const listener of this.listeners)
+      listener(structuredClone(observation));
+    return true;
+  }
+  private normalizeState(
+    target: string,
+    payload: z.output<typeof StateSchema>,
+    source: string,
+  ): MusicObservation {
+    const lastUpdated = parseObservationTime(payload.last_updated);
+    const lastChanged = parseObservationTime(payload.last_changed);
+    const { state, attributes = {} } = payload;
     const available = [
       'playing',
       'paused',
@@ -232,12 +289,10 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
       },
       provenance: {
         actor: { type: 'home_assistant' },
-        source: 'home_assistant.state_changed',
+        source,
       },
     };
-    for (const listener of this.listeners)
-      listener(structuredClone(observation));
-    return true;
+    return observation;
   }
   acceptStateChangedEvent(payload: unknown): boolean {
     const envelope = EnvelopeSchema.safeParse(payload);

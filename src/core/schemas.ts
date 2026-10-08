@@ -169,6 +169,43 @@ export const MusicCommandStatusSchema = z.enum([
   'superseded',
   'failed',
 ]);
+export const MusicRecoveryStopReasonSchema = z.enum([
+  'feedback_confirmed',
+  'superseded',
+  'policy_changed',
+  'read_unavailable',
+  'read_failed',
+  'read_timeout',
+  'invalid_readback',
+  'reported_unavailable',
+  'newer_report',
+  'non_retryable',
+  'attempt_limit',
+  'dispatch_failed',
+  'acceptance_pending',
+  'deadline',
+  'disposed',
+]);
+export type MusicRecoveryStopReason = z.infer<
+  typeof MusicRecoveryStopReasonSchema
+>;
+export const MusicCommandRecoverySchema = z.object({
+  stage: z.enum([
+    'awaiting_feedback',
+    'verifying',
+    'waiting_retry',
+    'retrying',
+    'matched',
+    'stopped',
+  ]),
+  attemptCount: z.number().int().min(1).max(3),
+  lastAttemptAt: z.number().nonnegative(),
+  deadlineAt: z.number().nonnegative(),
+  nextAttemptAt: z.number().nonnegative().nullable(),
+  stopReason: MusicRecoveryStopReasonSchema.nullable(),
+  verifiedAt: z.number().nonnegative().optional(),
+  reported: MusicObservationValuesSchema.optional(),
+});
 export const MusicCommandRecordSchema = z.object({
   id: z.string(),
   target: SemanticMusicIdSchema,
@@ -179,6 +216,7 @@ export const MusicCommandRecordSchema = z.object({
   acceptedAt: z.number().nonnegative().optional(),
   confirmedAt: z.number().nonnegative().optional(),
   diagnosticReason: z.string().optional(),
+  recovery: MusicCommandRecoverySchema.optional(),
 });
 export type MusicCommandRecord = z.infer<typeof MusicCommandRecordSchema>;
 export const DeviceMusicStateSchema = z.object({

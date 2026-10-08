@@ -443,6 +443,9 @@ export class LugnEngine {
     this.musicController.setVolumeRequestGuard((target, provenance) =>
       this.musicAutomation.assertVolumeRequestAllowed(target, provenance),
     );
+    this.musicController.setRecoveryPolicyGuard((command) =>
+      this.musicAutomation.recoveryAuthorization(command),
+    );
     this.musicController.setExternalVolumeChangeHandler(
       (target, volume, provenance) =>
         this.musicAutomation.noteExternalVolumeChange(
