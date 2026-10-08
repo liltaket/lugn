@@ -74,6 +74,171 @@ function setup(feedbackTimeoutMs = 1_000, clockStart = start) {
   return { clock, adapter, engine, report, issue, advance, record };
 }
 
+it.each([60_000, 63_000])(
+  'a retry publication consuming monotonic time until %i ms cannot cross the recovery deadline',
+  async (elapsed) => {
+    const s = setup();
+    const monotonic = s.clock.monotonicNow.bind(s.clock);
+    let offset = 0;
+    vi.spyOn(s.clock, 'monotonicNow').mockImplementation(
+      () => monotonic() + offset,
+    );
+    try {
+      const command = await s.issue('volume', 0.4);
+      const unsubscribe = s.engine.stream.subscribe((update) => {
+        const record = update.patch.music?.commands.find(
+          (item) => item.id === command.id,
+        );
+        if (record?.recovery?.stage === 'retrying')
+          offset = elapsed - monotonic();
+      });
+      await s.advance(1_000);
+      await s.advance(2_000);
+      unsubscribe();
+      expect(s.adapter.dispatched).toHaveLength(1);
+      expect(s.record(command.id).recovery?.stopReason).toBe('deadline');
+      expect(s.clock.pendingTimers()).toBe(0);
+    } finally {
+      s.engine.dispose();
+    }
+  },
+);
+
+it('source supersession stops recovery without inventing a manual Pause from accepted automatic feedback', async () => {
+  const s = setup();
+  try {
+    await s.engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    await s.engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+    });
+    await flush();
+    const pause = s.adapter.dispatched[0]!;
+    s.clock.advanceBy(1);
+    await s.engine.requestMusic(
+      target,
+      { property: 'source', value: 'Optical' },
+      human,
+    );
+    s.clock.advanceBy(1);
+    s.adapter.observe(
+      target,
+      s.report(0.3, 'paused').values,
+      true,
+      undefined,
+      s.clock.now(),
+      s.clock.now(),
+    );
+    expect(s.engine.state.intent.holds).toEqual([]);
+    expect(s.record(pause.id)).toMatchObject({
+      status: 'confirmed',
+      recovery: { stopReason: 'superseded' },
+    });
+    await s.engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    await flush();
+    expect(s.adapter.dispatched.at(-1)?.requested).toEqual({
+      property: 'playback',
+      value: 'playing',
+    });
+    expect(
+      s.adapter.dispatched.filter((command) => command.id === pause.id),
+    ).toHaveLength(1);
+  } finally {
+    s.engine.dispose();
+  }
+});
+
+it('source-superseded automatic Pause attribution preserves newer Play and a genuinely later physical Pause', async () => {
+  const s = setup();
+  try {
+    await s.engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    await s.engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+    });
+    await flush();
+    const pause = s.adapter.dispatched[0]!;
+    s.clock.advanceBy(1);
+    await s.engine.requestMusic(
+      target,
+      { property: 'source', value: 'Optical' },
+      human,
+    );
+    s.clock.advanceBy(2);
+    const play = await s.issue('playback', 'playing');
+    s.clock.advanceBy(1);
+    s.adapter.observe(
+      target,
+      s.report(0.3, 'paused').values,
+      true,
+      undefined,
+      s.clock.now(),
+      play.issuedAt - 1,
+    );
+    expect(s.record(pause.id).status).toBe('confirmed');
+    expect(s.engine.state.intent.holds).toEqual([]);
+    s.clock.advanceBy(1);
+    s.adapter.observe(
+      target,
+      s.report().values,
+      true,
+      play.id,
+      s.clock.now(),
+      s.clock.now(),
+    );
+    expect(s.engine.state.intent.holds).toEqual([]);
+    s.clock.advanceBy(1);
+    s.adapter.observe(
+      target,
+      s.report(0.3, 'paused').values,
+      true,
+      undefined,
+      s.clock.now(),
+      s.clock.now(),
+    );
+    expect(s.engine.state.intent.holds).toHaveLength(1);
+  } finally {
+    s.engine.dispose();
+  }
+});
+
+it('completed matching-read recoveries retain at most 128 terminal records and no timers', async () => {
+  const s = setup();
+  try {
+    let latestId = '';
+    for (let index = 0; index < 140; index++) {
+      const volume = index % 2 === 0 ? 0.4 : 0.5;
+      s.adapter.readStatus.mockImplementation(async () => s.report(volume));
+      latestId = (await s.issue('volume', volume)).id;
+      await s.advance(1_000);
+    }
+    expect(s.engine.state.music.commands).toHaveLength(128);
+    expect(s.record(latestId).recovery?.stage).toBe('matched');
+    expect(
+      s.engine.state.music.commands.every(
+        (command) =>
+          command.status === 'unconfirmed' &&
+          command.recovery?.stage === 'matched',
+      ),
+    ).toBe(true);
+    expect(s.clock.pendingTimers()).toBe(0);
+  } finally {
+    s.engine.dispose();
+  }
+});
+
 it('reads fresh status after accepted timeout without manufacturing feedback or ownership', async () => {
   const s = setup();
   try {

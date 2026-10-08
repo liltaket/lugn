@@ -357,6 +357,9 @@ pause that times out remains eligible for matching paused feedback for up to
 30 seconds from its latest attempt, so delayed room-empty feedback does not look
 like a manual pause. The original issue time still orders it before newer human
 playback intent; a retry does not become a new intent.
+Selecting a source cancels an old automatic Pause's recovery, while its accepted
+feedback retains this one-use attribution window. It must not manufacture a
+manual Pause hold. Newer Play/Pause or preset intent still takes priority.
 Within that bounded window, a separate external pause to the same state can be
 indistinguishable; exact attribution requires a correlated Home Assistant
 WebSocket service context.

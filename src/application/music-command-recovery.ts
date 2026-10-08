@@ -26,7 +26,11 @@ type Options = {
   feedbackTimeoutMs: number;
   publish: () => void;
   onTimeout: (command: MusicCommandRecord, publish?: boolean) => void;
-  onRetry: (command: MusicCommandRecord, signal: AbortSignal) => Promise<void>;
+  onRetry: (
+    command: MusicCommandRecord,
+    signal: AbortSignal,
+    isAllowed: () => boolean,
+  ) => Promise<void>;
   onAccepted: (command: MusicCommandRecord) => void;
   validateRead: (
     command: MusicCommandRecord,
@@ -79,7 +83,13 @@ export class MusicCommandRecovery {
     recovery.stage = 'stopped';
     recovery.nextAttemptAt = null;
     recovery.stopReason = reason;
-    if (runtime.command.status === 'pending') {
+    // Once removed from active, an unconfirmed completion must also settle the
+    // bounded ledger. Confirmed feedback keeps its caller's batched pruning.
+    if (
+      runtime.command.status === 'pending' ||
+      (runtime.command.status === 'unconfirmed' &&
+        reason !== 'feedback_confirmed')
+    ) {
       if (['superseded', 'disposed'].includes(reason))
         runtime.command.status = 'superseded';
       this.options.onTimeout(runtime.command, publish);
@@ -233,7 +243,9 @@ export class MusicCommandRecovery {
     this.awaitFeedback(runtime);
     try {
       // onRetry rechecks authority synchronously before adapter dispatch.
-      await this.options.onRetry(command, runtime.io.signal);
+      await this.options.onRetry(command, runtime.io.signal, () =>
+        this.allowed(runtime),
+      );
       if (!this.allowed(runtime)) return;
       runtime.accepted = true;
       command.acceptedAt = this.options.clock.now();

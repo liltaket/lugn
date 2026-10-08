@@ -153,7 +153,7 @@ export class MusicController {
         if (!this.disposed) this.publish();
       },
       onTimeout: (command, publish) => this.timeoutCommand(command, publish),
-      onRetry: async (command, signal) => {
+      onRetry: async (command, signal, isAllowed) => {
         if (this.recoveryGuards.get(command.id)?.() !== null)
           throw new Error('Recovery intent is no longer valid');
         command.status = 'pending';
@@ -167,7 +167,7 @@ export class MusicController {
         this.dispatchingCommands.add(command.id);
         this.publish();
         try {
-          if (this.recoveryGuards.get(command.id)?.() !== null)
+          if (!isAllowed() || this.recoveryGuards.get(command.id)?.() !== null)
             throw new Error(
               'Recovery intent was superseded during publication',
             );
@@ -1250,7 +1250,9 @@ export class MusicController {
           command.target === observation.target &&
           command.requested.property === 'playback' &&
           command.requested.value === 'paused' &&
-          command.status === 'unconfirmed' &&
+          (command.status === 'unconfirmed' ||
+            (command.status === 'superseded' &&
+              !isHumanActor(command.provenance.actor))) &&
           command.acceptedAt !== undefined &&
           playbackChangedAt >= command.issuedAt &&
           this.clock.now() -
@@ -1297,7 +1299,9 @@ export class MusicController {
       const matches =
         command.status === 'pending'
           ? age < this.timeoutMs
-          : command.status === 'unconfirmed' &&
+          : (command.status === 'unconfirmed' ||
+              (command.status === 'superseded' &&
+                !isHumanActor(command.provenance.actor))) &&
             command.acceptedAt !== undefined &&
             command.requested.value === 'paused' &&
             age < LATE_PAUSE_ATTRIBUTION_MS;
@@ -1318,7 +1322,10 @@ export class MusicController {
             candidate.requested.property === 'preset'),
       );
     if (newerPlaybackIntent) return false;
-    if (command.status === 'unconfirmed') {
+    // A source selection cancels retries, but does not request Play/Pause.
+    // Consume accepted automatic Pause feedback once, rather than creating a
+    // durable manual Pause. Newer playback/preset intent still takes priority.
+    if (command.status === 'unconfirmed' || command.status === 'superseded') {
       command.status = 'confirmed';
       command.confirmedAt = observation.observedAt;
       command.diagnosticReason =
