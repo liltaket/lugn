@@ -1,0 +1,3 @@
+## 2024-10-07 - Dynamic Range Slider Accessibility
+**Learning:** Setting `aria-valuetext` on `<input type="range">` elements and actively updating it on input provides crucial context to screen readers, especially when dealing with percentage values that might not be clearly inferred from raw values. Additionally, visually representing the selected value via a semantic `<output>` tag linked by `htmlFor` improves contextual relationships for assistive tech.
+**Action:** When adding or maintaining range inputs, always link the visual display using `<output>` with `htmlFor`, and ensure `aria-valuetext` is updated alongside value changes to pronounce the units (e.g. "50 procent").
