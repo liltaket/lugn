@@ -15,7 +15,7 @@ that live devices are currently controlled by this checkout.
 - Confirmed-away gating for automatic light/prelight activation and music
   automation, while preserving explicit dashboard controls.
 - Built-in light presets and room-scene convergence; local persistence for
-  logical lighting intent only.
+  logical lighting and music intent without replaying device commands.
 - Music presets, play/pause and volume policy through HA media-player entities,
   including the 23:00 start cutoff and Stockholm daily volume curve.
 - Custom Bed/Desk room dashboard, separate from Home Assistant, served and

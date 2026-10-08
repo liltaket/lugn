@@ -176,6 +176,55 @@ person adjustment includes the reported room count, such as `Personer (2):
 the clock; an unavailable count is shown as unknown instead of reusing a stale
 value.
 
+## Restart and durability
+
+The runtime saves logical music intent in the existing private state file
+alongside lighting intent. It retains baselines, exact manual volume destinations,
+human provenance and creation times, volume-policy enable state, absolute
+confirmed-absence deadlines, independent explicit Pause holds, and the prior
+enable setting for BILRESA temporary all-off mode. Restoring that temporary mode
+on the next long press preserves a valid manual hold.
+
+Restoration happens before fresh Home Assistant observations. Startup presence,
+reported volume and playback remain unknown; requested commands, command history,
+positive Play requests and fades are never replayed. A saved manual destination
+does not mean that volume was reached, and restoration does not send it to the
+player. A fade interrupted by restart keeps its saved human destination and the
+last committed baseline; it does not continue fading or claim completion.
+
+Short confirmed absences preserve absolute playback resume eligibility, including
+the existing Optical context. After fresh confirmed occupancy, a freshly available
+player may resume within that original window; at its exact expiry a new eligible
+entry may start the normal preset. Startup, HA seeding/recovery and unknown
+presence alone send no restored music commands. The first confirmed-empty
+heartbeat may pause playback for safety but does not renew saved deadlines or
+resume eligibility. Expired manual ownership is discarded without sending volume
+commands, including when its deadline passed during downtime. Repeated restarts
+cannot extend an absence.
+
+Explicit Pause does not expire with either continuity window. Its original
+timestamp protects it from stale Playing transitions and metadata updates. The
+first Playing snapshot after startup or availability recovery preserves Pause,
+even if HA advanced `last_changed`; that snapshot cannot prove human Play.
+An explicit Play/preset or an attributed newer physical Playing transition after
+a known observation baseline can release it. Freshly reported physical states
+remain visible while the hold persists.
+
+Persistence uses the existing 150 ms coalescing and atomic private-file write.
+Graceful shutdown flushes pending intent. HTTP/service acceptance is not proof of
+a durable write: an abrupt kill or power loss during the debounce or in-flight
+write can lose the latest change. Completed snapshots survive restart; stronger
+per-request durability would require a separate synchronous acknowledgment or
+journal. Physical power-loss testing remains pending.
+
+The reader accepts legacy lighting-only version-1 files. Installations with music
+write a version-2 envelope; older Lugn binaries reject that envelope and may start
+without saved lighting or music intent after rollback. Back up state before
+changing versions. Lighting-only installations retain version 1. Invalid music
+or changed music target IDs do not discard valid lighting, and invalid new music
+write input retains the last valid music section. Neither observations nor
+configuration secrets are stored.
+
 ## State and command confirmation
 
 The runtime observes playback, volume, source, title and availability from the
@@ -234,8 +283,9 @@ arbitrary entity ID or service call from a dashboard request.
   feedback, but their timing has not been measured against the connected WiiM.
 - Automatic behavior is configured for the room-level policy; the dashboard
   does not provide a player/source selector or an automation settings editor.
-- Music ownership and baselines are currently process-local; restart persistence
-  is a separate follow-up. Restart does not restore a saved music hold.
+- Abrupt termination can lose intent not yet durably written; a successful music
+  request does not acknowledge persistence. Physical power-loss and exact WiiM
+  feedback behavior remain unverified.
 - Physical WiiM timing, causal HA feedback attribution and fade trajectory
   tolerances remain unverified. On a test instance, change volume physically
   while occupied, cross 22:00/23:00/midnight/06:00, leave for less than 20 minutes,

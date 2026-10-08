@@ -56,6 +56,8 @@ import {
   type RoomState,
   type StateUpdate,
   MusicRequestSchema,
+  MusicIntentSnapshotSchema,
+  type MusicIntentSnapshot,
 } from '../core/schemas.js';
 import { CommandLedger } from '../execution/command-ledger.js';
 
@@ -65,6 +67,7 @@ export type EngineOptions = {
   scenes?: LightingScene[];
   defaultSceneId?: string;
   restoredLightingIntent?: LightingIntentSnapshot;
+  restoredMusicIntent?: MusicIntentSnapshot;
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
   continuityMs?: number;
@@ -488,6 +491,28 @@ export class LugnEngine {
       diagnostics: [],
       timings: [],
     };
+    if (options.restoredMusicIntent) {
+      const restoredMusic = MusicIntentSnapshotSchema.parse(
+        options.restoredMusicIntent,
+      );
+      const targets = Object.keys(this.musicController.state.devices);
+      if (
+        Object.keys(restoredMusic.targets).length !== targets.length ||
+        targets.some((target) => !Object.hasOwn(restoredMusic.targets, target))
+      )
+        throw new Error(
+          'Restored music intent targets do not match configuration',
+        );
+      this.musicAutomation.restoreIntent(restoredMusic);
+      this.bilresaPriorVolumeAutomation =
+        restoredMusic.temporaryVolumeAutomationRestore;
+      for (const [target, intent] of Object.entries(restoredMusic.targets))
+        if (intent.pause)
+          this.musicController.restorePauseIntent(
+            target,
+            intent.pause.createdAt,
+          );
+    }
     this.roomSessions = new RoomSessions(
       clock,
       options.roomSessionContinuityMs ?? 20 * 60_000,
@@ -677,6 +702,12 @@ export class LugnEngine {
         ]),
       ),
     });
+  }
+
+  getMusicIntentSnapshot(): MusicIntentSnapshot {
+    return MusicIntentSnapshotSchema.parse(
+      this.musicAutomation.getIntentSnapshot(this.bilresaPriorVolumeAutomation),
+    );
   }
 
   /** True while the configured default is waiting for the first confirmed entry. */

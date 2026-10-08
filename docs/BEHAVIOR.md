@@ -63,8 +63,10 @@ only after existing command attribution identifies a genuine external change.
 
 An explicit pause holds `music.playback` for that player until a later explicit
 Play/preset or an attributed newer physical Play. Presence, command timeout and
-continuity expiry do not release it. Volume remains independent. Playback holds
-are process-local and reset on restart, as music continuity already does.
+continuity expiry do not release it. Volume remains independent. Saved playback
+holds survive restart with their original timestamp; the first HA Playing seed
+or availability-recovery snapshot cannot surrender them. Music absence deadlines
+and short-return eligibility are absolute and cannot be renewed by restart.
 
 An explicit all-off or Sleep scene holds `lighting.activation` for its off
 targets until another explicit scene, a power adjustment to that target, or an
@@ -209,7 +211,7 @@ diagnostics contain lifecycle timestamps; state-stream updates include the
 
 Sessions are process-local. Restart is an explicit new visit boundary: startup
 state has no session, and only fresh confirmed occupancy starts a new UUID.
-The lighting intent store can restore domain intent and its absolute continuity
+The intent store can restore lighting/music intent and absolute continuity
 deadline, but never restores a session, sensor presence or device observations.
 An ended session remains visible until the next entry for diagnostics; disposal
 cancels its timer without manufacturing a physical exit.

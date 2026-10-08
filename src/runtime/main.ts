@@ -133,15 +133,22 @@ export async function startRuntime(
     filePath: lightingIntentPath,
     expectedDeviceIds: deviceIds,
     knownSceneIds: scenes.map((scene) => scene.id),
+    ...(Object.keys(config.homeAssistant.music).length === 0
+      ? {}
+      : {
+          expectedMusicTargetIds: Object.keys(config.homeAssistant.music),
+        }),
     onWarning: (message) => console.warn(`[lugn] ${message}`),
   });
   const restoredLightingIntent = await lightingIntentStore.load();
+  const restoredMusicIntent = lightingIntentStore.restoredMusicIntent;
   const engine = new LugnEngine(systemClock, {
     adapter: homeAssistantLighting,
     deviceIds,
     scenes,
     ...(defaultSceneId === undefined ? {} : { defaultSceneId }),
     ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
+    ...(restoredMusicIntent === undefined ? {} : { restoredMusicIntent }),
     prelight: config.prelight,
     ...(config.lightingControlModes === undefined
       ? {}
