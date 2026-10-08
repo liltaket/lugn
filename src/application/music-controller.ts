@@ -4,6 +4,7 @@ import {
   type MusicObservation,
 } from '../adapters/simulated-music.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
+import { isHumanActor } from '../core/automation-holds.js';
 import {
   MusicRequestSchema,
   MusicFadeRequestSchema,
@@ -29,6 +30,7 @@ const MUSIC_FADE_MAX_EXTENSION_MS = 30_000;
 // already timed out. Retain a short attribution window for accepted pauses;
 // HA REST does not expose a causal command context for exact correlation.
 const LATE_PAUSE_ATTRIBUTION_MS = 30_000;
+const LATE_VOLUME_ATTRIBUTION_MS = 30_000;
 
 export type MusicOptions = {
   targets?: Record<string, string[]>;
@@ -82,13 +84,26 @@ export class MusicController {
   private readonly observedSequence = new Map<string, number>();
   private readonly issuedSequence = new Map<string, number>();
   private readonly attributedSupersededVolumeCommands = new Set<string>();
-  private readonly lastObservations = new Map<string, MusicObservation>();
+  private readonly lastObservations = new Map<
+    string,
+    { observation: MusicObservation; staleVolumeFeedback: boolean }
+  >();
   // Intent/transition ordering must outlive command timeout and bounded ledger
   // history. A metadata-only HA snapshot cannot cancel a user's playback intent.
   private readonly latestPlaybackIntentAt = new Map<string, number>();
   private readonly latestPlaybackChangedAt = new Map<string, number>();
+  private readonly latestHumanVolumeIntent = new Map<
+    string,
+    { sequence: number; at: number }
+  >();
+  private readonly commandSequences = new Map<string, number>();
+  private readonly dispatchingCommands = new Set<string>();
+  private readonly attributedOlderAutomaticVolumeCommands = new Set<string>();
   private onExternalVolumeChange:
-    ((target: string, volume: number) => void) | undefined;
+    | ((target: string, volume: number, provenance: Provenance) => void)
+    | undefined;
+  private volumeRequestGuard:
+    ((target: string, provenance: Provenance) => void) | undefined;
   private onExternalPlaybackChange:
     | ((
         target: string,
@@ -147,9 +162,14 @@ export class MusicController {
     return structuredClone(this.requireTarget(target));
   }
   setExternalVolumeChangeHandler(
-    handler: (target: string, volume: number) => void,
+    handler: (target: string, volume: number, provenance: Provenance) => void,
   ): void {
     this.onExternalVolumeChange = handler;
+  }
+  setVolumeRequestGuard(
+    handler: (target: string, provenance: Provenance) => void,
+  ): void {
+    this.volumeRequestGuard = handler;
   }
   setExternalPlaybackChangeHandler(
     handler: (
@@ -172,6 +192,8 @@ export class MusicController {
   ): Promise<MusicCommandRecord> {
     const requested = MusicRequestSchema.parse(rawRequest);
     if (requested.property === 'volume')
+      this.volumeRequestGuard?.(target, provenance);
+    if (requested.property === 'volume')
       this.stopFade(
         target,
         'Superseded by a direct volume request',
@@ -187,6 +209,7 @@ export class MusicController {
     const request = MusicFadeRequestSchema.parse(rawRequest);
     const device = this.requireTarget(request.target);
     const normalizedProvenance = ProvenanceSchema.parse(provenance);
+    this.volumeRequestGuard?.(request.target, normalizedProvenance);
     const observationAt = device.observedAt;
     const startVolume = device.observed.volume;
     if (
@@ -206,6 +229,11 @@ export class MusicController {
       request.durationMs < stepCount * MUSIC_FADE_MIN_STEP_INTERVAL_MS
     )
       throw new MusicFadeDurationError();
+    if (isHumanActor(normalizedProvenance.actor))
+      this.latestHumanVolumeIntent.set(request.target, {
+        sequence: this.nextCommandId,
+        at: this.clock.now(),
+      });
     this.stopFade(
       request.target,
       'Replaced by a newer volume fade',
@@ -285,6 +313,8 @@ export class MusicController {
     const device = this.requireTarget(target);
     const requested = MusicRequestSchema.parse(rawRequest);
     const normalizedProvenance = ProvenanceSchema.parse(provenance);
+    if (requested.property === 'volume')
+      this.volumeRequestGuard?.(target, normalizedProvenance);
     if (
       requested.property === 'source' &&
       !device.allowedSources.includes(requested.value)
@@ -315,6 +345,15 @@ export class MusicController {
         reason: normalizedProvenance.reason ?? 'Explicit music adjustment',
       },
     };
+    this.commandSequences.set(command.id, this.nextCommandId);
+    if (
+      requested.property === 'volume' &&
+      isHumanActor(normalizedProvenance.actor)
+    )
+      this.latestHumanVolumeIntent.set(target, {
+        sequence: this.nextCommandId,
+        at: command.issuedAt,
+      });
     if (requested.property === 'playback' || requested.property === 'preset')
       this.latestPlaybackIntentAt.set(target, command.issuedAt);
     Object.assign(device.requested, { [requested.property]: requested.value });
@@ -336,9 +375,10 @@ export class MusicController {
     this.publish();
     let confirmedFromDispatch = false;
     try {
+      this.dispatchingCommands.add(command.id);
       await this.adapter.dispatch({ id: command.id, target, requested });
       command.acceptedAt = this.clock.now();
-      const observation = this.lastObservations.get(target);
+      const observation = this.lastObservations.get(target)?.observation;
       if (observation)
         confirmedFromDispatch = this.confirm(command, observation);
     } catch {
@@ -352,6 +392,8 @@ export class MusicController {
       }
       this.publish();
       throw new Error(`Music command failed for ${target}`);
+    } finally {
+      this.dispatchingCommands.delete(command.id);
     }
     this.pruneHistory(
       confirmedFromDispatch ? new Set([command.id]) : undefined,
@@ -369,6 +411,10 @@ export class MusicController {
     this.issuedSequence.clear();
     this.latestPlaybackIntentAt.clear();
     this.latestPlaybackChangedAt.clear();
+    this.latestHumanVolumeIntent.clear();
+    this.commandSequences.clear();
+    this.dispatchingCommands.clear();
+    this.attributedOlderAutomaticVolumeCommands.clear();
   }
 
   private scheduleFade(
@@ -444,8 +490,12 @@ export class MusicController {
       });
       const latest = this.lastObservations.get(runtime.state.target);
       const sequence = this.observedSequence.get(runtime.state.target) ?? 0;
-      if (latest && sequence > runtime.baselineSequence)
-        this.acceptFadeObservation(runtime, latest, sequence);
+      if (
+        latest &&
+        !latest.staleVolumeFeedback &&
+        sequence > runtime.baselineSequence
+      )
+        this.acceptFadeObservation(runtime, latest.observation, sequence);
     } catch {
       this.finishFade(
         runtime,
@@ -627,6 +677,8 @@ export class MusicController {
         !protectedIds.has(command.id)
       ) {
         this.state.commands.splice(index, 1);
+        this.commandSequences.delete(command.id);
+        this.attributedOlderAutomaticVolumeCommands.delete(command.id);
         this.releaseTracking(command.id);
         terminalCount -= 1;
       } else {
@@ -640,6 +692,8 @@ export class MusicController {
       const command = this.state.commands[index];
       if (command && command.status !== 'pending') {
         this.state.commands.splice(index, 1);
+        this.commandSequences.delete(command.id);
+        this.attributedOlderAutomaticVolumeCommands.delete(command.id);
         this.releaseTracking(command.id);
         terminalCount -= 1;
       } else {
@@ -684,13 +738,41 @@ export class MusicController {
       );
     const latePausePredatesNewerIntent =
       this.attributeLatePauseBeforeNewerIntent(observation, observedPlayback);
-    const externalVolumeChange =
+    const volumeChanged =
       observation.available &&
       previousVolume !== null &&
       observedVolume !== null &&
-      Math.abs(observedVolume - previousVolume) > 0.005 + Number.EPSILON &&
-      !this.matchesRecentPendingVolumeCommand(observation, observedVolume) &&
-      !this.attributeSupersededVolumeObservation(observation, observedVolume);
+      Math.abs(observedVolume - previousVolume) > 0.005 + Number.EPSILON;
+    const currentCorrelatedVolumeFeedback =
+      observedVolume !== null &&
+      this.matchesCurrentCorrelatedVolumeCommand(observation, observedVolume);
+    const staleVolumeFeedback =
+      !currentCorrelatedVolumeFeedback &&
+      ((observation.available &&
+        observedVolume !== null &&
+        previousVolume !== null &&
+        !volumeChanged &&
+        this.lastObservations.get(observation.target)?.staleVolumeFeedback ===
+          true &&
+        !this.matchesRecentPendingVolumeCommand(observation, observedVolume)) ||
+        (volumeChanged &&
+          (this.attributeOlderAutomaticVolumeObservation(
+            observation,
+            observedVolume,
+          ) ||
+            (!this.matchesRecentPendingVolumeCommand(
+              observation,
+              observedVolume,
+            ) &&
+              this.attributeSupersededVolumeObservation(
+                observation,
+                observedVolume,
+              )))));
+    const externalVolumeChange =
+      volumeChanged &&
+      !staleVolumeFeedback &&
+      !currentCorrelatedVolumeFeedback &&
+      !this.matchesRecentPendingVolumeCommand(observation, observedVolume);
     const externalPlaybackChange =
       observation.available &&
       previousPlayback !== 'unknown' &&
@@ -709,7 +791,10 @@ export class MusicController {
     );
     const sequence = (this.observedSequence.get(observation.target) ?? 0) + 1;
     this.observedSequence.set(observation.target, sequence);
-    this.lastObservations.set(observation.target, structuredClone(observation));
+    this.lastObservations.set(observation.target, {
+      observation: structuredClone(observation),
+      staleVolumeFeedback,
+    });
     const confirmedIds = new Set<string>();
     for (const command of [...this.state.commands])
       if (
@@ -718,6 +803,10 @@ export class MusicController {
       )
         confirmedIds.add(command.id);
     if (externalVolumeChange && observedVolume !== null) {
+      this.latestHumanVolumeIntent.set(observation.target, {
+        sequence: this.nextCommandId,
+        at: this.clock.now(),
+      });
       for (const command of this.state.commands) {
         if (
           command.target !== observation.target ||
@@ -735,7 +824,18 @@ export class MusicController {
       // prior request here would make the automation prefer stale state over
       // this observation when it calculates the next target.
       delete device.requested.volume;
-      this.onExternalVolumeChange?.(observation.target, observedVolume);
+      this.onExternalVolumeChange?.(
+        observation.target,
+        observedVolume,
+        device.observedProvenance,
+      );
+      // External human intent cancels every future step even when the new value
+      // happens to remain inside the previous fade's trajectory tolerance.
+      this.stopFade(
+        observation.target,
+        'External volume intent interrupted the fade',
+        'interrupted',
+      );
     }
     if (externalPlaybackChange) {
       for (const command of this.state.commands) {
@@ -759,7 +859,8 @@ export class MusicController {
       );
     }
     const fade = this.fades.get(observation.target);
-    if (fade) this.acceptFadeObservation(fade, observation, sequence);
+    if (fade && !staleVolumeFeedback)
+      this.acceptFadeObservation(fade, observation, sequence);
     this.pruneHistory(confirmedIds);
     this.publish();
   }
@@ -803,6 +904,82 @@ export class MusicController {
           0.005 + Number.EPSILON,
     );
   }
+  private matchesCurrentCorrelatedVolumeCommand(
+    observation: MusicObservation,
+    volume: number,
+  ): boolean {
+    if (observation.commandId === undefined) return false;
+    const command = [...this.state.commands]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.target === observation.target &&
+          candidate.requested.property === 'volume',
+      );
+    const intent = this.latestHumanVolumeIntent.get(observation.target);
+    return (
+      command !== undefined &&
+      command.requested.property === 'volume' &&
+      command.id === observation.commandId &&
+      command.acceptedAt !== undefined &&
+      (command.status === 'pending' || command.status === 'confirmed') &&
+      observation.observedAt >= command.issuedAt &&
+      Math.abs(volume - command.requested.value) <= 0.005 + Number.EPSILON &&
+      !(
+        intent !== undefined &&
+        !isHumanActor(command.provenance.actor) &&
+        (this.commandSequences.get(command.id) ?? Infinity) <= intent.sequence
+      )
+    );
+  }
+
+  private attributeOlderAutomaticVolumeObservation(
+    observation: MusicObservation,
+    observedVolume: number,
+  ): boolean {
+    const intent = this.latestHumanVolumeIntent.get(observation.target);
+    const latestVolume = [...this.state.commands]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.target === observation.target &&
+          candidate.requested.property === 'volume',
+      );
+    // Correlated feedback remains feedback, regardless of delay or command
+    // status. HA REST has no correlation: retain one bounded attribution for
+    // an older accepted/in-flight automatic command after newer human intent.
+    const command = [...this.state.commands]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.target === observation.target &&
+          candidate.requested.property === 'volume' &&
+          (candidate.acceptedAt !== undefined ||
+            this.dispatchingCommands.has(candidate.id)) &&
+          Math.abs(observedVolume - candidate.requested.value) <=
+            0.005 + Number.EPSILON &&
+          (observation.commandId !== undefined
+            ? observation.commandId === candidate.id &&
+              (candidate.id !== latestVolume?.id ||
+                candidate.status !== 'pending' ||
+                (intent !== undefined &&
+                  !isHumanActor(candidate.provenance.actor) &&
+                  (this.commandSequences.get(candidate.id) ?? Infinity) <=
+                    intent.sequence))
+            : intent !== undefined &&
+              !isHumanActor(candidate.provenance.actor) &&
+              (this.commandSequences.get(candidate.id) ?? Infinity) <=
+                intent.sequence &&
+              this.clock.now() - intent.at < LATE_VOLUME_ATTRIBUTION_MS &&
+              this.clock.now() - candidate.issuedAt <
+                LATE_VOLUME_ATTRIBUTION_MS &&
+              !this.attributedOlderAutomaticVolumeCommands.has(candidate.id)),
+      );
+    if (!command) return false;
+    if (observation.commandId === undefined)
+      this.attributedOlderAutomaticVolumeCommands.add(command.id);
+    return true;
+  }
   private attributeSupersededVolumeObservation(
     observation: MusicObservation,
     observedVolume: number,
@@ -820,6 +997,7 @@ export class MusicController {
           (observation.commandId === undefined ||
             observation.commandId === command.id) &&
           !this.attributedSupersededVolumeCommands.has(command.id) &&
+          !this.attributedOlderAutomaticVolumeCommands.has(command.id) &&
           Math.abs(observedVolume - command.requested.value) <=
             0.005 + Number.EPSILON,
       );
@@ -983,8 +1161,10 @@ export class MusicController {
       phase,
       target: runtime.state.target,
       state: structuredClone(runtime.state),
-      actualVolume:
-        this.state.devices[runtime.state.target]?.observed.volume ?? null,
+      actualVolume: this.lastObservations.get(runtime.state.target)
+        ?.staleVolumeFeedback
+        ? runtime.state.observedVolume
+        : (this.state.devices[runtime.state.target]?.observed.volume ?? null),
       provenance: structuredClone(runtime.provenance),
     });
   }

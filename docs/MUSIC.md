@@ -60,10 +60,11 @@ are initial software defaults and need measurement against the real WiiM.
 Volume matching allows a difference of 0.005 in Home Assistant's 0..1 scale.
 An observation cached from before a request cannot confirm it, and a matching
 observation only proves that HA reported the expected value. The volume policy
-tracks attribution separately: explicit/manual volume changes update the user
-baseline, while automatic policy actions are attributed to Lugn. See
-[Volume policy](#volume-policy) for the distinction between last controller,
-automatic adjustment, baseline and target.
+tracks authority separately from attribution: explicit/manual volume changes
+claim temporary ownership and update the user baseline. Automatic policy actions
+are attributed to Lugn only when they are allowed. See
+[Volume policy](#volume-policy) for the distinction between active owner, last
+changer, automatic adjustment, baseline and target.
 
 ## Automatic playback rules
 
@@ -78,8 +79,9 @@ automatic adjustment, baseline and target.
    does not start music; a new eligible entry is required.
 4. A Home Assistant `away` observation immediately pauses currently playing
    music, prevents later presence-driven starts/resumes, and cancels automatic
-   volume adjustments. Returning to `home` while the room is occupied restores
-   volume policy, but does not itself start music.
+   volume adjustments. Returning to `home` or `unknown` while the room is occupied
+   restores eligible volume policy, but does not itself start music or clear a
+   manual volume hold.
 5. Home status `unknown` is not treated as away and therefore does not gate the
    room-presence policy. It is shown separately on the dashboard.
 
@@ -118,6 +120,54 @@ Dashboard volume changes set a new user baseline after accounting for the
 current automatic offset. Thus a manual `+` or `−` remains a five-point step
 even when the daily curve is active.
 
+Explicit volume requests from a dashboard/user, physical remote or Home Assistant,
+and attributed external WiiM/HA volume changes claim **manual volume ownership**.
+While that ownership is valid, no automatic volume command or fade step may run,
+including minute ticks, person-count changes and evening/night offsets. Human
+volume commands and fades remain available even when automation is disabled,
+presence is unknown or HA reports away. Adapter rejection or missing confirmation
+does not cancel the human hold or prove that the requested volume was reached.
+The calculated automatic target remains inspectable as a counterfactual during
+the hold; it is not a command to the player.
+
+Ownership transitions are deterministic:
+
+| Event                                                                                 | Volume ownership behavior                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Human volume request or attributed external change                                    | Manual ownership begins; newer intent replaces the baseline.                                                                                                                                                 |
+| Human fade begins                                                                     | Manual ownership begins immediately; its destination is committed after successful settling, otherwise its actual terminal volume is used. Newer human intent takes precedence over a stale fade completion. |
+| First confirmed-empty event in an absence                                             | Start one absolute 20-minute continuity deadline.                                                                                                                                                            |
+| Repeated empty, empty → unknown → empty, or HA home/away                              | Preserve that deadline; do not extend it.                                                                                                                                                                    |
+| Occupied before the deadline                                                          | Preserve manual ownership and volume; cancel the absence countdown.                                                                                                                                          |
+| Exact deadline or later                                                               | Release the old manual hold. Send no volume command until room presence is occupied and HA is not away. Keep the baseline for the next eligible policy calculation.                                          |
+| Unknown without a preceding confirmed absence                                         | Suspend automatic adjustments without starting a countdown or clearing manual intent.                                                                                                                        |
+| Dedicated automatic-volume enable from disabled                                       | Deliberately hand volume back to automation; keep playback Pause independent.                                                                                                                                |
+| BILRESA long-press all-off mode restore                                               | Restore the prior enable setting without surrendering a valid manual hold.                                                                                                                                   |
+| New human intent after an absence deadline has expired, while still absent or unknown | Claim a fresh bounded 20-minute hold without renewing playback resume eligibility. Repeated empty observations do not extend the fresh hold.                                                                 |
+
+Explicit Play, Pause and preset selection do not change volume ownership. The
+manual Pause hold does not expire with the volume continuity window. Disabling
+automation, confirmed empty/away, and room presence `unknown` cancel future
+automatic fade steps; intentional human fades are still allowed. A human fade
+crossing an absence deadline may finish intentionally, but its completion does
+not recreate the expired hold. An already dispatched HA service call cannot be
+recalled.
+
+The backend volume snapshot exposes `activeOwner`, `lastIntentActor`, `policyEnabled`,
+`policyActive`, a typed `activityReason`, and `manualHold` with provenance, creation
+time, exact requested volume and optional expiry. `lastIntentActor` records the
+latest authorized volume intent, not a claim that the player changed; acceptance
+and confirmation remain separate in the command ledger. `effectiveTarget` is the
+current owner's destination, while `target` remains the calculated automatic
+target. Activity is false for valid manual ownership, disabled
+policy, unknown/empty room presence, away status, active fades and unavailable
+volume observations. Reads do not mutate the baseline or ownership. Legacy
+`controller` and `automatic` fields remain for existing clients.
+
+Dedicated enable clears a temporary hold but preserves an already active human
+fade until its terminal state. Competing automatic volume requests are blocked
+for that fade's lifetime; its completion does not recreate the surrendered hold.
+
 The Hub volume panel distinguishes the player's current volume from Lugn's
 calculated target. It reports who last changed the volume, whether automatic
 adjustment is active, the user baseline, and the current daily adjustment. The
@@ -153,6 +203,23 @@ once; subsequent physical changes, including a return to that level, remain
 external. Without a causal HA context, an external change to that exact older
 level can be indistinguishable from its first delayed feedback.
 
+After newer human intent, the first changed observation matching an older
+accepted or still in-flight **automatic** volume command is attributed to that command for up to
+30 seconds from both the older command and the human intent, including commands
+that have already confirmed or timed out. It updates reported volume but cannot
+replace the manual baseline or interrupt a newer human fade. Attribution is
+consumed once; metadata-only repeats keep ownership unchanged. Explicit command
+correlation is honored for retained commands regardless of delay. Once records
+are pruned, or outside the uncorrelated window, HA REST cannot distinguish delayed
+feedback from a genuinely newer physical change to the same value. Such a change
+can update the baseline but never releases a manual hold.
+
+If older automatic feedback and a current human fade step have the same value,
+uncorrelated repeats can remain classified as stale. The current fade may then
+finish unconfirmed and retain its last trusted volume rather than claim success.
+Fresh correlated feedback resolves this ambiguity; the HA REST adapter currently
+provides no command correlation. Manual ownership remains in force either way.
+
 Each target must map to a distinct `media_player.*` entity. Preset IDs default
 to Spotify DJ `1` and Optical `4`; exact source names are allowlisted per
 target. The adapter uses fixed `media_player` services and does not accept an
@@ -167,3 +234,12 @@ arbitrary entity ID or service call from a dashboard request.
   feedback, but their timing has not been measured against the connected WiiM.
 - Automatic behavior is configured for the room-level policy; the dashboard
   does not provide a player/source selector or an automation settings editor.
+- Music ownership and baselines are currently process-local; restart persistence
+  is a separate follow-up. Restart does not restore a saved music hold.
+- Physical WiiM timing, causal HA feedback attribution and fade trajectory
+  tolerances remain unverified. On a test instance, change volume physically
+  while occupied, cross 22:00/23:00/midnight/06:00, leave for less than 20 minutes,
+  then leave beyond the exact 20-minute boundary. Verify the HA command log has
+  no automatic volume commands during the hold, and that only eligible return
+  reactivates policy. Also interrupt fades, disconnect/reconnect HA and delay
+  service feedback; compare reported volume and command confirmation separately.
