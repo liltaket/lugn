@@ -12,9 +12,19 @@
     <main class="screen" id="app-root" data-role="unknown">
       <section class="glance" aria-label="Tid och inomhusklimat">
         <div class="clock-block" aria-label="Lokal tid och datum">
-          <time id="clock-time" class="clock-time" aria-label="Klockan"
-            >—:—</time
-          >
+          <div class="clock-top">
+            <time id="clock-time" class="clock-time" aria-label="Klockan"
+              >—:—</time
+            >
+            <button
+              id="presence-count-one"
+              class="presence-count-button"
+              type="button"
+              hidden
+            >
+              Sätt till 1 person
+            </button>
+          </div>
           <div class="clock-meta">
             <time id="clock-date" class="clock-date" datetime=""
               >Hämtar datum …</time

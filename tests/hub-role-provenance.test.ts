@@ -4,6 +4,7 @@ import { LugnEngine } from '../src/application/lugn-engine.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { FakeClock } from '../src/core/clock.js';
 import { LugnDisplayServer } from '../src/runtime/display-server.js';
+import { Stl27lPresenceControlAdapter } from '../src/adapters/stl27l-presence-control.js';
 
 async function setup() {
   const finder = createServer();
@@ -22,7 +23,12 @@ async function setup() {
     ],
     music: { targets: { 'music.room': ['Optical'] } },
   });
-  const registry = new CapabilityRegistry(engine);
+  const registry = new CapabilityRegistry(engine, {
+    presenceCountAdapter: new Stl27lPresenceControlAdapter(
+      'http://sensor.invalid',
+      async () => Response.json({ ok: true, count: 1 }),
+    ),
+  });
   const invoke = vi.spyOn(registry, 'invoke');
   const server = new LugnDisplayServer({
     host: '127.0.0.1',
@@ -66,6 +72,7 @@ async function setup() {
 }
 
 const actions = [
+  ['presence-count-one', {}, 'presence.setCountOne'],
   ['scene', { sceneId: 'scene.soft_light' }, 'lighting.activateScene'],
   [
     'light',
@@ -143,7 +150,7 @@ it('rejects body or URL role/source spoofing before invoking capabilities', asyn
             'content-type': 'application/json',
             origin: new URL(s.url('bed')).origin,
           },
-          body: JSON.stringify(actions[2][1]),
+          body: JSON.stringify(actions[3][1]),
         })
       ).status,
     ).toBe(400);

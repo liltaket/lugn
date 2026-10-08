@@ -86,7 +86,11 @@ async function microtasks(): Promise<void> {
   for (let i = 0; i < 30; i++) await Promise.resolve();
 }
 
-function dashboard(initialVolume = 0.3, streaming = false) {
+function dashboard(
+  initialVolume = 0.3,
+  streaming = false,
+  presenceCorrection = false,
+) {
   const clock = new FakeClock(Date.parse('2026-10-03T12:00:00Z'));
   const adapter = new SimulatedMusicAdapter(clock);
   const engine = new LugnEngine(clock, {
@@ -153,6 +157,7 @@ function dashboard(initialVolume = 0.3, streaming = false) {
   let nextStateGate: Promise<void> | undefined;
   let nextStateStatus = 200;
   let stateReads = 0;
+  let presenceCorrections = 0;
   const holdNextState = (status = 200) => {
     nextStateStatus = status;
     let release = () => {};
@@ -176,6 +181,7 @@ function dashboard(initialVolume = 0.3, streaming = false) {
           instanceId: 'runtime-a',
           deliveryRevision: stateReads + 1,
           generatedAt: clock.now(),
+          presenceCountCorrectionAvailable: presenceCorrection,
           musicVolumePolicies: engine.getMusicVolumePolicySnapshots(),
           musicPlaybackPolicies: engine.getMusicPlaybackPolicySnapshots(),
         }),
@@ -187,6 +193,11 @@ function dashboard(initialVolume = 0.3, streaming = false) {
       nextStateStatus = 200;
       if (gate) await gate;
       return { ok: status === 200, status, json: async () => snapshot };
+    }
+    if (url.endsWith('/display-api/presence-count-one')) {
+      expect(JSON.parse(options.body ?? '{}')).toEqual({});
+      presenceCorrections += 1;
+      return { ok: true, json: async () => ({ accepted: true, count: 1 }) };
     }
     const body = JSON.parse(options.body ?? '{}') as {
       target: string;
@@ -228,6 +239,7 @@ function dashboard(initialVolume = 0.3, streaming = false) {
     fetch,
     Date,
     Intl,
+    AbortController,
     console,
     window: {
       setTimeout,
@@ -252,6 +264,7 @@ function dashboard(initialVolume = 0.3, streaming = false) {
     context,
     holdNextState,
     stateReads: () => stateReads,
+    presenceCorrections: () => presenceCorrections,
     streams,
     document,
     documentListeners,
@@ -261,6 +274,7 @@ function dashboard(initialVolume = 0.3, streaming = false) {
       scenes: [],
       role: 'desk',
       generatedAt: clock.now(),
+      presenceCountCorrectionAvailable: presenceCorrection,
       musicVolumePolicies: engine.getMusicVolumePolicySnapshots(),
       musicPlaybackPolicies: engine.getMusicPlaybackPolicySnapshots(),
     }),
@@ -270,6 +284,45 @@ function dashboard(initialVolume = 0.3, streaming = false) {
 afterEach(() => {
   vi.useRealTimers();
 });
+
+it.each(['bed', 'desk'] as const)(
+  'keeps %s correction acknowledgement distinct from reported occupancy and music Details',
+  async (role) => {
+    vi.useFakeTimers();
+    const ui = dashboard(0.3, false, true);
+    try {
+      await microtasks();
+      await ui.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+        personCount: 2,
+      });
+      runInContext(
+        `render(${JSON.stringify({ ...ui.payload(), role })})`,
+        ui.context,
+      );
+      const before = structuredClone(ui.engine.state.presence);
+      const button = ui.get('#presence-count-one');
+      expect(button.hidden).toBe(false);
+      ui.get('#music-details-button').click();
+      expect(ui.get('#music-details').hidden).toBe(false);
+      button.click();
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('aria-busy')).toBe('true');
+      await microtasks();
+      expect(ui.presenceCorrections()).toBe(1);
+      expect(button.disabled).toBe(false);
+      expect(ui.engine.state.presence).toEqual(before);
+      expect(ui.get('#room-presence').textContent).toContain('2 personer');
+      expect(ui.get('#toast').textContent).toBe(
+        'Räknaren har bekräftat 1 person. Väntar på sensorstatus.',
+      );
+      expect(ui.get('#music-details').hidden).toBe(false);
+    } finally {
+      ui.engine.dispose();
+    }
+  },
+);
 
 describe('Hub role action hierarchy', () => {
   const sceneIds = [

@@ -91,6 +91,24 @@ button[aria-busy='true'] {
   line-height: 0.95;
   letter-spacing: -0.035em;
 }
+.clock-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.clock-top[data-correction='true'] .clock-time {
+  font-size: clamp(52px, 7.5vw, 88px);
+}
+.presence-count-button {
+  flex: 0 0 106px;
+  min-height: 44px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  font-size: 14px;
+  line-height: 1.25;
+}
 .clock-date {
   color: var(--quiet);
   font-size: clamp(20px, 2.3vw, 28px);

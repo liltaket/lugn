@@ -3,6 +3,7 @@ import { HomeAssistantEnvironmentMappingsSchema } from '../adapters/home-assista
 import { HomeAssistantHomePresenceConfigSchema } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantButtonMappingsSchema } from '../adapters/home-assistant-button.js';
 import { HomeAssistantBilresaConfigSchema } from '../adapters/home-assistant-bilresa.js';
+import { PresenceControlConfigSchema } from '../adapters/stl27l-presence-control.js';
 import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -248,6 +249,7 @@ const FileConfigSchema = z
     homeAssistant: HomeAssistantConfigSchema,
     lightingControlModes: LightingControlModesSchema.default({}),
     mqtt: MqttConfigSchema.optional(),
+    presenceControl: PresenceControlConfigSchema.optional(),
     display: DisplayConfigSchema.optional(),
     prelight: z
       .object({
@@ -327,6 +329,7 @@ export function validateRuntimeFileConfig(value: unknown): void {
 }
 
 export type RuntimeConfig = {
+  presenceControl?: z.output<typeof PresenceControlConfigSchema>;
   lightingControlModes?: LightingControlModes;
   http: {
     host: string;
@@ -516,6 +519,9 @@ export function loadRuntimeConfig(
       environment: fileConfig.homeAssistant.environment,
     },
     ...(mqtt === undefined ? {} : { mqtt }),
+    ...(fileConfig.presenceControl === undefined
+      ? {}
+      : { presenceControl: fileConfig.presenceControl }),
     ...(display === undefined ? {} : { display }),
     prelight: fileConfig.prelight,
     lightingControlModes: fileConfig.lightingControlModes,

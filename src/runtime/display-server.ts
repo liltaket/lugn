@@ -77,6 +77,7 @@ export type LugnDisplayServerOptions = {
   /** Hostnames/IPs accepted in Host and Origin; entries may omit the port. */
   allowedHosts?: readonly string[];
   capabilities: CapabilityRegistry;
+  presenceCountCorrectionAvailable?: boolean;
   scenes: readonly LightingScene[];
   stateProvider: () => RoomState;
   stateStream?: StateEventStream;
@@ -285,6 +286,41 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'POST' &&
+        hubRequest.route === '/display-api/presence-count-one'
+      ) {
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        const input = z
+          .object({})
+          .strict()
+          .parse(await readJsonBody(request));
+        try {
+          const result = await this.options.capabilities.invoke(
+            'presence.setCountOne',
+            input,
+            hubProvenance(hubRequest.hub),
+          );
+          sendJson(response, 200, result);
+        } catch (error) {
+          sendJson(
+            response,
+            error instanceof CapabilityInputError ? 400 : 502,
+            {
+              error:
+                error instanceof CapabilityInputError
+                  ? error.code
+                  : 'presence_sensor_unavailable',
+            },
+          );
+        }
+        return;
+      }
+      if (
+        request.method === 'POST' &&
         hubRequest.route === '/display-api/scene'
       ) {
         await this.invokeScene(request, response, hubRequest.hub);
@@ -345,6 +381,8 @@ export class LugnDisplayServer {
         this.options.musicPlaybackPoliciesProvider?.() ?? {},
       scenes: this.options.scenes,
       role: hub.role,
+      presenceCountCorrectionAvailable:
+        this.options.presenceCountCorrectionAvailable ?? false,
       castStatus: this.options.castStatus?.(hub.id) ?? { state: 'unknown' },
       environment:
         this.options.environmentProvider?.() ?? emptyEnvironmentSnapshot(),
