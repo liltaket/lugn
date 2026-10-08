@@ -13,6 +13,7 @@ const READ_TIMEOUT_MS = 5_000;
 const RETRY_DELAYS = [2_000, 5_000] as const;
 type Runtime = {
   command: MusicCommandRecord;
+  sourceAtIssue?: string;
   valid: () => MusicRecoveryStopReason | null;
   accepted: boolean;
   deadline: number;
@@ -42,7 +43,11 @@ type Options = {
 export class MusicCommandRecovery {
   private readonly active = new Map<string, Runtime>();
   constructor(private readonly options: Options) {}
-  start(command: MusicCommandRecord, valid: Runtime['valid']): void {
+  start(
+    command: MusicCommandRecord,
+    valid: Runtime['valid'],
+    sourceAtIssue?: string,
+  ): void {
     const { clock } = this.options;
     command.recovery = {
       stage: 'awaiting_feedback',
@@ -54,6 +59,7 @@ export class MusicCommandRecovery {
     };
     const runtime: Runtime = {
       command,
+      ...(sourceAtIssue === undefined ? {} : { sourceAtIssue }),
       valid,
       accepted: false,
       deadline: clock.monotonicNow() + RECOVERY_WINDOW_MS,
@@ -170,6 +176,19 @@ export class MusicCommandRecovery {
     recovery.verifiedAt = this.options.clock.now();
     if (!observation.available) {
       this.stop(command.id, 'reported_unavailable');
+      return;
+    }
+    // Source selection can leave HA playback/last_changed untouched. Compare
+    // against the original request's known source, including on the first read.
+    // The GET remains separate from subscription intent and ownership.
+    const sourceChanged =
+      command.requested.property === 'playback' &&
+      runtime.sourceAtIssue !== undefined &&
+      observation.values.source !== null &&
+      observation.values.source.length > 0 &&
+      observation.values.source !== runtime.sourceAtIssue;
+    if (sourceChanged) {
+      this.stop(command.id, 'newer_report');
       return;
     }
     if (command.requested.property === 'preset') {

@@ -500,7 +500,16 @@ export class MusicController {
         return null;
       };
       this.recoveryGuards.set(command.id, valid);
-      this.recovery.start(command, valid);
+      this.recovery.start(
+        command,
+        valid,
+        requested.property === 'playback' &&
+          device.availability === 'available' &&
+          device.observed.source !== null &&
+          device.observed.source.length > 0
+          ? device.observed.source
+          : undefined,
+      );
     } else
       this.timers.set(
         command.id,
@@ -885,6 +894,14 @@ export class MusicController {
       return;
     const previousVolume = device.observed.volume;
     const previousPlayback = device.observed.playback;
+    const sourceChanged =
+      device.availability === 'available' &&
+      observation.available &&
+      device.observed.source !== null &&
+      device.observed.source.length > 0 &&
+      observation.values.source !== null &&
+      observation.values.source.length > 0 &&
+      device.observed.source !== observation.values.source;
     const observedVolume = observation.values.volume;
     const observedPlayback = observation.values.playback;
     const newPlaybackTransition = this.isNewPlaybackTransition(
@@ -1026,6 +1043,10 @@ export class MusicController {
         this.confirm(command, observation)
       )
         confirmedIds.add(command.id);
+    // Source is in the playback ordering domain but is not a Play/Pause
+    // request. Preserve ordinary feedback matching, then cancel old recovery
+    // without manufacturing or releasing a Pause hold.
+    if (sourceChanged) this.bumpIntent(observation.target, 'playback');
     if (externalVolumeChange && observedVolume !== null) {
       this.bumpIntent(observation.target, 'volume');
       this.latestHumanVolumeIntent.set(observation.target, {

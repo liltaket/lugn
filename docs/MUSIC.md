@@ -123,6 +123,18 @@ requests share an ordering domain; volume, fade replacement/cancel and physical
 volume use the independent volume domain. Recovery dispatches preserve the
 original manual intent and absence deadline rather than creating another hold.
 
+A change between two known available source values also cancels playback recovery,
+even if playback and HA `last_changed` stay unchanged. Verification compares the
+source against the original request's known source, including on its first read;
+that read cancels only recovery and does not create subscription intent or a
+Play/Pause hold. Null/unknown sources and title-only updates do not establish a
+source change. A recent source/preset request cannot prove that it caused a later
+source report, so this cancellation is conservative even for a possible delayed
+Lugn echo. Ordinary source confirmation and accepted late Pause attribution still
+apply; source cancellation itself neither creates nor clears manual Pause or
+volume ownership. A separately attributed physical Play/Pause retains its existing
+policy behavior.
+
 Human Play/Pause remains independent from volume and usable while away/unknown.
 Human volume retries require the same live manual hold. Explicit automation
 handback cancels them; temporary BILRESA all-off/restore retains a valid hold.

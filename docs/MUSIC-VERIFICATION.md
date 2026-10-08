@@ -62,6 +62,15 @@ instant; sockets, asynchronous I/O and timers remain real. Its daytime brightnes
 expectation no longer depends on the developer's quiet-hours window. Music clock
 tests use an injected `FakeClock`; they do not change the machine or device clock.
 
+`music-source-recovery.test.ts` uses the real HA adapter with a synthetic REST
+transport and state-change events. It covers source-only changes after missing
+automatic Pause feedback, same-tick intent, first/pre-retry pure reads, cancellation
+during retry publication, unchanged-source metadata, null/unknown sources,
+independent manual volume and explicit Pause, recent source/preset ambiguity,
+accepted late Pause attribution, and a separately attributed physical Pause.
+These checks establish software cancellation and ownership behavior; physical
+WiiM source and feedback timing remain unmeasured.
+
 ## Pending physical-device protocol
 
 Run this only in an explicitly authorized isolated bench instance with its own
