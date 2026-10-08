@@ -110,6 +110,14 @@ export class MusicController {
     string,
     { sequence: number; at: number }
   >();
+  private readonly latestExternalPlaybackIntent = new Map<
+    string,
+    {
+      sequence: number;
+      changedAt: number | undefined;
+      playback: 'playing' | 'paused';
+    }
+  >();
   private readonly commandSequences = new Map<string, number>();
   private readonly dispatchingCommands = new Set<string>();
   private readonly attributedOlderAutomaticVolumeCommands = new Set<string>();
@@ -552,6 +560,7 @@ export class MusicController {
     this.latestPlaybackIntentAt.clear();
     this.latestPlaybackChangedAt.clear();
     this.latestHumanVolumeIntent.clear();
+    this.latestExternalPlaybackIntent.clear();
     this.commandSequences.clear();
     this.dispatchingCommands.clear();
     this.attributedOlderAutomaticVolumeCommands.clear();
@@ -1054,6 +1063,11 @@ export class MusicController {
       );
     }
     if (externalPlaybackChange) {
+      this.latestExternalPlaybackIntent.set(observation.target, {
+        sequence: this.nextCommandId,
+        changedAt: observation.playbackChangedAt,
+        playback: observedPlayback as 'playing' | 'paused',
+      });
       this.bumpIntent(observation.target, 'playback');
       for (const command of this.state.commands) {
         if (
@@ -1094,6 +1108,21 @@ export class MusicController {
       changedAt > this.clock.now()
     )
       return false;
+    const external = this.latestExternalPlaybackIntent.get(observation.target);
+    // Equal HA timestamps can hide the ordering of physical Play then Pause.
+    // Yield to the later paused report without letting equal-time Playing
+    // feedback clear a manual Pause.
+    if (
+      previousPlayback === 'playing' &&
+      observation.values.playback === 'paused' &&
+      external?.playback === 'playing' &&
+      changedAt === external.changedAt &&
+      changedAt === this.latestPlaybackChangedAt.get(observation.target) &&
+      changedAt >
+        (this.latestPlaybackIntentAt.get(observation.target) ??
+          Number.NEGATIVE_INFINITY)
+    )
+      return true;
     // last_updated advances for title/volume/availability snapshots too.
     // Only a playback transition newer than both the last intent and previous
     // transition can supersede intent, even if an intermediate state was missed.
@@ -1232,6 +1261,24 @@ export class MusicController {
     this.attributedSupersededVolumeCommands.add(superseded.id);
     return superseded;
   }
+  private pauseAttributionPredatesExternalIntent(
+    command: MusicCommandRecord,
+    observation: MusicObservation,
+  ): boolean {
+    const external = this.latestExternalPlaybackIntent.get(command.target);
+    if (
+      !external ||
+      (this.commandSequences.get(command.id) ?? Infinity) > external.sequence
+    )
+      return true;
+    // Ordering survives equal issue times and bounded command history. Only
+    // explicitly historical feedback may still describe the older Pause.
+    return (
+      observation.playbackChangedAt !== undefined &&
+      external.changedAt !== undefined &&
+      observation.playbackChangedAt < external.changedAt
+    );
+  }
   private attributeLatePauseBeforeNewerIntent(
     observation: MusicObservation,
     observedPlayback: MusicObservation['values']['playback'],
@@ -1253,6 +1300,7 @@ export class MusicController {
           (command.status === 'unconfirmed' ||
             command.status === 'superseded') &&
           command.acceptedAt !== undefined &&
+          this.pauseAttributionPredatesExternalIntent(command, observation) &&
           playbackChangedAt >= command.issuedAt &&
           this.clock.now() -
             (command.recovery?.lastAttemptAt ?? command.issuedAt) <
@@ -1303,7 +1351,11 @@ export class MusicController {
             command.acceptedAt !== undefined &&
             command.requested.value === 'paused' &&
             age < LATE_PAUSE_ATTRIBUTION_MS;
-      if (matches) {
+      if (
+        matches &&
+        (command.requested.value !== 'paused' ||
+          this.pauseAttributionPredatesExternalIntent(command, observation))
+      ) {
         commandIndex = index;
         break;
       }

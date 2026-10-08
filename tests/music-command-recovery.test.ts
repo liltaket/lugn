@@ -74,6 +74,19 @@ function setup(feedbackTimeoutMs = 1_000, clockStart = start) {
   return { clock, adapter, engine, report, issue, advance, record };
 }
 
+async function acceptedPause(
+  s: ReturnType<typeof setup>,
+  actor: 'human' | 'automatic',
+) {
+  if (actor === 'human') return s.issue('playback', 'paused');
+  await s.engine.handlePresence({
+    type: 'presence.changed',
+    presence: 'confirmed_empty',
+  });
+  await flush();
+  return s.engine.state.music.commands[0]!;
+}
+
 it.each([60_000, 63_000])(
   'a retry publication consuming monotonic time until %i ms cannot cross the recovery deadline',
   async (elapsed) => {
@@ -273,6 +286,320 @@ it('source-superseded automatic Pause attribution preserves newer Play and a gen
       s.clock.now(),
     );
     expect(s.engine.state.intent.holds).toHaveLength(1);
+  } finally {
+    s.engine.dispose();
+  }
+});
+
+it.each(['human', 'automatic'] as const)(
+  '%s source-superseded Pause yields to physical Play before genuinely newer physical Pause',
+  async (actor) => {
+    const s = setup();
+    try {
+      const pause = await acceptedPause(s, actor);
+      s.clock.advanceBy(1);
+      await s.engine.requestMusic(
+        target,
+        { property: 'source', value: 'Optical' },
+        human,
+      );
+      s.clock.advanceBy(1);
+      s.adapter.observe(
+        target,
+        s.report().values,
+        true,
+        undefined,
+        s.clock.now(),
+        s.clock.now(),
+      );
+      expect(s.engine.state.intent.holds).toEqual([]);
+      s.clock.advanceBy(1);
+      s.adapter.observe(
+        target,
+        s.report(0.3, 'paused').values,
+        true,
+        undefined,
+        s.clock.now(),
+        s.clock.now(),
+      );
+      expect(s.engine.state.intent.holds).toMatchObject([
+        {
+          createdAt: s.clock.now(),
+          provenance: {
+            actor: { type: 'home_assistant' },
+            source: 'external_observation',
+          },
+        },
+      ]);
+      expect(s.record(pause.id).status).toBe('superseded');
+      await s.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'confirmed_empty',
+      });
+      await flush();
+      const count = s.adapter.dispatched.length;
+      await s.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+        personCount: 1,
+      });
+      await flush();
+      expect(
+        s.adapter.dispatched
+          .slice(count)
+          .some(
+            (command) =>
+              command.requested.property === 'preset' ||
+              (command.requested.property === 'playback' &&
+                command.requested.value === 'playing'),
+          ),
+      ).toBe(false);
+    } finally {
+      s.engine.dispose();
+    }
+  },
+);
+
+it.each(['human', 'automatic'] as const)(
+  '%s historical source-superseded Pause feedback cannot undo newer physical Play',
+  async (actor) => {
+    const s = setup();
+    try {
+      const pause = await acceptedPause(s, actor);
+      s.clock.advanceBy(1);
+      await s.engine.requestMusic(
+        target,
+        { property: 'source', value: 'Optical' },
+        human,
+      );
+      const historicalChangedAt = s.clock.now();
+      s.clock.advanceBy(1);
+      s.adapter.observe(
+        target,
+        s.report().values,
+        true,
+        undefined,
+        s.clock.now(),
+        s.clock.now(),
+      );
+      const intent = s.engine.getMusicIntentSnapshot();
+      s.clock.advanceBy(1);
+      s.adapter.observe(
+        target,
+        s.report(0.3, 'paused').values,
+        true,
+        undefined,
+        s.clock.now(),
+        historicalChangedAt,
+      );
+      expect(s.engine.getMusicIntentSnapshot()).toEqual(intent);
+      expect(s.engine.state.intent.holds).toEqual([]);
+      expect(s.record(pause.id).status).toBe('superseded');
+    } finally {
+      s.engine.dispose();
+    }
+  },
+);
+
+it('physical playback intent ordering survives same-tick reports without transition timestamps', async () => {
+  const s = setup();
+  try {
+    s.adapter.observe(target, s.report(0.3, 'paused').values);
+    const pause = await s.issue('playback', 'paused');
+    await s.engine.requestMusic(
+      target,
+      { property: 'source', value: 'Optical' },
+      human,
+    );
+    s.adapter.observe(target, s.report().values);
+    expect(s.engine.state.intent.holds).toEqual([]);
+    s.adapter.observe(target, s.report(0.3, 'paused').values);
+    expect(s.engine.state.intent.holds).toMatchObject([
+      {
+        createdAt: start,
+        provenance: {
+          actor: { type: 'home_assistant' },
+          source: 'external_observation',
+        },
+      },
+    ]);
+    expect(s.record(pause.id).status).toBe('superseded');
+  } finally {
+    s.engine.dispose();
+  }
+});
+
+it('a receive timestamp cannot prove later Paused feedback predates timestamp-free physical Play', async () => {
+  const s = setup();
+  try {
+    s.adapter.observe(target, s.report(0.3, 'paused').values);
+    const pause = await s.issue('playback', 'paused');
+    s.clock.advanceBy(1);
+    await s.engine.requestMusic(
+      target,
+      { property: 'source', value: 'Optical' },
+      human,
+    );
+    const changedAt = s.clock.now();
+    s.clock.advanceBy(1);
+    s.adapter.observe(target, s.report().values);
+    s.clock.advanceBy(1);
+    s.adapter.observe(
+      target,
+      s.report(0.3, 'paused').values,
+      true,
+      undefined,
+      s.clock.now(),
+      changedAt,
+    );
+    expect(s.engine.state.intent.holds).toMatchObject([
+      {
+        createdAt: s.clock.now(),
+        provenance: {
+          actor: { type: 'home_assistant' },
+          source: 'external_observation',
+        },
+      },
+    ]);
+    expect(s.record(pause.id).status).toBe('superseded');
+  } finally {
+    s.engine.dispose();
+  }
+});
+
+it.each(['human', 'automatic'] as const)(
+  '%s equal-time physical Pause yields conservatively and repeats do not renew or release its hold',
+  async (actor) => {
+    const s = setup();
+    try {
+      await acceptedPause(s, actor);
+      s.clock.advanceBy(1);
+      await s.engine.requestMusic(
+        target,
+        { property: 'source', value: 'Optical' },
+        human,
+      );
+      s.clock.advanceBy(1);
+      const changedAt = s.clock.now();
+      s.adapter.observe(
+        target,
+        s.report().values,
+        true,
+        undefined,
+        s.clock.now(),
+        changedAt,
+      );
+      s.clock.advanceBy(1);
+      s.adapter.observe(
+        target,
+        s.report(0.3, 'paused').values,
+        true,
+        undefined,
+        s.clock.now(),
+        changedAt,
+      );
+      expect(s.engine.state.intent.holds).toMatchObject([
+        {
+          createdAt: s.clock.now(),
+          provenance: {
+            actor: { type: 'home_assistant' },
+            source: 'external_observation',
+          },
+        },
+      ]);
+      const intent = s.engine.getMusicIntentSnapshot();
+      s.clock.advanceBy(1);
+      s.adapter.observe(
+        target,
+        s.report(0.3, 'paused').values,
+        true,
+        undefined,
+        s.clock.now(),
+        changedAt,
+      );
+      expect(s.engine.getMusicIntentSnapshot()).toEqual(intent);
+      s.clock.advanceBy(1);
+      s.adapter.observe(
+        target,
+        s.report().values,
+        true,
+        undefined,
+        s.clock.now(),
+        changedAt,
+      );
+      expect(s.engine.getMusicIntentSnapshot()).toEqual(intent);
+      s.clock.advanceBy(1);
+      s.adapter.observe(
+        target,
+        s.report().values,
+        true,
+        undefined,
+        s.clock.now(),
+        s.clock.now(),
+      );
+      expect(s.engine.state.intent.holds).toEqual([]);
+    } finally {
+      s.engine.dispose();
+    }
+  },
+);
+
+it('retained physical playback ordering does not veto newer Pause intent after ledger pruning', async () => {
+  const s = setup();
+  try {
+    const old = await s.issue('playback', 'paused');
+    s.clock.advanceBy(1);
+    await s.engine.requestMusic(
+      target,
+      { property: 'source', value: 'Optical' },
+      human,
+    );
+    s.clock.advanceBy(1);
+    const physicalPlayAt = s.clock.now();
+    s.adapter.observe(
+      target,
+      s.report().values,
+      true,
+      undefined,
+      physicalPlayAt,
+      physicalPlayAt,
+    );
+    for (let index = 0; index < 130; index++) {
+      await s.engine.requestMusic(
+        target,
+        { property: 'source', value: 'Optical' },
+        human,
+      );
+      s.adapter.observe(
+        target,
+        s.report().values,
+        true,
+        undefined,
+        physicalPlayAt,
+        physicalPlayAt,
+      );
+    }
+    expect(
+      s.engine.state.music.commands.some((command) => command.id === old.id),
+    ).toBe(false);
+    const pause = await s.issue('playback', 'paused');
+    const intent = s.engine.getMusicIntentSnapshot();
+    await s.engine.requestMusic(
+      target,
+      { property: 'source', value: 'Optical' },
+      human,
+    );
+    s.clock.advanceBy(1);
+    s.adapter.observe(
+      target,
+      s.report(0.3, 'paused').values,
+      true,
+      undefined,
+      s.clock.now(),
+      s.clock.now(),
+    );
+    expect(s.engine.getMusicIntentSnapshot()).toEqual(intent);
+    expect(s.record(pause.id).status).toBe('confirmed');
   } finally {
     s.engine.dispose();
   }

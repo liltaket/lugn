@@ -361,6 +361,13 @@ Selecting a source cancels an old Pause's recovery, while its accepted
 feedback retains this one-use attribution window. It must not manufacture a
 manual Pause hold or replace a human Pause's original age and provenance.
 Newer Play/Pause or preset intent still takes priority.
+Newer external playback intent also outlives command history and equal issue
+times: after external Play, a later/equal-time Paused report cannot be attributed
+to an older accepted Pause. A strictly earlier playback timestamp remains
+historical. If HA reports Playing then Paused with the same timestamp,
+Lugn conservatively holds Pause; equal-time Playing never releases it, and
+repeated Paused metadata does not renew it. Without causal context the tie is
+ambiguous, so explicit Play or a genuinely newer Playing transition is required.
 Within that bounded window, a separate external pause to the same state can be
 indistinguishable; exact attribution requires a correlated Home Assistant
 WebSocket service context.
