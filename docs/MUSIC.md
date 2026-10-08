@@ -65,6 +65,92 @@ are attributed to Lugn only when they are allowed. See
 [Volume policy](#volume-policy) for the distinction between active owner, last
 changer, automatic adjustment, baseline and target.
 
+## Verification after missing feedback
+
+Service acceptance still does not confirm device state. If an accepted command
+has no matching subscription feedback by the configured feedback timeout
+(10 seconds by default), Lugn reads only its mapped Home Assistant entity with
+`GET /api/states/{entity_id}`. This is **Home Assistant's stored entity report**,
+not a physical WiiM poll. An unchanged entity may legitimately have an update
+timestamp older than the command; a read older than a newer known report is
+rejected. The read does not emit a subscription observation or advance its
+watermarks, change volume ownership/baseline, clear Pause, or confirm a preset.
+
+The original command carries optional typed `recovery` metadata: stage,
+`attemptCount` (initial attempt plus at most two retries), `lastAttemptAt`,
+`deadlineAt`, `nextAttemptAt`, `stopReason`, and the separate `reported` values
+and `verifiedAt` time. A matching read ends recovery at `matched`; the command
+remains `unconfirmed`, because a current HA match does not prove what caused it.
+Ordinary matching feedback can still confirm through the existing controller.
+
+```mermaid
+stateDiagram-v2
+    awaiting_feedback --> verifying: accepted attempt times out
+    verifying --> matched: HA currently reports requested value
+    verifying --> waiting_retry: different report and intent still valid
+    waiting_retry --> verifying: 2s / 5s, fresh pre-retry read
+    verifying --> retrying: pre-retry read still differs, authority rechecked
+    retrying --> awaiting_feedback: retry accepted
+    awaiting_feedback --> stopped: feedback / supersession / deadline
+    verifying --> stopped: unavailable, invalid, failed or ambiguous read
+    waiting_retry --> stopped: supersession / policy change / deadline
+    retrying --> stopped: failed or still-pending dispatch / deadline
+```
+
+The bounds are fixed, without new configuration:
+
+- At most **two extra attempts**, only for absolute volume or Play/Pause.
+  Backoff is **2 seconds before retry 1**, then **5 seconds before retry 2**.
+  Each retry gets another fresh read before dispatch; there are at most five
+  reads per original command. Reads and retry dispatches do not overlap.
+- Each read has a **5-second timeout**. All recovery work has one **60-second
+  deadline from original issue**, enforced with the monotonic clock, including
+  pending reads, dispatch acceptance and feedback waits. If dispatch was still
+  pending when its feedback wait expired, later acceptance cannot start recovery.
+  Abort signals bound HA requests; late continuations are discarded even if a
+  custom adapter does not honor cancellation.
+- Source commands get verification only. Presets can expose reported playback
+  status but cannot confirm the selected preset and are never resent. Fade
+  steps keep their own bounded feedback lifecycle and never enter this recovery.
+  Adapters without optional `readStatus` retain `unconfirmed` with the typed
+  `read_unavailable` reason; Lugn does not blindly resend.
+
+Authority is checked before and after reads, after backoff, and synchronously
+before dispatch, including after state-publication subscribers run. New direct
+or physical intent invalidates old work through per-target generations that
+outlive equal timestamps and pruned command history. Playback, preset and source
+requests share an ordering domain; volume, fade replacement/cancel and physical
+volume use the independent volume domain. Recovery dispatches preserve the
+original manual intent and absence deadline rather than creating another hold.
+
+Human Play/Pause remains independent from volume and usable while away/unknown.
+Human volume retries require the same live manual hold. Explicit automation
+handback cancels them; temporary BILRESA all-off/restore retains a valid hold.
+Automatic volume additionally requires occupied/non-away/enabled policy and the
+same person/day target and context. Automatic Play requires occupied/non-away,
+06:00–23:00 Stockholm time, a clear Pause hold and the original entry context.
+An automatic empty-room Pause is retried only while still confirmed empty; an
+away Pause only while still away. Unknown, return or home recovery cancels old
+work, even without a replacement command. Repeated identical samples do not
+renew the recovery deadline. A different HA read whose change timestamp is
+newer than the original intent is ambiguous physical intent; Lugn stops rather
+than overwriting it. Read/dispatch failures also stop this recovery. Normal room
+policy may independently evaluate later fresh commands; the attempt cap applies
+to this original command's recovery lifetime.
+
+The dashboard command status (visible alongside the primary controls and in the
+music view) explains checks, attempts and stop reasons. **HA-kontroll** identifies
+the separate read result. The main reported volume/playback still comes from the
+subscription; when a newer disagreeing read exists, that volume is labelled
+**Senast**. A newer subscription observation restores its ordinary freshness
+label. Neither value claims physical or causal confirmation.
+
+Recovery is **process-local** and is not persisted or replayed after restart.
+The existing durable manual volume/Pause intent and continuity policies remain
+unchanged. Disposal cancels timers and invalidates pending continuations. Actual
+HA/WiiM timing and physical behavior remain subject to the protocol below and
+[Music verification](MUSIC-VERIFICATION.md).
+
 ## Automatic playback rules
 
 1. A confirmed room-empty transition pauses each configured player and records
@@ -268,7 +354,9 @@ acceptance is separate from observed state:
 Home Assistant's REST service response does not give this adapter a causal
 command context to match later media-player feedback exactly. An accepted
 pause that times out remains eligible for matching paused feedback for up to
-30 seconds, so delayed room-empty feedback does not look like a manual pause.
+30 seconds from its latest attempt, so delayed room-empty feedback does not look
+like a manual pause. The original issue time still orders it before newer human
+playback intent; a retry does not become a new intent.
 Within that bounded window, a separate external pause to the same state can be
 indistinguishable; exact attribution requires a correlated Home Assistant
 WebSocket service context.
@@ -282,7 +370,7 @@ level can be indistinguishable from its first delayed feedback.
 
 After newer human intent, the first changed observation matching an older
 accepted or still in-flight **automatic** volume command is attributed to that command for up to
-30 seconds from both the older command and the human intent, including commands
+30 seconds from both the older command's latest attempt and the human intent, including commands
 that have already confirmed or timed out. It updates reported volume but cannot
 replace the manual baseline or interrupt a newer human fade. Attribution is
 consumed once; metadata-only repeats keep ownership unchanged. Explicit command

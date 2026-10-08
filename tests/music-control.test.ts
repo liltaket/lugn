@@ -37,7 +37,6 @@ function setup() {
 function controllerInternals(controller: MusicController) {
   return controller as unknown as {
     issuedSequence: Map<string, number>;
-    timers: Map<string, unknown>;
   };
 }
 
@@ -292,7 +291,7 @@ describe('semantic music control', () => {
     expect(controllerInternals(controller).issuedSequence.has(pending.id)).toBe(
       true,
     );
-    expect(controllerInternals(controller).timers.has(pending.id)).toBe(true);
+    expect(clock.pendingTimers()).toBeGreaterThan(0);
     expect(
       controller.state.commands.filter(({ status }) => status !== 'pending'),
     ).toHaveLength(128);
@@ -305,7 +304,6 @@ describe('semantic music control', () => {
     expect(controllerInternals(controller).issuedSequence.has(pending.id)).toBe(
       false,
     );
-    expect(controllerInternals(controller).timers.has(pending.id)).toBe(false);
     expect(clock.pendingTimers()).toBe(0);
     controller.dispose();
   });
@@ -332,7 +330,7 @@ describe('semantic music control', () => {
     clock.advanceBy(100);
     expect(controller.state.commands[0]?.status).toBe('unconfirmed');
     expect(internals.issuedSequence.size).toBe(0);
-    expect(internals.timers.size).toBe(0);
+    expect(clock.pendingTimers()).toBe(0);
 
     vi.spyOn(adapter, 'dispatch').mockRejectedValueOnce(
       new Error('private-token'),
@@ -346,7 +344,7 @@ describe('semantic music control', () => {
     ).rejects.toThrow('Music command failed');
     expect(controller.state.commands.at(-1)?.status).toBe('failed');
     expect(internals.issuedSequence.size).toBe(0);
-    expect(internals.timers.size).toBe(0);
+    expect(clock.pendingTimers()).toBe(0);
 
     const superseded = await controller.request(
       'music.room',
@@ -363,10 +361,9 @@ describe('semantic music control', () => {
     ).toBe('superseded');
     expect(internals.issuedSequence.size).toBe(1);
     expect(internals.issuedSequence.has(current.id)).toBe(true);
-    expect(internals.timers.size).toBe(1);
+    expect(clock.pendingTimers()).toBeGreaterThan(0);
     controller.dispose();
     expect(internals.issuedSequence.size).toBe(0);
-    expect(internals.timers.size).toBe(0);
     expect(clock.pendingTimers()).toBe(0);
   });
 

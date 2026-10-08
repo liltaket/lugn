@@ -8,6 +8,7 @@ import type {
   Presence,
   Provenance,
   MusicIntentSnapshot,
+  MusicCommandRecord,
   ManualVolumeHold,
 } from '../core/schemas.js';
 import type { MusicFadeLifecycleEvent } from './music-controller.js';
@@ -106,6 +107,7 @@ export class MusicAutomation {
   private lastConfirmedPresence: Presence = 'unknown';
   private restoredAbsenceAwaitingPresence = false;
   private readonly restoredPlaybackContinuityTargets = new Set<string>();
+  private readonly recoveryRevision = { volume: 0, playback: 0 };
 
   constructor(private readonly options: MusicAutomationOptions) {
     this.holds = options.holds ?? new AutomationHolds(options.clock);
@@ -117,6 +119,9 @@ export class MusicAutomation {
     personCount: number | null,
   ): void {
     if (this.disposed) return;
+    if (this.presence !== presence || this.personCount !== personCount)
+      this.recoveryRevision.volume++;
+    if (this.presence !== presence) this.recoveryRevision.playback++;
     this.expireManualVolumeHolds();
     this.presence = presence;
     this.personCount = personCount;
@@ -194,6 +199,10 @@ export class MusicAutomation {
 
   handleHomePresence(homePresence: HomePresence): void {
     if (this.disposed) return;
+    if (this.homePresence !== homePresence) {
+      this.recoveryRevision.volume++;
+      this.recoveryRevision.playback++;
+    }
     this.homePresence = homePresence;
     if (homePresence === 'away') {
       for (const target of this.options.targets) {
@@ -399,6 +408,7 @@ export class MusicAutomation {
     intent: 'explicit' | 'restore' = 'explicit',
   ): void {
     if (this.disposed || this.volumeAutomationEnabled === enabled) return;
+    this.recoveryRevision.volume++;
     this.volumeAutomationEnabled = enabled;
     if (!enabled) {
       this.cancelTimer();
@@ -568,6 +578,42 @@ export class MusicAutomation {
   }
 
   /** Shared authority gate for capability commands and every automatic fade step. */
+  recoveryAuthorization(command: MusicCommandRecord): string | null {
+    if (this.disposed) return null;
+    const { target, requested, provenance } = command;
+    if (isHumanActor(provenance.actor)) {
+      if (requested.property !== 'volume') return 'human';
+      const hold = this.getManualVolumeHold(target);
+      return hold &&
+        hold.volume === requested.value &&
+        !this.activeFades.has(target)
+        ? `manual-volume:${this.manualRevisions.get(target) ?? 0}`
+        : null;
+    }
+    if (requested.property === 'volume') {
+      const policy = this.getVolumePolicySnapshot(target);
+      return policy.policyActive &&
+        policy.target !== null &&
+        Math.abs(policy.target - requested.value) <= Number.EPSILON
+        ? `auto-volume:${this.recoveryRevision.volume}`
+        : null;
+    }
+    if (requested.property === 'playback' && requested.value === 'paused') {
+      const valid =
+        provenance.reason === 'pause'
+          ? this.presence === 'confirmed_empty'
+          : provenance.reason === 'pause while away' &&
+            this.homePresence === 'away';
+      return valid ? `auto-pause:${this.recoveryRevision.playback}` : null;
+    }
+    return this.presence === 'occupied' &&
+      this.homePresence !== 'away' &&
+      !this.isQuietHours() &&
+      !this.holds.blocks('music.playback', target)
+      ? `auto-play:${this.recoveryRevision.playback}`
+      : null;
+  }
+
   assertVolumeRequestAllowed(target: string, provenance: Provenance): void {
     if (isHumanActor(provenance.actor)) return;
     this.expireManualVolumeHolds();

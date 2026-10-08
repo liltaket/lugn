@@ -749,6 +749,9 @@ function renderMusicExplanations(payload, target) {
       : null;
   const commandText =
     pendingResult ??
+    (stale && command?.recovery
+      ? 'Återförsökens status okänd · Lugn svarar inte.'
+      : musicRecoveryText(command)) ??
     (command
       ? ({
           pending:
@@ -800,6 +803,62 @@ function renderMusicExplanations(payload, target) {
     rows.push(row);
   }
   refs.musicDecisionHistory.replaceChildren(...rows);
+}
+
+function musicRecoveryText(command) {
+  const recovery = command?.recovery;
+  if (!recovery || ['confirmed', 'superseded'].includes(command.status))
+    return null;
+  const attempts = `${recovery.attemptCount}/3`;
+  if (recovery.stage === 'verifying')
+    return `Kvittens saknas · läser HA-status (försök ${attempts})`;
+  if (recovery.stage === 'retrying')
+    return `Återförsök ${attempts} · skickar till HA`;
+  if (recovery.stage === 'awaiting_feedback')
+    return recovery.attemptCount > 1
+      ? `Försök ${attempts} · inväntar HA-rapport`
+      : null;
+  if (recovery.stage === 'waiting_retry') {
+    const seconds = Math.max(
+      0,
+      Math.ceil((recovery.nextAttemptAt - estimatedServerNow()) / 1000),
+    );
+    return `HA saknar begärt läge · ny kontroll om ${seconds} s`;
+  }
+  if (recovery.stage === 'matched') {
+    const request = command.requested;
+    const report = recovery.reported;
+    const value =
+      request.property === 'volume'
+        ? formatVolume(volumeFraction(report?.volume))
+        : request.property === 'source'
+          ? report?.source
+          : { playing: 'spelar', paused: 'pausad' }[report?.playback];
+    return `HA-kontroll: ${value ?? 'begärt läge'} · matchar begäran, orsak okänd`;
+  }
+  if (recovery.stage !== 'stopped') return null;
+  return (
+    {
+      superseded: 'Återförsök stoppat · nyare val',
+      policy_changed: 'Återförsök stoppat · ändrade villkor',
+      read_unavailable: 'Kvittens saknas · statuskontroll stöds inte',
+      read_failed: 'HA-status kunde inte läsas · inget återförsök',
+      read_timeout: 'HA-status svarade inte i tid · inget återförsök',
+      invalid_readback: 'HA-status är ogiltig eller äldre · inget återförsök',
+      reported_unavailable:
+        'HA rapporterar spelaren otillgänglig · inget återförsök',
+      newer_report: 'Nyare HA-status · Lugn avstår återförsök',
+      non_retryable:
+        command.requested.property === 'preset'
+          ? 'HA rapporterar spelstatus · vald preset kan inte verifieras'
+          : 'HA rapporterar annan källa · inget återförsök',
+      attempt_limit: 'Kvittens saknas efter 3 försök · kontrollera HA-status',
+      dispatch_failed: 'Återförsöket misslyckades · kontrollera HA-status',
+      acceptance_pending: 'Anropet kan ännu pågå · inget återförsök',
+      deadline: 'Tidsgräns 60 s nådd · inga fler återförsök',
+      disposed: 'Återförsöket avslutat',
+    }[recovery.stopReason] ?? null
+  );
 }
 
 function setMusicDetailsOpen(open) {
@@ -892,13 +951,23 @@ function renderMusic(payload) {
     !canControl || controlVolume === null || controlVolume <= 0;
   refs.musicVolumeUp.disabled =
     !canControl || controlVolume === null || controlVolume >= 1;
+  const newerVerification = (payload?.state?.music?.commands ?? []).some(
+    (command) =>
+      command.target === musicTarget &&
+      typeof command.recovery?.verifiedAt === 'number' &&
+      command.recovery.verifiedAt > (device.observedAt ?? -1) &&
+      typeof command.recovery.reported?.volume === 'number' &&
+      command.recovery.reported.volume !== volume,
+  );
   setText(
     refs.musicVolumeObservedLabel,
-    availability === 'available' && connected ? 'Nu' : 'Senast',
+    availability === 'available' && connected && !newerVerification
+      ? 'Nu'
+      : 'Senast',
   );
   refs.musicVolumeValue.setAttribute(
     'aria-label',
-    availability === 'available' && connected
+    availability === 'available' && connected && !newerVerification
       ? 'Spelarens rapporterade volym'
       : 'Senast rapporterade spelarvolym',
   );

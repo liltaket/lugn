@@ -23,7 +23,9 @@ export type MusicObservation = {
   provenance?: Provenance;
 };
 export interface MusicAdapter {
-  dispatch(command: MusicCommand): Promise<void>;
+  dispatch(command: MusicCommand, signal?: AbortSignal): Promise<void>;
+  /** Fresh read of the adapter's reported status; must not emit ordinary feedback. */
+  readStatus?(target: string, signal?: AbortSignal): Promise<MusicObservation>;
   subscribe(listener: (observation: MusicObservation) => void): () => void;
 }
 
