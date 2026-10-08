@@ -1251,8 +1251,7 @@ export class MusicController {
           command.requested.property === 'playback' &&
           command.requested.value === 'paused' &&
           (command.status === 'unconfirmed' ||
-            (command.status === 'superseded' &&
-              !isHumanActor(command.provenance.actor))) &&
+            command.status === 'superseded') &&
           command.acceptedAt !== undefined &&
           playbackChangedAt >= command.issuedAt &&
           this.clock.now() -
@@ -1300,8 +1299,7 @@ export class MusicController {
         command.status === 'pending'
           ? age < this.timeoutMs
           : (command.status === 'unconfirmed' ||
-              (command.status === 'superseded' &&
-                !isHumanActor(command.provenance.actor))) &&
+              command.status === 'superseded') &&
             command.acceptedAt !== undefined &&
             command.requested.value === 'paused' &&
             age < LATE_PAUSE_ATTRIBUTION_MS;
@@ -1323,7 +1321,7 @@ export class MusicController {
       );
     if (newerPlaybackIntent) return false;
     // A source selection cancels retries, but does not request Play/Pause.
-    // Consume accepted automatic Pause feedback once, rather than creating a
+    // Consume accepted Pause feedback once, rather than creating or replacing a
     // durable manual Pause. Newer playback/preset intent still takes priority.
     if (command.status === 'unconfirmed' || command.status === 'superseded') {
       command.status = 'confirmed';

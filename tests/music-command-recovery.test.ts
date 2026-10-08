@@ -156,6 +156,70 @@ it('source supersession stops recovery without inventing a manual Pause from acc
   }
 });
 
+it('source supersession preserves the complete durable human Pause intent through late accepted feedback', async () => {
+  const s = setup();
+  try {
+    const pause = await s.issue('playback', 'paused');
+    const intent = s.engine.getMusicIntentSnapshot();
+    s.clock.advanceBy(1);
+    await s.engine.requestMusic(
+      target,
+      { property: 'source', value: 'Optical' },
+      human,
+    );
+    expect(s.engine.getMusicIntentSnapshot()).toEqual(intent);
+    s.clock.advanceBy(1);
+    s.adapter.observe(
+      target,
+      s.report(0.3, 'paused').values,
+      true,
+      undefined,
+      s.clock.now(),
+      s.clock.now(),
+    );
+    expect(s.engine.getMusicIntentSnapshot()).toEqual(intent);
+    expect(s.engine.state.intent.holds).toMatchObject([
+      { createdAt: pause.issuedAt, provenance: human },
+    ]);
+    expect(s.record(pause.id)).toMatchObject({
+      status: 'confirmed',
+      recovery: { stopReason: 'superseded' },
+    });
+    // Attribution is consumed: genuinely newer physical Play/Pause remains
+    // meaningful and the later Pause receives its own age and provenance.
+    s.clock.advanceBy(1);
+    s.adapter.observe(
+      target,
+      s.report().values,
+      true,
+      undefined,
+      s.clock.now(),
+      s.clock.now(),
+    );
+    expect(s.engine.state.intent.holds).toEqual([]);
+    s.clock.advanceBy(1);
+    s.adapter.observe(
+      target,
+      s.report(0.3, 'paused').values,
+      true,
+      undefined,
+      s.clock.now(),
+      s.clock.now(),
+    );
+    expect(s.engine.state.intent.holds).toMatchObject([
+      {
+        createdAt: s.clock.now(),
+        provenance: {
+          actor: { type: 'home_assistant' },
+          source: 'external_observation',
+        },
+      },
+    ]);
+  } finally {
+    s.engine.dispose();
+  }
+});
+
 it('source-superseded automatic Pause attribution preserves newer Play and a genuinely later physical Pause', async () => {
   const s = setup();
   try {
