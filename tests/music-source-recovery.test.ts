@@ -59,13 +59,16 @@ async function setup() {
   const change = (
     source: string | null,
     playback = 'playing',
-    changedAt = start - 60_000,
+    changedAt: number | string = start - 60_000,
   ) => {
     snapshot = {
       ...snapshot,
       state: playback,
       last_updated: new Date(clock.now()).toISOString(),
-      last_changed: new Date(changedAt).toISOString(),
+      last_changed:
+        typeof changedAt === 'string'
+          ? changedAt
+          : new Date(changedAt).toISOString(),
       attributes: {
         ...snapshot.attributes,
         source,
@@ -374,6 +377,57 @@ it.each(['null-report', 'unknown-baseline'] as const)(
       expect(s.services).toEqual(['media_pause', 'media_pause']);
       expect(s.record(pause.id).recovery?.attemptCount).toBe(2);
       expect(s.engine.state.intent.holds).toEqual([]);
+    } finally {
+      s.engine.dispose();
+    }
+  },
+);
+
+it.each(['subscription', 'first-read', 'pre-retry-read'] as const)(
+  'a physical Pause whose HA microseconds collapse to the Play issue timestamp stops %s recovery',
+  async (path) => {
+    const s = await setup();
+    try {
+      const play = await s.engine.requestMusic(
+        target,
+        { property: 'playback', value: 'playing' },
+        human,
+      );
+      if (path === 'pre-retry-read') {
+        s.change('Spotify', 'paused', start - 1);
+        await s.advance(1_000);
+        expect(s.record(play.id).recovery?.stage).toBe('waiting_retry');
+      }
+      await s.advance(1);
+      s.change('Spotify', 'paused', '2026-10-04T10:00:00.000900+00:00');
+      if (path === 'subscription') s.emit();
+      await s.advance(path === 'pre-retry-read' ? 1_999 : 999);
+      await s.advance(2_000);
+      expect(s.services).toEqual(['media_play']);
+      expect(s.record(play.id).recovery?.stopReason).toBe(
+        path === 'subscription' ? 'superseded' : 'newer_report',
+      );
+      if (path === 'subscription') {
+        expect(s.engine.state.intent.holds).toMatchObject([
+          { provenance: { actor: { type: 'home_assistant' } } },
+        ]);
+        const hold = structuredClone(s.engine.state.intent.holds);
+        // Metadata repeats cannot renew Pause and equal-time Playing cannot
+        // release it, even when receipt/last_updated move forward.
+        s.change('Spotify', 'paused', start);
+        s.emit();
+        expect(s.engine.state.intent.holds).toEqual(hold);
+        await s.advance(1);
+        s.change('Spotify', 'playing', start);
+        s.emit();
+        expect(s.engine.state.intent.holds).toEqual(hold);
+      } else {
+        // A status GET cancels recovery without inventing subscription intent.
+        expect(s.engine.state.intent.holds).toEqual([]);
+        expect(s.engine.getMusicState(target).observed.playback).toBe(
+          'playing',
+        );
+      }
     } finally {
       s.engine.dispose();
     }

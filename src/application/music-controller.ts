@@ -1129,6 +1129,18 @@ export class MusicController {
       changedAt > this.clock.now()
     )
       return false;
+    // HA timestamps lose sub-millisecond ordering when parsed. A known
+    // Playing -> Paused transition tied with the last request must yield to
+    // Pause; the reverse tie must never release a manual Pause hold.
+    if (
+      previousPlayback === 'playing' &&
+      observation.values.playback === 'paused' &&
+      changedAt === this.latestPlaybackIntentAt.get(observation.target) &&
+      changedAt >=
+        (this.latestPlaybackChangedAt.get(observation.target) ??
+          Number.NEGATIVE_INFINITY)
+    )
+      return true;
     const external = this.latestExternalPlaybackIntent.get(observation.target);
     // Equal HA timestamps can hide the ordering of physical Play then Pause.
     // Yield to the later paused report without letting equal-time Playing

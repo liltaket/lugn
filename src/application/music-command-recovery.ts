@@ -228,7 +228,13 @@ export class MusicCommandRecovery {
       property === 'playback'
         ? observation.playbackChangedAt
         : observation.sourceUpdatedAt;
-    if (changedAt !== undefined && changedAt > command.issuedAt) {
+    if (
+      changedAt !== undefined &&
+      (changedAt > command.issuedAt ||
+        (property === 'playback' &&
+          actual === 'paused' &&
+          changedAt === command.issuedAt))
+    ) {
       this.stop(command.id, 'newer_report');
       return;
     }

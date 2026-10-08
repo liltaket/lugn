@@ -135,6 +135,13 @@ apply; source cancellation itself neither creates nor clears manual Pause or
 volume ownership. A separately attributed physical Play/Pause retains its existing
 policy behavior.
 
+HA timestamps can contain microseconds that JavaScript truncates to milliseconds.
+A known Playing-to-Paused transition tied with the latest playback request yields
+to Pause; equal-time Playing cannot clear a Pause hold. A status read reporting
+Paused with the original Play issue timestamp also stops recovery, without
+creating a hold or claiming a confirmed physical Pause. Strictly older playback
+timestamps retain the existing stale-feedback rules.
+
 Human Play/Pause remains independent from volume and usable while away/unknown.
 Human volume retries require the same live manual hold. Explicit automation
 handback cancels them; temporary BILRESA all-off/restore retains a valid hold.

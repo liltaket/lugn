@@ -71,6 +71,11 @@ accepted late Pause attribution, and a separately attributed physical Pause.
 These checks establish software cancellation and ownership behavior; physical
 WiiM source and feedback timing remain unmeasured.
 
+The HA adapter suite also reproduces a physical Pause whose microsecond timestamp
+parses to the Play issue millisecond. Subscription, first-read and pre-retry reads
+must stop the old Play recovery; repeated Paused metadata cannot renew the hold,
+equal-time Playing cannot release it, and pure reads cannot invent a hold.
+
 ## Pending physical-device protocol
 
 Run this only in an explicitly authorized isolated bench instance with its own
