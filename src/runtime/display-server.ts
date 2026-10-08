@@ -21,7 +21,10 @@ import {
   type MusicRequest,
 } from '../core/schemas.js';
 import type { EnvironmentSnapshot } from '../adapters/home-assistant-environment.js';
-import type { MusicVolumePolicySnapshot } from '../application/music-automation.js';
+import type {
+  MusicVolumePolicySnapshot,
+  MusicPlaybackPolicySnapshot,
+} from '../application/music-automation.js';
 import type { StateEventStream } from '../core/event-stream.js';
 
 const MAX_REQUEST_BYTES = 8 * 1024;
@@ -78,6 +81,10 @@ export type LugnDisplayServerOptions = {
   stateProvider: () => RoomState;
   stateStream?: StateEventStream;
   musicVolumePoliciesProvider?: () => Record<string, MusicVolumePolicySnapshot>;
+  musicPlaybackPoliciesProvider?: () => Record<
+    string,
+    MusicPlaybackPolicySnapshot
+  >;
   environmentProvider?: () => EnvironmentSnapshot;
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
 };
@@ -324,7 +331,10 @@ export class LugnDisplayServer {
       state: this.options.stateProvider(),
       deliveryRevision: ++this.nextDeliveryRevision,
       instanceId: this.instanceId,
+      generatedAt: Date.now(),
       musicVolumePolicies: this.options.musicVolumePoliciesProvider?.() ?? {},
+      musicPlaybackPolicies:
+        this.options.musicPlaybackPoliciesProvider?.() ?? {},
       scenes: this.options.scenes,
       role: hub.role,
       castStatus: this.options.castStatus?.(hub.id) ?? { state: 'unknown' },

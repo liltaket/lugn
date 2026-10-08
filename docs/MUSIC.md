@@ -14,7 +14,7 @@ The custom room dashboard provides:
 - Play/pause.
 - Volume down/up in 5 percentage-point steps.
 
-The capability API includes `music.getState`, `music.play`, `music.pause`,
+The capability API includes `music.getState`, `music.getPolicy`, `music.play`, `music.pause`,
 `music.setVolume` (0..1), `music.fadeVolume`, `music.cancelFade`, and
 `music.selectSource`. Fade requests use `{ target, volume, durationMs }`, with a
 1 second to 2 minute duration. Source names must appear in the target's
@@ -168,13 +168,42 @@ Dedicated enable clears a temporary hold but preserves an already active human
 fade until its terminal state. Competing automatic volume requests are blocked
 for that fade's lifetime; its completion does not recreate the surrendered hold.
 
-The Hub volume panel distinguishes the player's current volume from Lugn's
-calculated target. It reports who last changed the volume, whether automatic
-adjustment is active, the user baseline, and the current daily adjustment. The
-person adjustment includes the reported room count, such as `Personer (2):
-−10 pp` or `Personer (1): 0 pp`. The dashboard also shows the room count beside
-the clock; an unavailable count is shown as unknown instead of reusing a stale
-value.
+`state.music.volumeChanges[target]` separately records the last reported volume
+change, its observation time, provenance and attribution. Initial seeding,
+command acceptance and exact same-volume metadata updates do not invent a change.
+`correlated` means feedback names a known matching command; `matched` means its
+value/timing matches tracked intent without causal correlation; `external` means
+there is no such match. A matched report is not proof that Lugn caused the change.
+Delayed automatic feedback can remain the last reported changer while valid
+manual ownership still prevents every new automatic adjustment. Reported changes
+include small differences below the existing manual-ownership noise tolerance.
+
+The playback policy snapshot exposes typed `activityReason`, `entryEligible`,
+`quietHours`, the independent `manualPause` hold and a live `resumeExpiresAt`.
+`entryEligible` means an automatic action is permitted on the **next fresh
+confirmed entry from empty**, not that playback is currently active or may start
+immediately. It can be true while the room is empty and waiting for entry.
+Occupied startup/repeated occupancy waits for a new entry. Pause, away, unknown
+room presence and quiet hours suppress eligibility; quiet hours are 23:00–06:00
+in Europe/Stockholm. Availability suppression matches the existing restored
+continuity guard; ordinary playback entry does not acquire a new availability
+rule. The volume enable switch does not disable playback.
+
+`music.getPolicy` returns the target's volume/playback snapshots, last reported
+volume change and typed decision history. The display payload exposes the same
+playback snapshots and `generatedAt` for countdowns independent of Hub clock skew.
+History is bounded to 128 total music decisions and deduplicates unchanged
+ownership, reason, enable state and continuity deadlines. It records evaluated
+transitions, not every clock instant: the existing enabled volume-policy minute
+tick evaluates quiet-hour reasons, while disabled policy has no periodic volume
+evaluation. Unrelated lighting publications do not refresh music history. Reads
+do not append history. Report attribution and history are runtime diagnostics,
+never persisted or replayed after restart. This covers the music portion of issue
+#14; shared lighting/prelight decision history remains a follow-up.
+
+The Hub details distinguish reported and requested volume, the current owner's
+effective target, baseline and calculated daily/person adjustments. An unknown
+person count remains unknown rather than reusing a stale value.
 
 ## Restart and durability
 

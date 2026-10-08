@@ -17,8 +17,8 @@ without EventSource keep polling. Healthy streams retain a fifteen-second
 verification poll; hidden pages close the stream and visible pages reconnect.
 
 Selected scenes show sending, waiting for lamps, and confirmed states separately.
-Reported music volume remains labelled `Nu`; a requested target is labelled
-`Begärt mål` and waits for device feedback. Command acceptance still triggers a
+Reported music volume is labelled `Nu`, or `Senast` when the player or Lugn is
+unavailable. Requested volume is a separate fact in Details. Command acceptance triggers a
 fresh status read and never invents an observed state or physical convergence.
 
 ## Operational control panel
@@ -47,8 +47,10 @@ Assistant mappings and broader room systems remain future UI work.
 ## Current Hub dashboard
 
 Lugn serves its own room dashboard for Nest Hubs. It is a custom Lugn page, not
-a Home Assistant dashboard. The layout is designed to fit the Hub screen
-without horizontal or vertical scrolling.
+a Home Assistant dashboard. The primary layout fits the Hub screen without
+horizontal or vertical scrolling. The in-place Details pane may scroll its
+secondary explanations; music controls remain visible and `Tillbaka` restores
+lighting controls.
 
 The primary controls are large room-light preset buttons:
 
@@ -74,6 +76,35 @@ preset, playback and volume controls remain available while away.
 Volume steps and their boundary buttons use the latest pending requested volume,
 falling back to the reported volume after confirmation, failure, expiry or an
 external change. The displayed current volume remains the player's observation.
+
+The main music panel names the active volume owner and its typed reason. The
+effective target belongs to that owner; it does not become a requested volume
+merely because a command was accepted. Details separates automatic policy
+enabled/activity, the last reported volume changer, requested volume, baseline,
+daily/person-count offsets and the calculated automatic target. A matching
+uncorrelated report is labelled as matching a request, rather than proof of
+who moved the physical control. Missing attribution remains unknown.
+
+Manual volume continuity counts down only when the backend supplies a confirmed
+absence deadline. The countdown uses server time plus elapsed client time; at
+the boundary the dashboard waits for backend authority instead of releasing a
+hold itself. A lost connection marks authority/activity unknown and preserves
+last reported values.
+
+Playback explanations come from the shared backend policy. They distinguish
+manual Pause, home/away, unknown/empty presence, the 23–06 automatic-start gate,
+and eligibility for the next confirmed entry. Enabling volume automation does
+not disable or enable playback automation. Pending, failed and unconfirmed
+commands remain separate from reported playback. When a Pause hold exists,
+`Spela` explicitly releases it even if the player still reports playing after
+a failed Pause; volume ownership stays independent.
+
+Details shows the selected player's newest eight typed decisions from the
+backend's bounded 128-entry process history. It records evaluated policy
+transitions, not every clock tick or device event, and is not persisted. The
+`music.getPolicy` read capability exposes current volume/playback reasons,
+reported volume-change attribution and that player's history. This implements
+the music portion of issue #14; lighting/prelight history remains follow-up work.
 
 After command acceptance the Hub waits for a new status read started after
 acceptance before enabling the controls again. An earlier background poll is

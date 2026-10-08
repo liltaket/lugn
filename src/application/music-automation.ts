@@ -11,6 +11,13 @@ import type {
   ManualVolumeHold,
 } from '../core/schemas.js';
 import type { MusicFadeLifecycleEvent } from './music-controller.js';
+import { z } from 'zod';
+import {
+  AutomationHoldSchema,
+  ManualVolumeHoldSchema,
+  MusicVolumeActivityReasonSchema,
+  MusicPlaybackActivityReasonSchema,
+} from '../core/schemas.js';
 
 const automationActor = { type: 'automation' as const, id: 'lugn.music' };
 const minimumAutomatedVolume = 0.05;
@@ -27,32 +34,40 @@ type ActiveFade = {
 
 export type { ManualVolumeHold } from '../core/schemas.js';
 
-export type VolumeActivityReason =
-  | 'manual_hold'
-  | 'automation_disabled'
-  | 'presence_unknown'
-  | 'confirmed_empty'
-  | 'home_away'
-  | 'fade_active'
-  | 'volume_unavailable'
-  | 'active';
+export type VolumeActivityReason = z.infer<
+  typeof MusicVolumeActivityReasonSchema
+>;
+export const MusicPlaybackPolicySnapshotSchema = z.object({
+  activityReason: MusicPlaybackActivityReasonSchema,
+  /** Eligible for the next fresh entry, not permission to start immediately. */
+  entryEligible: z.boolean(),
+  quietHours: z.boolean(),
+  manualPause: AutomationHoldSchema.nullable(),
+  resumeExpiresAt: z.number().finite().nonnegative().nullable(),
+});
+export type MusicPlaybackPolicySnapshot = z.infer<
+  typeof MusicPlaybackPolicySnapshotSchema
+>;
 
-export type MusicVolumePolicySnapshot = {
-  activeOwner: 'manual' | 'lugn' | 'none';
-  lastIntentActor: 'manual' | 'lugn' | 'unknown';
-  policyEnabled: boolean;
-  policyActive: boolean;
-  activityReason: VolumeActivityReason;
-  manualHold: ManualVolumeHold | null;
-  controller: 'you' | 'lugn';
-  automatic: boolean;
-  baselineSource: 'user' | 'inferred' | 'unknown';
-  baseline: number | null;
-  target: number | null;
-  effectiveTarget: number | null;
-  dailyOffset: number;
-  personOffset: number;
-};
+export const MusicVolumePolicySnapshotSchema = z.object({
+  activeOwner: z.enum(['manual', 'lugn', 'none']),
+  lastIntentActor: z.enum(['manual', 'lugn', 'unknown']),
+  policyEnabled: z.boolean(),
+  policyActive: z.boolean(),
+  activityReason: MusicVolumeActivityReasonSchema,
+  manualHold: ManualVolumeHoldSchema.nullable(),
+  controller: z.enum(['you', 'lugn']),
+  automatic: z.boolean(),
+  baselineSource: z.enum(['user', 'inferred', 'unknown']),
+  baseline: z.number().nullable(),
+  target: z.number().nullable(),
+  effectiveTarget: z.number().nullable(),
+  dailyOffset: z.number(),
+  personOffset: z.number(),
+});
+export type MusicVolumePolicySnapshot = z.infer<
+  typeof MusicVolumePolicySnapshotSchema
+>;
 
 export type MusicAutomationOptions = {
   targets: string[];
@@ -67,6 +82,7 @@ export type MusicAutomationOptions = {
   onError?: (target: string, operation: string) => void;
   cancelAutomaticFade?: (target: string) => void;
   onChange?: () => void;
+  onPolicyTick?: () => void;
 };
 
 /** Presence-driven playback and volume policy for configured room players. */
@@ -146,29 +162,16 @@ export class MusicAutomation {
       this.lastConfirmedPresence = 'occupied';
       // Unknown samples do not erase the last confirmed room transition.
       const returningFromEmpty = lastConfirmedBeforeEvent === 'confirmed_empty';
-      if (
-        this.homePresence !== 'away' &&
-        returningFromEmpty &&
-        this.localHour() >= 6 &&
-        this.localHour() < 23
-      ) {
+      if (returningFromEmpty) {
         for (const target of this.options.targets) {
-          if (this.holds.blocks('music.playback', target)) continue;
-          if (
-            this.restoredPlaybackContinuityTargets.has(target) &&
-            this.options.getState(target).availability !== 'available'
-          )
-            continue;
-          if ((this.resumeUntil.get(target) ?? 0) > this.options.clock.now()) {
+          const action = this.entryAction(target);
+          if (action === 'resume') {
             this.send(
               target,
               { property: 'playback', value: 'playing' },
               'resume',
             );
-          } else if (
-            !this.holds.blocks('music.playback', target) &&
-            !this.isPlaying(this.options.getState(target))
-          ) {
+          } else if (action === 'preset') {
             this.send(
               target,
               { property: 'preset', value: 'spotify_dj' },
@@ -411,6 +414,73 @@ export class MusicAutomation {
 
   get isVolumeAutomationEnabled(): boolean {
     return this.volumeAutomationEnabled;
+  }
+
+  getPlaybackPolicySnapshot(target: string): MusicPlaybackPolicySnapshot {
+    const manualPause =
+      this.holds
+        .snapshot()
+        .find(
+          (hold) => hold.scope === 'music.playback' && hold.target === target,
+        ) ?? null;
+    const quietHours = this.isQuietHours();
+    const action = this.entryAction(target);
+    const activityReason = manualPause
+      ? 'manual_pause'
+      : this.homePresence === 'away'
+        ? 'home_away'
+        : quietHours
+          ? 'quiet_hours'
+          : this.presence === 'unknown'
+            ? 'presence_unknown'
+            : this.requiresAvailableEntry(target)
+              ? 'player_unavailable'
+              : this.presence === 'confirmed_empty' && action === null
+                ? 'already_playing'
+                : this.presence === 'confirmed_empty'
+                  ? 'confirmed_empty'
+                  : 'awaiting_new_entry';
+    const resume = this.resumeUntil.get(target) ?? 0;
+    return {
+      activityReason,
+      entryEligible:
+        this.presence === 'confirmed_empty' &&
+        this.lastConfirmedPresence === 'confirmed_empty' &&
+        action !== null,
+      quietHours,
+      manualPause,
+      resumeExpiresAt:
+        this.lastConfirmedPresence === 'confirmed_empty' &&
+        resume > this.options.clock.now()
+          ? resume
+          : null,
+    };
+  }
+
+  private isQuietHours(): boolean {
+    const hour = this.localHour();
+    return hour < 6 || hour >= 23;
+  }
+
+  private requiresAvailableEntry(target: string): boolean {
+    return (
+      this.restoredPlaybackContinuityTargets.has(target) &&
+      this.options.getState(target).availability !== 'available'
+    );
+  }
+
+  /** Shared by dispatch and read-only eligibility; fresh entry is checked by the caller. */
+  private entryAction(target: string): 'resume' | 'preset' | null {
+    if (
+      this.homePresence === 'away' ||
+      this.isQuietHours() ||
+      this.holds.blocks('music.playback', target) ||
+      this.requiresAvailableEntry(target)
+    )
+      return null;
+    if ((this.resumeUntil.get(target) ?? 0) > this.options.clock.now())
+      return 'resume';
+    return this.isPlaying(this.options.getState(target)) ? null : 'preset';
   }
 
   getIntentSnapshot(
@@ -702,6 +772,7 @@ export class MusicAutomation {
     this.timer = this.options.clock.setTimeout(() => {
       this.timer = undefined;
       this.applyVolumePolicy();
+      this.options.onPolicyTick?.();
       this.scheduleNextMinute();
     }, delay);
   }

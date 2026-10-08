@@ -38,7 +38,8 @@ not be implied by their labels.
 - Automatic music playback must not start or resume from 23:00 until 06:00 (Europe/Stockholm).
 - Routine connection, Cast and refresh status should not consume dashboard
   space; actionable failures may be shown when needed.
-- The dashboard must not scroll in either direction.
+- The primary dashboard must not scroll in either direction. Secondary music
+  explanations may scroll within an in-place Details pane while controls remain visible.
 
 ## Brand Commitments
 
@@ -58,6 +59,8 @@ not be implied by their labels.
 - Make common room controls reachable with one clear touch.
 - Present room conditions in a glanceable hierarchy.
 - Keep observed values distinct from Lugn's volume target and controller.
+- Name current controller authority independently from the last reported changer,
+  automatic policy enablement and current policy activity.
 - Preserve truthful states and actionable error recovery.
 
 ## Accessibility & Inclusion

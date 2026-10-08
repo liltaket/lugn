@@ -3,6 +3,7 @@ import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
   MusicAutomation,
   type MusicVolumePolicySnapshot,
+  type MusicPlaybackPolicySnapshot,
 } from './music-automation.js';
 import type {
   MusicCommandRecord,
@@ -58,6 +59,7 @@ import {
   MusicRequestSchema,
   MusicIntentSnapshotSchema,
   type MusicIntentSnapshot,
+  type MusicDecision,
 } from '../core/schemas.js';
 import { CommandLedger } from '../execution/command-ledger.js';
 
@@ -154,6 +156,7 @@ export class LugnEngine {
   private readonly roomSessions: RoomSessions;
   private lastNonOffSceneId: string | null = null;
   private bilresaPriorVolumeAutomation: boolean | null = null;
+  private readonly lastMusicDecisionContexts = new Map<string, string>();
   private readonly convergenceTimeoutMs: number;
   private readonly retryDelayMs: number;
   private readonly continuityMs: number;
@@ -425,6 +428,9 @@ export class LugnEngine {
         this.musicController.request(target, request, provenance),
       cancelAutomaticFade: (target) => this.musicController.cancelFade(target),
       onChange: () => this.publish(['music', 'intent']),
+      onPolicyTick: () => {
+        if (this.refreshMusicDecisions()) this.publish(['music']);
+      },
       onError: (target, operation) => {
         this.addDiagnostic(
           'music.automation_unconfirmed',
@@ -599,6 +605,30 @@ export class LugnEngine {
         this.musicAutomation.getVolumePolicySnapshot(target),
       ]),
     );
+  }
+
+  getMusicPlaybackPolicySnapshots(): Record<
+    string,
+    MusicPlaybackPolicySnapshot
+  > {
+    return Object.fromEntries(
+      Object.keys(this.musicController.state.devices).map((target) => [
+        target,
+        this.musicAutomation.getPlaybackPolicySnapshot(target),
+      ]),
+    );
+  }
+
+  getMusicPolicySnapshot(target: string) {
+    this.musicController.getState(target);
+    return structuredClone({
+      volume: this.musicAutomation.getVolumePolicySnapshot(target),
+      playback: this.musicAutomation.getPlaybackPolicySnapshot(target),
+      lastVolumeChange: this.state.music.volumeChanges?.[target] ?? null,
+      decisions: (this.state.music.decisions ?? []).filter(
+        (decision) => decision.target === target,
+      ),
+    });
   }
 
   async handleBilresaPress(
@@ -2811,6 +2841,47 @@ export class LugnEngine {
       );
   }
 
+  private refreshMusicDecisions(): boolean {
+    const volumePolicies = this.getMusicVolumePolicySnapshots();
+    const playbackPolicies = this.getMusicPlaybackPolicySnapshots();
+    const added: MusicDecision[] = [];
+    for (const [target, volume] of Object.entries(volumePolicies)) {
+      const playback = playbackPolicies[target]!;
+      const contexts: Array<Omit<MusicDecision, 'at'>> = [
+        {
+          target,
+          reason: { kind: 'volume', value: volume.activityReason },
+          owner: volume.activeOwner,
+          policyEnabled: volume.policyEnabled,
+          manualExpiresAt: volume.manualHold?.expiresAt ?? null,
+          resumeExpiresAt: null,
+        },
+        {
+          target,
+          reason: { kind: 'playback', value: playback.activityReason },
+          owner: playback.manualPause ? 'manual' : 'none',
+          // Playback has no enable toggle; volume enable never controls it.
+          policyEnabled: true,
+          manualExpiresAt: null,
+          resumeExpiresAt: playback.resumeExpiresAt,
+        },
+      ];
+      for (const context of contexts) {
+        const key = `${target}:${context.reason.kind}`;
+        const signature = JSON.stringify(context);
+        if (this.lastMusicDecisionContexts.get(key) === signature) continue;
+        this.lastMusicDecisionContexts.set(key, signature);
+        added.push({ ...context, at: this.clock.now() });
+      }
+    }
+    if (added.length === 0) return false;
+    this.state.music.decisions = [
+      ...(this.state.music.decisions ?? []),
+      ...added,
+    ].slice(-128);
+    return true;
+  }
+
   private publish(
     domains: Array<
       | 'presence'
@@ -2824,6 +2895,12 @@ export class LugnEngine {
       | 'timings'
     >,
   ): void {
+    // Decide from the originating domains, before lighting ownership adds intent.
+    // Lighting-only publishes must not recompute music policies or history.
+    const refreshMusic =
+      domains.includes('music') ||
+      domains.includes('presence') ||
+      (domains.includes('intent') && !domains.includes('lighting'));
     // Property holds are views of existing ownership, never a second ledger.
     const activeHolds = [
       ...this.holds.snapshot(),
@@ -2908,6 +2985,12 @@ export class LugnEngine {
       if (revision !== this.state.lighting.sceneRevision)
         this.intentByRevision.delete(revision);
     this.state.commands = this.ledger.records;
+    if (
+      refreshMusic &&
+      this.refreshMusicDecisions() &&
+      !domains.includes('music')
+    )
+      domains.push('music');
     this.state.revision += 1;
     this.state.updatedAt = this.clock.now();
     RoomStateSchema.parse(this.state);

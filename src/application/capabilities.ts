@@ -9,6 +9,8 @@ import {
   SemanticButtonIdSchema,
   SemanticMusicIdSchema,
   MusicCommandStatusSchema,
+  MusicVolumeChangeSchema,
+  MusicDecisionSchema,
   MusicPresetSchema,
   LightingValuesSchema,
   ProvenanceSchema,
@@ -22,6 +24,10 @@ import {
   MusicFadeDurationError,
   MusicFadeUnavailableError,
 } from './music-controller.js';
+import {
+  MusicVolumePolicySnapshotSchema,
+  MusicPlaybackPolicySnapshotSchema,
+} from './music-automation.js';
 
 const EmptyInput = z.object({});
 const ActivateSceneInput = z.object({ sceneId: z.string() });
@@ -71,6 +77,15 @@ export class CapabilityInputError extends Error {
 }
 
 export const CapabilitySchemas = {
+  'music.getPolicy': {
+    input: GetMusicInput,
+    output: z.object({
+      volume: MusicVolumePolicySnapshotSchema,
+      playback: MusicPlaybackPolicySnapshotSchema,
+      lastVolumeChange: MusicVolumeChangeSchema.nullable(),
+      decisions: z.array(MusicDecisionSchema).max(128),
+    }),
+  },
   'music.getState': {
     input: GetMusicInput,
     output: z.object({ device: DeviceMusicStateSchema }),
@@ -170,6 +185,12 @@ export class CapabilityRegistry {
     const provenance = ProvenanceSchema.parse(invocation);
     let output: unknown;
     switch (name) {
+      case 'music.getPolicy': {
+        const input = GetMusicInput.parse(rawInput);
+        getMusicTarget(this.engine, input.target);
+        output = this.engine.getMusicPolicySnapshot(input.target);
+        break;
+      }
       case 'music.getState': {
         const input = GetMusicInput.parse(rawInput);
         output = {

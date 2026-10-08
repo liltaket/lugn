@@ -17,6 +17,29 @@ const refs = {
   connectionMessage: document.querySelector('#connection-message'),
   retry: document.querySelector('#retry-button'),
   sceneGrid: document.querySelector('#scene-grid'),
+  sceneSection: document.querySelector('#scene-section'),
+  musicDetails: document.querySelector('#music-details'),
+  musicDetailsButton: document.querySelector('#music-details-button'),
+  musicVolumeRequested: document.querySelector('#music-volume-requested'),
+  musicVolumeAutomaticTarget: document.querySelector(
+    '#music-volume-automatic-target',
+  ),
+  musicVolumeLastChange: document.querySelector('#music-volume-last-change'),
+  musicVolumePolicyEnabled: document.querySelector(
+    '#music-volume-policy-enabled',
+  ),
+  musicVolumePolicyActivity: document.querySelector(
+    '#music-volume-policy-activity',
+  ),
+  musicPlaybackPolicy: document.querySelector('#music-playback-policy'),
+  musicPlaybackEligibility: document.querySelector(
+    '#music-playback-eligibility',
+  ),
+  musicPlaybackQuiet: document.querySelector('#music-playback-quiet'),
+  musicPlaybackHold: document.querySelector('#music-playback-hold'),
+  musicResumeWindow: document.querySelector('#music-resume-window'),
+  musicCommandState: document.querySelector('#music-command-state'),
+  musicDecisionHistory: document.querySelector('#music-decision-history'),
   musicPlayerStatus: document.querySelector('#music-player-status'),
   musicTitle: document.querySelector('#music-title'),
   musicSource: document.querySelector('#music-source'),
@@ -59,6 +82,9 @@ const metricRefs = new Map(
 );
 
 let latestPayload;
+let payloadReceivedAt = 0;
+let musicDetailsOpen = false;
+let historyRenderKey;
 let lastFreshAt = 0;
 let sceneOrderKey = null;
 let musicTarget = '';
@@ -208,7 +234,7 @@ function setConnection(state, message, retry = false) {
 }
 
 function setClock() {
-  const now = new Date();
+  const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
   const time = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Europe/Stockholm',
     hour: '2-digit',
@@ -234,6 +260,10 @@ function setClock() {
       .map((part) => [part.type, part.value]),
   );
   refs.clockDate.dateTime = `${dateValue.year}-${dateValue.month}-${dateValue.day}`;
+  if (latestPayload) {
+    renderMusicVolumePolicy(latestPayload, musicTarget);
+    renderMusicExplanations(latestPayload, musicTarget);
+  }
 }
 
 function getSceneList(payload) {
@@ -458,58 +488,97 @@ function formatVolumeOffset(value) {
 }
 
 function renderMusicVolumePolicy(payload, target) {
+  const stale = isUnavailable();
   const policy = target ? payload?.musicVolumePolicies?.[target] : null;
   const baseline = volumeFraction(policy?.baseline);
   const requested = volumeFraction(
     payload?.state?.music?.devices?.[target]?.requested?.volume,
   );
-  const goal = requested ?? volumeFraction(policy?.target);
-  const controller =
-    policy?.controller === 'lugn' || policy?.controller === 'you'
-      ? policy.controller
+  const owner = ['manual', 'lugn', 'none'].includes(policy?.activeOwner)
+    ? policy.activeOwner
+    : policy?.automatic === true
+      ? 'lugn'
       : 'unknown';
-  refs.musicVolumePolicy.dataset.controller = controller;
+  const activityKnown = typeof policy?.policyActive === 'boolean';
+  const active = activityKnown
+    ? policy.policyActive
+    : policy?.automatic === true;
+  const goal =
+    policy?.activeOwner !== undefined
+      ? volumeFraction(policy?.effectiveTarget)
+      : (requested ?? volumeFraction(policy?.target));
+  refs.musicVolumePolicy.dataset.controller = stale
+    ? 'unknown'
+    : owner === 'manual'
+      ? 'you'
+      : owner;
   setText(
     refs.musicVolumeController,
-    controller === 'lugn' && policy?.automatic === true
-      ? 'Lugn justerar volymen'
-      : controller === 'you' && policy?.automatic === true
-        ? 'Du ändrade volymen'
-        : controller === 'you'
-          ? 'Du styr volymen'
-          : 'Volymstyrning okänd',
+    stale
+      ? 'Styrning okänd'
+      : owner === 'manual'
+        ? 'Manuell volym'
+        : owner === 'lugn'
+          ? active
+            ? 'Lugn styr volymen'
+            : 'Lugn tonar volymen'
+          : owner === 'none'
+            ? 'Ingen aktiv volymstyrning'
+            : 'Volymstyrning okänd',
   );
   setText(
     refs.musicVolumeTargetLabel,
-    requested !== null
-      ? 'Begärt mål'
-      : policy?.automatic === true
-        ? 'Automatiskt mål'
-        : 'Mål',
+    stale
+      ? 'Senaste mål'
+      : owner === 'manual'
+        ? 'Manuellt mål'
+        : owner === 'lugn'
+          ? active
+            ? 'Automål'
+            : 'Toningsmål'
+          : requested !== null && !policy
+            ? 'Begärt mål'
+            : 'Aktivt mål',
   );
   setText(refs.musicVolumeTarget, formatVolume(goal));
-  const explanation =
-    requested !== null &&
-    Math.abs(
-      requested -
-        (payload?.state?.music?.devices?.[target]?.observed?.volume ?? -1),
-    ) > 0.005
-      ? 'Begärt · väntar på spelaren'
-      : goal === null
-        ? 'Mål saknas'
-        : policy?.automatic === true && policy?.baselineSource === 'user'
-          ? 'Din bas · Lugn anpassar efter dygn och antal personer'
-          : policy?.automatic === true
-            ? 'Målet följer dygn och antal personer'
-            : controller === 'you'
-              ? 'Automatiken är pausad'
-              : 'Väntar på volymregel';
+  const hold = policy?.manualHold;
+  const explanation = stale
+    ? 'Lugn svarar inte · visar senaste värden'
+    : hold && typeof hold.expiresAt === 'number'
+      ? continuityText(hold.expiresAt, 'Manuellt val')
+      : volumeReason(policy?.activityReason);
   setText(refs.musicVolumeTargetState, explanation);
-  refs.musicVolumeTargetState.hidden = !explanation;
+  refs.musicVolumeTargetState.hidden = false;
+  setText(refs.musicVolumeRequested, formatVolume(requested));
+  setText(
+    refs.musicVolumeAutomaticTarget,
+    formatVolume(volumeFraction(policy?.target)),
+  );
+  setText(
+    refs.musicVolumePolicyEnabled,
+    stale
+      ? 'Okänt'
+      : typeof policy?.policyEnabled === 'boolean'
+        ? policy.policyEnabled
+          ? 'På'
+          : 'Av'
+        : 'Okänt',
+  );
+  setText(
+    refs.musicVolumePolicyActivity,
+    !stale && activityKnown ? (active ? 'Aktiv' : 'Pausad') : 'Okänt',
+  );
+  const change = payload?.state?.music?.volumeChanges?.[target];
+  setText(
+    refs.musicVolumeLastChange,
+    change
+      ? `${volumeChanger(change)} · ${formatVolume(volumeFraction(change.volume))}`
+      : 'Okänd',
+  );
   setText(
     refs.musicVolumeBaselineLabel,
     policy?.baselineSource === 'user'
-      ? 'Din bas'
+      ? 'Manuellt vald bas'
       : policy?.baselineSource === 'inferred'
         ? 'Uppskattad bas'
         : 'Basnivå',
@@ -527,11 +596,204 @@ function renderMusicVolumePolicy(payload, target) {
   );
 }
 
+function monotonicNow() {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function estimatedServerNow() {
+  return typeof latestPayload?.generatedAt === 'number' &&
+    Number.isFinite(latestPayload.generatedAt)
+    ? latestPayload.generatedAt +
+        Math.max(0, monotonicNow() - payloadReceivedAt)
+    : Date.now();
+}
+
+function continuityText(expiresAt, prefix) {
+  const remaining = expiresAt - estimatedServerNow();
+  return remaining > 0
+    ? `${prefix} · ${Math.ceil(remaining / 60000)} min kvar vid tomt rum`
+    : 'Kontinuitetsgräns nådd · inväntar Lugn';
+}
+
+function volumeReason(reason) {
+  return (
+    {
+      manual_hold: 'Manuellt val · automatiken väntar',
+      automation_disabled: 'Volymautomatiken är av',
+      presence_unknown: 'Automatiken väntar · närvaro okänd',
+      confirmed_empty: 'Automatiken väntar · rummet tomt',
+      home_away: 'Automatiken väntar · borta',
+      fade_active: 'Volymtoning pågår · minutregeln väntar',
+      volume_unavailable: 'Automatiken väntar · volymrapport saknas',
+      active: 'Lugn anpassar efter dygn och antal personer',
+    }[reason] ?? 'Orsak saknas'
+  );
+}
+
+function playbackReason(reason) {
+  return (
+    {
+      manual_pause: 'Manuell paus spärrar autostart',
+      home_away: 'Autostart spärrad · borta',
+      quiet_hours: 'Ingen autostart 23–06',
+      presence_unknown: 'Autostart väntar · närvaro okänd',
+      confirmed_empty: 'Autostart väntar · rummet tomt',
+      player_unavailable: 'Autostart väntar · spelaren frånkopplad',
+      already_playing: 'Spelaren spelar · ingen ny autostart',
+      awaiting_new_entry: 'Autostart först vid en ny entré',
+    }[reason] ?? 'Autostartvillkor okända'
+  );
+}
+
+function volumeChanger(change) {
+  const human = ['user', 'physical_remote', 'home_assistant'].includes(
+    change.provenance?.actor?.type,
+  );
+  if (change.attribution === 'matched')
+    return human ? 'Matchar manuell begäran' : 'Matchar Lugn';
+  if (change.attribution === 'correlated')
+    return human ? 'Manuell återkoppling' : 'Lugn-återkoppling';
+  return change.provenance?.actor?.type === 'physical_remote'
+    ? 'Fysisk kontroll'
+    : 'Extern / HA';
+}
+
+function renderMusicExplanations(payload, target) {
+  const policy = payload?.musicPlaybackPolicies?.[target];
+  const stale = isUnavailable();
+  setText(
+    refs.musicPlaybackPolicy,
+    isUnavailable()
+      ? 'Autostartvillkor okända · Lugn svarar inte'
+      : playbackReason(policy?.activityReason),
+  );
+  setText(
+    refs.musicPlaybackEligibility,
+    stale
+      ? 'Autostartvillkor okända · Lugn svarar inte.'
+      : policy?.entryEligible === true
+        ? 'Villkoren tillåter automatisk musik vid nästa bekräftade entré.'
+        : playbackReason(policy?.activityReason),
+  );
+  setText(
+    refs.musicPlaybackQuiet,
+    !stale && typeof policy?.quietHours === 'boolean'
+      ? policy.quietHours
+        ? 'Natt: ingen autostart 23–06.'
+        : 'Autostartfönster: 06–23, vid ny entré.'
+      : 'Nattvillkor okända.',
+  );
+  setText(
+    refs.musicPlaybackHold,
+    stale
+      ? 'Pausspärr okänd · Lugn svarar inte.'
+      : policy?.manualPause
+        ? 'Spela eller välj preset för att släppa pausspärren.'
+        : policy
+          ? 'Ingen manuell pausspärr.'
+          : 'Pausspärr okänd.',
+  );
+  const resume = policy?.resumeExpiresAt;
+  setText(
+    refs.musicResumeWindow,
+    stale
+      ? 'Återgångsfönster okänt · Lugn svarar inte.'
+      : typeof resume === 'number'
+        ? resume > estimatedServerNow()
+          ? `Återgångsfönster: ${Math.ceil((resume - estimatedServerNow()) / 60000)} min kvar.`
+          : 'Återgångsfönstret har löpt ut.'
+        : 'Ingen sparad återgång.',
+  );
+  const commands = (payload?.state?.music?.commands ?? []).filter(
+    (item) => item.target === target,
+  );
+  const outstanding = commands.filter((item) => item.status === 'pending');
+  const command = outstanding.at(-1) ?? commands.at(-1);
+  const pendingLabel =
+    outstanding.length > 1
+      ? `${outstanding.length} begäranden`
+      : command?.requested?.property === 'volume'
+        ? 'Volym begärd'
+        : 'Musik begärd';
+  const latest = commands.at(-1);
+  const pendingResult =
+    outstanding.length &&
+    latest !== command &&
+    ['failed', 'unconfirmed'].includes(latest?.status)
+      ? `${outstanding.length > 1 ? `${outstanding.length} begäranden` : command.requested?.property === 'volume' ? 'Volym' : 'Musik'} inväntar · ${latest.requested?.property === 'volume' ? 'volym' : 'musik'} ${latest.status === 'failed' ? 'misslyckades' : 'saknar kvittens'}`
+      : null;
+  const commandText =
+    pendingResult ??
+    (command
+      ? ({
+          pending:
+            typeof command.acceptedAt === 'number'
+              ? `${pendingLabel} · inväntar spelaren`
+              : 'Skickar till spelaren …',
+          failed: 'Senaste begäran misslyckades · försök igen',
+          unconfirmed: 'Kvittens saknas · kontrollera rapporterat läge',
+          superseded: 'Äldre begäran ersatt av nyare val',
+          confirmed: 'Begäran rapporterad av spelaren',
+        }[command.status] ?? 'Begärans status okänd')
+      : '');
+  setText(refs.musicCommandState, commandText);
+  refs.musicCommandState.hidden = !commandText;
+  const history = payload?.state?.music?.decisions;
+  const decisions = Array.isArray(history)
+    ? history
+        .filter((item) => item.target === target)
+        .slice(-8)
+        .reverse()
+    : [];
+  const key = JSON.stringify([target, Array.isArray(history), decisions]);
+  if (key === historyRenderKey) return;
+  historyRenderKey = key;
+  const rows = decisions.map((decision) => {
+    const row = document.createElement('li');
+    const time = document.createElement('time');
+    time.textContent =
+      typeof decision.at === 'number' && Number.isFinite(decision.at)
+        ? new Intl.DateTimeFormat('sv-SE', {
+            timeZone: 'Europe/Stockholm',
+            hour: '2-digit',
+            minute: '2-digit',
+          }).format(new Date(decision.at))
+        : '—';
+    const copy = document.createElement('span');
+    copy.textContent =
+      decision.reason?.kind === 'volume'
+        ? `Volym: ${volumeReason(decision.reason.value)}`
+        : `Musik: ${playbackReason(decision.reason?.value)}`;
+    row.append(time, copy);
+    return row;
+  });
+  if (!rows.length) {
+    const row = document.createElement('li');
+    row.textContent = Array.isArray(history)
+      ? 'Inga beslut i denna process ännu.'
+      : 'Beslutshistorik saknas.';
+    rows.push(row);
+  }
+  refs.musicDecisionHistory.replaceChildren(...rows);
+}
+
+function setMusicDetailsOpen(open) {
+  musicDetailsOpen = open;
+  refs.musicDetails.hidden = !open;
+  refs.sceneSection.hidden = open;
+  root.dataset.musicDetails = String(open);
+  refs.musicDetailsButton.setAttribute('aria-expanded', String(open));
+  setText(refs.musicDetailsButton, open ? 'Tillbaka' : 'Detaljer');
+}
+
 function renderMusic(payload) {
   const entries = musicDevices(payload);
   if (entries.length === 0) {
     musicTarget = '';
+    setMusicDetailsOpen(false);
+    refs.musicDetailsButton.disabled = true;
     renderMusicVolumePolicy(payload, null);
+    renderMusicExplanations(payload, null);
     setText(refs.musicPlayerStatus, 'Ingen musikspelare konfigurerad');
     setText(refs.musicTitle, 'Musikspelare saknas');
     setText(refs.musicSource, 'Lägg till en mediaspelare i Lugn');
@@ -557,9 +819,11 @@ function renderMusic(payload) {
     musicTarget = entries[0][0];
   const [, device] =
     entries.find(([target]) => target === musicTarget) ?? entries[0];
+  refs.musicDetailsButton.disabled = false;
   const observed = device.observed ?? {};
   const availability = device.availability ?? 'unavailable';
   const isPlaying = observed.playback === 'playing';
+  const playbackAction = musicPlaybackAction(payload, musicTarget);
   const isPending =
     pending.has(`music:${musicTarget}`) ||
     pending.has(`music-preset:${musicTarget}`);
@@ -572,6 +836,7 @@ function renderMusic(payload) {
     : null;
   const controlVolume = musicVolumeForControl(device);
   renderMusicVolumePolicy(payload, musicTarget);
+  renderMusicExplanations(payload, musicTarget);
 
   refs.musicPlayback.disabled = !canControl;
   refs.musicPresetDj.disabled = !canControl;
@@ -586,22 +851,29 @@ function renderMusic(payload) {
   refs.musicPresetOptical.dataset.state = refs.musicPresetDj.dataset.state;
   refs.musicPlayback.setAttribute(
     'aria-label',
-    isPlaying ? 'Pausa musik' : 'Starta musik',
+    playbackAction === 'paused'
+      ? 'Pausa musik'
+      : payload?.musicPlaybackPolicies?.[musicTarget]?.manualPause
+        ? 'Spela och släpp manuell paus'
+        : 'Starta musik',
   );
   refs.musicPlayback.setAttribute('aria-pressed', String(isPlaying));
-  setText(refs.musicPlaybackIcon, isPlaying ? 'Ⅱ' : '▶');
-  setText(refs.musicPlaybackLabel, isPlaying ? 'Pausa' : 'Spela');
+  setText(refs.musicPlaybackIcon, playbackAction === 'paused' ? 'Ⅱ' : '▶');
+  setText(
+    refs.musicPlaybackLabel,
+    playbackAction === 'paused' ? 'Pausa' : 'Spela',
+  );
   refs.musicVolumeDown.disabled =
     !canControl || controlVolume === null || controlVolume <= 0;
   refs.musicVolumeUp.disabled =
     !canControl || controlVolume === null || controlVolume >= 1;
   setText(
     refs.musicVolumeObservedLabel,
-    availability === 'available' ? 'Nu' : 'Senast',
+    availability === 'available' && connected ? 'Nu' : 'Senast',
   );
   refs.musicVolumeValue.setAttribute(
     'aria-label',
-    availability === 'available'
+    availability === 'available' && connected
       ? 'Spelarens rapporterade volym'
       : 'Senast rapporterade spelarvolym',
   );
@@ -622,8 +894,12 @@ function renderMusic(payload) {
     isPending
       ? 'Skickar kommando …'
       : availability !== 'available'
-        ? 'Spelaren är inte tillgänglig'
-        : '',
+        ? 'Frånkopplad'
+        : isPlaying
+          ? 'Spelar'
+          : observed.playback === 'paused'
+            ? 'Pausad'
+            : 'Okänt',
   );
   refs.musicVolumeValue.value = formatVolume(volume);
   setText(refs.musicVolumeValue, refs.musicVolumeValue.value);
@@ -631,11 +907,13 @@ function renderMusic(payload) {
 
 function render(payload) {
   latestPayload = payload;
+  payloadReceivedAt = monotonicNow();
   setRole(payload?.role);
   renderScenes(payload);
   renderEnvironment(payload?.environment);
   renderRoomPresence(payload?.state);
   renderMusic(payload);
+  setClock();
 }
 
 async function getState() {
@@ -804,12 +1082,20 @@ refs.sceneGrid.addEventListener('click', (event) => {
 refs.musicPlayback.addEventListener('click', () => {
   const device = latestPayload?.state?.music?.devices?.[musicTarget];
   if (!device) return;
-  const value = device.observed?.playback === 'playing' ? 'paused' : 'playing';
+  const value = musicPlaybackAction(latestPayload, musicTarget);
   void runCommand(`music:${musicTarget}`, {
     target: musicTarget,
     request: { property: 'playback', value },
   });
 });
+
+function musicPlaybackAction(payload, target) {
+  return payload?.musicPlaybackPolicies?.[target]?.manualPause
+    ? 'playing'
+    : payload?.state?.music?.devices?.[target]?.observed?.playback === 'playing'
+      ? 'paused'
+      : 'playing';
+}
 
 function selectMusicPreset(presetId) {
   if (!musicTarget) return;
@@ -855,6 +1141,10 @@ refs.musicVolumeUp.addEventListener('click', () => {
   stepMusicVolume(1);
 });
 
+refs.musicDetailsButton.addEventListener('click', () => {
+  setMusicDetailsOpen(!musicDetailsOpen);
+});
+
 refs.retry.addEventListener('click', () => {
   window.clearTimeout(timer);
   void refresh();
@@ -880,6 +1170,7 @@ window.addEventListener('pagehide', () => {
   window.clearTimeout(toastTimer);
 });
 
+setMusicDetailsOpen(false);
 setClock();
 clockTimer = window.setInterval(setClock, 1000);
 void refresh();

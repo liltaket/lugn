@@ -219,10 +219,63 @@ export const MusicFadeStateSchema = z.object({
   diagnosticReason: z.string().optional(),
 });
 export type MusicFadeState = z.infer<typeof MusicFadeStateSchema>;
+export const MusicVolumeActivityReasonSchema = z.enum([
+  'manual_hold',
+  'automation_disabled',
+  'presence_unknown',
+  'confirmed_empty',
+  'home_away',
+  'fade_active',
+  'volume_unavailable',
+  'active',
+]);
+export const MusicPlaybackActivityReasonSchema = z.enum([
+  'manual_pause',
+  'home_away',
+  'quiet_hours',
+  'presence_unknown',
+  'confirmed_empty',
+  'player_unavailable',
+  'already_playing',
+  'awaiting_new_entry',
+]);
+export type MusicPlaybackActivityReason = z.infer<
+  typeof MusicPlaybackActivityReasonSchema
+>;
+export const MusicVolumeChangeSchema = z.object({
+  volume: z.number().finite().min(0).max(1),
+  observedAt: z.number().finite().nonnegative(),
+  provenance: ProvenanceSchema,
+  attribution: z.enum(['correlated', 'matched', 'external']),
+});
+export type MusicVolumeChange = z.infer<typeof MusicVolumeChangeSchema>;
+export const MusicDecisionSchema = z.object({
+  target: SemanticMusicIdSchema,
+  at: z.number().finite().nonnegative(),
+  reason: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('volume'),
+      value: MusicVolumeActivityReasonSchema,
+    }),
+    z.object({
+      kind: z.literal('playback'),
+      value: MusicPlaybackActivityReasonSchema,
+    }),
+  ]),
+  owner: z.enum(['manual', 'lugn', 'none']),
+  policyEnabled: z.boolean(),
+  manualExpiresAt: z.number().finite().nonnegative().nullable(),
+  resumeExpiresAt: z.number().finite().nonnegative().nullable(),
+});
+export type MusicDecision = z.infer<typeof MusicDecisionSchema>;
 export const MusicStateSchema = z.object({
   devices: z.record(SemanticMusicIdSchema, DeviceMusicStateSchema),
   commands: z.array(MusicCommandRecordSchema),
   fades: z.record(SemanticMusicIdSchema, MusicFadeStateSchema).default({}),
+  volumeChanges: z
+    .record(SemanticMusicIdSchema, MusicVolumeChangeSchema)
+    .optional(),
+  decisions: z.array(MusicDecisionSchema).max(128).optional(),
 });
 export type MusicState = z.infer<typeof MusicStateSchema>;
 
