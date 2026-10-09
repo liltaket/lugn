@@ -1,0 +1,3 @@
+## 2024-10-09 - Avoid spreading and reversing arrays for finding last matching element
+**Learning:** Found multiple instances of `[...arr].reverse().find()` pattern for finding the last element in arrays. This is extremely inefficient (allocates O(n) memory and requires full array traversal). `Array.prototype.findLast` is not available due to `tsconfig.json` target `es2022`, so a standard backward `for` loop is optimal.
+**Action:** When finding the last element, use a backward `for` loop `for (let i = arr.length - 1; i >= 0; i--)` to avoid garbage collection and get O(1) early exit when matches are found.
