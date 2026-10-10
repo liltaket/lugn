@@ -1,4 +1,4 @@
+## 2025-02-18 - Semantic `<output>` and `aria-valuetext` for Range Sliders
 
-## 2026-10-10 - Manual DOM text nodes need explicit semantic linking
-**Learning:** When building UI interfaces dynamically with imperative DOM scripts (e.g., `document.createElement`), simple text labels like `<p>` or `<span>` elements miss native HTML semantic linking to inputs. They don't improve the click target area and fail to implicitly inform screen readers without extra ARIA tags.
-**Action:** Use actual `<label>` elements and explicitly map their `htmlFor` attribute to the respective input's `id` to ensure broader click targets and robust accessibility for dynamically generated form controls.
+**Learning:** Screen readers might not correctly read out values for native HTML `<input type="range">` unless `aria-valuetext` is explicitly provided and updated dynamically. Additionally, the textual display of a slider's value should use the `<output>` tag linked via `htmlFor` matching the slider's `id` instead of a plain `<span>` to ensure proper semantic association and accessibility.
+**Action:** When implementing custom range sliders, always set and update `aria-valuetext` in JavaScript and pair them with a semantically correct `<output>` element connected by `htmlFor` and `id`.
