@@ -95,22 +95,34 @@ export function applyStateUpdate(
  * structuredClone is notoriously slow for frequent use due to its capability to handle cyclic references and complex builtin types.
  * For the StateEventStream where objects are simple state representations and performance is critical, a simple deep clone function is much faster (~3x faster).
  */
-function cloneDeep<T>(obj: T): T {
+function cloneDeep<T>(obj: T, seen = new Map<unknown, unknown>()): T {
   if (obj === null || typeof obj !== 'object') {
     return obj;
   }
+
+  if (seen.has(obj)) {
+    return seen.get(obj) as T;
+  }
+
+  if (obj instanceof Date) {
+    return new Date(obj.getTime()) as T;
+  }
+
   if (Array.isArray(obj)) {
     const arr = new Array(obj.length);
+    seen.set(obj, arr);
     for (let i = 0; i < obj.length; i++) {
-      arr[i] = cloneDeep(obj[i]);
+      arr[i] = cloneDeep(obj[i], seen);
     }
-    return arr as unknown as T;
+    return arr as T;
   }
+
   const clonedObj: Record<string, unknown> = {};
+  seen.set(obj, clonedObj);
   for (const key in obj) {
     if (Object.prototype.hasOwnProperty.call(obj, key)) {
-      clonedObj[key] = cloneDeep((obj as Record<string, unknown>)[key]);
+      clonedObj[key] = cloneDeep((obj as Record<string, unknown>)[key], seen);
     }
   }
-  return clonedObj as unknown as T;
+  return clonedObj as T;
 }

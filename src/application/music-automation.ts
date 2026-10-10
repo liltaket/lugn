@@ -7,8 +7,18 @@ import type {
   MusicRequest,
   Presence,
   Provenance,
+  MusicIntentSnapshot,
+  MusicCommandRecord,
+  ManualVolumeHold,
 } from '../core/schemas.js';
 import type { MusicFadeLifecycleEvent } from './music-controller.js';
+import { z } from 'zod';
+import {
+  AutomationHoldSchema,
+  ManualVolumeHoldSchema,
+  MusicVolumeActivityReasonSchema,
+  MusicPlaybackActivityReasonSchema,
+} from '../core/schemas.js';
 
 const automationActor = { type: 'automation' as const, id: 'lugn.music' };
 const minimumAutomatedVolume = 0.05;
@@ -20,17 +30,45 @@ type ActiveFade = {
   id: string;
   targetVolume: number;
   isUser: boolean;
+  manualRevision: number;
 };
 
-export type MusicVolumePolicySnapshot = {
-  controller: 'you' | 'lugn';
-  automatic: boolean;
-  baselineSource: 'user' | 'inferred' | 'unknown';
-  baseline: number | null;
-  target: number | null;
-  dailyOffset: number;
-  personOffset: number;
-};
+export type { ManualVolumeHold } from '../core/schemas.js';
+
+export type VolumeActivityReason = z.infer<
+  typeof MusicVolumeActivityReasonSchema
+>;
+export const MusicPlaybackPolicySnapshotSchema = z.object({
+  activityReason: MusicPlaybackActivityReasonSchema,
+  /** Eligible for the next fresh entry, not permission to start immediately. */
+  entryEligible: z.boolean(),
+  quietHours: z.boolean(),
+  manualPause: AutomationHoldSchema.nullable(),
+  resumeExpiresAt: z.number().finite().nonnegative().nullable(),
+});
+export type MusicPlaybackPolicySnapshot = z.infer<
+  typeof MusicPlaybackPolicySnapshotSchema
+>;
+
+export const MusicVolumePolicySnapshotSchema = z.object({
+  activeOwner: z.enum(['manual', 'lugn', 'none']),
+  lastIntentActor: z.enum(['manual', 'lugn', 'unknown']),
+  policyEnabled: z.boolean(),
+  policyActive: z.boolean(),
+  activityReason: MusicVolumeActivityReasonSchema,
+  manualHold: ManualVolumeHoldSchema.nullable(),
+  controller: z.enum(['you', 'lugn']),
+  automatic: z.boolean(),
+  baselineSource: z.enum(['user', 'inferred', 'unknown']),
+  baseline: z.number().nullable(),
+  target: z.number().nullable(),
+  effectiveTarget: z.number().nullable(),
+  dailyOffset: z.number(),
+  personOffset: z.number(),
+});
+export type MusicVolumePolicySnapshot = z.infer<
+  typeof MusicVolumePolicySnapshotSchema
+>;
 
 export type MusicAutomationOptions = {
   targets: string[];
@@ -43,6 +81,9 @@ export type MusicAutomationOptions = {
     provenance: Provenance,
   ) => Promise<unknown>;
   onError?: (target: string, operation: string) => void;
+  cancelAutomaticFade?: (target: string) => void;
+  onChange?: () => void;
+  onPolicyTick?: () => void;
 };
 
 /** Presence-driven playback and volume policy for configured room players. */
@@ -52,6 +93,10 @@ export class MusicAutomation {
   private readonly volumeControllers = new Map<string, 'you' | 'lugn'>();
   private readonly resumeUntil = new Map<string, number>();
   private readonly activeFades = new Map<string, ActiveFade>();
+  private readonly manualVolumeHolds = new Map<string, ManualVolumeHold>();
+  private readonly manualRevisions = new Map<string, number>();
+  private absenceExpiresAt: number | null = null;
+  private absenceTimer: TimerHandle | undefined;
   private readonly holds: AutomationHolds;
   private timer: TimerHandle | undefined;
   private presence: Presence = 'unknown';
@@ -60,6 +105,9 @@ export class MusicAutomation {
   private volumeAutomationEnabled = true;
   private disposed = false;
   private lastConfirmedPresence: Presence = 'unknown';
+  private restoredAbsenceAwaitingPresence = false;
+  private readonly restoredPlaybackContinuityTargets = new Set<string>();
+  private readonly recoveryRevision = { volume: 0, playback: 0 };
 
   constructor(private readonly options: MusicAutomationOptions) {
     this.holds = options.holds ?? new AutomationHolds(options.clock);
@@ -71,53 +119,64 @@ export class MusicAutomation {
     personCount: number | null,
   ): void {
     if (this.disposed) return;
+    if (this.presence !== presence || this.personCount !== personCount)
+      this.recoveryRevision.volume++;
+    if (this.presence !== presence) this.recoveryRevision.playback++;
+    this.expireManualVolumeHolds();
     this.presence = presence;
     this.personCount = personCount;
 
     const lastConfirmedBeforeEvent = this.lastConfirmedPresence;
     if (presence === 'confirmed_empty') {
       this.lastConfirmedPresence = 'confirmed_empty';
-      if (lastConfirmedBeforeEvent !== 'confirmed_empty') {
+      const newConfirmedAbsence =
+        lastConfirmedBeforeEvent !== 'confirmed_empty';
+      if (newConfirmedAbsence) {
+        this.absenceExpiresAt = this.options.clock.now() + musicContinuityMs;
+        for (const hold of this.manualVolumeHolds.values())
+          hold.expiresAt = this.absenceExpiresAt;
+        this.scheduleAbsenceExpiry();
+      }
+      if (newConfirmedAbsence || this.restoredAbsenceAwaitingPresence) {
+        this.restoredAbsenceAwaitingPresence = false;
         for (const target of this.options.targets) {
           const device = this.options.getState(target);
           const wasPlaying =
             device.observed.playback === 'playing' ||
             device.requested.playback === 'playing';
-          this.resumeUntil.set(
-            target,
-            wasPlaying && !this.holds.blocks('music.playback', target)
-              ? this.options.clock.now() + musicContinuityMs
-              : 0,
-          );
+          if (newConfirmedAbsence)
+            this.resumeUntil.set(
+              target,
+              wasPlaying && !this.holds.blocks('music.playback', target)
+                ? this.options.clock.now() + musicContinuityMs
+                : 0,
+            );
           this.send(target, { property: 'playback', value: 'paused' }, 'pause');
         }
       }
       this.cancelTimer();
+      this.cancelAutomaticFades();
       return;
     }
 
     if (presence === 'occupied') {
+      this.restoredAbsenceAwaitingPresence = false;
+      this.absenceExpiresAt = null;
+      this.cancelAbsenceTimer();
+      for (const hold of this.manualVolumeHolds.values()) hold.expiresAt = null;
       this.lastConfirmedPresence = 'occupied';
       // Unknown samples do not erase the last confirmed room transition.
       const returningFromEmpty = lastConfirmedBeforeEvent === 'confirmed_empty';
-      if (
-        this.homePresence !== 'away' &&
-        returningFromEmpty &&
-        this.localHour() >= 6 &&
-        this.localHour() < 23
-      ) {
+      if (returningFromEmpty) {
         for (const target of this.options.targets) {
-          if (this.holds.blocks('music.playback', target)) continue;
-          if ((this.resumeUntil.get(target) ?? 0) > this.options.clock.now()) {
+          const action = this.entryAction(target);
+          if (action === 'resume') {
             this.send(
               target,
               { property: 'playback', value: 'playing' },
               'resume',
             );
-          } else if (
-            !this.holds.blocks('music.playback', target) &&
-            !this.isPlaying(this.options.getState(target))
-          ) {
+          } else if (action === 'preset') {
             this.send(
               target,
               { property: 'preset', value: 'spotify_dj' },
@@ -126,6 +185,7 @@ export class MusicAutomation {
           }
         }
       }
+      this.restoredPlaybackContinuityTargets.clear();
       this.applyVolumePolicy();
       if (this.homePresence === 'away' || !this.volumeAutomationEnabled)
         this.cancelTimer();
@@ -134,10 +194,15 @@ export class MusicAutomation {
     }
 
     this.cancelTimer();
+    this.cancelAutomaticFades();
   }
 
   handleHomePresence(homePresence: HomePresence): void {
     if (this.disposed) return;
+    if (this.homePresence !== homePresence) {
+      this.recoveryRevision.volume++;
+      this.recoveryRevision.playback++;
+    }
     this.homePresence = homePresence;
     if (homePresence === 'away') {
       for (const target of this.options.targets) {
@@ -149,29 +214,27 @@ export class MusicAutomation {
           );
       }
       this.cancelTimer();
+      this.cancelAutomaticFades();
       return;
     }
-    if (homePresence === 'home' && this.presence === 'occupied') {
+    if (this.presence === 'occupied') {
       this.applyVolumePolicy();
       if (this.volumeAutomationEnabled) this.scheduleNextMinute();
     }
   }
 
-  /** Keep an explicit dashboard volume adjustment as the new user baseline. */
+  /** Human volume intent owns volume independently from explicit Pause. */
   noteExplicitRequest(
     target: string,
     request: MusicRequest,
     provenance: Provenance,
   ): void {
-    if (request.property === 'volume') {
+    if (request.property === 'volume' && isHumanActor(provenance.actor)) {
       const offset = this.currentOffset();
       this.baselines.set(target, this.clampBaseline(request.value - offset));
-      if (provenance.actor.type === 'user') {
-        this.explicitBaselines.add(target);
-        this.volumeControllers.set(target, 'you');
-      } else {
-        this.explicitBaselines.delete(target);
-      }
+      this.claimManualVolume(target, request.value, provenance);
+    } else if (request.property === 'volume') {
+      this.volumeControllers.set(target, 'lugn');
     } else if (
       request.property === 'playback' &&
       isHumanActor(provenance.actor)
@@ -201,17 +264,26 @@ export class MusicAutomation {
     const activeFade = this.activeFades.get(request.target);
     if (!activeFade) return;
     activeFade.targetVolume = request.volume;
-    activeFade.isUser = provenance.actor.type === 'user';
+    activeFade.isUser = isHumanActor(provenance.actor);
   }
 
   /** Follow the controller's actual fade lifetime, including settling and terminal paths. */
   handleFadeLifecycle(event: MusicFadeLifecycleEvent): void {
     if (this.disposed) return;
     if (event.phase === 'started') {
+      const isUser = isHumanActor(event.provenance.actor);
+      if (isUser)
+        this.claimManualVolume(
+          event.target,
+          event.state.targetVolume,
+          event.provenance,
+        );
+      else this.volumeControllers.set(event.target, 'lugn');
       this.activeFades.set(event.target, {
         id: event.state.id,
         targetVolume: event.state.targetVolume,
-        isUser: event.provenance.actor.type === 'user',
+        isUser,
+        manualRevision: this.manualRevisions.get(event.target) ?? 0,
       });
       return;
     }
@@ -219,6 +291,13 @@ export class MusicAutomation {
     const activeFade = this.activeFades.get(event.target);
     if (!activeFade || activeFade.id !== event.state.id) return;
     this.activeFades.delete(event.target);
+    // An interrupted/superseded automatic fade cannot commit its stale actual
+    // volume over newer human intent. External intent can also replace a user fade.
+    if (
+      activeFade.manualRevision !==
+      (this.manualRevisions.get(event.target) ?? 0)
+    )
+      return;
     const terminalVolume =
       event.state.status === 'completed'
         ? activeFade.targetVolume
@@ -230,6 +309,8 @@ export class MusicAutomation {
       this.clampBaseline(terminalVolume - this.currentOffset()),
     );
     if (activeFade.isUser) {
+      const hold = this.getManualVolumeHold(event.target);
+      if (hold) hold.volume = terminalVolume;
       this.explicitBaselines.add(event.target);
       this.volumeControllers.set(event.target, 'you');
     } else {
@@ -258,15 +339,20 @@ export class MusicAutomation {
   }
 
   /** Keep WiiM or Home Assistant volume changes as the user's baseline. */
-  noteExternalVolumeChange(target: string, volume: number): void {
+  noteExternalVolumeChange(
+    target: string,
+    volume: number,
+    provenance: Provenance = {
+      actor: { type: 'home_assistant' },
+      source: 'external_observation',
+    },
+  ): void {
     if (this.disposed || !Number.isFinite(volume)) return;
     this.baselines.set(
       target,
       this.clampBaseline(volume - this.currentOffset()),
     );
-    this.explicitBaselines.add(target);
-    this.volumeControllers.set(target, 'you');
-    this.applyVolumePolicy();
+    this.claimManualVolume(target, volume, provenance);
   }
 
   getVolumePolicySnapshot(target: string): MusicVolumePolicySnapshot {
@@ -275,19 +361,30 @@ export class MusicAutomation {
     const offset = offsets.daily + offsets.person;
     const baseline =
       this.baselines.get(target) ?? this.inferBaseline(device, offset);
-    if (baseline !== undefined) this.baselines.set(target, baseline);
     const targetVolume =
       baseline === undefined ? null : this.clamp(baseline + offset);
-    const automatic =
-      !this.activeFades.has(target) &&
-      this.volumeAutomationEnabled &&
-      this.presence === 'occupied' &&
-      this.homePresence !== 'away' &&
-      targetVolume !== null;
+    const activityReason = this.volumeActivityReason(target, baseline);
+    const automatic = activityReason === 'active';
+    const hold = this.getManualVolumeHold(target);
+    const activeFade = this.activeFades.get(target);
     return {
-      controller: automatic
-        ? (this.volumeControllers.get(target) ?? 'lugn')
-        : 'you',
+      activeOwner:
+        hold || activeFade?.isUser
+          ? 'manual'
+          : automatic || activeFade
+            ? 'lugn'
+            : 'none',
+      lastIntentActor:
+        this.volumeControllers.get(target) === 'you'
+          ? 'manual'
+          : this.volumeControllers.has(target)
+            ? 'lugn'
+            : 'unknown',
+      policyEnabled: this.volumeAutomationEnabled,
+      policyActive: automatic,
+      activityReason,
+      manualHold: hold ? structuredClone(hold) : null,
+      controller: hold || activeFade?.isUser ? 'you' : 'lugn',
       automatic,
       baselineSource:
         baseline === undefined
@@ -297,18 +394,28 @@ export class MusicAutomation {
             : 'inferred',
       baseline: baseline ?? null,
       target: targetVolume,
+      effectiveTarget:
+        hold?.volume ??
+        activeFade?.targetVolume ??
+        (automatic ? targetVolume : null),
       dailyOffset: offsets.daily,
       personOffset: offsets.person,
     };
   }
 
-  setVolumeAutomationEnabled(enabled: boolean): void {
+  setVolumeAutomationEnabled(
+    enabled: boolean,
+    intent: 'explicit' | 'restore' = 'explicit',
+  ): void {
     if (this.disposed || this.volumeAutomationEnabled === enabled) return;
+    this.recoveryRevision.volume++;
     this.volumeAutomationEnabled = enabled;
     if (!enabled) {
       this.cancelTimer();
+      this.cancelAutomaticFades();
       return;
     }
+    if (intent === 'explicit') this.manualVolumeHolds.clear();
     if (this.presence === 'occupied' && this.homePresence !== 'away') {
       this.applyVolumePolicy();
       this.scheduleNextMinute();
@@ -319,9 +426,315 @@ export class MusicAutomation {
     return this.volumeAutomationEnabled;
   }
 
+  getPlaybackPolicySnapshot(target: string): MusicPlaybackPolicySnapshot {
+    const manualPause =
+      this.holds
+        .snapshot()
+        .find(
+          (hold) => hold.scope === 'music.playback' && hold.target === target,
+        ) ?? null;
+    const quietHours = this.isQuietHours();
+    const action = this.entryAction(target);
+    const activityReason = manualPause
+      ? 'manual_pause'
+      : this.homePresence === 'away'
+        ? 'home_away'
+        : quietHours
+          ? 'quiet_hours'
+          : this.presence === 'unknown'
+            ? 'presence_unknown'
+            : this.requiresAvailableEntry(target)
+              ? 'player_unavailable'
+              : this.presence === 'confirmed_empty' && action === null
+                ? 'already_playing'
+                : this.presence === 'confirmed_empty'
+                  ? 'confirmed_empty'
+                  : 'awaiting_new_entry';
+    const resume = this.resumeUntil.get(target) ?? 0;
+    return {
+      activityReason,
+      entryEligible:
+        this.presence === 'confirmed_empty' &&
+        this.lastConfirmedPresence === 'confirmed_empty' &&
+        action !== null,
+      quietHours,
+      manualPause,
+      resumeExpiresAt:
+        this.lastConfirmedPresence === 'confirmed_empty' &&
+        resume > this.options.clock.now()
+          ? resume
+          : null,
+    };
+  }
+
+  private isQuietHours(): boolean {
+    const hour = this.localHour();
+    return hour < 6 || hour >= 23;
+  }
+
+  private requiresAvailableEntry(target: string): boolean {
+    return (
+      this.restoredPlaybackContinuityTargets.has(target) &&
+      this.options.getState(target).availability !== 'available'
+    );
+  }
+
+  /** Shared by dispatch and read-only eligibility; fresh entry is checked by the caller. */
+  private entryAction(target: string): 'resume' | 'preset' | null {
+    if (
+      this.homePresence === 'away' ||
+      this.isQuietHours() ||
+      this.holds.blocks('music.playback', target) ||
+      this.requiresAvailableEntry(target)
+    )
+      return null;
+    if ((this.resumeUntil.get(target) ?? 0) > this.options.clock.now())
+      return 'resume';
+    return this.isPlaying(this.options.getState(target)) ? null : 'preset';
+  }
+
+  getIntentSnapshot(
+    temporaryVolumeAutomationRestore: boolean | null,
+  ): MusicIntentSnapshot {
+    const pauses = new Map(
+      this.holds
+        .snapshot()
+        .filter((hold) => hold.scope === 'music.playback')
+        .map((hold) => [
+          hold.target,
+          { createdAt: hold.createdAt, provenance: hold.provenance },
+        ]),
+    );
+    return {
+      version: 1,
+      volumeAutomationEnabled: this.volumeAutomationEnabled,
+      temporaryVolumeAutomationRestore,
+      confirmedAbsence: this.lastConfirmedPresence === 'confirmed_empty',
+      absenceExpiresAt: this.absenceExpiresAt,
+      targets: Object.fromEntries(
+        this.options.targets.map((target) => {
+          const baseline = this.baselines.get(target);
+          return [
+            target,
+            {
+              baseline: baseline ?? null,
+              baselineSource:
+                baseline === undefined
+                  ? 'unknown'
+                  : this.explicitBaselines.has(target)
+                    ? 'user'
+                    : 'inferred',
+              lastIntentActor:
+                this.volumeControllers.get(target) === 'you'
+                  ? 'manual'
+                  : this.volumeControllers.has(target)
+                    ? 'lugn'
+                    : 'unknown',
+              manualVolume: structuredClone(
+                this.getManualVolumeHold(target) ?? null,
+              ),
+              pause: pauses.get(target) ?? null,
+              resumeUntil:
+                this.lastConfirmedPresence === 'confirmed_empty'
+                  ? (this.resumeUntil.get(target) ?? 0)
+                  : 0,
+            },
+          ];
+        }),
+      ),
+    };
+  }
+
+  /** Hydrate intent before HA seeding; current presence and device state remain unknown. */
+  restoreIntent(snapshot: MusicIntentSnapshot): void {
+    this.volumeAutomationEnabled = snapshot.volumeAutomationEnabled;
+    this.absenceExpiresAt = snapshot.absenceExpiresAt;
+    this.lastConfirmedPresence = snapshot.confirmedAbsence
+      ? 'confirmed_empty'
+      : 'unknown';
+    this.restoredAbsenceAwaitingPresence = snapshot.confirmedAbsence;
+    for (const [target, intent] of Object.entries(snapshot.targets)) {
+      if (intent.baseline !== null) this.baselines.set(target, intent.baseline);
+      if (intent.baselineSource === 'user') this.explicitBaselines.add(target);
+      if (intent.lastIntentActor !== 'unknown')
+        this.volumeControllers.set(
+          target,
+          intent.lastIntentActor === 'manual' ? 'you' : 'lugn',
+        );
+      const hold = intent.manualVolume;
+      if (
+        hold &&
+        (hold.expiresAt === null || this.options.clock.now() < hold.expiresAt)
+      ) {
+        this.manualVolumeHolds.set(target, structuredClone(hold));
+        this.manualRevisions.set(target, 1);
+      }
+      if (intent.pause) this.holds.restoreMusicPause(target, intent.pause);
+      this.resumeUntil.set(target, intent.resumeUntil);
+      if (snapshot.confirmedAbsence)
+        this.restoredPlaybackContinuityTargets.add(target);
+    }
+    this.scheduleAbsenceExpiry();
+  }
+
+  /** Shared authority gate for capability commands and every automatic fade step. */
+  recoveryAuthorization(command: MusicCommandRecord): string | null {
+    if (this.disposed) return null;
+    const { target, requested, provenance } = command;
+    if (isHumanActor(provenance.actor)) {
+      if (requested.property !== 'volume') return 'human';
+      const hold = this.getManualVolumeHold(target);
+      return hold &&
+        hold.volume === requested.value &&
+        !this.activeFades.has(target)
+        ? `manual-volume:${this.manualRevisions.get(target) ?? 0}`
+        : null;
+    }
+    if (requested.property === 'volume') {
+      const policy = this.getVolumePolicySnapshot(target);
+      return policy.policyActive &&
+        policy.target !== null &&
+        Math.abs(policy.target - requested.value) <= Number.EPSILON
+        ? `auto-volume:${this.recoveryRevision.volume}`
+        : null;
+    }
+    if (requested.property === 'playback' && requested.value === 'paused') {
+      const valid =
+        provenance.reason === 'pause'
+          ? this.presence === 'confirmed_empty'
+          : provenance.reason === 'pause while away' &&
+            this.homePresence === 'away';
+      return valid ? `auto-pause:${this.recoveryRevision.playback}` : null;
+    }
+    return this.presence === 'occupied' &&
+      this.homePresence !== 'away' &&
+      !this.isQuietHours() &&
+      !this.holds.blocks('music.playback', target)
+      ? `auto-play:${this.recoveryRevision.playback}`
+      : null;
+  }
+
+  assertVolumeRequestAllowed(target: string, provenance: Provenance): void {
+    if (isHumanActor(provenance.actor)) return;
+    this.expireManualVolumeHolds();
+    if (
+      this.manualVolumeHolds.has(target) ||
+      this.activeFades.get(target)?.isUser
+    )
+      throw new Error(
+        'Automatic volume is held by explicit human volume intent',
+      );
+    if (
+      !this.volumeAutomationEnabled ||
+      this.presence !== 'occupied' ||
+      this.homePresence === 'away'
+    )
+      throw new Error('Automatic volume is suppressed by room policy');
+  }
+
+  private claimManualVolume(
+    target: string,
+    volume: number,
+    provenance: Provenance,
+  ): void {
+    this.manualRevisions.set(
+      target,
+      (this.manualRevisions.get(target) ?? 0) + 1,
+    );
+    this.manualVolumeHolds.set(target, {
+      volume,
+      createdAt: this.options.clock.now(),
+      expiresAt:
+        this.absenceExpiresAt !== null &&
+        this.absenceExpiresAt > this.options.clock.now()
+          ? this.absenceExpiresAt
+          : this.lastConfirmedPresence === 'confirmed_empty'
+            ? this.options.clock.now() + musicContinuityMs
+            : null,
+      provenance: structuredClone(provenance),
+    });
+    this.explicitBaselines.add(target);
+    this.volumeControllers.set(target, 'you');
+    this.scheduleAbsenceExpiry();
+  }
+
+  private volumeActivityReason(
+    target: string,
+    baseline: number | undefined,
+  ): VolumeActivityReason {
+    if (this.getManualVolumeHold(target)) return 'manual_hold';
+    if (!this.volumeAutomationEnabled) return 'automation_disabled';
+    if (this.homePresence === 'away') return 'home_away';
+    if (this.presence === 'unknown') return 'presence_unknown';
+    if (this.presence === 'confirmed_empty') return 'confirmed_empty';
+    if (this.activeFades.has(target)) return 'fade_active';
+    if (
+      baseline === undefined ||
+      this.options.getState(target).availability !== 'available' ||
+      this.options.getState(target).observed.volume === null
+    )
+      return 'volume_unavailable';
+    return 'active';
+  }
+
+  private cancelAutomaticFades(): void {
+    for (const [target, fade] of this.activeFades)
+      if (!fade.isUser) this.options.cancelAutomaticFade?.(target);
+  }
+
+  private getManualVolumeHold(target: string): ManualVolumeHold | undefined {
+    const hold = this.manualVolumeHolds.get(target);
+    return hold &&
+      (hold.expiresAt === null || this.options.clock.now() < hold.expiresAt)
+      ? hold
+      : undefined;
+  }
+
+  private scheduleAbsenceExpiry(): void {
+    this.cancelAbsenceTimer();
+    const deadlines = [...this.manualVolumeHolds.values()].flatMap((hold) =>
+      hold.expiresAt === null ? [] : [hold.expiresAt],
+    );
+    if (deadlines.length === 0) return;
+    this.absenceTimer = this.options.clock.setTimeout(
+      () => {
+        this.absenceTimer = undefined;
+        this.expireManualVolumeHolds();
+        this.scheduleAbsenceExpiry();
+      },
+      // Node overflows longer delays to 1 ms. Recheck distant restored
+      // deadlines in bounded chunks while retaining their absolute expiry.
+      Math.min(
+        2 ** 31 - 1,
+        Math.max(0, Math.min(...deadlines) - this.options.clock.now()),
+      ),
+    );
+  }
+
+  private expireManualVolumeHolds(): void {
+    let changed = false;
+    for (const [target, hold] of this.manualVolumeHolds) {
+      if (
+        hold.expiresAt !== null &&
+        this.options.clock.now() >= hold.expiresAt
+      ) {
+        this.manualVolumeHolds.delete(target);
+        changed = true;
+      }
+    }
+    if (changed) this.options.onChange?.();
+  }
+
+  private cancelAbsenceTimer(): void {
+    if (this.absenceTimer !== undefined)
+      this.options.clock.clearTimeout(this.absenceTimer);
+    this.absenceTimer = undefined;
+  }
+
   dispose(): void {
     this.disposed = true;
     this.cancelTimer();
+    this.cancelAbsenceTimer();
   }
 
   private applyVolumePolicy(): void {
@@ -334,11 +747,14 @@ export class MusicAutomation {
     const offsets = this.currentOffsets();
     const offset = offsets.daily + offsets.person;
     for (const target of this.options.targets) {
-      if (this.activeFades.has(target)) continue;
       const device = this.options.getState(target);
       const baseline =
         this.baselines.get(target) ?? this.inferBaseline(device, offset);
-      if (baseline === undefined) continue;
+      if (
+        this.volumeActivityReason(target, baseline) !== 'active' ||
+        baseline === undefined
+      )
+        continue;
       this.baselines.set(target, baseline);
       const desired = this.clamp(baseline + offset);
       const current = device.requested.volume ?? device.observed.volume;
@@ -402,6 +818,7 @@ export class MusicAutomation {
     this.timer = this.options.clock.setTimeout(() => {
       this.timer = undefined;
       this.applyVolumePolicy();
+      this.options.onPolicyTick?.();
       this.scheduleNextMinute();
     }, delay);
   }

@@ -1,3 +1,4 @@
-## 2024-10-06 - Replace structuredClone with cloneDeep for Event Streams
-**Learning:** `structuredClone` is very slow when used extensively on the critical path, particularly because it has to account for cyclical references and numerous complex JavaScript types. `applyStateUpdate` which uses it extensively to apply and re-build states causes slow down in event publishing.
-**Action:** Replace `structuredClone` with a custom `cloneDeep` function (which safely and quickly clones nested JSON structures without `structuredClone` overhead) in modules running tight loops or handling stream events, such as `src/core/event-stream.ts`.
+## 2024-05-18 - Avoid [...arr].reverse().find()
+
+**Learning:** When trying to find the last item in an array matching a predicate, `[...arr].reverse().find()` creates a shallow copy of the entire array and reverses it. This leads to an O(N) memory allocation and O(N) operation overhead before the search even begins. This was found in `CommandLedger` where it is frequently called.
+**Action:** Replace `[...arr].reverse().find()` with backward `for` loops. This avoids the memory allocation and retains O(N) worst-case time complexity, but fast-paths early exit for matching elements near the end. `Array.prototype.findLast()` would be another option if the project configuration supported ES2023 or newer.

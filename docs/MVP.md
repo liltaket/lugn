@@ -24,7 +24,7 @@ still needs work before Lugn is a broadly configurable, finished product.
 - Built-in room presets are Helt släckt, Mysljus, Vardagsljus, Filmkväll and
   Fokus; the dashboard gives them the primary controls.
 - Scene convergence, retries, command diagnostics and a versioned logical
-  lighting-intent snapshot are implemented. Physical state and pending
+  lighting/music intent snapshot are implemented. Physical state and pending
   commands are not restored after restart.
 
 ### Music
@@ -97,3 +97,5 @@ still needs work before Lugn is a broadly configurable, finished product.
   Lugn as the controller and expose their target.
 - Restart restores logical lighting intent only after fresh occupancy; old
   presence, observations, command ledgers and pending commands are not replayed.
+- Saved music ownership and explicit Pause restore before HA seeding. Short
+  absence resume eligibility keeps its original absolute deadline.

@@ -21,7 +21,10 @@ import {
   type MusicRequest,
 } from '../core/schemas.js';
 import type { EnvironmentSnapshot } from '../adapters/home-assistant-environment.js';
-import type { MusicVolumePolicySnapshot } from '../application/music-automation.js';
+import type {
+  MusicVolumePolicySnapshot,
+  MusicPlaybackPolicySnapshot,
+} from '../application/music-automation.js';
 import type { StateEventStream } from '../core/event-stream.js';
 
 const MAX_REQUEST_BYTES = 8 * 1024;
@@ -74,13 +77,26 @@ export type LugnDisplayServerOptions = {
   /** Hostnames/IPs accepted in Host and Origin; entries may omit the port. */
   allowedHosts?: readonly string[];
   capabilities: CapabilityRegistry;
+  presenceCountCorrectionAvailable?: boolean;
   scenes: readonly LightingScene[];
   stateProvider: () => RoomState;
   stateStream?: StateEventStream;
   musicVolumePoliciesProvider?: () => Record<string, MusicVolumePolicySnapshot>;
+  musicPlaybackPoliciesProvider?: () => Record<
+    string,
+    MusicPlaybackPolicySnapshot
+  >;
   environmentProvider?: () => EnvironmentSnapshot;
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
 };
+
+/** Only the hub resolved from the authenticated secret path supplies provenance. */
+function hubProvenance(hub: LugnDisplayHub) {
+  return {
+    actor: { type: 'user' as const, id: `nest-dashboard:${hub.role}` },
+    source: `lugn.cast_dashboard.${hub.role}`,
+  };
+}
 
 type HubRequest = {
   hub: LugnDisplayHub;
@@ -270,30 +286,65 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'POST' &&
+        hubRequest.route === '/display-api/presence-count-one'
+      ) {
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        const input = z
+          .object({})
+          .strict()
+          .parse(await readJsonBody(request));
+        try {
+          const result = await this.options.capabilities.invoke(
+            'presence.setCountOne',
+            input,
+            hubProvenance(hubRequest.hub),
+          );
+          sendJson(response, 200, result);
+        } catch (error) {
+          sendJson(
+            response,
+            error instanceof CapabilityInputError ? 400 : 502,
+            {
+              error:
+                error instanceof CapabilityInputError
+                  ? error.code
+                  : 'presence_sensor_unavailable',
+            },
+          );
+        }
+        return;
+      }
+      if (
+        request.method === 'POST' &&
         hubRequest.route === '/display-api/scene'
       ) {
-        await this.invokeScene(request, response);
+        await this.invokeScene(request, response, hubRequest.hub);
         return;
       }
       if (
         request.method === 'POST' &&
         hubRequest.route === '/display-api/light'
       ) {
-        await this.invokeLight(request, response);
+        await this.invokeLight(request, response, hubRequest.hub);
         return;
       }
       if (
         request.method === 'POST' &&
         hubRequest.route === '/display-api/music'
       ) {
-        await this.invokeMusic(request, response);
+        await this.invokeMusic(request, response, hubRequest.hub);
         return;
       }
       if (
         request.method === 'POST' &&
         hubRequest.route === '/display-api/music-preset'
       ) {
-        await this.invokeMusicPreset(request, response);
+        await this.invokeMusicPreset(request, response, hubRequest.hub);
         return;
       }
       if (request.method !== 'GET' && request.method !== 'POST') {
@@ -324,9 +375,14 @@ export class LugnDisplayServer {
       state: this.options.stateProvider(),
       deliveryRevision: ++this.nextDeliveryRevision,
       instanceId: this.instanceId,
+      generatedAt: Date.now(),
       musicVolumePolicies: this.options.musicVolumePoliciesProvider?.() ?? {},
+      musicPlaybackPolicies:
+        this.options.musicPlaybackPoliciesProvider?.() ?? {},
       scenes: this.options.scenes,
       role: hub.role,
+      presenceCountCorrectionAvailable:
+        this.options.presenceCountCorrectionAvailable ?? false,
       castStatus: this.options.castStatus?.(hub.id) ?? { state: 'unknown' },
       environment:
         this.options.environmentProvider?.() ?? emptyEnvironmentSnapshot(),
@@ -441,6 +497,7 @@ export class LugnDisplayServer {
   private async invokeScene(
     request: IncomingMessage,
     response: ServerResponse,
+    hub: LugnDisplayHub,
   ): Promise<void> {
     if (!isJsonRequest(request)) {
       sendJson(response, 415, {
@@ -453,12 +510,14 @@ export class LugnDisplayServer {
       'lighting.activateScene',
       input,
       response,
+      hub,
     );
   }
 
   private async invokeLight(
     request: IncomingMessage,
     response: ServerResponse,
+    hub: LugnDisplayHub,
   ): Promise<void> {
     if (!isJsonRequest(request)) {
       sendJson(response, 415, {
@@ -467,12 +526,13 @@ export class LugnDisplayServer {
       return;
     }
     const input = DisplayLightRequestSchema.parse(await readJsonBody(request));
-    await this.invokeLightingCapability('lighting.set', input, response);
+    await this.invokeLightingCapability('lighting.set', input, response, hub);
   }
 
   private async invokeMusic(
     request: IncomingMessage,
     response: ServerResponse,
+    hub: LugnDisplayHub,
   ): Promise<void> {
     if (!isJsonRequest(request)) {
       sendJson(response, 415, {
@@ -486,10 +546,7 @@ export class LugnDisplayServer {
       const result = await this.options.capabilities.invoke(
         capability.name,
         capability.input,
-        {
-          actor: { type: 'user', id: 'nest-dashboard' },
-          source: 'lugn.cast_dashboard',
-        },
+        hubProvenance(hub),
       );
       sendJson(response, 200, result);
     } catch (error) {
@@ -511,6 +568,7 @@ export class LugnDisplayServer {
   private async invokeMusicPreset(
     request: IncomingMessage,
     response: ServerResponse,
+    hub: LugnDisplayHub,
   ): Promise<void> {
     if (!isJsonRequest(request)) {
       sendJson(response, 415, {
@@ -528,10 +586,7 @@ export class LugnDisplayServer {
           target: input.target,
           preset: input.presetId === 1 ? 'spotify_dj' : 'optical',
         },
-        {
-          actor: { type: 'user', id: 'nest-dashboard' },
-          source: 'lugn.cast_dashboard',
-        },
+        hubProvenance(hub),
       );
       sendJson(response, 200, result);
     } catch (error) {
@@ -554,12 +609,14 @@ export class LugnDisplayServer {
     name: 'lighting.activateScene' | 'lighting.set',
     input: unknown,
     response: ServerResponse,
+    hub: LugnDisplayHub,
   ): Promise<void> {
     try {
-      const result = await this.options.capabilities.invoke(name, input, {
-        actor: { type: 'user', id: 'nest-dashboard' },
-        source: 'lugn.cast_dashboard',
-      });
+      const result = await this.options.capabilities.invoke(
+        name,
+        input,
+        hubProvenance(hub),
+      );
       sendJson(response, 200, result);
     } catch (error) {
       if (error instanceof ZodError) {
