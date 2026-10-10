@@ -156,11 +156,11 @@ export class CommandLedger {
     now: number,
     commandId?: string,
   ): CommandRecord | undefined {
-    // PERFORMANCE: Replaced [...arr].reverse().find() with a backward for loop to avoid intermediate array allocations and reduce GC overhead.
-    let command = commandId
-      ? this.records.find((candidate) => candidate.id === commandId)
-      : undefined;
-    if (!commandId) {
+    let command: CommandRecord | undefined;
+    if (commandId) {
+      command = this.records.find((candidate) => candidate.id === commandId);
+    } else {
+      // PERF: Iterating backward avoids O(N) allocation overhead compared to [...arr].reverse().find()
       for (let i = this.records.length - 1; i >= 0; i--) {
         const candidate = this.records[i]!;
         if (
@@ -174,6 +174,7 @@ export class CommandLedger {
         }
       }
     }
+
     if (
       !command ||
       command.target !== target ||
@@ -207,7 +208,7 @@ export class CommandLedger {
     now: number,
   ): CommandRecord | undefined {
     const windowMs = Math.min(this.attributionWindowMs, 10_000);
-    // PERFORMANCE: Replaced [...arr].reverse().find() with a backward for loop to avoid intermediate array allocations and reduce GC overhead.
+    // PERF: Iterating backward avoids O(N) allocation overhead compared to [...arr].reverse().find()
     for (let i = this.records.length - 1; i >= 0; i--) {
       const command = this.records[i]!;
       if (
@@ -229,7 +230,7 @@ export class CommandLedger {
     property: LightingProperty,
     value: LightingValues[LightingProperty],
   ): CommandRecord | undefined {
-    // PERFORMANCE: Replaced [...arr].reverse().find() with a backward for loop to avoid intermediate array allocations and reduce GC overhead.
+    // PERF: Iterating backward avoids O(N) allocation overhead compared to [...arr].reverse().find()
     for (let i = this.records.length - 1; i >= 0; i--) {
       const command = this.records[i]!;
       if (

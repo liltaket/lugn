@@ -1062,6 +1062,7 @@ function restoreFocus(focusedKey, focusedValue) {
     !element.disabled
   ) {
     element.value = focusedValue;
+    element.setAttribute('aria-valuetext', `${focusedValue} procent`);
     const output = element
       .closest('.brightness-control, .music-volume-control')
       ?.querySelector('.brightness-value, .music-volume-preview');
@@ -1276,10 +1277,14 @@ function renderMusicPlayer(target, device, commands, fade) {
   controls.append(playbackControl);
 
   const volumeControl = node('div', 'music-control music-volume-control');
-  volumeControl.append(node('p', 'music-control-title', 'Volym'));
+  const volumeLabel = document.createElement('label');
+  volumeLabel.className = 'music-control-title';
+  volumeLabel.textContent = 'Volym';
+  volumeControl.append(volumeLabel);
   const volumeSlider = document.createElement('input');
   volumeSlider.type = 'range';
   volumeSlider.id = `music-volume-${target.replace(/[^a-zA-Z0-9_.-]/g, '-')}`;
+  volumeLabel.htmlFor = volumeSlider.id;
   volumeSlider.min = '0';
   volumeSlider.max = '100';
   volumeSlider.step = '1';
@@ -1609,10 +1614,16 @@ function renderLight(target, device, presenceState) {
   const unavailable = device.availability === 'unavailable';
   const knownPower = device.effectiveDesired?.power ?? device.observed?.power;
   const powerControl = node('div', 'power-control');
-  powerControl.append(node('span', 'power-label', 'Ström'));
+  const powerLabelId = `light-power-${target.replace(/[^a-zA-Z0-9_.-]/g, '-')}`;
+  const labelElem = document.createElement('label');
+  labelElem.className = 'power-label';
+  labelElem.textContent = 'Ström';
+  labelElem.htmlFor = powerLabelId;
+  powerControl.append(labelElem);
   const powerLabel = node('label', 'power-toggle');
   const powerInput = document.createElement('input');
   powerInput.type = 'checkbox';
+  powerInput.id = powerLabelId;
   powerInput.className = 'switch-input';
   powerInput.checked = knownPower === true;
   powerInput.indeterminate = knownPower === undefined;
@@ -1654,6 +1665,15 @@ function renderBrightnessControl(target, device, disabled) {
   const minus = node('button', 'adjust-button', '−10');
   minus.type = 'button';
   minus.disabled = disabled || !Number.isInteger(current) || current <= 0;
+  if (minus.disabled) {
+    if (disabled) {
+      minus.title = 'Justering tillfälligt inaktiverad';
+    } else if (!Number.isInteger(current)) {
+      minus.title = 'Okänd ljusstyrka';
+    } else {
+      minus.title = 'Redan på lägsta nivån';
+    }
+  }
   minus.setAttribute(
     'aria-label',
     `Sänk ljusstyrkan för ${displayTarget(target)} med 10 procentenheter`,
@@ -1669,6 +1689,7 @@ function renderBrightnessControl(target, device, disabled) {
 
   const slider = document.createElement('input');
   slider.type = 'range';
+  slider.id = `light-brightness-${target.replace(/[^a-zA-Z0-9_.-]/g, '-')}`;
   slider.min = '0';
   slider.max = '100';
   slider.step = '1';
@@ -1678,13 +1699,16 @@ function renderBrightnessControl(target, device, disabled) {
     'aria-label',
     `Önskad ljusstyrka för ${displayTarget(target)}`,
   );
+  slider.setAttribute('aria-valuetext', `${slider.value} procent`);
   slider.dataset.focusKey = `brightness:${target}`;
   const value = node(
-    'span',
+    'output',
     'brightness-value',
     Number.isInteger(current) ? `${current}%` : 'Okänd',
   );
+  value.htmlFor = slider.id;
   slider.addEventListener('input', () => {
+    slider.setAttribute('aria-valuetext', `${slider.value} procent`);
     value.textContent = `Nytt önskemål ${slider.value}%`;
   });
   slider.addEventListener('change', () => {
@@ -1698,6 +1722,15 @@ function renderBrightnessControl(target, device, disabled) {
   const plus = node('button', 'adjust-button', '+10');
   plus.type = 'button';
   plus.disabled = disabled || !Number.isInteger(current) || current >= 100;
+  if (plus.disabled) {
+    if (disabled) {
+      plus.title = 'Justering tillfälligt inaktiverad';
+    } else if (!Number.isInteger(current)) {
+      plus.title = 'Okänd ljusstyrka';
+    } else {
+      plus.title = 'Redan på högsta nivån';
+    }
+  }
   plus.setAttribute(
     'aria-label',
     `Höj ljusstyrkan för ${displayTarget(target)} med 10 procentenheter`,
