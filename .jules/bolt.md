@@ -1,0 +1,3 @@
+## 2024-10-06 - Replace structuredClone with cloneDeep for Event Streams
+**Learning:** `structuredClone` is very slow when used extensively on the critical path, particularly because it has to account for cyclical references and numerous complex JavaScript types. `applyStateUpdate` which uses it extensively to apply and re-build states causes slow down in event publishing.
+**Action:** Replace `structuredClone` with a custom `cloneDeep` function (which safely and quickly clones nested JSON structures without `structuredClone` overhead) in modules running tight loops or handling stream events, such as `src/core/event-stream.ts`.
