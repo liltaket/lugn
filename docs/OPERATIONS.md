@@ -164,8 +164,18 @@ atomically, and restricted to mode `0600`.
 Physical observations, presence counts, command history, and pending commands
 are not restored. After restart, saved lighting intent is reconciled only when
 presence is confirmed occupied; a confirmed-empty event still turns lights off.
-Expired continuity is discarded. Music state and configuration are not part of
-this lighting-intent file.
+Expired continuity is discarded. The same file optionally stores logical music
+intent: volume baselines/holds, policy enable state, temporary BILRESA restore
+state, explicit Pause and absolute absence/resume deadlines. It restores before
+HA seeding without replaying commands, fades or device observations. See
+[music restart behavior](MUSIC.md#restart-and-durability).
+
+Music installations write a version-2 envelope, accepting legacy version 1 on
+read. Older binaries reject version 2; back up state before a version rollback.
+Lighting-only installations continue writing version 1. Writes retain the existing
+150 ms debounce; graceful shutdown flushes pending changes, while abrupt
+termination before a completed write can lose the newest intent. Service command
+acceptance does not acknowledge disk durability. Configuration remains separate.
 
 ## Discover Home Assistant mappings
 
@@ -552,8 +562,9 @@ timeout.
 
 Runtime command history, command-ID attribution, Home Assistant observations,
 sensor presence, diagnostics, and timing records are not persisted. The
-separate lighting-intent file retains only the selected scene, logical desired
-values, manual property ownership, and absolute continuity expiry. Restart does
+separate intent file retains the selected scene, logical desired light values,
+manual property ownership, and absolute continuity expiry, plus configured
+logical music ownership, Pause and continuity intent. Restart does
 not replay old physical commands; the new process starts with unknown presence,
 seeds fresh Home Assistant observations, and waits for confirmed occupancy
 before reconverging saved intent. Back up the installation config and secret

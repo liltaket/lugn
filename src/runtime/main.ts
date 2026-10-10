@@ -18,6 +18,7 @@ import {
   type Stl27lPresenceMqttSubscriber,
 } from '../adapters/stl27l-mqtt-presence.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
+import { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
 import {
   resolveRoomDefaultSceneId,
   withRoomPresets,
@@ -133,15 +134,22 @@ export async function startRuntime(
     filePath: lightingIntentPath,
     expectedDeviceIds: deviceIds,
     knownSceneIds: scenes.map((scene) => scene.id),
+    ...(Object.keys(config.homeAssistant.music).length === 0
+      ? {}
+      : {
+          expectedMusicTargetIds: Object.keys(config.homeAssistant.music),
+        }),
     onWarning: (message) => console.warn(`[lugn] ${message}`),
   });
   const restoredLightingIntent = await lightingIntentStore.load();
+  const restoredMusicIntent = lightingIntentStore.restoredMusicIntent;
   const engine = new LugnEngine(systemClock, {
     adapter: homeAssistantLighting,
     deviceIds,
     scenes,
     ...(defaultSceneId === undefined ? {} : { defaultSceneId }),
     ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
+    ...(restoredMusicIntent === undefined ? {} : { restoredMusicIntent }),
     prelight: config.prelight,
     ...(config.lightingControlModes === undefined
       ? {}
@@ -185,6 +193,13 @@ export async function startRuntime(
   );
   lightingIntentStore.start(engine);
   const capabilities = new CapabilityRegistry(engine, {
+    ...(config.presenceControl === undefined
+      ? {}
+      : {
+          presenceCountAdapter: new Stl27lPresenceControlAdapter(
+            config.presenceControl.baseUrl,
+          ),
+        }),
     ...(homeAssistantButton === undefined
       ? {}
       : { buttonAdapter: homeAssistantButton }),
@@ -309,11 +324,14 @@ export async function startRuntime(
           token,
         })),
         capabilities,
+        presenceCountCorrectionAvailable: config.presenceControl !== undefined,
         scenes: Array.from(engine.scenes.values()),
         stateProvider: () => engine.state,
         stateStream: engine.stream,
         musicVolumePoliciesProvider: () =>
           engine.getMusicVolumePolicySnapshots(),
+        musicPlaybackPoliciesProvider: () =>
+          engine.getMusicPlaybackPolicySnapshots(),
         environmentProvider: () => homeAssistantEnvironment.snapshot(),
         castStatus: (hubId) => {
           const lastHubPollAt =

@@ -26,6 +26,9 @@ touchscreens, so primary actions and room conditions must fit in one viewport
 without scrolling. Bed and desk Hub roles currently receive the same room
 state, sensor snapshot, scenes and music policy; role-specific datasets must
 not be implied by their labels.
+Their action hierarchy differs: Bed prioritizes all-off and soft light, with
+Sleep only when configured; Desk prioritizes focus/everyday light and Optical.
+All available controls remain reachable in the same shared room dashboard.
 
 ## Capabilities and Constraints
 
@@ -38,7 +41,8 @@ not be implied by their labels.
 - Automatic music playback must not start or resume from 23:00 until 06:00 (Europe/Stockholm).
 - Routine connection, Cast and refresh status should not consume dashboard
   space; actionable failures may be shown when needed.
-- The dashboard must not scroll in either direction.
+- The primary dashboard must not scroll in either direction. Secondary music
+  explanations may scroll within an in-place Details pane while controls remain visible.
 
 ## Brand Commitments
 
@@ -56,8 +60,12 @@ not be implied by their labels.
 ## Product Principles
 
 - Make common room controls reachable with one clear touch.
+- Adapt action priority to the authenticated Hub role without inferring room
+  occupancy from a dashboard action or duplicating automation policy.
 - Present room conditions in a glanceable hierarchy.
 - Keep observed values distinct from Lugn's volume target and controller.
+- Name current controller authority independently from the last reported changer,
+  automatic policy enablement and current policy activity.
 - Preserve truthful states and actionable error recovery.
 
 ## Accessibility & Inclusion

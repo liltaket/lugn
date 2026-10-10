@@ -169,6 +169,43 @@ export const MusicCommandStatusSchema = z.enum([
   'superseded',
   'failed',
 ]);
+export const MusicRecoveryStopReasonSchema = z.enum([
+  'feedback_confirmed',
+  'superseded',
+  'policy_changed',
+  'read_unavailable',
+  'read_failed',
+  'read_timeout',
+  'invalid_readback',
+  'reported_unavailable',
+  'newer_report',
+  'non_retryable',
+  'attempt_limit',
+  'dispatch_failed',
+  'acceptance_pending',
+  'deadline',
+  'disposed',
+]);
+export type MusicRecoveryStopReason = z.infer<
+  typeof MusicRecoveryStopReasonSchema
+>;
+export const MusicCommandRecoverySchema = z.object({
+  stage: z.enum([
+    'awaiting_feedback',
+    'verifying',
+    'waiting_retry',
+    'retrying',
+    'matched',
+    'stopped',
+  ]),
+  attemptCount: z.number().int().min(1).max(3),
+  lastAttemptAt: z.number().nonnegative(),
+  deadlineAt: z.number().nonnegative(),
+  nextAttemptAt: z.number().nonnegative().nullable(),
+  stopReason: MusicRecoveryStopReasonSchema.nullable(),
+  verifiedAt: z.number().nonnegative().optional(),
+  reported: MusicObservationValuesSchema.optional(),
+});
 export const MusicCommandRecordSchema = z.object({
   id: z.string(),
   target: SemanticMusicIdSchema,
@@ -179,6 +216,7 @@ export const MusicCommandRecordSchema = z.object({
   acceptedAt: z.number().nonnegative().optional(),
   confirmedAt: z.number().nonnegative().optional(),
   diagnosticReason: z.string().optional(),
+  recovery: MusicCommandRecoverySchema.optional(),
 });
 export type MusicCommandRecord = z.infer<typeof MusicCommandRecordSchema>;
 export const DeviceMusicStateSchema = z.object({
@@ -219,12 +257,136 @@ export const MusicFadeStateSchema = z.object({
   diagnosticReason: z.string().optional(),
 });
 export type MusicFadeState = z.infer<typeof MusicFadeStateSchema>;
+export const MusicVolumeActivityReasonSchema = z.enum([
+  'manual_hold',
+  'automation_disabled',
+  'presence_unknown',
+  'confirmed_empty',
+  'home_away',
+  'fade_active',
+  'volume_unavailable',
+  'active',
+]);
+export const MusicPlaybackActivityReasonSchema = z.enum([
+  'manual_pause',
+  'home_away',
+  'quiet_hours',
+  'presence_unknown',
+  'confirmed_empty',
+  'player_unavailable',
+  'already_playing',
+  'awaiting_new_entry',
+]);
+export type MusicPlaybackActivityReason = z.infer<
+  typeof MusicPlaybackActivityReasonSchema
+>;
+export const MusicVolumeChangeSchema = z.object({
+  volume: z.number().finite().min(0).max(1),
+  observedAt: z.number().finite().nonnegative(),
+  provenance: ProvenanceSchema,
+  attribution: z.enum(['correlated', 'matched', 'external']),
+});
+export type MusicVolumeChange = z.infer<typeof MusicVolumeChangeSchema>;
+export const MusicDecisionSchema = z.object({
+  target: SemanticMusicIdSchema,
+  at: z.number().finite().nonnegative(),
+  reason: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('volume'),
+      value: MusicVolumeActivityReasonSchema,
+    }),
+    z.object({
+      kind: z.literal('playback'),
+      value: MusicPlaybackActivityReasonSchema,
+    }),
+  ]),
+  owner: z.enum(['manual', 'lugn', 'none']),
+  policyEnabled: z.boolean(),
+  manualExpiresAt: z.number().finite().nonnegative().nullable(),
+  resumeExpiresAt: z.number().finite().nonnegative().nullable(),
+});
+export type MusicDecision = z.infer<typeof MusicDecisionSchema>;
 export const MusicStateSchema = z.object({
   devices: z.record(SemanticMusicIdSchema, DeviceMusicStateSchema),
   commands: z.array(MusicCommandRecordSchema),
   fades: z.record(SemanticMusicIdSchema, MusicFadeStateSchema).default({}),
+  volumeChanges: z
+    .record(SemanticMusicIdSchema, MusicVolumeChangeSchema)
+    .optional(),
+  decisions: z.array(MusicDecisionSchema).max(128).optional(),
 });
 export type MusicState = z.infer<typeof MusicStateSchema>;
+
+const PersistedHumanMusicProvenanceSchema = ProvenanceSchema.extend({
+  actor: ActorSchema.strict(),
+})
+  .strict()
+  .refine((provenance) =>
+    ['user', 'physical_remote', 'home_assistant'].includes(
+      provenance.actor.type,
+    ),
+  );
+
+export const ManualVolumeHoldSchema = z
+  .object({
+    volume: z.number().finite().min(0).max(1),
+    createdAt: z.number().finite().nonnegative(),
+    expiresAt: z.number().finite().nonnegative().nullable(),
+    provenance: PersistedHumanMusicProvenanceSchema,
+  })
+  .strict()
+  .refine(
+    (hold) => hold.expiresAt === null || hold.expiresAt >= hold.createdAt,
+  );
+export type ManualVolumeHold = z.infer<typeof ManualVolumeHoldSchema>;
+
+export const MusicPauseIntentSchema = z
+  .object({
+    createdAt: z.number().finite().nonnegative(),
+    provenance: PersistedHumanMusicProvenanceSchema,
+  })
+  .strict();
+export type MusicPauseIntent = z.infer<typeof MusicPauseIntentSchema>;
+
+/** Logical intent and absolute continuity deadlines; no observations, commands or fades. */
+export const MusicIntentSnapshotSchema = z
+  .object({
+    version: z.literal(1),
+    volumeAutomationEnabled: z.boolean(),
+    temporaryVolumeAutomationRestore: z.boolean().nullable(),
+    confirmedAbsence: z.boolean(),
+    absenceExpiresAt: z.number().finite().nonnegative().nullable(),
+    targets: z.record(
+      SemanticMusicIdSchema,
+      z
+        .object({
+          baseline: z.number().finite().min(0).max(1).nullable(),
+          baselineSource: z.enum(['user', 'inferred', 'unknown']),
+          lastIntentActor: z.enum(['manual', 'lugn', 'unknown']),
+          manualVolume: ManualVolumeHoldSchema.nullable(),
+          pause: MusicPauseIntentSchema.nullable(),
+          resumeUntil: z.number().finite().nonnegative(),
+        })
+        .strict()
+        .refine(
+          (target) =>
+            (target.baseline === null) ===
+              (target.baselineSource === 'unknown') &&
+            (target.pause === null || target.resumeUntil === 0),
+        ),
+    ),
+  })
+  .strict()
+  .refine(
+    (snapshot) =>
+      snapshot.confirmedAbsence === (snapshot.absenceExpiresAt !== null) &&
+      Object.values(snapshot.targets).every(
+        (target) =>
+          snapshot.confirmedAbsence ||
+          (target.manualVolume?.expiresAt == null && target.resumeUntil === 0),
+      ),
+  );
+export type MusicIntentSnapshot = z.infer<typeof MusicIntentSnapshotSchema>;
 
 export const PresenceEventSchema = z.object({
   type: z.literal('presence.changed'),

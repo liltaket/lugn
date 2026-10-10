@@ -8,18 +8,25 @@ import {
   SemanticLightingIdSchema,
   SceneSchema,
   type LightingIntentSnapshot,
+  MusicIntentSnapshotSchema,
+  SemanticMusicIdSchema,
+  type MusicIntentSnapshot,
 } from '../core/schemas.js';
 
-const currentVersion = 1;
+const currentVersion = 2;
 const maxSnapshotBytes = 1024 * 1024;
 const defaultDebounceMs = 150;
 
-const VersionedSnapshotSchema = z
-  .object({
-    version: z.literal(currentVersion),
-    snapshot: LightingIntentSnapshotSchema,
-  })
-  .strict();
+const VersionedSnapshotSchema = z.union([
+  z.object({ version: z.literal(1), snapshot: z.unknown() }).strict(),
+  z
+    .object({
+      version: z.literal(currentVersion),
+      snapshot: z.unknown(),
+      music: z.unknown().optional(),
+    })
+    .strict(),
+]);
 
 export type LightingIntentStoreStream = {
   subscribe(listener: (update: { domains: string[] }) => void): () => void;
@@ -27,29 +34,34 @@ export type LightingIntentStoreStream = {
 
 export type LightingIntentSource = {
   getLightingIntentSnapshot(): LightingIntentSnapshot;
+  getMusicIntentSnapshot?(): MusicIntentSnapshot;
   stream: LightingIntentStoreStream;
 };
 
 export type LightingIntentStoreOptions = {
-  /** Path to the private, versioned lighting intent file. */
+  /** Path to the private, versioned logical intent file. */
   filePath: string;
   /** Configured semantic lighting IDs; persisted IDs must match this set. */
   expectedDeviceIds: readonly string[];
   /** Scene IDs accepted by the active configuration. */
   knownSceneIds: readonly string[];
+  /** Opt in to music persistence, validating its targets independently. */
+  expectedMusicTargetIds?: readonly string[];
   debounceMs?: number;
   /** Receives generic messages only; paths, values, and OS errors are redacted. */
   onWarning?: (message: string) => void;
 };
 
 /**
- * Persists only the engine's logical lighting intent. Observations, presence
+ * Persists logical lighting and optional music intent. Observations, presence
  * measurements, and command history are deliberately excluded by the snapshot
  * type and its runtime schema.
  */
 export class LightingIntentStore {
   private readonly expectedDeviceIds: Set<string>;
   private readonly knownSceneIds: Set<string>;
+  private readonly expectedMusicTargetIds: Set<string> | undefined;
+  private lastValidMusic: MusicIntentSnapshot | undefined;
   private readonly debounceMs: number;
   private readonly warn: (message: string) => void;
   private unsubscribe: (() => void) | undefined;
@@ -62,6 +74,10 @@ export class LightingIntentStore {
   constructor(private readonly options: LightingIntentStoreOptions) {
     this.expectedDeviceIds = new Set(options.expectedDeviceIds);
     this.knownSceneIds = new Set(options.knownSceneIds);
+    this.expectedMusicTargetIds =
+      options.expectedMusicTargetIds === undefined
+        ? undefined
+        : new Set(options.expectedMusicTargetIds);
     this.debounceMs = options.debounceMs ?? defaultDebounceMs;
     const warningSink =
       options.onWarning ?? ((message: string) => console.warn(message));
@@ -92,10 +108,26 @@ export class LightingIntentStore {
     if (!Number.isFinite(this.debounceMs) || this.debounceMs < 0) {
       throw new Error('Lighting intent store debounce is invalid');
     }
+    if (
+      this.expectedMusicTargetIds &&
+      (this.expectedMusicTargetIds.size !==
+        options.expectedMusicTargetIds?.length ||
+        [...this.expectedMusicTargetIds].some(
+          (id) => !SemanticMusicIdSchema.safeParse(id).success,
+        ))
+    )
+      throw new Error('Music intent store target IDs are invalid');
+  }
+
+  get restoredMusicIntent(): MusicIntentSnapshot | undefined {
+    return this.lastValidMusic === undefined
+      ? undefined
+      : structuredClone(this.lastValidMusic);
   }
 
   /** Load and validate a prior intent snapshot; invalid or absent state is ignored. */
   async load(): Promise<LightingIntentSnapshot | undefined> {
+    this.lastValidMusic = undefined;
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
       // lstat rejects symlinks before opening. O_NOFOLLOW closes the race on
@@ -123,11 +155,27 @@ export class LightingIntentStore {
         return undefined;
       }
       const parsed = VersionedSnapshotSchema.safeParse(raw);
-      if (!parsed.success || !this.matchesConfiguredIds(parsed.data.snapshot)) {
+      if (!parsed.success) {
         this.warn('Lugn lighting intent state is invalid; ignoring it.');
         return undefined;
       }
-      return structuredClone(parsed.data.snapshot);
+      if (
+        parsed.data.version === 2 &&
+        parsed.data.music !== undefined &&
+        this.expectedMusicTargetIds !== undefined
+      ) {
+        this.lastValidMusic = this.validateMusicSnapshot(parsed.data.music);
+        if (!this.lastValidMusic)
+          this.warn(
+            'Lugn music intent state is invalid; ignoring that section.',
+          );
+      }
+      const snapshot = this.validateSnapshot(parsed.data.snapshot);
+      if (!snapshot) {
+        this.warn('Lugn lighting intent state is invalid; ignoring it.');
+        return undefined;
+      }
+      return structuredClone(snapshot);
     } catch (error) {
       this.warn(
         isMissingFile(error)
@@ -140,7 +188,7 @@ export class LightingIntentStore {
     }
   }
 
-  /** Begin listening for logical lighting and presence changes. */
+  /** Begin listening for changes that can affect logical intent. */
   start(source: LightingIntentSource): void {
     if (this.stopped) throw new Error('Lighting intent store has stopped');
     if (this.unsubscribe) {
@@ -152,10 +200,13 @@ export class LightingIntentStore {
     this.unsubscribe = source.stream.subscribe((update) => {
       if (
         update.domains.includes('lighting') ||
-        update.domains.includes('presence')
+        update.domains.includes('presence') ||
+        update.domains.includes('music') ||
+        update.domains.includes('intent')
       )
         this.scheduleWrite();
     });
+    if (this.expectedMusicTargetIds !== undefined) this.scheduleWrite();
   }
 
   /** Write the latest intent now, waiting for any previous atomic write. */
@@ -209,6 +260,24 @@ export class LightingIntentStore {
         );
         return;
       }
+      let music = this.lastValidMusic;
+      if (
+        this.expectedMusicTargetIds !== undefined &&
+        this.source?.getMusicIntentSnapshot
+      ) {
+        let rawMusic: unknown;
+        try {
+          rawMusic = this.source.getMusicIntentSnapshot();
+        } catch {
+          /* Validate below. */
+        }
+        const validMusic = this.validateMusicSnapshot(rawMusic);
+        if (validMusic) music = validMusic;
+        else
+          this.warn(
+            'Lugn music intent snapshot is invalid; the last valid music intent was retained.',
+          );
+      }
 
       const directory = dirname(this.options.filePath);
       await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -245,7 +314,11 @@ export class LightingIntentStore {
       handle = await open(temporaryPath, 'wx', 0o600);
       await handle.chmod(0o600);
       await handle.writeFile(
-        `${JSON.stringify({ version: currentVersion, snapshot })}\n`,
+        `${JSON.stringify(
+          music === undefined
+            ? { version: 1, snapshot }
+            : { version: currentVersion, snapshot, music },
+        )}\n`,
         'utf8',
       );
       await handle.sync();
@@ -266,6 +339,7 @@ export class LightingIntentStore {
       await rename(temporaryPath, this.options.filePath);
       temporaryPath = undefined;
       renamed = true;
+      this.lastValidMusic = music;
       try {
         await directoryHandle.sync();
       } catch {
@@ -289,6 +363,21 @@ export class LightingIntentStore {
   private validateSnapshot(value: unknown): LightingIntentSnapshot | undefined {
     const parsed = LightingIntentSnapshotSchema.safeParse(value);
     if (!parsed.success || !this.matchesConfiguredIds(parsed.data))
+      return undefined;
+    return parsed.data;
+  }
+
+  private validateMusicSnapshot(
+    value: unknown,
+  ): MusicIntentSnapshot | undefined {
+    const parsed = MusicIntentSnapshotSchema.safeParse(value);
+    if (!parsed.success || this.expectedMusicTargetIds === undefined)
+      return undefined;
+    const targets = Object.keys(parsed.data.targets);
+    if (
+      targets.length !== this.expectedMusicTargetIds.size ||
+      targets.some((target) => !this.expectedMusicTargetIds?.has(target))
+    )
       return undefined;
     return parsed.data;
   }

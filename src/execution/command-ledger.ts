@@ -160,10 +160,10 @@ export class CommandLedger {
     if (commandId) {
       command = this.records.find((candidate) => candidate.id === commandId);
     } else {
+      // PERF: Iterating backward avoids O(N) allocation overhead compared to [...arr].reverse().find()
       for (let i = this.records.length - 1; i >= 0; i--) {
-        const candidate = this.records[i];
+        const candidate = this.records[i]!;
         if (
-          candidate &&
           candidate.target === target &&
           candidate.status === 'pending' &&
           now - candidate.issuedAt <= this.attributionWindowMs &&
@@ -174,6 +174,7 @@ export class CommandLedger {
         }
       }
     }
+
     if (
       !command ||
       command.target !== target ||
@@ -207,10 +208,10 @@ export class CommandLedger {
     now: number,
   ): CommandRecord | undefined {
     const windowMs = Math.min(this.attributionWindowMs, 10_000);
+    // PERF: Iterating backward avoids O(N) allocation overhead compared to [...arr].reverse().find()
     for (let i = this.records.length - 1; i >= 0; i--) {
-      const command = this.records[i];
+      const command = this.records[i]!;
       if (
-        command &&
         command.status === 'superseded' &&
         command.target === target &&
         command.desired[property] === value &&
@@ -229,10 +230,10 @@ export class CommandLedger {
     property: LightingProperty,
     value: LightingValues[LightingProperty],
   ): CommandRecord | undefined {
+    // PERF: Iterating backward avoids O(N) allocation overhead compared to [...arr].reverse().find()
     for (let i = this.records.length - 1; i >= 0; i--) {
-      const command = this.records[i];
+      const command = this.records[i]!;
       if (
-        command &&
         command.status === 'pending' &&
         command.target === target &&
         command.desired[property] === value
