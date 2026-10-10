@@ -63,8 +63,10 @@ only after existing command attribution identifies a genuine external change.
 
 An explicit pause holds `music.playback` for that player until a later explicit
 Play/preset or an attributed newer physical Play. Presence, command timeout and
-continuity expiry do not release it. Volume remains independent. Playback holds
-are process-local and reset on restart, as music continuity already does.
+continuity expiry do not release it. Volume remains independent. Saved playback
+holds survive restart with their original timestamp; the first HA Playing seed
+or availability-recovery snapshot cannot surrender them. Music absence deadlines
+and short-return eligibility are absolute and cannot be renewed by restart.
 
 An explicit all-off or Sleep scene holds `lighting.activation` for its off
 targets until another explicit scene, a power adjustment to that target, or an
@@ -93,14 +95,18 @@ Likewise for music:
 
     playback -> automation
     volume baseline -> user
-    volume offset   -> automation
+    volume owner    -> user during manual hold, otherwise eligible automation
     source   -> automation
 
 The most recent volume changer and automatic-policy status are separate facts.
-A user volume change becomes the new baseline; when the room is occupied and
-the resident is not away, Lugn can still apply the daily and person offsets to
-that baseline. The dashboard reports who last changed the volume separately
-from whether automatic adjustment is active and what target it calculates.
+A human volume change becomes the new baseline and temporarily owns volume,
+blocking daily/person adjustments and every nonhuman volume command. A short
+confirmed absence preserves this intent; at the absolute 20-minute absence
+deadline volume ownership is released, and eligible occupancy permits automatic
+offsets again. Unknown presence alone does not start or renew the deadline.
+Explicit Pause owns playback independently and does not expire with volume.
+See [Music](MUSIC.md#volume-policy) for transitions, deliberate automation
+hand-back and the BILRESA temporary restore exception.
 
 This avoids coarse global "passive mode" flags.
 
@@ -205,7 +211,7 @@ diagnostics contain lifecycle timestamps; state-stream updates include the
 
 Sessions are process-local. Restart is an explicit new visit boundary: startup
 state has no session, and only fresh confirmed occupancy starts a new UUID.
-The lighting intent store can restore domain intent and its absolute continuity
+The intent store can restore lighting/music intent and absolute continuity
 deadline, but never restores a session, sensor presence or device observations.
 An ended session remains visible until the next entry for diagnostics; disposal
 cancels its timer without manufacturing a physical exit.

@@ -1,6 +1,7 @@
 import { createServer } from 'node:net';
 import { request } from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { MusicPlaybackPolicySnapshot } from '../src/application/music-automation.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { LugnDisplayServer } from '../src/runtime/display-server.js';
@@ -12,7 +13,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setup(streaming = true) {
+async function setup(streaming = true, music = false) {
   const portFinder = createServer();
   await new Promise<void>((resolve) =>
     portFinder.listen(0, '127.0.0.1', resolve),
@@ -23,6 +24,7 @@ async function setup(streaming = true) {
   await new Promise<void>((resolve) => portFinder.close(() => resolve()));
   const engine = new LugnEngine(
     new FakeClock(Date.parse('2026-10-04T12:00:00+02:00')),
+    music ? { music: { targets: { 'music.room': [] } } } : {},
   );
   const server = new LugnDisplayServer({
     host: '127.0.0.1',
@@ -35,6 +37,12 @@ async function setup(streaming = true) {
       return engine.state;
     },
     ...(streaming ? { stateStream: engine.stream } : {}),
+    ...(music
+      ? {
+          musicPlaybackPoliciesProvider: () =>
+            engine.getMusicPlaybackPolicySnapshots(),
+        }
+      : {}),
   });
   let snapshotFails = false;
   await server.start();
@@ -74,6 +82,8 @@ async function setup(streaming = true) {
           state: typeof engine.state;
           role: string;
           deliveryRevision: number;
+          generatedAt: number;
+          musicPlaybackPolicies: Record<string, MusicPlaybackPolicySnapshot>;
         };
       },
     };
@@ -90,6 +100,36 @@ async function setup(streaming = true) {
 }
 
 describe('secret-path Hub state stream', () => {
+  it('carries authoritative playback policy and server time in polling and stream snapshots', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = Date.parse('2026-10-04T12:00:00+02:00');
+    vi.setSystemTime(now);
+    try {
+      const { base, open, engine } = await setup(true, true);
+      const polled = (await (await fetch(`${base}/state`)).json()) as {
+        generatedAt: number;
+        musicPlaybackPolicies: Record<string, MusicPlaybackPolicySnapshot>;
+      };
+      expect(polled.generatedAt).toBe(now);
+      expect(polled.musicPlaybackPolicies).toEqual(
+        engine.getMusicPlaybackPolicySnapshots(),
+      );
+      const streamed = await (await open()).next();
+      expect(streamed.generatedAt).toBe(now);
+      expect(streamed.musicPlaybackPolicies).toEqual(
+        polled.musicPlaybackPolicies,
+      );
+      const fallback = await setup(false);
+      const fallbackPayload = (await (
+        await fetch(`${fallback.base}/state`)
+      ).json()) as {
+        musicPlaybackPolicies: Record<string, MusicPlaybackPolicySnapshot>;
+      };
+      expect(fallbackPayload.musicPlaybackPolicies).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('closes an event stream when an asynchronous snapshot provider fails', async () => {
     const { engine, open, breakSnapshot } = await setup();
     const stream = await open();

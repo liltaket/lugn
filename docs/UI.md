@@ -17,8 +17,8 @@ without EventSource keep polling. Healthy streams retain a fifteen-second
 verification poll; hidden pages close the stream and visible pages reconnect.
 
 Selected scenes show sending, waiting for lamps, and confirmed states separately.
-Reported music volume remains labelled `Nu`; a requested target is labelled
-`Begärt mål` and waits for device feedback. Command acceptance still triggers a
+Reported music volume is labelled `Nu`, or `Senast` when the player or Lugn is
+unavailable. Requested volume is a separate fact in Details. Command acceptance triggers a
 fresh status read and never invents an observed state or physical convergence.
 
 ## Operational control panel
@@ -47,8 +47,10 @@ Assistant mappings and broader room systems remain future UI work.
 ## Current Hub dashboard
 
 Lugn serves its own room dashboard for Nest Hubs. It is a custom Lugn page, not
-a Home Assistant dashboard. The layout is designed to fit the Hub screen
-without horizontal or vertical scrolling.
+a Home Assistant dashboard. The primary layout fits the Hub screen without
+horizontal or vertical scrolling. The in-place Details pane may scroll its
+secondary explanations; music controls remain visible and `Tillbaka` restores
+lighting controls.
 
 The primary controls are large room-light preset buttons:
 
@@ -75,6 +77,35 @@ Volume steps and their boundary buttons use the latest pending requested volume,
 falling back to the reported volume after confirmation, failure, expiry or an
 external change. The displayed current volume remains the player's observation.
 
+The main music panel names the active volume owner and its typed reason. The
+effective target belongs to that owner; it does not become a requested volume
+merely because a command was accepted. Details separates automatic policy
+enabled/activity, the last reported volume changer, requested volume, baseline,
+daily/person-count offsets and the calculated automatic target. A matching
+uncorrelated report is labelled as matching a request, rather than proof of
+who moved the physical control. Missing attribution remains unknown.
+
+Manual volume continuity counts down only when the backend supplies a confirmed
+absence deadline. The countdown uses server time plus elapsed client time; at
+the boundary the dashboard waits for backend authority instead of releasing a
+hold itself. A lost connection marks authority/activity unknown and preserves
+last reported values.
+
+Playback explanations come from the shared backend policy. They distinguish
+manual Pause, home/away, unknown/empty presence, the 23–06 automatic-start gate,
+and eligibility for the next confirmed entry. Enabling volume automation does
+not disable or enable playback automation. Pending, failed and unconfirmed
+commands remain separate from reported playback. When a Pause hold exists,
+`Spela` explicitly releases it even if the player still reports playing after
+a failed Pause; volume ownership stays independent.
+
+Details shows the selected player's newest eight typed decisions from the
+backend's bounded 128-entry process history. It records evaluated policy
+transitions, not every clock tick or device event, and is not persisted. The
+`music.getPolicy` read capability exposes current volume/playback reasons,
+reported volume-change attribution and that player's history. This implements
+the music portion of issue #14; lighting/prelight history remains follow-up work.
+
 After command acceptance the Hub waits for a new status read started after
 acceptance before enabling the controls again. An earlier background poll is
 allowed to finish first, but cannot replace that fresh read.
@@ -85,6 +116,26 @@ Each configured Hub has a role (`bed` or `desk`), a Cast receiver IP and a
 separate secret URL path. The dashboard listener is configured independently
 from the bearer-protected, loopback-only capability API. Keep the display
 listener on a trusted LAN and do not publish it to the internet.
+
+Bed prioritizes Helt släckt and Mysljus, followed by Sleep if that scene is
+configured, then the remaining available scenes. Desk prioritizes Fokus and
+Vardagsljus. With up to six scenes, the first two available scenes have larger
+full-width controls; larger sets use paired buttons to preserve space. All
+configured scenes remain available and require one touch. Missing preferred
+scenes are skipped rather than invented. Unknown roles retain the neutral scene
+order. Desk puts Optical before Spotify DJ in actual button and keyboard order;
+Bed and unknown roles keep Spotify DJ first. Playback, volume, Details and the
+same backend reasons remain available on both roles. The role adds no separate
+room state, PC capability, or inferred confirmed occupancy.
+The target layout covers the five built-in scenes plus optional Sleep, with a
+paired fallback for seven/eight scenes. Larger custom scene sets need separate
+viewport validation or future pagination.
+
+Scene, light, music and preset commands identify the authenticated role as actor
+`nest-dashboard:bed` / `nest-dashboard:desk` and source
+`lugn.cast_dashboard.bed` / `lugn.cast_dashboard.desk`. The server resolves that
+role from the Hub's secret path; client-supplied role/source fields are rejected,
+and headers cannot override it. This is action provenance, not presence evidence.
 
 The custom Hub dashboard does not use Clerk; it uses a separate secret path
 for each receiver. The local operational control panel at `/ui/` supports

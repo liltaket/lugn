@@ -1,3 +1,4 @@
-## 2024-05-18 - Tooltips on disabled buttons and aria-valuetext on sliders
-**Learning:** Native range inputs need `aria-valuetext` to convey percentage or scaled meaning contextually to screen readers, avoiding them reading raw arbitrary numbers. Additionally, disabled adjust buttons without a tooltip leave users guessing *why* they cannot interact with them (e.g., already max/min, unavailable device, etc.).
-**Action:** When implementing custom ranges or disable-able adjust controls, proactively add `aria-valuetext` updates and explicit title explanations for their disabled state.
+## 2025-02-18 - Semantic `<output>` and `aria-valuetext` for Range Sliders
+
+**Learning:** Screen readers might not correctly read out values for native HTML `<input type="range">` unless `aria-valuetext` is explicitly provided and updated dynamically. Additionally, the textual display of a slider's value should use the `<output>` tag linked via `htmlFor` matching the slider's `id` instead of a plain `<span>` to ensure proper semantic association and accessibility.
+**Action:** When implementing custom range sliders, always set and update `aria-valuetext` in JavaScript and pair them with a semantically correct `<output>` element connected by `htmlFor` and `id`.

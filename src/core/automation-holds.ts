@@ -1,5 +1,10 @@
 import type { Clock } from './clock.js';
-import type { AutomationHold, Actor, Provenance } from './schemas.js';
+import type {
+  AutomationHold,
+  Actor,
+  Provenance,
+  MusicPauseIntent,
+} from './schemas.js';
 
 export function isHumanActor(actor: Actor): boolean {
   return ['user', 'physical_remote', 'home_assistant'].includes(actor.type);
@@ -36,6 +41,17 @@ export class AutomationHolds {
 
   clear(scope: 'music.playback' | 'lighting.activation', target: string): void {
     this.holds.delete(`${scope}:${target}`);
+  }
+
+  restoreMusicPause(target: string, intent: MusicPauseIntent): void {
+    this.holds.set(`music.playback:${target}`, {
+      scope: 'music.playback',
+      target,
+      intent: 'paused',
+      provenance: structuredClone(intent.provenance),
+      createdAt: intent.createdAt,
+      resetPolicy: 'explicit_playback',
+    });
   }
 
   snapshot(): AutomationHold[] {
