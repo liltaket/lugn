@@ -2957,12 +2957,14 @@ export class LugnEngine {
     let remainingTerminalSwitches = runtimeHistoryLimit;
     const retainedSwitchCommands = [];
     for (let i = this.state.switches.commands.length - 1; i >= 0; i--) {
-      const command = this.state.switches.commands[i]!;
-      if (command.status === 'pending') {
-        retainedSwitchCommands.push(command);
-      } else if (remainingTerminalSwitches > 0) {
-        retainedSwitchCommands.push(command);
-        remainingTerminalSwitches -= 1;
+      const command = this.state.switches.commands[i];
+      if (command) {
+        if (command.status === 'pending') {
+          retainedSwitchCommands.push(command);
+        } else if (remainingTerminalSwitches > 0) {
+          retainedSwitchCommands.push(command);
+          remainingTerminalSwitches -= 1;
+        }
       }
     }
     retainedSwitchCommands.reverse();
