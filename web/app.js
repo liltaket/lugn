@@ -1276,10 +1276,14 @@ function renderMusicPlayer(target, device, commands, fade) {
   controls.append(playbackControl);
 
   const volumeControl = node('div', 'music-control music-volume-control');
-  volumeControl.append(node('p', 'music-control-title', 'Volym'));
+  const volumeLabel = document.createElement('label');
+  volumeLabel.className = 'music-control-title';
+  volumeLabel.textContent = 'Volym';
+  volumeControl.append(volumeLabel);
   const volumeSlider = document.createElement('input');
   volumeSlider.type = 'range';
   volumeSlider.id = `music-volume-${target.replace(/[^a-zA-Z0-9_.-]/g, '-')}`;
+  volumeLabel.htmlFor = volumeSlider.id;
   volumeSlider.min = '0';
   volumeSlider.max = '100';
   volumeSlider.step = '1';
@@ -1609,10 +1613,16 @@ function renderLight(target, device, presenceState) {
   const unavailable = device.availability === 'unavailable';
   const knownPower = device.effectiveDesired?.power ?? device.observed?.power;
   const powerControl = node('div', 'power-control');
-  powerControl.append(node('span', 'power-label', 'Ström'));
+  const powerLabelId = `light-power-${target.replace(/[^a-zA-Z0-9_.-]/g, '-')}`;
+  const labelElem = document.createElement('label');
+  labelElem.className = 'power-label';
+  labelElem.textContent = 'Ström';
+  labelElem.htmlFor = powerLabelId;
+  powerControl.append(labelElem);
   const powerLabel = node('label', 'power-toggle');
   const powerInput = document.createElement('input');
   powerInput.type = 'checkbox';
+  powerInput.id = powerLabelId;
   powerInput.className = 'switch-input';
   powerInput.checked = knownPower === true;
   powerInput.indeterminate = knownPower === undefined;
