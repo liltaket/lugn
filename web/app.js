@@ -1655,6 +1655,15 @@ function renderBrightnessControl(target, device, disabled) {
   const minus = node('button', 'adjust-button', '−10');
   minus.type = 'button';
   minus.disabled = disabled || !Number.isInteger(current) || current <= 0;
+  if (minus.disabled) {
+    if (disabled) {
+      minus.title = 'Justering tillfälligt inaktiverad';
+    } else if (!Number.isInteger(current)) {
+      minus.title = 'Okänd ljusstyrka';
+    } else {
+      minus.title = 'Redan på lägsta nivån';
+    }
+  }
   minus.setAttribute(
     'aria-label',
     `Sänk ljusstyrkan för ${displayTarget(target)} med 10 procentenheter`,
@@ -1703,6 +1712,15 @@ function renderBrightnessControl(target, device, disabled) {
   const plus = node('button', 'adjust-button', '+10');
   plus.type = 'button';
   plus.disabled = disabled || !Number.isInteger(current) || current >= 100;
+  if (plus.disabled) {
+    if (disabled) {
+      plus.title = 'Justering tillfälligt inaktiverad';
+    } else if (!Number.isInteger(current)) {
+      plus.title = 'Okänd ljusstyrka';
+    } else {
+      plus.title = 'Redan på högsta nivån';
+    }
+  }
   plus.setAttribute(
     'aria-label',
     `Höj ljusstyrkan för ${displayTarget(target)} med 10 procentenheter`,
