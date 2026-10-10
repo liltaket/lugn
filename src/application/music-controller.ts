@@ -1172,33 +1172,40 @@ export class MusicController {
     observation: MusicObservation,
     observedVolume: number,
   ): MusicCommandRecord | undefined {
-    return [...this.state.commands]
-      .reverse()
-      .find(
-        (command) =>
-          command.target === observation.target &&
-          command.requested.property === 'volume' &&
-          command.status === 'pending' &&
-          observation.observedAt >= command.issuedAt &&
-          this.clock.now() -
-            (command.recovery?.lastAttemptAt ?? command.issuedAt) <
-            this.timeoutMs &&
-          Math.abs(observedVolume - command.requested.value) <=
-            0.005 + Number.EPSILON,
-      );
+    for (let i = this.state.commands.length - 1; i >= 0; i--) {
+      const command = this.state.commands[i]!;
+      if (
+        command.target === observation.target &&
+        command.requested.property === 'volume' &&
+        command.status === 'pending' &&
+        observation.observedAt >= command.issuedAt &&
+        this.clock.now() -
+          (command.recovery?.lastAttemptAt ?? command.issuedAt) <
+          this.timeoutMs &&
+        Math.abs(observedVolume - command.requested.value) <=
+          0.005 + Number.EPSILON
+      ) {
+        return command;
+      }
+    }
+    return undefined;
   }
   private matchesCurrentCorrelatedVolumeCommand(
     observation: MusicObservation,
     volume: number,
   ): boolean {
     if (observation.commandId === undefined) return false;
-    const command = [...this.state.commands]
-      .reverse()
-      .find(
-        (candidate) =>
-          candidate.target === observation.target &&
-          candidate.requested.property === 'volume',
-      );
+    let command: MusicCommandRecord | undefined = undefined;
+    for (let i = this.state.commands.length - 1; i >= 0; i--) {
+      const candidate = this.state.commands[i]!;
+      if (
+        candidate.target === observation.target &&
+        candidate.requested.property === 'volume'
+      ) {
+        command = candidate;
+        break;
+      }
+    }
     const intent = this.latestHumanVolumeIntent.get(observation.target);
     return (
       command !== undefined &&
@@ -1221,44 +1228,52 @@ export class MusicController {
     observedVolume: number,
   ): MusicCommandRecord | undefined {
     const intent = this.latestHumanVolumeIntent.get(observation.target);
-    const latestVolume = [...this.state.commands]
-      .reverse()
-      .find(
-        (candidate) =>
-          candidate.target === observation.target &&
-          candidate.requested.property === 'volume',
-      );
+    let latestVolume: MusicCommandRecord | undefined = undefined;
+    for (let i = this.state.commands.length - 1; i >= 0; i--) {
+      const candidate = this.state.commands[i]!;
+      if (
+        candidate.target === observation.target &&
+        candidate.requested.property === 'volume'
+      ) {
+        latestVolume = candidate;
+        break;
+      }
+    }
     // Correlated feedback remains feedback, regardless of delay or command
     // status. HA REST has no correlation: retain one bounded attribution for
     // an older accepted/in-flight automatic command after newer human intent.
-    const command = [...this.state.commands]
-      .reverse()
-      .find(
-        (candidate) =>
-          candidate.target === observation.target &&
-          candidate.requested.property === 'volume' &&
-          (candidate.acceptedAt !== undefined ||
-            this.dispatchingCommands.has(candidate.id)) &&
-          Math.abs(observedVolume - candidate.requested.value) <=
-            0.005 + Number.EPSILON &&
-          (observation.commandId !== undefined
-            ? observation.commandId === candidate.id &&
-              (candidate.id !== latestVolume?.id ||
-                candidate.status !== 'pending' ||
-                (intent !== undefined &&
-                  !isHumanActor(candidate.provenance.actor) &&
-                  (this.commandSequences.get(candidate.id) ?? Infinity) <=
-                    intent.sequence))
-            : intent !== undefined &&
-              !isHumanActor(candidate.provenance.actor) &&
-              (this.commandSequences.get(candidate.id) ?? Infinity) <=
-                intent.sequence &&
-              this.clock.now() - intent.at < LATE_VOLUME_ATTRIBUTION_MS &&
-              this.clock.now() -
-                (candidate.recovery?.lastAttemptAt ?? candidate.issuedAt) <
-                LATE_VOLUME_ATTRIBUTION_MS &&
-              !this.attributedOlderAutomaticVolumeCommands.has(candidate.id)),
-      );
+    let command: MusicCommandRecord | undefined = undefined;
+    for (let i = this.state.commands.length - 1; i >= 0; i--) {
+      const candidate = this.state.commands[i]!;
+      if (
+        candidate.target === observation.target &&
+        candidate.requested.property === 'volume' &&
+        (candidate.acceptedAt !== undefined ||
+          this.dispatchingCommands.has(candidate.id)) &&
+        Math.abs(observedVolume - candidate.requested.value) <=
+          0.005 + Number.EPSILON &&
+        (observation.commandId !== undefined
+          ? observation.commandId === candidate.id &&
+            (candidate.id !== latestVolume?.id ||
+              candidate.status !== 'pending' ||
+              (intent !== undefined &&
+                !isHumanActor(candidate.provenance.actor) &&
+                (this.commandSequences.get(candidate.id) ?? Infinity) <=
+                  intent.sequence))
+          : intent !== undefined &&
+            !isHumanActor(candidate.provenance.actor) &&
+            (this.commandSequences.get(candidate.id) ?? Infinity) <=
+              intent.sequence &&
+            this.clock.now() - intent.at < LATE_VOLUME_ATTRIBUTION_MS &&
+            this.clock.now() -
+              (candidate.recovery?.lastAttemptAt ?? candidate.issuedAt) <
+              LATE_VOLUME_ATTRIBUTION_MS &&
+            !this.attributedOlderAutomaticVolumeCommands.has(candidate.id))
+      ) {
+        command = candidate;
+        break;
+      }
+    }
     if (!command) return undefined;
     if (observation.commandId === undefined)
       this.attributedOlderAutomaticVolumeCommands.add(command.id);
@@ -1268,25 +1283,29 @@ export class MusicController {
     observation: MusicObservation,
     observedVolume: number,
   ): MusicCommandRecord | undefined {
-    const superseded = [...this.state.commands]
-      .reverse()
-      .find(
-        (command) =>
-          command.target === observation.target &&
-          command.requested.property === 'volume' &&
-          command.status === 'superseded' &&
-          command.acceptedAt !== undefined &&
-          observation.observedAt >= command.issuedAt &&
-          this.clock.now() -
-            (command.recovery?.lastAttemptAt ?? command.issuedAt) <
-            this.timeoutMs &&
-          (observation.commandId === undefined ||
-            observation.commandId === command.id) &&
-          !this.attributedSupersededVolumeCommands.has(command.id) &&
-          !this.attributedOlderAutomaticVolumeCommands.has(command.id) &&
-          Math.abs(observedVolume - command.requested.value) <=
-            0.005 + Number.EPSILON,
-      );
+    let superseded: MusicCommandRecord | undefined = undefined;
+    for (let i = this.state.commands.length - 1; i >= 0; i--) {
+      const command = this.state.commands[i]!;
+      if (
+        command.target === observation.target &&
+        command.requested.property === 'volume' &&
+        command.status === 'superseded' &&
+        command.acceptedAt !== undefined &&
+        observation.observedAt >= command.issuedAt &&
+        this.clock.now() -
+          (command.recovery?.lastAttemptAt ?? command.issuedAt) <
+          this.timeoutMs &&
+        (observation.commandId === undefined ||
+          observation.commandId === command.id) &&
+        !this.attributedSupersededVolumeCommands.has(command.id) &&
+        !this.attributedOlderAutomaticVolumeCommands.has(command.id) &&
+        Math.abs(observedVolume - command.requested.value) <=
+          0.005 + Number.EPSILON
+      ) {
+        superseded = command;
+        break;
+      }
+    }
     if (!superseded) return undefined;
     // HA may report an accepted older step after it has been superseded. Consume
     // that attribution once, without confirming or discarding the newer target.
@@ -1323,22 +1342,25 @@ export class MusicController {
       !Number.isFinite(playbackChangedAt)
     )
       return false;
-    const pause = [...this.state.commands]
-      .reverse()
-      .find(
-        (command) =>
-          command.target === observation.target &&
-          command.requested.property === 'playback' &&
-          command.requested.value === 'paused' &&
-          (command.status === 'unconfirmed' ||
-            command.status === 'superseded') &&
-          command.acceptedAt !== undefined &&
-          this.pauseAttributionPredatesExternalIntent(command, observation) &&
-          playbackChangedAt >= command.issuedAt &&
-          this.clock.now() -
-            (command.recovery?.lastAttemptAt ?? command.issuedAt) <
-            LATE_PAUSE_ATTRIBUTION_MS,
-      );
+    let pause: MusicCommandRecord | undefined = undefined;
+    for (let i = this.state.commands.length - 1; i >= 0; i--) {
+      const command = this.state.commands[i]!;
+      if (
+        command.target === observation.target &&
+        command.requested.property === 'playback' &&
+        command.requested.value === 'paused' &&
+        (command.status === 'unconfirmed' || command.status === 'superseded') &&
+        command.acceptedAt !== undefined &&
+        this.pauseAttributionPredatesExternalIntent(command, observation) &&
+        playbackChangedAt >= command.issuedAt &&
+        this.clock.now() -
+          (command.recovery?.lastAttemptAt ?? command.issuedAt) <
+          LATE_PAUSE_ATTRIBUTION_MS
+      ) {
+        pause = command;
+        break;
+      }
+    }
     if (!pause) return false;
     const newerIntent = this.state.commands
       .slice(this.state.commands.indexOf(pause) + 1)

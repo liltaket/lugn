@@ -156,17 +156,24 @@ export class CommandLedger {
     now: number,
     commandId?: string,
   ): CommandRecord | undefined {
-    const command = commandId
-      ? this.records.find((candidate) => candidate.id === commandId)
-      : [...this.records]
-          .reverse()
-          .find(
-            (candidate) =>
-              candidate.target === target &&
-              candidate.status === 'pending' &&
-              now - candidate.issuedAt <= this.attributionWindowMs &&
-              candidate.desired[property] === value,
-          );
+    let command: CommandRecord | undefined = undefined;
+    if (commandId) {
+      command = this.records.find((candidate) => candidate.id === commandId);
+    } else {
+      for (let i = this.records.length - 1; i >= 0; i--) {
+        const candidate = this.records[i]!;
+        if (
+          candidate.target === target &&
+          candidate.status === 'pending' &&
+          now - candidate.issuedAt <= this.attributionWindowMs &&
+          candidate.desired[property] === value
+        ) {
+          command = candidate;
+          break;
+        }
+      }
+    }
+
     if (
       !command ||
       command.target !== target ||
@@ -200,17 +207,20 @@ export class CommandLedger {
     now: number,
   ): CommandRecord | undefined {
     const windowMs = Math.min(this.attributionWindowMs, 10_000);
-    return [...this.records]
-      .reverse()
-      .find(
-        (command) =>
-          command.status === 'superseded' &&
-          command.target === target &&
-          command.desired[property] === value &&
-          this.supersededAtById.has(command.id) &&
-          this.supersededAtById.get(command.id)! <= now &&
-          now - this.supersededAtById.get(command.id)! <= windowMs,
-      );
+    for (let i = this.records.length - 1; i >= 0; i--) {
+      const command = this.records[i]!;
+      if (
+        command.status === 'superseded' &&
+        command.target === target &&
+        command.desired[property] === value &&
+        this.supersededAtById.has(command.id) &&
+        this.supersededAtById.get(command.id)! <= now &&
+        now - this.supersededAtById.get(command.id)! <= windowMs
+      ) {
+        return command;
+      }
+    }
+    return undefined;
   }
 
   latestPending(
@@ -218,13 +228,16 @@ export class CommandLedger {
     property: LightingProperty,
     value: LightingValues[LightingProperty],
   ): CommandRecord | undefined {
-    return [...this.records]
-      .reverse()
-      .find(
-        (command) =>
-          command.status === 'pending' &&
-          command.target === target &&
-          command.desired[property] === value,
-      );
+    for (let i = this.records.length - 1; i >= 0; i--) {
+      const command = this.records[i]!;
+      if (
+        command.status === 'pending' &&
+        command.target === target &&
+        command.desired[property] === value
+      ) {
+        return command;
+      }
+    }
+    return undefined;
   }
 }
