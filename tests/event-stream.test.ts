@@ -127,6 +127,62 @@ describe('applyStateUpdate', () => {
     expect(replay.session).toEqual(updates[1]!.patch.session);
   });
 
+  it('correctly handles __proto__ as an own key in objects without mutating prototypes during deep clone', () => {
+    const original: RoomState = {
+      revision: 0,
+      updatedAt: 0,
+      session: null,
+      presence: {
+        state: 'unknown',
+        personCount: null,
+        continuityExpiresAt: null,
+        home: { state: 'unknown', observedAt: null },
+      },
+      lighting: { currentScene: null, sceneRevision: 0, devices: {} },
+      switches: { devices: {}, commands: [] },
+      music: { devices: {}, commands: [], fades: {} },
+      intent: { holds: [] },
+      commands: [],
+      diagnostics: [],
+      timings: [],
+    };
+
+    // Create an object with a literal '__proto__' key (not a prototype) using JSON.parse
+    const lightingData = JSON.parse(
+      '{"__proto__":{"observed":{"power":true,"brightness":1,"color_temp":200,"color":{"r":0,"g":0,"b":0}},"baselineDesired":{"power":true},"effectiveDesired":{"power":true},"ownership":{},"availability":"available"}}',
+    );
+
+    const next = applyStateUpdate(original, {
+      revision: 1,
+      at: 10,
+      domains: ['lighting'],
+      patch: {
+        lighting: {
+          currentScene: null,
+          sceneRevision: 1,
+          devices: lightingData,
+        },
+      },
+    });
+
+    const devices = next.lighting.devices;
+
+    // It should have an own property named '__proto__'
+    expect(Object.prototype.hasOwnProperty.call(devices, '__proto__')).toBe(
+      true,
+    );
+
+    // The prototype of the devices object should not be polluted by the __proto__ key's value
+    expect(Object.getPrototypeOf(devices)).toBe(Object.prototype);
+
+    // And its __proto__ property should contain our data
+    expect(
+      (devices as Record<string, Record<string, unknown>>)['__proto__']?.[
+        'availability'
+      ],
+    ).toBe('available');
+  });
+
   it('correctly handles unrestricted complex values in diagnostics through structuredClone', () => {
     const original: RoomState = {
       revision: 0,
