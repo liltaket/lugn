@@ -182,7 +182,11 @@ describe('applyStateUpdate', () => {
 
     // Check if the original object prototype wasn't modified globally
     // The cloned object should preserve the correct proto
-    expect(details['protoObj']).toHaveProperty('__proto__', { flag: 'inherited' });
-    expect(Object.getPrototypeOf(details['protoObj'])).toEqual(Object.prototype);
+    expect(details['protoObj']).toHaveProperty('__proto__', {
+      flag: 'inherited',
+    });
+    expect(Object.getPrototypeOf(details['protoObj'])).toEqual(
+      Object.prototype,
+    );
   });
 });

@@ -18,7 +18,8 @@ export class StateEventStream {
     const validUpdate = StateUpdateSchema.parse(update);
     this.history.push(validUpdate);
     if (this.history.length > this.maxHistory) this.history.shift();
-    for (const listener of this.listeners) listener(cloneDeep(validUpdate));
+    for (const listener of this.listeners)
+      listener(structuredClone(validUpdate));
   }
 
   subscribe(listener: (update: StateUpdate) => void): () => void {
@@ -31,7 +32,7 @@ export class StateEventStream {
       return {
         kind: 'snapshot',
         revision: current.revision,
-        state: cloneDeep(current),
+        state: structuredClone(current),
       };
     }
     if (afterRevision === current.revision) {
@@ -46,13 +47,13 @@ export class StateEventStream {
       return {
         kind: 'snapshot',
         revision: current.revision,
-        state: cloneDeep(current),
+        state: structuredClone(current),
       };
     }
     return {
       kind: 'updates',
       fromRevision: afterRevision,
-      updates: cloneDeep(updates),
+      updates: structuredClone(updates),
     };
   }
 }
@@ -118,7 +119,9 @@ function cloneDeep<T>(obj: T, seen = new Map<unknown, unknown>()): T {
     return arr as T;
   }
 
-  const clonedObj: Record<string, unknown> = Object.create(Object.getPrototypeOf(obj));
+  const clonedObj: Record<string, unknown> = Object.create(
+    Object.getPrototypeOf(obj),
+  );
   seen.set(obj, clonedObj);
   for (const key in obj) {
     if (Object.prototype.hasOwnProperty.call(obj, key)) {
