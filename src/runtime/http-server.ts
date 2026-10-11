@@ -718,10 +718,11 @@ export class LugnHttpServer {
   private constantTimeEqual(left: string, right: string): boolean {
     const leftBytes = Buffer.from(left);
     const rightBytes = Buffer.from(right);
-    return (
-      leftBytes.length === rightBytes.length &&
-      timingSafeEqual(leftBytes, rightBytes)
-    );
+    if (leftBytes.length !== rightBytes.length) {
+      timingSafeEqual(leftBytes, leftBytes);
+      return false;
+    }
+    return timingSafeEqual(leftBytes, rightBytes);
   }
 
   private async invokeCapability(
@@ -795,9 +796,11 @@ export class LugnHttpServer {
     if (!match?.[1]) return false;
     const provided = Buffer.from(match[1]);
     const expected = Buffer.from(configuredToken);
-    return (
-      provided.length === expected.length && timingSafeEqual(provided, expected)
-    );
+    if (provided.length !== expected.length) {
+      timingSafeEqual(provided, provided);
+      return false;
+    }
+    return timingSafeEqual(provided, expected);
   }
 }
 

@@ -847,10 +847,11 @@ function isWildcardHost(host: string): boolean {
 function secretsEqual(supplied: string, configured: string): boolean {
   const providedBytes = Buffer.from(supplied, 'utf8');
   const configuredBytes = Buffer.from(configured, 'utf8');
-  return (
-    providedBytes.byteLength === configuredBytes.byteLength &&
-    timingSafeEqual(providedBytes, configuredBytes)
-  );
+  if (providedBytes.byteLength !== configuredBytes.byteLength) {
+    timingSafeEqual(providedBytes, providedBytes);
+    return false;
+  }
+  return timingSafeEqual(providedBytes, configuredBytes);
 }
 
 function findUiAsset(
