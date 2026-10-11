@@ -126,4 +126,63 @@ describe('applyStateUpdate', () => {
     expect(ended.session).toBeNull();
     expect(replay.session).toEqual(updates[1]!.patch.session);
   });
+
+  it('correctly handles unrestricted complex values in diagnostics through structuredClone', () => {
+    const original: RoomState = {
+      revision: 0,
+      updatedAt: 0,
+      session: null,
+      presence: {
+        state: 'unknown',
+        personCount: null,
+        continuityExpiresAt: null,
+        home: { state: 'unknown', observedAt: null },
+      },
+      lighting: { currentScene: null, sceneRevision: 0, devices: {} },
+      switches: { devices: {}, commands: [] },
+      music: { devices: {}, commands: [], fades: {} },
+      intent: { holds: [] },
+      commands: [],
+      diagnostics: [],
+      timings: [],
+    };
+    const protoTest = JSON.parse(
+      '{"__proto__":{"flag":"inherited"},"ordinary":1}',
+    );
+    const next = applyStateUpdate(original, {
+      revision: 1,
+      at: 10,
+      domains: ['diagnostics'],
+      patch: {
+        diagnostics: [
+          {
+            id: 1,
+            at: 10,
+            kind: 'test',
+            message: 'Complex',
+            details: {
+              map: new Map([['a', 1]]),
+              set: new Set([1, 2, 3]),
+              bytes: new Uint8Array([1, 2, 3]),
+              protoObj: protoTest,
+            },
+          },
+        ],
+      },
+    });
+
+    const details = next.diagnostics[0]!.details;
+    expect(details['map']).toBeInstanceOf(Map);
+    expect((details['map'] as Map<string, number>).get('a')).toBe(1);
+    expect(details['set']).toBeInstanceOf(Set);
+    expect((details['set'] as Set<number>).has(2)).toBe(true);
+    expect(details['bytes']).toBeInstanceOf(Uint8Array);
+    expect((details['bytes'] as Uint8Array)[1]).toBe(2);
+    expect(details['protoObj']).toHaveProperty('ordinary', 1);
+
+    // Check if the original object prototype wasn't modified globally
+    // The cloned object should preserve the correct proto
+    expect(details['protoObj']).toHaveProperty('__proto__', { flag: 'inherited' });
+    expect(Object.getPrototypeOf(details['protoObj'])).toEqual(Object.prototype);
+  });
 });

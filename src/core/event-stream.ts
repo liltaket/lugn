@@ -84,7 +84,8 @@ export function applyStateUpdate(
   if (music !== undefined) newState.music = cloneDeep(music);
   if (intent !== undefined) newState.intent = cloneDeep(intent);
   if (commands !== undefined) newState.commands = cloneDeep(commands);
-  if (diagnostics !== undefined) newState.diagnostics = cloneDeep(diagnostics);
+  if (diagnostics !== undefined)
+    newState.diagnostics = structuredClone(diagnostics);
   if (timings !== undefined) newState.timings = cloneDeep(timings);
   return newState;
 }
@@ -117,7 +118,7 @@ function cloneDeep<T>(obj: T, seen = new Map<unknown, unknown>()): T {
     return arr as T;
   }
 
-  const clonedObj: Record<string, unknown> = {};
+  const clonedObj: Record<string, unknown> = Object.create(Object.getPrototypeOf(obj));
   seen.set(obj, clonedObj);
   for (const key in obj) {
     if (Object.prototype.hasOwnProperty.call(obj, key)) {
