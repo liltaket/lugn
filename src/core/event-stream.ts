@@ -125,12 +125,16 @@ function cloneDeep<T>(obj: T, seen = new Map<unknown, unknown>()): T {
   seen.set(obj, clonedObj);
   for (const key in obj) {
     if (Object.prototype.hasOwnProperty.call(obj, key)) {
-      Object.defineProperty(clonedObj, key, {
-        value: cloneDeep((obj as Record<string, unknown>)[key], seen),
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      });
+      if (key === '__proto__') {
+        Object.defineProperty(clonedObj, key, {
+          value: cloneDeep((obj as Record<string, unknown>)[key], seen),
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+      } else {
+        clonedObj[key] = cloneDeep((obj as Record<string, unknown>)[key], seen);
+      }
     }
   }
   return clonedObj as T;
