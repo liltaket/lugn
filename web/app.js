@@ -106,6 +106,11 @@ function setLiveStatus(label, tone = 'neutral') {
 function setLoginError(message) {
   loginError.textContent = message;
   loginError.hidden = !message;
+  if (message) {
+    tokenInput.setAttribute('aria-invalid', 'true');
+  } else {
+    tokenInput.removeAttribute('aria-invalid');
+  }
 }
 
 function updateLoginPresentation() {
