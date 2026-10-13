@@ -46,6 +46,60 @@ current scene. Power and brightness overrides keep their existing behavior.
 Custom scenes should specify their own WLED brightness and color temperature
 when the strip should stay on.
 
+### Dedicated WLED CCT white strips
+
+A PWM CCT strip has a separate white-channel level in addition to master and
+segment brightness and color temperature. Home Assistant can expose only
+`color_temp` for this hardware, hiding the white-channel level. A strip can
+therefore report `on` with normal brightness while its white channel is zero.
+Older HA WLED integrations leave that channel unchanged when setting brightness
+or color temperature. Newer integrations restore it on color-temperature
+commands, but brightness-only and power-only commands can still retain it.
+
+For a dedicated white-only WLED with exactly one segment, opt into direct
+control under `homeAssistant` while keeping its existing light mapping:
+
+```json
+"entities": {
+  "lighting.wled_cct": "light.brunos_rum_wled"
+},
+"wledCct": {
+  "lighting.wled_cct": {
+    "baseUrl": "http://192.168.10.184",
+    "segmentId": 0
+  }
+}
+```
+
+Use the WLED device's own address, not Home Assistant's address. `segmentId`
+defaults to 0. Lugn must be able to reach that address. The mapping is empty by
+default; normal HA lights keep their existing transport. Restart Lugn after
+enabling it. This mode requires a single white+CCT segment (`lc & 7 == 6`);
+RGB strips, missing segments and multi-segment devices are rejected before
+writing. Keep WLED's RGB-derived auto-white/CCT options disabled for a dedicated
+white strip. This mode owns steady white light and selects the Solid effect.
+
+Commands for these targets use WLED's JSON API. One ON update enables master
+and segment power, restores segment and white-channel levels to 255, and sets
+master brightness and CCT. A color-temperature-only update preserves the
+effective brightness; an explicit ON can recover a zero white channel. OFF and
+brightness zero disable master power without erasing white or CCT settings.
+No Home Assistant credentials are sent to WLED.
+
+WLED state is read on HA light events and every 30 seconds while the adapter
+has subscribers. Observed brightness includes master, segment and white-channel
+levels. A zero white/segment level while powered ON is treated as a channel
+fault (unavailable), preserving the desired scene for normal bounded recovery
+rather than installing a manual zero-brightness override. Deliberate master
+power OFF and ordinary nonzero brightness changes retain the existing manual
+control rules. Recovery still obeys occupancy/home-away gates and retry limits;
+polling itself never writes. A new availability loss grants one fresh bounded
+recovery window even after a long-running scene; repeated unavailable feedback
+does not reset those limits. Device-reported values confirm commands, not
+physical light output. CCT follows HA's nominal 2000–6535 K mapping; WLED's
+8-bit quantization is matched back to the last requested Kelvin value when
+the reported code agrees.
+
 The dashboard presents these presets as its primary controls. Other scenes
 from configuration can still be exposed, but only the listed room presets
 have these built-in room-wide definitions.

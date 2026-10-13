@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Clock } from '../core/clock.js';
+import { WledCctController, WledCctMappingsSchema } from './wled-cct.js';
 import {
   SemanticLightingIdSchema,
   type LightingValues,
@@ -41,8 +42,17 @@ const HomeAssistantLightingConfigSchema = z
     }),
     token: z.string().min(1),
     entities: z.record(SemanticLightingIdSchema, HomeAssistantEntityIdSchema),
+    wledCct: WledCctMappingsSchema.default({}),
   })
   .superRefine((config, context) => {
+    for (const target of Object.keys(config.wledCct)) {
+      if (!(target in config.entities))
+        context.addIssue({
+          code: 'custom',
+          path: ['wledCct', target],
+          message: 'WLED CCT target must be mapped in entities',
+        });
+    }
     const entityIds = Object.values(config.entities);
     if (entityIds.length === 0) {
       context.addIssue({
@@ -100,6 +110,8 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
     (observation: LightingObservation) => void
   >();
   private readonly lastUpdatedByTarget = new Map<string, number>();
+  private readonly wledCct: WledCctController;
+  private wledPollTimer: ReturnType<Clock['setTimeout']> | undefined;
 
   constructor(
     config: HomeAssistantLightingConfig,
@@ -109,6 +121,12 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
     const parsedConfig = HomeAssistantLightingConfigSchema.parse(config);
     this.baseUrl = parsedConfig.baseUrl.replace(/\/+$/, '');
     this.token = parsedConfig.token;
+    this.wledCct = new WledCctController(
+      parsedConfig.wledCct,
+      transport,
+      clock,
+      (observation) => this.emit(observation),
+    );
     this.entityBySemanticId = new Map(Object.entries(parsedConfig.entities));
     this.semanticIdByEntity = new Map(
       Object.entries(parsedConfig.entities).map(([semanticId, entityId]) => [
@@ -124,6 +142,11 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
       throw new Error(
         `No Home Assistant light entity is configured for ${command.target}`,
       );
+    }
+
+    if (this.wledCct.has(command.target)) {
+      await this.wledCct.dispatch(command);
+      return;
     }
 
     const service = command.values.power === false ? 'turn_off' : 'turn_on';
@@ -200,13 +223,38 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
 
   subscribe(listener: (observation: LightingObservation) => void): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.scheduleWledPoll();
+    return () => {
+      this.listeners.delete(listener);
+      if (this.listeners.size === 0) {
+        if (this.wledPollTimer !== undefined)
+          this.clock.clearTimeout(this.wledPollTimer);
+        this.wledPollTimer = undefined;
+        for (const target of this.entityBySemanticId.keys())
+          this.wledCct.invalidate(target);
+      }
+    };
+  }
+
+  private scheduleWledPoll(): void {
+    if (this.wledPollTimer !== undefined || this.listeners.size === 0) return;
+    const targets = [...this.entityBySemanticId.keys()].filter((target) =>
+      this.wledCct.has(target),
+    );
+    if (targets.length === 0) return;
+    this.wledPollTimer = this.clock.setTimeout(() => {
+      this.wledPollTimer = undefined;
+      void Promise.all(
+        targets.map((target) => this.wledCct.refresh(target)),
+      ).finally(() => this.scheduleWledPoll());
+    }, 30_000);
   }
 
   /**
    * Accepts a Home Assistant state_changed event, either the event itself, its
    * WebSocket event envelope, or the event's data object. Returns true only
-   * when a usable observation for a configured entity was published.
+   * when a configured entity's state was accepted. WLED CCT observations are
+   * read asynchronously from the device rather than trusting HA attributes.
    */
   acceptStateChangedEvent(payload: unknown): boolean {
     const eventEnvelope = HomeAssistantWebSocketEventSchema.safeParse(payload);
@@ -239,6 +287,16 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
       return true;
     if (Number.isFinite(lastUpdated))
       this.lastUpdatedByTarget.set(target, lastUpdated);
+
+    // HA does not expose the white channel on a pure CCT entity. Its apparent
+    // brightness must not confirm a strip whose white channel is still zero.
+    if (this.wledCct.has(target)) {
+      if (newState.state === 'on' || newState.state === 'off') {
+        void this.wledCct.refresh(target);
+        return true;
+      }
+      this.wledCct.invalidate(target);
+    }
 
     if (newState.state !== 'on' && newState.state !== 'off') {
       if (newState.state !== 'unknown' && newState.state !== 'unavailable')

@@ -3,6 +3,7 @@ import { HomeAssistantEnvironmentMappingsSchema } from '../adapters/home-assista
 import { HomeAssistantHomePresenceConfigSchema } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantButtonMappingsSchema } from '../adapters/home-assistant-button.js';
 import { HomeAssistantBilresaConfigSchema } from '../adapters/home-assistant-bilresa.js';
+import { WledCctMappingsSchema } from '../adapters/wled-cct.js';
 import { PresenceControlConfigSchema } from '../adapters/stl27l-presence-control.js';
 import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -90,6 +91,7 @@ const HomeAssistantConfigSchema = z
       SemanticLightingIdSchema,
       z.string().regex(/^light\.[a-z0-9_]+$/),
     ),
+    wledCct: WledCctMappingsSchema.default({}),
     buttons: HomeAssistantButtonMappingsSchema.default({}),
     bilresa: HomeAssistantBilresaConfigSchema.default(
       HomeAssistantBilresaConfigSchema.parse({}),
@@ -269,6 +271,14 @@ const FileConfigSchema = z
     const configuredLights = new Set(
       Object.keys(config.homeAssistant.entities),
     );
+    for (const target of Object.keys(config.homeAssistant.wledCct)) {
+      if (!configuredLights.has(target))
+        context.addIssue({
+          code: 'custom',
+          path: ['homeAssistant', 'wledCct', target],
+          message: `WLED CCT target ${target} is not mapped in homeAssistant.entities`,
+        });
+    }
     if (configuredLights.size === 0) {
       context.addIssue({
         code: 'custom',
@@ -348,6 +358,7 @@ export type RuntimeConfig = {
     token: string;
     homePresence?: z.output<typeof HomeAssistantHomePresenceConfigSchema>;
     entities: Record<string, string>;
+    wledCct?: z.output<typeof WledCctMappingsSchema>;
     buttons: Record<string, string>;
     bilresa?: z.output<typeof HomeAssistantBilresaConfigSchema>;
     switches: Record<string, string>;
@@ -512,6 +523,7 @@ export function loadRuntimeConfig(
       token: homeAssistantToken,
       homePresence: fileConfig.homeAssistant.homePresence,
       entities: fileConfig.homeAssistant.entities,
+      wledCct: fileConfig.homeAssistant.wledCct,
       buttons: fileConfig.homeAssistant.buttons,
       bilresa: fileConfig.homeAssistant.bilresa,
       switches: fileConfig.homeAssistant.switches,

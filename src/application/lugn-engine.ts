@@ -2210,6 +2210,13 @@ export class LugnEngine {
       this.acceptedLightingCommandIds.delete(observation.commandId);
     }
     if (observation.availability === 'unavailable') {
+      // A new outage after a long-running healthy scene needs its own bounded
+      // recovery window. Repeated outage feedback must not reset retry limits.
+      if (device.availability === 'available')
+        this.startConvergenceAttempt(
+          this.state.lighting.sceneRevision,
+          observation.target,
+        );
       const changed = device.availability !== 'unavailable';
       device.availability = 'unavailable';
       device.observed = {};
