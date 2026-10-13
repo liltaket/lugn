@@ -29,6 +29,31 @@ describe('runtime configuration cross references', () => {
     },
     scenes: [],
   };
+  it('defaults WLED CCT control off and validates its mapped targets and endpoints', () => {
+    expect(loadConfig(minimal).homeAssistant.wledCct).toEqual({});
+    const wledConfig = (wledCct: unknown) => ({
+      ...minimal,
+      homeAssistant: { ...minimal.homeAssistant, wledCct },
+    });
+    expect(
+      loadConfig(
+        wledConfig({ 'lighting.ceiling': { baseUrl: 'http://wled.local' } }),
+      ).homeAssistant.wledCct,
+    ).toEqual({
+      'lighting.ceiling': { baseUrl: 'http://wled.local', segmentId: 0 },
+    });
+    for (const wledCct of [
+      { 'lighting.missing': { baseUrl: 'http://wled.local' } },
+      { 'lighting.ceiling': { baseUrl: 'ftp://wled.local' } },
+      { 'lighting.ceiling': { baseUrl: 'http://user:password@wled.local' } },
+      { 'lighting.ceiling': { baseUrl: 'http://wled.local/path' } },
+      { 'lighting.ceiling': { baseUrl: 'http://wled.local/?token=secret' } },
+      { 'lighting.ceiling': { baseUrl: 'http://wled.local', segmentId: -1 } },
+    ])
+      expect(() => loadConfig(wledConfig(wledCct))).toThrow(
+        'Invalid configuration',
+      );
+  });
   it('validates per-light control modes and requires mapped targets', () => {
     expect(loadConfig(minimal).lightingControlModes).toEqual({});
     expect(

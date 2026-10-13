@@ -16,6 +16,7 @@
       "lighting.desk": "light.living_room_desk",
       "lighting.wled_cct": "light.wled_cct"
     },
+    "wledCct": {},
     "buttons": {},
     "bilresa": {
       "button1Entities": [

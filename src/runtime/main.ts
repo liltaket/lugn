@@ -79,6 +79,9 @@ export async function startRuntime(
       baseUrl: config.homeAssistant.baseUrl,
       token: config.homeAssistant.token,
       entities: config.homeAssistant.entities,
+      ...(config.homeAssistant.wledCct === undefined
+        ? {}
+        : { wledCct: config.homeAssistant.wledCct }),
     },
     homeAssistantFetch,
     systemClock,
