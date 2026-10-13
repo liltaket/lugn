@@ -384,10 +384,10 @@ export class LugnEngine {
           }
         : undefined;
     const expiredRestoredScene = restoredContinuityExpired
-      ? restoredIntent?.currentScene
-        ? (preservedAppliedScene ??
-          this.scenes.get(restoredIntent.currentScene))
-        : detachedOffDefinition
+      ? (preservedAppliedScene ??
+        (restoredIntent?.currentScene
+          ? this.scenes.get(restoredIntent.currentScene)
+          : detachedOffDefinition))
       : undefined;
     const expiredRestoredSceneIsExplicitlyOffOrSleep =
       expiredRestoredScene !== undefined &&
@@ -560,7 +560,7 @@ export class LugnEngine {
           restoredIntent !== undefined
             ? hasRestoredIntent
               ? restoredIntent.currentScene
-              : detachedOffDefinition
+              : restoredIntent.currentScene === null
                 ? null
                 : (expiredRestoredSceneToPreserve?.id ?? null)
             : (this.defaultSceneOnOccupancy?.id ?? null),

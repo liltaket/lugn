@@ -47,6 +47,50 @@ async function presence(
 }
 
 describe('preset intent boundaries', () => {
+  it('retains a deleted active sleep preset through an expired restart', async () => {
+    const clock = new FakeClock(Date.parse('2026-10-04T12:00:00+02:00'));
+    const sleep: LightingScene = {
+      id: 'scene.sleep',
+      name: 'Sleep',
+      lighting: {
+        'lighting.ceiling': { power: false },
+        'lighting.desk': { power: true, brightness: 6, colorTemperature: 2700 },
+      },
+    };
+    const engine = new LugnEngine(clock, {
+      deviceIds: targets,
+      scenes: [full, sleep, off],
+      defaultSceneId: full.id,
+      continuityMs: 1000,
+    });
+    engines.push(engine);
+    await engine.activateScene(sleep.id, { type: 'user' });
+    await presence(engine, 'confirmed_empty');
+    engine.deleteSceneDefinition(sleep.id);
+    const snapshot = engine.getLightingIntentSnapshot();
+    const restoredClock = new FakeClock(clock.now() + 1001);
+    const adapter = new SimulatedLightingAdapter(restoredClock);
+    const restored = new LugnEngine(restoredClock, {
+      deviceIds: targets,
+      adapter,
+      scenes: [full, off],
+      defaultSceneId: full.id,
+      restoredLightingIntent: snapshot,
+      preserveRestoredSceneIds: [sleep.id],
+    });
+    engines.push(restored);
+    expect(restored.state.lighting.currentScene).toBeNull();
+    expect(restored.getLightingIntentSnapshot().appliedScene?.id).toBe(
+      sleep.id,
+    );
+    expect(
+      restored.state.lighting.devices['lighting.desk']?.effectiveDesired
+        .brightness,
+    ).toBe(6);
+    await presence(restored, 'occupied');
+    expect(adapter.observed.get('lighting.desk')?.brightness).toBe(6);
+    expect(adapter.observed.get('lighting.ceiling')?.power).toBe(false);
+  });
   it.each(['legacy', 'save-crash', 'current'])(
     'saving an active managed preset does not apply its edits after %s restart',
     async (mode) => {
