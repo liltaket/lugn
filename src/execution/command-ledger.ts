@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Clock } from '../core/clock.js';
+import { lightingFeedbackMatches } from '../core/lighting-feedback.js';
 import type {
   CommandRecord,
   LightingProperty,
@@ -167,7 +168,7 @@ export class CommandLedger {
           candidate.target === target &&
           candidate.status === 'pending' &&
           now - candidate.issuedAt <= this.attributionWindowMs &&
-          candidate.desired[property] === value
+          lightingFeedbackMatches(property, candidate.desired[property], value)
         ) {
           command = candidate;
           break;
@@ -178,7 +179,7 @@ export class CommandLedger {
     if (
       !command ||
       command.target !== target ||
-      command.desired[property] !== value
+      !lightingFeedbackMatches(property, command.desired[property], value)
     )
       return undefined;
     if (command.status !== 'pending') return command;
@@ -214,7 +215,7 @@ export class CommandLedger {
       if (
         command.status === 'superseded' &&
         command.target === target &&
-        command.desired[property] === value &&
+        lightingFeedbackMatches(property, command.desired[property], value) &&
         this.supersededAtById.has(command.id) &&
         this.supersededAtById.get(command.id)! <= now &&
         now - this.supersededAtById.get(command.id)! <= windowMs

@@ -2252,8 +2252,12 @@ function renderMappingSummary(devices, presenceState) {
       continue;
     }
     if (
-      properties.every(
-        (property) => device.observed[property] === desired[property],
+      properties.every((property) =>
+        lightingFeedbackMatches(
+          property,
+          desired[property],
+          device.observed[property],
+        ),
       )
     ) {
       counts.aligned += 1;
@@ -2350,8 +2354,12 @@ function convergenceStatus(device, presenceState) {
   if (properties.some((property) => device.observed?.[property] === undefined))
     return { label: 'Inväntar återrapportering', tone: 'warn' };
   if (
-    properties.every(
-      (property) => device.observed[property] === desired[property],
+    properties.every((property) =>
+      lightingFeedbackMatches(
+        property,
+        desired[property],
+        device.observed[property],
+      ),
     )
   )
     return { label: 'Rapporterat läge stämmer', tone: 'good' };

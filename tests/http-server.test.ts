@@ -236,7 +236,9 @@ describe('local capability HTTP API', () => {
     expect(await page.text()).toContain('<title>Lugn · Rumskontroll</title>');
     const frontend = await fetch(`${baseUrl}/ui/app.js`);
     expect(frontend.status).toBe(200);
-    expect(await frontend.text()).not.toContain('local-test-token');
+    const frontendCode = await frontend.text();
+    expect(frontendCode).not.toContain('local-test-token');
+    expect(frontendCode).toContain('const lightingFeedbackMatches =');
 
     const sessionStatus = await fetch(`${baseUrl}/ui/api/session`);
     expect(await sessionStatus.json()).toEqual({

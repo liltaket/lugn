@@ -15,6 +15,7 @@ import {
   type CapabilityRegistry,
 } from '../application/capabilities.js';
 import type { LightingScene, RoomState } from '../core/schemas.js';
+import { lightingFeedbackBrowserScript } from './lighting-feedback-script.js';
 import {
   MusicRequestSchema,
   SemanticMusicIdSchema,
@@ -482,6 +483,11 @@ export class LugnDisplayServer {
     let body: Buffer;
     try {
       body = await readFile(file);
+      if (filename === 'display.js')
+        body = Buffer.concat([
+          Buffer.from(lightingFeedbackBrowserScript),
+          body,
+        ]);
     } catch {
       sendJson(response, 503, { error: 'display_assets_unavailable' });
       return;
