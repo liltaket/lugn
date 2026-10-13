@@ -62,6 +62,7 @@ import {
   type MusicDecision,
 } from '../core/schemas.js';
 import { CommandLedger } from '../execution/command-ledger.js';
+import { synchronizeSceneColorTemperature } from './dashboard-scenes.js';
 
 export type EngineOptions = {
   deviceIds?: string[];
@@ -644,6 +645,35 @@ export class LugnEngine {
     this.activeSceneDefinition = restoredScene
       ? (appliedSceneToRestore ?? this.scenes.get(restoredScene))
       : appliedSceneToRestore;
+    if (appliedSceneToRestore && this.activeSceneDefinition) {
+      // Complete legacy applied presets from their own values, not a newer
+      // saved edit. Power, brightness and existing manual Kelvin stay intact.
+      const completed = synchronizeSceneColorTemperature(
+        this.activeSceneDefinition,
+        2700,
+      );
+      for (const [target, values] of Object.entries(completed.lighting)) {
+        const device = devices[target];
+        if (!device || values.power === false) continue;
+        const cct = values.colorTemperature;
+        if (cct === undefined) continue;
+        if (device.baselineDesired.colorTemperature === undefined)
+          device.baselineDesired.colorTemperature = cct;
+        if (
+          device.effectiveDesired.power !== false &&
+          device.effectiveDesired.colorTemperature === undefined
+        ) {
+          device.effectiveDesired.colorTemperature = cct;
+          device.ownership.colorTemperature = {
+            kind: 'scene',
+            revision: this.state.lighting.sceneRevision,
+          };
+        }
+        const original = this.activeSceneDefinition.lighting[target]!;
+        if (original.colorTemperature === undefined)
+          original.colorTemperature = cct;
+      }
+    }
     // A deleted active all-off preset keeps its lamp intent with a null label.
     // Recover its off semantics without resurrecting the deleted definition.
     const restoredDetachedOff =
@@ -1773,6 +1803,14 @@ export class LugnEngine {
       // values are not evidence of what a lamp will restore on its next ON.
       if (desired.power === true)
         Object.assign(desired, device.effectiveDesired);
+      // Brightness-only scene corrections can otherwise select a cached RGB
+      // mode in HA/Tuya. Kelvin must accompany every active scene write, even
+      // when its last reported value already matches the room temperature.
+      if (
+        device.effectiveDesired.power !== false &&
+        device.effectiveDesired.colorTemperature !== undefined
+      )
+        desired.colorTemperature = device.effectiveDesired.colorTemperature;
       if (device.availability === 'degraded') continue;
       if (now - targetStartedAt >= this.convergenceTimeoutMs) {
         device.availability = 'degraded';
