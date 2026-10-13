@@ -468,6 +468,8 @@ const PersistedLightingOwnershipSchema = z.discriminatedUnion('kind', [
 /** The durable subset of lighting state. Observations and commands are excluded. */
 export const LightingIntentSnapshotSchema = z
   .object({
+    /** Preserve all-off semantics after deleting the active preset definition. */
+    detachedOffScene: z.literal(true).optional(),
     currentScene: z
       .string()
       .regex(/^scene\.[a-z0-9][a-z0-9._-]*$/)

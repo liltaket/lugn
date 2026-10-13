@@ -125,6 +125,14 @@ export class LightingIntentStore {
       : structuredClone(this.lastValidMusic);
   }
 
+  /** Scene definitions can change while the runtime remains running. */
+  setKnownSceneIds(ids: readonly string[]): void {
+    if (ids.some((id) => !SceneSchema.shape.id.safeParse(id).success))
+      throw new Error('Lighting intent store scene IDs are invalid');
+    this.knownSceneIds.clear();
+    for (const id of ids) this.knownSceneIds.add(id);
+  }
+
   /** Load and validate a prior intent snapshot; invalid or absent state is ignored. */
   async load(): Promise<LightingIntentSnapshot | undefined> {
     this.lastValidMusic = undefined;

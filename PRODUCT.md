@@ -12,11 +12,17 @@ Household members use the room dashboards from Nest Hub touchscreens. This is
 inferred from the configured Hub roles and the user's request for quick,
 glanceable room controls.
 
+Household members also use the web control panel at `/ui/` on a computer or
+phone to adjust each lamp's brightness in lighting presets and create or delete
+presets. This editor is available on the web dashboard only.
+
 ## Product Purpose
 
 Lugn provides local-first room automation for lighting, presence, music and
 indoor conditions. The custom Nest Hub dashboard lets a resident see the room
 at a glance and quickly choose a lighting scene or music action.
+The web panel provides detailed lighting and music controls and persistent
+lighting preset management.
 
 ## Operating Context
 
@@ -30,6 +36,11 @@ Their action hierarchy differs: Bed prioritizes all-off and soft light, with
 Sleep only when configured; Desk prioritizes focus/everyday light and Optical.
 All available controls remain reachable in the same shared room dashboard.
 
+The web panel is a separate, responsive surface that may scroll. Its preset
+editor keeps drafts across live updates and separates saving a preset from
+activating it. Nest Hubs receive updated presets for activation and have no
+preset editing controls.
+
 ## Capabilities and Constraints
 
 - Large room-light scene controls, including an explicit all-off action.
@@ -41,7 +52,7 @@ All available controls remain reachable in the same shared room dashboard.
 - Automatic music playback must not start or resume from 23:00 until 06:00 (Europe/Stockholm).
 - Routine connection, Cast and refresh status should not consume dashboard
   space; actionable failures may be shown when needed.
-- The primary dashboard must not scroll in either direction. Secondary music
+- The primary Nest Hub dashboard must not scroll in either direction. Secondary music
   explanations may scroll within an in-place Details pane while controls remain visible.
 
 ## Brand Commitments

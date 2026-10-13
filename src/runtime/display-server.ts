@@ -79,6 +79,7 @@ export type LugnDisplayServerOptions = {
   capabilities: CapabilityRegistry;
   presenceCountCorrectionAvailable?: boolean;
   scenes: readonly LightingScene[];
+  scenesProvider?: () => readonly LightingScene[];
   stateProvider: () => RoomState;
   stateStream?: StateEventStream;
   musicVolumePoliciesProvider?: () => Record<string, MusicVolumePolicySnapshot>;
@@ -379,7 +380,7 @@ export class LugnDisplayServer {
       musicVolumePolicies: this.options.musicVolumePoliciesProvider?.() ?? {},
       musicPlaybackPolicies:
         this.options.musicPlaybackPoliciesProvider?.() ?? {},
-      scenes: this.options.scenes,
+      scenes: this.options.scenesProvider?.() ?? this.options.scenes,
       role: hub.role,
       presenceCountCorrectionAvailable:
         this.options.presenceCountCorrectionAvailable ?? false,
