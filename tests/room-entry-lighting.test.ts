@@ -128,7 +128,7 @@ describe('room entry lighting reliability', () => {
     clock.advanceBy(250);
     await flush();
     expect(requests.slice(before)).toEqual([
-      { entity_id: 'light.strip', brightness_pct: 60 },
+      { entity_id: 'light.strip', brightness_pct: 60, color_temp_kelvin: 2700 },
     ]);
     feedback('light.strip', 'on');
     await flush();
