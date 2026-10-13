@@ -43,6 +43,19 @@ common 2700–6500 K range. This keeps room CCT synchronized: an external
 per-light color-temperature change is reconciled back to the shared value, and
 an explicit color-temperature adjustment applies to every active light in the
 current scene. Power and brightness overrides keep their existing behavior.
+Dashboard-created and edited presets use the same Kelvin synchronization when
+saved and loaded. Active entries with no temperature inherit the scene's shared
+Kelvin; a preset with no active temperature defaults to 2700 K. This completion
+does not repeat WLED brightness boosts or change OFF entries. Legacy applied
+presets also gain missing Kelvin on restart while preserving their applied
+brightness and existing manual temperature, rather than applying newer edits.
+
+Every active scene correction includes its desired Kelvin, even when only
+brightness differs from the last reported state. In HA's Tuya integration a
+brightness-only command can select a cached colour mode and hue after a white
+command has physically succeeded. Including `color_temp_kelvin` explicitly
+selects white mode. This applies to scene transitions, retries and enforcement;
+OFF commands still contain no colour or brightness fields.
 Custom scenes should specify their own WLED brightness and color temperature
 when the strip should stay on.
 

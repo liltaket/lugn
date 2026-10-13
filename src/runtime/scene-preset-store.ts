@@ -4,6 +4,7 @@ import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
 import type { LugnEngine } from '../application/lugn-engine.js';
+import { synchronizeSceneColorTemperature } from '../application/dashboard-scenes.js';
 import {
   LightingValuesSchema,
   SceneSchema,
@@ -107,7 +108,12 @@ export class ScenePresetStore {
         if (scene.id === 'scene.all_off') throw new Error('Protected preset');
         this.validateTargets(scene);
       }
-      this.data = parsed;
+      this.data = {
+        ...parsed,
+        scenes: parsed.scenes.map((scene) =>
+          synchronizeSceneColorTemperature(scene, 2700),
+        ),
+      };
     } catch (error) {
       if (!(
         error instanceof Error &&
@@ -138,11 +144,12 @@ export class ScenePresetStore {
     input: z.infer<typeof ScenePresetInputSchema>,
   ): Promise<LightingScene> {
     return this.serialize(async () => {
-      const scene = {
+      const requested = {
         ...ScenePresetInputSchema.parse(input),
         id: `scene.custom_${randomUUID()}`,
       };
-      this.validateTargets(scene);
+      this.validateTargets(requested);
+      const scene = synchronizeSceneColorTemperature(requested, 2700);
       if (engine.scenes.size >= MAX_SCENES)
         throw new ScenePresetError(409, 'scene_limit_reached');
       const next = { ...this.data, scenes: [...this.data.scenes, scene] };
@@ -163,8 +170,9 @@ export class ScenePresetStore {
       this.checkExpected(engine, id, parsed.expectedScene);
       if (id === 'scene.all_off')
         throw new ScenePresetError(409, 'scene_protected');
-      const scene = { id, name: parsed.name, lighting: parsed.lighting };
-      this.validateTargets(scene);
+      const requested = { id, name: parsed.name, lighting: parsed.lighting };
+      this.validateTargets(requested);
+      const scene = synchronizeSceneColorTemperature(requested, 2700);
       const next = {
         ...this.data,
         scenes: [...this.data.scenes.filter((entry) => entry.id !== id), scene],

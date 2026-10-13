@@ -59,18 +59,35 @@ function normalizeRoomScenes(
 ): LightingScene[] {
   return scenes.map((scene) => {
     if (scene.id === 'scene.all_off') return scene;
-    const cct = mostCommonSceneColorTemperature(scene);
+    const synchronized = synchronizeSceneColorTemperature(scene);
     const lighting = Object.fromEntries(
-      Object.entries(scene.lighting).map(([target, values]) => {
+      Object.entries(synchronized.lighting).map(([target, values]) => {
         const next = { ...values };
-        if (values.power !== false && cct !== undefined)
-          next.colorTemperature = cct;
         if (values.power !== false && target.toLowerCase().includes('wled'))
           next.brightness = Math.min(100, (values.brightness ?? 12) + 6);
         return [target, next];
       }),
     );
     return SceneSchema.parse({ ...scene, lighting });
+  });
+}
+
+/** Completes room Kelvin without reapplying generated-preset brightness boosts. */
+export function synchronizeSceneColorTemperature(
+  scene: LightingScene,
+  fallbackKelvin?: number,
+): LightingScene {
+  const cct = mostCommonSceneColorTemperature(scene) ?? fallbackKelvin;
+  return SceneSchema.parse({
+    ...scene,
+    lighting: Object.fromEntries(
+      Object.entries(scene.lighting).map(([target, values]) => [
+        target,
+        values.power !== false && cct !== undefined
+          ? { ...values, colorTemperature: cct }
+          : { ...values },
+      ]),
+    ),
   });
 }
 
