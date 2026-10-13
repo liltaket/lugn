@@ -60,11 +60,13 @@ describe('lighting intent persistence', () => {
     };
     expect(stored.version).toBe(1);
     expect(Object.keys(stored.snapshot).sort()).toEqual([
+      'appliedScene',
       'continuityExpiresAt',
       'currentScene',
       'devices',
       'sceneRevision',
     ]);
+    expect(stored.snapshot['appliedScene']).toEqual(scene);
     expect(stored.snapshot['currentScene']).toBe(scene.id);
     expect(stored.snapshot['continuityExpiresAt']).toBe(startingAt + 20_000);
     const fileMode = (await stat(filePath)).mode & 0o777;

@@ -8,6 +8,14 @@ import {
 } from 'node:http';
 import { join } from 'node:path';
 import { z, ZodError } from 'zod';
+import type { LightingScene } from '../core/schemas.js';
+import {
+  ScenePresetError,
+  ScenePresetInputSchema,
+  ScenePresetUpdateSchema,
+  ScenePresetDeleteSchema,
+} from './scene-preset-store.js';
+import type { ScenePresetStore } from './scene-preset-store.js';
 import {
   CapabilityInputError,
   CapabilitySchemas,
@@ -49,6 +57,7 @@ export type LugnHttpServerOptions = {
   engine: LugnEngine;
   capabilities: CapabilityRegistry;
   integrations: () => Record<string, string>;
+  scenePresetStore?: ScenePresetStore;
   webAssetsDirectory?: string;
   trustedOrigins?: string[];
   clerk?: {
@@ -411,6 +420,87 @@ export class LugnHttpServer {
       this.startUiEventStream(response, sessionId, session.expiresAt);
       return true;
     }
+    const sceneMatch = /^\/ui\/api\/scenes(?:\/([^/]+))?$/.exec(pathname);
+    if (
+      sceneMatch &&
+      (request.method === 'POST' || request.method === 'DELETE')
+    ) {
+      if (!this.isSameOrigin(request)) {
+        sendJson(response, 403, { error: 'same_origin_required' });
+        return true;
+      }
+      const csrfHeader = request.headers['x-lugn-csrf'];
+      if (
+        typeof csrfHeader !== 'string' ||
+        !this.constantTimeEqual(csrfHeader, session.csrfToken)
+      ) {
+        sendJson(response, 403, { error: 'csrf_failed' });
+        return true;
+      }
+      if (!isJsonRequest(request)) {
+        sendJson(response, 415, {
+          error: 'content_type_must_be_application_json',
+        });
+        return true;
+      }
+      const store = this.options.scenePresetStore;
+      if (!store) {
+        sendJson(response, 503, { error: 'scene_presets_unavailable' });
+        return true;
+      }
+      const id =
+        sceneMatch[1] === undefined
+          ? undefined
+          : decodeURIComponent(sceneMatch[1]);
+      const schema =
+        request.method === 'DELETE'
+          ? ScenePresetDeleteSchema
+          : id === undefined
+            ? ScenePresetInputSchema
+            : ScenePresetUpdateSchema;
+      const parsed = schema.safeParse(await readJsonBody(request));
+      if (!parsed.success) {
+        sendJson(response, 400, {
+          error: 'invalid_request',
+          issues: safeIssues(parsed.error),
+        });
+        return true;
+      }
+      const currentSession = this.getUiSession(request);
+      if (!currentSession || currentSession.csrfToken !== session.csrfToken) {
+        sendJson(response, 401, { error: 'unauthorized' });
+        return true;
+      }
+      try {
+        if (request.method === 'DELETE') {
+          if (id === undefined) {
+            sendJson(response, 404, { error: 'not_found' });
+            return true;
+          }
+          const input = ScenePresetDeleteSchema.parse(parsed.data);
+          await store.delete(this.options.engine, id, input.expectedScene);
+          sendJson(response, 200, { deleted: id });
+        } else if (id === undefined) {
+          const scene = await store.create(
+            this.options.engine,
+            ScenePresetInputSchema.parse(parsed.data),
+          );
+          sendJson(response, 201, { scene: this.uiScene(scene) });
+        } else {
+          const scene = await store.update(
+            this.options.engine,
+            id,
+            ScenePresetUpdateSchema.parse(parsed.data),
+          );
+          sendJson(response, 200, { scene: this.uiScene(scene) });
+        }
+      } catch (error) {
+        if (error instanceof ScenePresetError)
+          sendJson(response, error.status, { error: error.code });
+        else throw error;
+      }
+      return true;
+    }
     const capabilityMatch = /^\/ui\/api\/capabilities\/([^/]+)$/.exec(pathname);
     if (request.method === 'POST' && capabilityMatch) {
       if (!this.isSameOrigin(request)) {
@@ -540,7 +630,14 @@ export class LugnHttpServer {
   private uiOverview(): {
     health: { status: 'ok' | 'degraded'; integrations: Record<string, string> };
     state: LugnEngine['state'];
-    scenes: Array<{ id: string; name: string }>;
+    scenes: Array<
+      LightingScene & {
+        canEdit: boolean;
+        canDelete: boolean;
+        protectionReason?: string;
+      }
+    >;
+    presetsEnabled: boolean;
   } {
     const integrations = this.options.integrations();
     const connected = Object.values(integrations).every(
@@ -549,10 +646,28 @@ export class LugnHttpServer {
     return {
       health: { status: connected ? 'ok' : 'degraded', integrations },
       state: structuredClone(this.options.engine.state),
-      scenes: [...this.options.engine.scenes.values()].map(({ id, name }) => ({
-        id,
-        name,
-      })),
+      presetsEnabled: this.options.scenePresetStore !== undefined,
+      scenes: [...this.options.engine.scenes.values()].map((scene) =>
+        this.uiScene(scene),
+      ),
+    };
+  }
+
+  private uiScene(scene: LightingScene): LightingScene & {
+    canEdit: boolean;
+    canDelete: boolean;
+    protectionReason?: string;
+  } {
+    const protectionReason = this.options.engine.sceneProtection(scene.id);
+    return {
+      ...structuredClone(scene),
+      canEdit:
+        this.options.scenePresetStore !== undefined &&
+        protectionReason !== 'all_off',
+      canDelete:
+        this.options.scenePresetStore !== undefined &&
+        protectionReason === undefined,
+      ...(protectionReason === undefined ? {} : { protectionReason }),
     };
   }
 

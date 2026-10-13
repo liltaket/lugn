@@ -54,6 +54,12 @@ export class AutomationHolds {
     });
   }
 
+  restoreLightingActivation(hold: AutomationHold): void {
+    if (hold.scope !== 'lighting.activation')
+      throw new Error('Expected a lighting activation hold');
+    this.holds.set(`lighting.activation:${hold.target}`, structuredClone(hold));
+  }
+
   snapshot(): AutomationHold[] {
     return structuredClone([...this.holds.values()]);
   }

@@ -28,6 +28,23 @@ const systemAlert = document.getElementById('system-alert');
 const sceneSummary = document.getElementById('scene-summary');
 const sceneList = document.getElementById('scene-list');
 const reapplyButton = document.getElementById('reapply-button');
+const createPresetButton = document.getElementById('create-preset-button');
+const presetEditor = document.getElementById('preset-editor');
+const presetForm = document.getElementById('preset-form');
+const presetFields = document.getElementById('preset-fields');
+const presetName = document.getElementById('preset-name');
+const presetLightList = document.getElementById('preset-light-list');
+const presetStatus = document.getElementById('preset-status');
+const closePresetButton = document.getElementById('close-preset-button');
+const savePresetButton = document.getElementById('save-preset-button');
+const saveActivatePresetButton = document.getElementById(
+  'save-activate-preset-button',
+);
+const deletePresetButton = document.getElementById('delete-preset-button');
+const presetConfirm = document.getElementById('preset-confirm');
+const presetConfirmMessage = document.getElementById('preset-confirm-message');
+const presetConfirmYes = document.getElementById('preset-confirm-yes');
+const presetConfirmNo = document.getElementById('preset-confirm-no');
 const mappingSummary = document.getElementById('mapping-summary');
 const musicList = document.getElementById('music-list');
 const lightList = document.getElementById('light-list');
@@ -57,6 +74,11 @@ let pollTimer = null;
 let actionMessage = '';
 let actionTone = 'neutral';
 const pendingActions = new Set();
+let presetDraft = null;
+let presetOriginal = null;
+let presetBusy = false;
+let presetReturnFocus = null;
+let presetConfirmationAction = null;
 
 class SessionExpiredError extends Error {}
 class ClerkAuthorizationError extends Error {}
@@ -87,6 +109,33 @@ clerkRetry.addEventListener('click', () => {
 
 reapplyButton.addEventListener('click', () => {
   void invokeCapability('lighting.reapplyScene', {}, 'scene');
+});
+
+createPresetButton.addEventListener('click', () => openPresetEditor(null));
+closePresetButton.addEventListener('click', requestClosePreset);
+presetName.addEventListener('input', () => {
+  if (presetDraft) presetDraft.name = presetName.value;
+  updatePresetDirtyState();
+});
+presetForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void savePreset(event.submitter === saveActivatePresetButton);
+});
+deletePresetButton.addEventListener('click', () => {
+  confirmPresetAction(
+    'delete',
+    `Radera ”${presetOriginal.name}”? Lampornas aktuella läge behålls.`,
+    'Radera preset',
+  );
+});
+presetConfirmNo.addEventListener('click', () => {
+  const action = presetConfirmationAction;
+  hidePresetConfirmation();
+  (action === 'delete' ? deletePresetButton : closePresetButton).focus();
+});
+presetConfirmYes.addEventListener('click', () => {
+  if (presetConfirmationAction === 'delete') void deletePreset();
+  else closePresetEditor();
 });
 
 void restoreSessionOnStartup();
@@ -167,6 +216,7 @@ function showLogin(message = '') {
   stopLiveUpdates();
   csrfToken = null;
   overview = null;
+  closePresetEditor(false);
   pendingActions.clear();
   dashboardView.hidden = true;
   loginView.hidden = false;
@@ -1146,8 +1196,12 @@ function renderScenes(data) {
       ? 'En scen är vald men finns inte i den aktuella scenlistan.'
       : 'Ingen aktiv scen';
   reapplyButton.hidden = !currentScene;
-  reapplyButton.disabled = pendingActions.has('scene');
+  reapplyButton.disabled = pendingActions.has('scene') || presetBusy;
+  saveActivatePresetButton.disabled = pendingActions.has('scene') || presetBusy;
   reapplyButton.dataset.focusKey = 'reapply-scene';
+  const editable = data.presetsEnabled === true;
+  createPresetButton.hidden = !editable;
+  createPresetButton.disabled = presetBusy || !!presetConfirmationAction;
 
   sceneList.replaceChildren();
   if (scenes.length === 0) {
@@ -1157,10 +1211,12 @@ function renderScenes(data) {
     return;
   }
   for (const scene of scenes) {
+    const item = node('div', 'scene-item');
+    item.dataset.editing = String(presetDraft?.id === scene.id);
     const selected = scene.id === currentScene;
     const button = node('button', 'scene-button');
     button.type = 'button';
-    button.disabled = pendingActions.has('scene');
+    button.disabled = pendingActions.has('scene') || presetBusy;
     button.setAttribute('aria-pressed', String(selected));
     button.dataset.focusKey = `scene:${scene.id}`;
     const name = node('span', 'scene-name', scene.name);
@@ -1173,8 +1229,396 @@ function renderScenes(data) {
         'scene',
       );
     });
-    sceneList.append(button);
+    item.append(button);
+    if (editable && scene.canEdit) {
+      const edit = node('button', 'scene-edit', 'Redigera');
+      edit.type = 'button';
+      edit.disabled = presetBusy;
+      edit.setAttribute('aria-label', `Redigera ${scene.name}`);
+      edit.dataset.focusKey = `edit-scene:${scene.id}`;
+      edit.addEventListener('click', () => {
+        if (presetDraft && presetIsDirty()) {
+          setPresetStatus(
+            'Spara eller stäng dina ändringar innan du väljer ett annat preset.',
+            'warn',
+          );
+          presetName.focus();
+          return;
+        }
+        openPresetEditor(scene);
+      });
+      item.append(edit);
+    }
+    sceneList.append(item);
   }
+}
+
+function sceneSnapshot(scene) {
+  return {
+    id: scene.id,
+    name: scene.name,
+    lighting: structuredClone(scene.lighting),
+  };
+}
+
+function presetIsDirty() {
+  return (
+    presetDraft &&
+    (!presetOriginal ||
+      JSON.stringify(presetDraft) !== JSON.stringify(presetOriginal))
+  );
+}
+
+function updatePresetDirtyState() {
+  closePresetButton.textContent = presetIsDirty()
+    ? 'Avbryt ändringar'
+    : 'Stäng';
+}
+
+function setPresetStatus(message, tone = 'neutral') {
+  presetStatus.textContent = message;
+  presetStatus.dataset.tone = tone;
+}
+
+function hidePresetConfirmation() {
+  presetConfirm.hidden = true;
+  presetConfirmationAction = null;
+  presetFields.disabled = presetBusy;
+  closePresetButton.disabled = presetBusy;
+  createPresetButton.disabled = presetBusy;
+}
+
+function confirmPresetAction(action, message, label) {
+  if (presetBusy) return;
+  presetConfirmationAction = action;
+  presetConfirmMessage.textContent = message;
+  presetConfirmYes.textContent = label;
+  presetConfirm.hidden = false;
+  presetFields.disabled = true;
+  closePresetButton.disabled = true;
+  createPresetButton.disabled = true;
+  presetConfirmNo.focus();
+}
+
+function requestClosePreset() {
+  if (presetBusy) return;
+  if (presetIsDirty()) {
+    confirmPresetAction(
+      'discard',
+      'Stäng utan att spara dina ändringar?',
+      'Kasta ändringar',
+    );
+  } else closePresetEditor();
+}
+
+function closePresetEditor(restore = true) {
+  presetEditor.hidden = true;
+  presetDraft = null;
+  presetOriginal = null;
+  hidePresetConfirmation();
+  if (overview) renderScenes(overview);
+  if (restore) restoreFocus(presetReturnFocus, null);
+}
+
+function openPresetEditor(scene) {
+  if (presetBusy || presetConfirmationAction) return;
+  if (presetDraft && presetIsDirty()) {
+    setPresetStatus(
+      'Spara eller stäng dina ändringar innan du skapar ett nytt preset.',
+      'warn',
+    );
+    presetName.focus();
+    return;
+  }
+  presetReturnFocus = scene ? `edit-scene:${scene.id}` : 'create-preset';
+  createPresetButton.dataset.focusKey = 'create-preset';
+  presetOriginal = scene ? sceneSnapshot(scene) : null;
+  const source = (overview.scenes ?? []).find(
+    (candidate) => candidate.id === overview.state.lighting.currentScene,
+  );
+  const lighting =
+    scene?.lighting ??
+    source?.lighting ??
+    Object.fromEntries(
+      Object.entries(overview.state.lighting.devices).map(
+        ([target, device]) => [
+          target,
+          { power: true, brightness: 50, ...device.baselineDesired },
+        ],
+      ),
+    );
+  presetDraft = scene
+    ? sceneSnapshot(scene)
+    : { name: '', lighting: structuredClone(lighting) };
+  presetName.value = presetDraft.name;
+  document.getElementById('preset-editor-title').textContent = scene
+    ? `Redigera ${scene.name}`
+    : 'Nytt preset';
+  deletePresetButton.hidden = !scene?.canDelete;
+  deletePresetButton.title = scene?.protectionReason ?? '';
+  hidePresetConfirmation();
+  presetEditor.hidden = false;
+  presetLightList.replaceChildren();
+  for (const target of Object.keys(overview.state.lighting.devices).sort(
+    (a, b) => a.localeCompare(b),
+  )) {
+    presetLightList.append(renderPresetLight(target));
+  }
+  setPresetStatus(
+    !scene && source
+      ? `Utgår från ${source.name}. Ge presetet ett eget namn.`
+      : 'Ändringar sparas först när du väljer Spara.',
+  );
+  updatePresetDirtyState();
+  renderScenes(overview);
+  presetName.focus({ preventScroll: true });
+  presetEditor.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+}
+
+function renderPresetLight(target) {
+  const row = node('div', 'preset-light');
+  const includeLabel = node('label', 'preset-light-identity');
+  const include = document.createElement('input');
+  include.type = 'checkbox';
+  include.checked = Object.hasOwn(presetDraft.lighting, target);
+  include.setAttribute(
+    'aria-label',
+    `Ta med ${displayTarget(target)} i presetet`,
+  );
+  includeLabel.append(include, node('span', '', displayTarget(target)));
+  const control = node('div', 'preset-brightness');
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = '0';
+  slider.max = '100';
+  slider.step = '1';
+  slider.setAttribute(
+    'aria-label',
+    `Ljusstyrka för ${displayTarget(target)} i presetet`,
+  );
+  const number = document.createElement('input');
+  number.type = 'number';
+  number.required = true;
+  number.min = '0';
+  number.max = '100';
+  number.step = '1';
+  number.inputMode = 'numeric';
+  number.setAttribute(
+    'aria-label',
+    `Ljusstyrka i procent för ${displayTarget(target)}`,
+  );
+  const numberWrap = node('div', 'preset-number');
+  numberWrap.append(number, node('span', '', '%'));
+  const status = node('span', 'preset-light-state');
+  let retained = structuredClone(
+    presetDraft.lighting[target] ?? { power: false, brightness: 0 },
+  );
+  const sync = () => {
+    const values = presetDraft.lighting[target];
+    const brightness = values?.power === false ? 0 : (values?.brightness ?? 50);
+    slider.value = String(brightness);
+    number.value = String(brightness);
+    slider.disabled = !include.checked;
+    number.disabled = !include.checked;
+    slider.setAttribute(
+      'aria-valuetext',
+      include.checked ? `${brightness} procent` : 'Oförändrad',
+    );
+    status.textContent = !include.checked
+      ? 'Oförändrad'
+      : values.power === false
+        ? 'Släckt'
+        : values.brightness === undefined
+          ? 'Nivå ej angiven'
+          : 'På';
+    row.dataset.included = String(include.checked);
+  };
+  const setBrightness = (value) => {
+    if (!Number.isInteger(value) || value < 0 || value > 100) return;
+    presetDraft.lighting[target] = {
+      ...presetDraft.lighting[target],
+      power: value > 0,
+      brightness: value,
+    };
+    sync();
+    updatePresetDirtyState();
+  };
+  slider.addEventListener('input', () => setBrightness(Number(slider.value)));
+  number.addEventListener('input', () => {
+    if (number.value !== '' && number.validity.valid)
+      setBrightness(Number(number.value));
+  });
+  number.addEventListener('change', () => {
+    if (number.validity.valid && number.value !== '') sync();
+  });
+  include.addEventListener('change', () => {
+    if (include.checked) presetDraft.lighting[target] = retained;
+    else {
+      retained = structuredClone(presetDraft.lighting[target]);
+      delete presetDraft.lighting[target];
+    }
+    sync();
+    updatePresetDirtyState();
+  });
+  sync();
+  control.append(slider, numberWrap, status);
+  row.append(includeLabel, control);
+  return row;
+}
+
+function setPresetBusy(busy) {
+  presetBusy = busy;
+  presetFields.disabled = busy;
+  closePresetButton.disabled = busy;
+  presetConfirmYes.disabled = busy;
+  presetConfirmNo.disabled = busy;
+  savePresetButton.textContent = busy ? 'Sparar…' : 'Spara';
+  presetForm.setAttribute('aria-busy', String(busy));
+  if (overview) renderScenes(overview);
+}
+
+async function mutatePreset(path, method, body) {
+  const response = await fetch(`${API_ROOT}/scenes${path}`, {
+    method,
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/json', 'X-Lugn-CSRF': csrfToken },
+    body: JSON.stringify(body),
+  });
+  if (response.status === 401 || response.status === 403)
+    throw new SessionExpiredError();
+  if (!response.ok) {
+    const failure = await response.json().catch(() => ({}));
+    const errors = {
+      scene_changed:
+        'Presetet har ändrats någon annanstans. Ditt utkast finns kvar. Stäng och öppna presetet igen för att hämta senaste versionen.',
+      unknown_scene:
+        'Presetet har raderats någon annanstans. Stäng redigeraren och skapa ett nytt preset.',
+      scene_protected:
+        'Det här presetet behövs av systemet och kan inte ändras eller raderas.',
+      target_not_configured:
+        'En lampa finns inte längre i konfigurationen. Stäng och öppna presetet igen för att hämta aktuella lampor.',
+      scene_limit_reached:
+        'Presetlistan är full. Radera ett preset innan du skapar ett nytt.',
+      scene_save_failed:
+        'Presetet kunde inte lagras på servern. Dina ändringar finns kvar. Försök igen.',
+    };
+    throw new Error(
+      errors[failure.error] ??
+        'Ändringen kunde inte sparas. Ditt utkast finns kvar. Försök igen.',
+    );
+  }
+  return response.json();
+}
+
+async function savePreset(activate) {
+  if (!presetDraft || presetBusy || !csrfToken) return;
+  if (activate && pendingActions.has('scene')) {
+    setPresetStatus(
+      'Vänta tills den pågående scenaktiveringen är klar innan du sparar och aktiverar.',
+      'warn',
+    );
+    return;
+  }
+  const name = presetDraft.name.trim();
+  if (!name) {
+    setPresetStatus('Ge presetet ett namn.', 'bad');
+    presetName.focus();
+    return;
+  }
+  if (!Object.keys(presetDraft.lighting).length) {
+    setPresetStatus('Välj minst en lampa som ska ingå.', 'bad');
+    return;
+  }
+  setPresetBusy(true);
+  setPresetStatus('Sparar preset…');
+  try {
+    const { scene } = await mutatePreset(
+      presetOriginal ? `/${encodeURIComponent(presetOriginal.id)}` : '',
+      'POST',
+      {
+        name,
+        lighting: presetDraft.lighting,
+        ...(presetOriginal ? { expectedScene: presetOriginal } : {}),
+      },
+    );
+    presetOriginal = sceneSnapshot(scene);
+    presetDraft = sceneSnapshot(scene);
+    presetName.value = scene.name;
+    deletePresetButton.hidden = !scene.canDelete;
+    document.getElementById('preset-editor-title').textContent =
+      `Redigera ${scene.name}`;
+    // Keep the successful response even if the following status read is unavailable.
+    overview.scenes = [
+      ...overview.scenes.filter((item) => item.id !== scene.id),
+      scene,
+    ];
+    updatePresetDirtyState();
+    await refreshOverview();
+    setPresetStatus(
+      activate
+        ? 'Presetet är sparat. Aktiverar…'
+        : 'Presetet är sparat. Lamporna ändras när du aktiverar det.',
+      'good',
+    );
+    if (activate) {
+      await invokeCapability(
+        'lighting.activateScene',
+        { sceneId: scene.id },
+        'scene',
+      );
+      setPresetStatus(`Presetet är sparat. ${actionMessage}`, actionTone);
+    }
+  } catch (error) {
+    handlePresetError(error);
+  } finally {
+    setPresetBusy(false);
+    if (!presetEditor.hidden) savePresetButton.focus({ preventScroll: true });
+  }
+}
+
+async function deletePreset() {
+  if (!presetOriginal || presetBusy || !csrfToken) return;
+  setPresetBusy(true);
+  setPresetStatus('Raderar preset…');
+  try {
+    const id = presetOriginal.id;
+    await mutatePreset(`/${encodeURIComponent(id)}`, 'DELETE', {
+      expectedScene: presetOriginal,
+    });
+    overview.scenes = overview.scenes.filter((scene) => scene.id !== id);
+    closePresetEditor(false);
+    await refreshOverview();
+    setActionMessage(
+      'Presetet har raderats. Lampornas aktuella läge behålls.',
+      'good',
+    );
+    createPresetButton.focus({ preventScroll: true });
+  } catch (error) {
+    hidePresetConfirmation();
+    handlePresetError(error);
+  } finally {
+    setPresetBusy(false);
+  }
+}
+
+function handlePresetError(error) {
+  if (error instanceof SessionExpiredError) {
+    setPresetStatus(
+      'Sessionen har gått ut. Logga in igen innan du sparar.',
+      'bad',
+    );
+    setActionMessage(
+      'Sessionen har gått ut. Logga ut och logga in igen.',
+      'bad',
+    );
+  } else
+    setPresetStatus(
+      error instanceof Error
+        ? error.message
+        : 'Åtgärden misslyckades. Försök igen.',
+      'bad',
+    );
 }
 
 function renderMusic(devices, commands, fades = {}) {

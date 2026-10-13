@@ -44,6 +44,26 @@ the panel.
 This panel is for observing and tuning configured lights. Editing Home
 Assistant mappings and broader room systems remain future UI work.
 
+The web panel also manages lighting presets. Each preset has a separate edit
+button; the inline editor provides a name, inclusion checkbox and 0–100% slider
+with an exact numeric input for each configured lamp. Zero means off. Excluded
+lamps retain their existing intent when the preset is activated. New presets
+start from the selected preset, or from current desired lighting when none is
+selected. Saving changes the definition while retaining the previously applied
+lighting across restart; **Spara och aktivera** additionally
+uses the existing scene activation capability. Live state updates preserve the
+open draft. Deleting or discarding unsaved changes requires an inline
+confirmation. Deleting an active preset retains the current lamp intent.
+
+Preset definitions and deleted built-in presets are persisted separately in
+`<statePath>.scenes.json`, loaded after the generated room presets, before
+restoring lighting intent. Writes are atomic and must succeed before changes
+are published. Edits require a web session, same-origin request and CSRF token;
+stale edits are rejected instead of overwriting newer changes. **Helt släckt**
+remains a protected system action; the configured automation default can be
+edited but cannot be deleted. Nest Hubs keep their activation controls and
+receive updated presets, with no preset editor on their pages.
+
 ## Current Hub dashboard
 
 Lugn serves its own room dashboard for Nest Hubs. It is a custom Lugn page, not

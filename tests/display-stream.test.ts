@@ -32,6 +32,7 @@ async function setup(streaming = true, music = false) {
     hubs: [{ id: 'bed', role: 'bed', token, castHost: '127.0.0.1' }],
     capabilities: new CapabilityRegistry(engine),
     scenes: [...engine.scenes.values()],
+    scenesProvider: () => [...engine.scenes.values()],
     stateProvider: () => {
       if (snapshotFails) throw new Error('Snapshot temporarily unavailable');
       return engine.state;
@@ -100,6 +101,29 @@ async function setup(streaming = true, music = false) {
 }
 
 describe('secret-path Hub state stream', () => {
+  it('keeps Hub activation scenes current after dashboard preset edits', async () => {
+    const { base, engine } = await setup();
+    const scene = {
+      id: 'scene.custom_test',
+      name: 'Ny scen',
+      lighting: {
+        [Object.keys(engine.state.lighting.devices)[0]!]: {
+          power: true,
+          brightness: 26,
+        },
+      },
+    };
+    engine.saveSceneDefinition(scene);
+    const snapshot = (await (await fetch(`${base}/state`)).json()) as {
+      scenes: (typeof scene)[];
+    };
+    expect(snapshot.scenes).toContainEqual(scene);
+    engine.deleteSceneDefinition(scene.id);
+    const updated = (await (await fetch(`${base}/state`)).json()) as {
+      scenes: (typeof scene)[];
+    };
+    expect(updated.scenes.some((entry) => entry.id === scene.id)).toBe(false);
+  });
   it('carries authoritative playback policy and server time in polling and stream snapshots', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const now = Date.parse('2026-10-04T12:00:00+02:00');

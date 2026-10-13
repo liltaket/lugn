@@ -3,7 +3,7 @@ import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
 import { HomeAssistantHomePresenceAdapter } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { DashCastAdapter } from '../adapters/dashcast.js';
 import { HomeAssistantLightingAdapter } from '../adapters/home-assistant-lighting.js';
@@ -28,6 +28,7 @@ import { systemClock } from '../core/clock.js';
 import { LugnDisplayServer } from './display-server.js';
 import { DashCastManager } from './dashcast-manager.js';
 import { LightingIntentStore } from './lighting-intent-store.js';
+import { ScenePresetStore } from './scene-preset-store.js';
 import { LugnHttpServer } from './http-server.js';
 import {
   MqttJsSubscriber,
@@ -126,17 +127,33 @@ export async function startRuntime(
     systemClock,
   );
   const deviceIds = Object.keys(config.homeAssistant.entities);
-  const scenes = withRoomPresets(config.scenes ?? defaultScenes, deviceIds);
+  const baseScenes = withRoomPresets(config.scenes ?? defaultScenes, deviceIds);
   const defaultSceneId = resolveRoomDefaultSceneId(
     config.defaultSceneId,
-    scenes,
+    baseScenes,
   );
   const lightingIntentPath =
     dependencies.lightingIntentPath ?? config.statePath;
+  const scenePresetStore = new ScenePresetStore({
+    filePath: join(
+      dirname(lightingIntentPath),
+      `${basename(lightingIntentPath)}.scenes.json`,
+    ),
+    deviceIds,
+    ...(defaultSceneId === undefined ? {} : { defaultSceneId }),
+    onWarning: (message) => console.warn(`[lugn] ${message}`),
+    onSaved: (ids) => lightingIntentStore.setKnownSceneIds(ids),
+  });
+  const scenes = await scenePresetStore.load(baseScenes);
   const lightingIntentStore = new LightingIntentStore({
     filePath: lightingIntentPath,
     expectedDeviceIds: deviceIds,
-    knownSceneIds: scenes.map((scene) => scene.id),
+    // Tombstones let a crash between deleting a preset and saving intent retain
+    // its lamp values; the obsolete scene label is detached immediately below.
+    knownSceneIds: [
+      ...scenes.map((scene) => scene.id),
+      ...scenePresetStore.deletedSceneIds,
+    ],
     ...(Object.keys(config.homeAssistant.music).length === 0
       ? {}
       : {
@@ -145,11 +162,26 @@ export async function startRuntime(
     onWarning: (message) => console.warn(`[lugn] ${message}`),
   });
   const restoredLightingIntent = await lightingIntentStore.load();
+  if (
+    restoredLightingIntent?.currentScene &&
+    !scenes.some((scene) => scene.id === restoredLightingIntent.currentScene)
+  ) {
+    restoredLightingIntent.currentScene = null;
+    if (
+      deviceIds.length > 0 &&
+      Object.values(restoredLightingIntent.devices).every(
+        (device) => device.effectiveDesired.power === false,
+      )
+    )
+      restoredLightingIntent.detachedOffScene = true;
+  }
+  lightingIntentStore.setKnownSceneIds(scenes.map((scene) => scene.id));
   const restoredMusicIntent = lightingIntentStore.restoredMusicIntent;
   const engine = new LugnEngine(systemClock, {
     adapter: homeAssistantLighting,
     deviceIds,
     scenes,
+    preserveRestoredSceneIds: scenePresetStore.managedSceneIds,
     ...(defaultSceneId === undefined ? {} : { defaultSceneId }),
     ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
     ...(restoredMusicIntent === undefined ? {} : { restoredMusicIntent }),
@@ -304,6 +336,7 @@ export async function startRuntime(
   const http = new LugnHttpServer({
     ...config.http,
     engine,
+    scenePresetStore,
     capabilities,
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
     integrations: () => ({
@@ -329,6 +362,7 @@ export async function startRuntime(
         capabilities,
         presenceCountCorrectionAvailable: config.presenceControl !== undefined,
         scenes: Array.from(engine.scenes.values()),
+        scenesProvider: () => Array.from(engine.scenes.values()),
         stateProvider: () => engine.state,
         stateStream: engine.stream,
         musicVolumePoliciesProvider: () =>
