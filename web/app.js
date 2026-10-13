@@ -33,6 +33,13 @@ const musicList = document.getElementById('music-list');
 const lightList = document.getElementById('light-list');
 const actionStatus = document.getElementById('action-status');
 
+// PERF: Cache Intl.DateTimeFormat to avoid expensive instantiations during render loops
+const updatedAtFormat = new Intl.DateTimeFormat('sv-SE', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
 let csrfToken = null;
 let tokenRequired = true;
 let authProvider = 'token';
@@ -1839,11 +1846,7 @@ function renderUpdatedAt(value) {
   const date = new Date(value);
   updatedAt.textContent = Number.isNaN(date.getTime())
     ? 'Uppdateringstid saknas'
-    : `Tillstånd ändrat ${new Intl.DateTimeFormat('sv-SE', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      }).format(date)}`;
+    : `Tillstånd ändrat ${updatedAtFormat.format(date)}`;
 }
 
 function integrationLabel(name) {

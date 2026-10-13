@@ -20,6 +20,14 @@ import {
   MusicPlaybackActivityReasonSchema,
 } from '../core/schemas.js';
 
+// PERF: Cache Intl.DateTimeFormat to avoid expensive instantiations during tick calculations
+const localHourFormat = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
 const automationActor = { type: 'automation' as const, id: 'lugn.music' };
 const minimumAutomatedVolume = 0.05;
 const maximumAutomatedVolume = 0.8;
@@ -798,12 +806,9 @@ export class MusicAutomation {
   }
 
   private localHour(): number {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Stockholm',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(this.options.clock.now()));
+    const parts = localHourFormat.formatToParts(
+      new Date(this.options.clock.now()),
+    );
     const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
     const minute = Number(
       parts.find((part) => part.type === 'minute')?.value ?? 0,

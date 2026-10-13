@@ -63,6 +63,14 @@ import {
 } from '../core/schemas.js';
 import { CommandLedger } from '../execution/command-ledger.js';
 
+// PERF: Cache Intl.DateTimeFormat to avoid expensive instantiations during engine evaluations
+const prelightQuietHoursFormat = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
 export type EngineOptions = {
   deviceIds?: string[];
   lightingControlModes?: LightingControlModes;
@@ -2814,12 +2822,9 @@ export class LugnEngine {
   }
 
   private isPrelightQuietHours(): boolean {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Stockholm',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(this.clock.now()));
+    const parts = prelightQuietHoursFormat.formatToParts(
+      new Date(this.clock.now()),
+    );
     const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
     return hour >= 23 || hour < 6;
   }
