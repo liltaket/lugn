@@ -21,7 +21,7 @@ afterEach(() => engines.splice(0).forEach((engine) => engine.dispose()));
 async function flush() {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 }
-function setup(enforce = false, prelight = false) {
+function setup(enforce = false, prelight = false, noScenes = false) {
   const clock = new FakeClock(Date.parse('2026-10-13T12:00:00+02:00'));
   const requests: Array<Record<string, unknown>> = [];
   const adapter = new HomeAssistantLightingAdapter(
@@ -39,7 +39,7 @@ function setup(enforce = false, prelight = false) {
   const engine = new LugnEngine(clock, {
     adapter,
     deviceIds: [target],
-    scenes: [2700, 4000].map((kelvin) => ({
+    scenes: (noScenes ? [] : [2700, 4000]).map((kelvin) => ({
       id: `scene.k${kelvin}`,
       name: String(kelvin),
       lighting: {
@@ -250,6 +250,39 @@ describe('one percent Kelvin feedback tolerance', () => {
       ).toBe(false);
     },
   );
+
+  it('preserves manual Kelvin intent through successive rounded reports', async () => {
+    const { engine, clock, requests, report } = setup(false, false, true);
+    await engine.setLighting(
+      target,
+      { power: true, brightness: 3, colorTemperature: 2700 },
+      { actor: { type: 'user' }, source: 'manual-kelvin' },
+    );
+    report(2699);
+    await flush();
+    expect(engine.state.commands.at(-1)?.status).toBe('confirmed');
+    const ownership = structuredClone(
+      engine.state.lighting.devices[target]?.ownership.colorTemperature,
+    );
+    clock.advanceBy(61000);
+    for (const kelvin of [2702, 2699]) {
+      report(kelvin);
+      await flush();
+      const device = engine.state.lighting.devices[target];
+      expect(device?.observed.colorTemperature).toBe(kelvin);
+      expect(device?.effectiveDesired.colorTemperature).toBe(2700);
+      expect(device?.ownership.colorTemperature).toEqual(ownership);
+    }
+    expect(requests).toHaveLength(1);
+    report(2750);
+    await flush();
+    expect(
+      engine.state.lighting.devices[target]?.effectiveDesired.colorTemperature,
+    ).toBe(2750);
+    expect(
+      engine.state.lighting.devices[target]?.ownership.colorTemperature,
+    ).not.toEqual(ownership);
+  });
 
   it('retries genuinely different Kelvin without changing the scene goal', async () => {
     const { engine, clock, requests, report } = setup();

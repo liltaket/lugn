@@ -2595,7 +2595,7 @@ export class LugnEngine {
           property === 'colorTemperature' &&
           lightingFeedbackMatches(
             property,
-            this.expectedSceneColorTemperature(observation.target, device),
+            device.effectiveDesired.colorTemperature,
             value,
           )
         ) &&
