@@ -398,6 +398,25 @@ export class LightingIntentStore {
     ) {
       return false;
     }
+    if (
+      snapshot.appliedScene &&
+      Object.keys(snapshot.appliedScene.lighting).some(
+        (id) => !this.expectedDeviceIds.has(id),
+      )
+    )
+      return false;
+    if (
+      snapshot.appliedScene &&
+      snapshot.currentScene !== null &&
+      snapshot.appliedScene.id !== snapshot.currentScene
+    )
+      return false;
+    if (
+      snapshot.activationHolds?.some(
+        (hold) => !this.expectedDeviceIds.has(hold.target),
+      )
+    )
+      return false;
     return (
       snapshot.currentScene === null ||
       this.knownSceneIds.has(snapshot.currentScene)

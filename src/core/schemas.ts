@@ -470,6 +470,25 @@ export const LightingIntentSnapshotSchema = z
   .object({
     /** Preserve all-off semantics after deleting the active preset definition. */
     detachedOffScene: z.literal(true).optional(),
+    /** The applied definition can differ from a subsequently edited preset. */
+    appliedScene: SceneSchema.extend({
+      lighting: z.record(
+        SemanticLightingIdSchema,
+        LightingValuesSchema.strict(),
+      ),
+    })
+      .strict()
+      .optional(),
+    activationHolds: z
+      .array(
+        AutomationHoldSchema.extend({
+          scope: z.literal('lighting.activation'),
+          target: SemanticLightingIdSchema,
+          intent: z.literal('off'),
+          resetPolicy: z.literal('explicit_lighting'),
+        }).strict(),
+      )
+      .optional(),
     currentScene: z
       .string()
       .regex(/^scene\.[a-z0-9][a-z0-9._-]*$/)

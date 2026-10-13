@@ -66,6 +66,13 @@ export class ScenePresetStore {
     return [...this.data.deletedSceneIds];
   }
 
+  get managedSceneIds(): readonly string[] {
+    return [
+      ...this.data.scenes.map((scene) => scene.id),
+      ...this.data.deletedSceneIds,
+    ];
+  }
+
   async load(baseScenes: readonly LightingScene[]): Promise<LightingScene[]> {
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {

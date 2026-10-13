@@ -181,6 +181,7 @@ export async function startRuntime(
     adapter: homeAssistantLighting,
     deviceIds,
     scenes,
+    preserveRestoredSceneIds: scenePresetStore.managedSceneIds,
     ...(defaultSceneId === undefined ? {} : { defaultSceneId }),
     ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
     ...(restoredMusicIntent === undefined ? {} : { restoredMusicIntent }),

@@ -49,7 +49,8 @@ button; the inline editor provides a name, inclusion checkbox and 0–100% slide
 with an exact numeric input for each configured lamp. Zero means off. Excluded
 lamps retain their existing intent when the preset is activated. New presets
 start from the selected preset, or from current desired lighting when none is
-selected. Saving changes the definition; **Spara och aktivera** additionally
+selected. Saving changes the definition while retaining the previously applied
+lighting across restart; **Spara och aktivera** additionally
 uses the existing scene activation capability. Live state updates preserve the
 open draft. Deleting or discarding unsaved changes requires an inline
 confirmation. Deleting an active preset retains the current lamp intent.
