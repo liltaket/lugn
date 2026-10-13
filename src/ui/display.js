@@ -391,7 +391,11 @@ function renderScenes(payload) {
           ([property, value]) =>
             (device.effectiveDesired.power === false && property !== 'power') ||
             (device.availability === 'available' &&
-              device.observed?.[property] === value),
+              lightingFeedbackMatches(
+                property,
+                value,
+                device.observed?.[property],
+              )),
         ),
       );
     const status = isPending

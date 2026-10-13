@@ -24,6 +24,7 @@ import {
   type SwitchObservation,
 } from '../adapters/simulated-switch.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
+import { lightingFeedbackMatches } from '../core/lighting-feedback.js';
 import { StateEventStream } from '../core/event-stream.js';
 import { RoomSessions } from './room-sessions.js';
 import {
@@ -1775,7 +1776,11 @@ export class LugnEngine {
         const value = device.effectiveDesired[property];
         if (
           value === undefined ||
-          (value === device.observed[property] &&
+          (lightingFeedbackMatches(
+            property,
+            value,
+            device.observed[property],
+          ) &&
             !forceTargets.has(target) &&
             !(forceOff && property === 'power' && value === false))
         )
@@ -1873,7 +1878,12 @@ export class LugnEngine {
           : LightingProperties.every((property) => {
               const desired = device.effectiveDesired[property];
               return (
-                desired === undefined || desired === device.observed[property]
+                desired === undefined ||
+                lightingFeedbackMatches(
+                  property,
+                  desired,
+                  device.observed[property],
+                )
               );
             }),
     );
@@ -2089,8 +2099,12 @@ export class LugnEngine {
         const current = device.observed[property];
         if (
           current !== undefined &&
-          current !== prelightValues[property] &&
-          current !== previousValues[property]
+          !lightingFeedbackMatches(
+            property,
+            prelightValues[property],
+            current,
+          ) &&
+          !lightingFeedbackMatches(property, previousValues[property], current)
         )
           continue;
         Object.assign(values, { [property]: previousValues[property] });
@@ -2396,7 +2410,7 @@ export class LugnEngine {
         restored !== undefined &&
         current !== undefined &&
         restored !== current &&
-        device.observed[property] !== current
+        !lightingFeedbackMatches(property, current, device.observed[property])
       );
     });
     if (conflictsWithCurrentIntent)
@@ -2543,7 +2557,11 @@ export class LugnEngine {
       const supersededCommand =
         !command &&
         !observation.commandId &&
-        device.effectiveDesired[property] !== value
+        !lightingFeedbackMatches(
+          property,
+          device.effectiveDesired[property],
+          value,
+        )
           ? this.ledger.recentSupersededMatch(
               observation.target,
               property,
@@ -2573,6 +2591,14 @@ export class LugnEngine {
         !command &&
         !supersededCommand &&
         !pendingHaProperties.has(property) &&
+        !(
+          property === 'colorTemperature' &&
+          lightingFeedbackMatches(
+            property,
+            this.expectedSceneColorTemperature(observation.target, device),
+            value,
+          )
+        ) &&
         !(
           property === 'power' &&
           value === true &&
@@ -2656,7 +2682,12 @@ export class LugnEngine {
         : LightingProperties.every((property) => {
             const desired = device.effectiveDesired[property];
             return (
-              desired === undefined || desired === device.observed[property]
+              desired === undefined ||
+              lightingFeedbackMatches(
+                property,
+                desired,
+                device.observed[property],
+              )
             );
           });
     if (currentIntentConfirmed) device.availability = 'available';
@@ -2879,7 +2910,10 @@ export class LugnEngine {
         if (values.power === false) return observed.power === false;
         return LightingProperties.every((property) => {
           const value = values[property];
-          return value === undefined || observed[property] === value;
+          return (
+            value === undefined ||
+            lightingFeedbackMatches(property, value, observed[property])
+          );
         });
       });
     }
@@ -3341,7 +3375,10 @@ export class LugnEngine {
       const mismatch = LightingProperties.some((property) => {
         if (desired.power === false && property !== 'power') return false;
         const value = desired[property];
-        return value !== undefined && value !== device.observed[property];
+        return (
+          value !== undefined &&
+          !lightingFeedbackMatches(property, value, device.observed[property])
+        );
       });
       if (!mismatch) continue;
       // Never overlap a transport call or interrupt a still-active retry batch.
@@ -3501,7 +3538,10 @@ export class LugnEngine {
         if (device.effectiveDesired.power === false && property !== 'power')
           return false;
         const desired = device.effectiveDesired[property];
-        return desired !== undefined && desired !== device.observed[property];
+        return (
+          desired !== undefined &&
+          !lightingFeedbackMatches(property, desired, device.observed[property])
+        );
       });
       if (
         !hasMismatch ||
@@ -3537,7 +3577,12 @@ export class LugnEngine {
               return false;
             const desired = device.effectiveDesired[property];
             return (
-              desired !== undefined && desired !== device.observed[property]
+              desired !== undefined &&
+              !lightingFeedbackMatches(
+                property,
+                desired,
+                device.observed[property],
+              )
             );
           })
         );
@@ -3575,7 +3620,10 @@ export class LugnEngine {
         if (device.effectiveDesired.power === false && property !== 'power')
           return false;
         const desired = device.effectiveDesired[property];
-        return desired !== undefined && desired !== device.observed[property];
+        return (
+          desired !== undefined &&
+          !lightingFeedbackMatches(property, desired, device.observed[property])
+        );
       });
       if (!hasMismatch) continue;
       const key = this.lightingDeliveryKey(revision, target);
@@ -3622,7 +3670,10 @@ export class LugnEngine {
     if (!stillDesired) return false;
     return LightingProperties.some((property) => {
       const value = command.desired[property];
-      return value !== undefined && device.observed[property] !== value;
+      return (
+        value !== undefined &&
+        !lightingFeedbackMatches(property, value, device.observed[property])
+      );
     });
   }
 

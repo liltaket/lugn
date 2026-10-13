@@ -16,6 +16,7 @@ import {
   ScenePresetDeleteSchema,
 } from './scene-preset-store.js';
 import type { ScenePresetStore } from './scene-preset-store.js';
+import { lightingFeedbackBrowserScript } from './lighting-feedback-script.js';
 import {
   CapabilityInputError,
   CapabilitySchemas,
@@ -218,12 +219,17 @@ export class LugnHttpServer {
     const asset = assets[pathname];
     if (!asset) return false;
     try {
-      const content = readFileSync(
+      let content = readFileSync(
         join(
           this.options.webAssetsDirectory ?? join(process.cwd(), 'web'),
           asset.name,
         ),
       );
+      if (asset.name === 'app.js')
+        content = Buffer.concat([
+          Buffer.from(lightingFeedbackBrowserScript),
+          content,
+        ]);
       response.writeHead(200, {
         'content-type': asset.contentType,
         'cache-control': 'no-cache',

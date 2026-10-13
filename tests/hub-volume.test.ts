@@ -6,6 +6,7 @@ import { LugnEngine } from '../src/application/lugn-engine.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { FakeClock } from '../src/core/clock.js';
 import { MusicCommandRecoverySchema } from '../src/core/schemas.js';
+import { lightingFeedbackBrowserScript } from '../src/runtime/lighting-feedback-script.js';
 
 type Listener = (...args: unknown[]) => void;
 
@@ -253,7 +254,8 @@ function dashboard(
     },
   });
   runInContext(
-    readFileSync(new URL('../src/ui/display.js', import.meta.url), 'utf8'),
+    lightingFeedbackBrowserScript +
+      readFileSync(new URL('../src/ui/display.js', import.meta.url), 'utf8'),
     context,
   );
   return {
@@ -935,6 +937,47 @@ describe('Hub live state with resilient polling fallback', () => {
       ui.engine.dispose();
     }
   });
+
+  it.each([
+    [2699, 'Bekräftat'],
+    [2727, 'Bekräftat'],
+    [2728, 'Valt'],
+  ])(
+    'confirms Hub scenes using Kelvin tolerance at %i K',
+    async (reported, label) => {
+      vi.useFakeTimers();
+      const ui = dashboard(0.3, true);
+      try {
+        await microtasks();
+        const payload = {
+          ...ui.payload(),
+          scenes: [{ id: 'scene.kelvin', name: 'Kelvin', lighting: {} }],
+        };
+        payload.state.lighting.currentScene = 'scene.kelvin';
+        payload.state.lighting.devices['lighting.desk'] = {
+          effectiveDesired: {
+            power: true,
+            brightness: 3,
+            colorTemperature: 2700,
+          },
+          baselineDesired: {
+            power: true,
+            brightness: 3,
+            colorTemperature: 2700,
+          },
+          observed: { power: true, brightness: 3, colorTemperature: reported },
+          ownership: {},
+          availability: 'available',
+        };
+        runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+        const button = ui.get('#scene-grid').children[0]!;
+        expect(button.querySelector('.scene-status')?.textContent).toBe(label);
+      } finally {
+        ui.windowListeners.get('pagehide')?.();
+        ui.engine.dispose();
+      }
+    },
+  );
 
   it('does not claim a pending default scene is confirmed before device feedback', async () => {
     vi.useFakeTimers();

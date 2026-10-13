@@ -56,6 +56,11 @@ brightness-only command can select a cached colour mode and hue after a white
 command has physically succeeded. Including `color_temp_kelvin` explicitly
 selects white mode. This applies to scene transitions, retries and enforcement;
 OFF commands still contain no colour or brightness fields.
+Kelvin readback is accepted within an inclusive 1% of the requested value
+(2700 K accepts 2673–2727 K). Confirmation, convergence, retries, enforcement,
+and prelight completion share this tolerance. Reported Kelvin remains visible
+unchanged, and the requested Kelvin remains the goal. Power and brightness
+still require exact matches; pending-command intent comparisons remain exact.
 Custom scenes should specify their own WLED brightness and color temperature
 when the strip should stay on.
 
