@@ -1,5 +1,13 @@
 import { MusicController, type MusicOptions } from './music-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
+
+// ⚡ Bolt: Cache Intl.DateTimeFormat to avoid instantiation overhead during regular state evaluation
+const HOUR_FORMAT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
 import {
   MusicAutomation,
   type MusicVolumePolicySnapshot,
@@ -3055,12 +3063,7 @@ export class LugnEngine {
   }
 
   private isPrelightQuietHours(): boolean {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Stockholm',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(this.clock.now()));
+    const parts = HOUR_FORMAT.formatToParts(new Date(this.clock.now()));
     const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
     return hour >= 23 || hour < 6;
   }

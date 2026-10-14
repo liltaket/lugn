@@ -26,6 +26,14 @@ const maximumAutomatedVolume = 0.8;
 const twoPersonReduction = 0.1;
 const musicContinuityMs = 20 * 60_000;
 
+// ⚡ Bolt: Cache Intl.DateTimeFormat to avoid instantiation overhead on frequent localHour checks
+const HOUR_FORMAT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
 type ActiveFade = {
   id: string;
   targetVolume: number;
@@ -798,12 +806,7 @@ export class MusicAutomation {
   }
 
   private localHour(): number {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Stockholm',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(this.options.clock.now()));
+    const parts = HOUR_FORMAT.formatToParts(new Date(this.options.clock.now()));
     const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
     const minute = Number(
       parts.find((part) => part.type === 'minute')?.value ?? 0,

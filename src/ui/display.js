@@ -9,6 +9,28 @@ const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
 
+// ⚡ Bolt: Cache Intl.DateTimeFormat instances to prevent expensive reinstantiation
+// during frequent render and polling loops (e.g., setClock).
+const TIME_FORMAT = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+const DATE_FORMAT = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+});
+
+const DATE_PARTS_FORMAT = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
 const root = document.querySelector('#app-root');
 const refs = {
   clockTime: document.querySelector('#clock-time'),
@@ -250,25 +272,11 @@ function setConnection(state, message, retry = false) {
 
 function setClock() {
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
-  const time = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(now);
-  const date = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-  }).format(now);
+  const time = TIME_FORMAT.format(now);
+  const date = DATE_FORMAT.format(now);
   setText(refs.clockTime, time);
   setText(refs.clockDate, date);
-  const dateParts = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now);
+  const dateParts = DATE_PARTS_FORMAT.formatToParts(now);
   const dateValue = Object.fromEntries(
     dateParts
       .filter((part) => part.type !== 'literal')
@@ -785,11 +793,7 @@ function renderMusicExplanations(payload, target) {
     const time = document.createElement('time');
     time.textContent =
       typeof decision.at === 'number' && Number.isFinite(decision.at)
-        ? new Intl.DateTimeFormat('sv-SE', {
-            timeZone: 'Europe/Stockholm',
-            hour: '2-digit',
-            minute: '2-digit',
-          }).format(new Date(decision.at))
+        ? TIME_FORMAT.format(new Date(decision.at))
         : '—';
     const copy = document.createElement('span');
     copy.textContent =
