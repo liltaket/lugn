@@ -190,3 +190,23 @@ rendering only from an HTTP response on the Lugn host.
 A full visual settings editor is not part of the current delivery. Future
 settings can include scenes, home-presence mapping, music policy, routines,
 receiver roles and diagnostics, using the typed Lugn capability layer.
+
+### Music automation settings
+
+The web panel's **Musikautomatik** section edits the shared daily volume curve,
+additional reduction for multiple people, automatic volume limits and enable
+state. Time points use Stockholm local time; the endpoints are 00:00 and 24:00
+with matching offsets. Numeric inputs and sliders update the chart together.
+Advanced contains the occupancy offset and limits.
+
+The current explanation separates reported player volume, baseline, offsets,
+automatic target and active owner. **Förhandsvisa** uses the draft at the chosen
+time/person count and never dispatches a device command. **Spara och tillämpa**
+persists before applying volume policy to eligible players. Manual volume holds
+and playback/Pause are retained. **Avbryt ändringar** reloads current settings;
+**Återställ standardvärden** only changes the draft until saved. Live state
+updates retain dirty drafts, navigation warns about unsaved work, and concurrent
+saves are rejected with the draft retained.
+
+This editor uses the existing authenticated web session, same-origin and CSRF
+write protections. It is absent from Nest Hub pages and their API allowlist.

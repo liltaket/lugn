@@ -16,3 +16,4 @@ export * from './execution/command-ledger.js';
 export * from './adapters/home-assistant-music.js';
 export * from './adapters/simulated-music.js';
 export * from './application/music-controller.js';
+export * from './core/music-volume-settings.js';

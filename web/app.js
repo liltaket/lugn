@@ -74,6 +74,10 @@ let pollTimer = null;
 let actionMessage = '';
 let actionTone = 'neutral';
 const pendingActions = new Set();
+let volumeSettingsDraft = null;
+let volumeSettingsOriginal = null;
+let volumeSettingsBusy = false;
+let volumePreviewRevision = 0;
 let presetDraft = null;
 let presetOriginal = null;
 let presetBusy = false;
@@ -833,6 +837,15 @@ async function openDashboard(sessionCsrfToken, expiresAt = null) {
 }
 
 async function endSession() {
+  if (
+    volumeSettingsDirty() &&
+    !window.confirm(
+      'Du har osparade musikinställningar. Logga ut och kasta ändringarna?',
+    )
+  )
+    return;
+  volumeSettingsDraft = null;
+  volumeSettingsOriginal = null;
   logoutButton.disabled = true;
   setActionMessage('Loggar ut…');
   try {
@@ -1088,6 +1101,7 @@ function render() {
   renderScenes(overview);
   const music = overview.state?.music ?? {};
   renderMusic(music.devices ?? {}, music.commands ?? [], music.fades ?? {});
+  renderMusicSettings();
   const devices = overview.state?.lighting?.devices ?? {};
   const presenceState = overview.state?.presence?.state ?? 'unknown';
   renderLights(devices, presenceState);
@@ -2432,3 +2446,384 @@ function hasColorTemperature(device) {
     Number.isInteger(device.observed?.colorTemperature)
   );
 }
+
+function settingsElement(id) {
+  return document.getElementById(`settings-${id}`);
+}
+function volumeSettingsDirty() {
+  return (
+    volumeSettingsDraft !== null &&
+    JSON.stringify(volumeSettingsDraft) !==
+      JSON.stringify(volumeSettingsOriginal)
+  );
+}
+function volumePercent(value) {
+  return value === null ? 'okänd' : `${Math.round(value * 1000) / 10} %`;
+}
+function volumeOffset(value) {
+  return `${Math.round(value * 1000) / 10} pp`;
+}
+function volumeOwner(owner) {
+  return { manual: 'manuell', lugn: 'Lugn', none: 'ingen' }[owner] ?? 'okänd';
+}
+function settingsMinute(value) {
+  const [hour, minute] = value.split(':').map(Number);
+  return hour * 60 + minute;
+}
+function settingsTime(minute) {
+  return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+}
+function renderMusicSettings() {
+  const available =
+    overview.musicSettingsEnabled &&
+    Object.keys(overview.state?.music?.devices ?? {}).length > 0;
+  document.getElementById('music-settings-section').hidden = !available;
+  if (!available) return;
+  const targets = Object.keys(overview.state.music.devices);
+  const select = settingsElement('preview-target');
+  if (
+    Array.from(select.options)
+      .map((option) => option.value)
+      .join() !== targets.join()
+  ) {
+    select.replaceChildren(
+      ...targets.map((target) => {
+        const option = document.createElement('option');
+        option.value = target;
+        option.textContent = target;
+        return option;
+      }),
+    );
+  }
+  const target = select.value;
+  const policy = overview.musicVolumePolicies?.[target];
+  document.getElementById('music-settings-current').textContent = policy
+    ? `Nu · Rapporterad volym ${volumePercent(overview.state.music.devices[target].observed.volume)} · Baslinje ${volumePercent(policy.baseline)} (${policy.baselineSource === 'user' ? 'vald av dig' : 'beräknad'}) · Dygn ${volumeOffset(policy.dailyOffset)} · Personer ${volumeOffset(policy.personOffset)} · Automatiskt mål ${volumePercent(policy.target)} · Volymägare: ${volumeOwner(policy.activeOwner)}`
+    : 'Väntar på volympolicy.';
+  if (
+    !volumeSettingsDraft ||
+    (!volumeSettingsBusy &&
+      !volumeSettingsDirty() &&
+      JSON.stringify(volumeSettingsOriginal) !==
+        JSON.stringify(overview.musicSettings))
+  ) {
+    volumeSettingsOriginal = structuredClone(overview.musicSettings);
+    volumeSettingsDraft = structuredClone(volumeSettingsOriginal);
+    fillMusicSettings();
+  }
+}
+function fillMusicSettings() {
+  settingsElement('enabled').checked = volumeSettingsDraft.enabled;
+  for (const [id, key] of [
+    ['person', 'personOffset'],
+    ['minimum', 'minimum'],
+    ['maximum', 'maximum'],
+  ])
+    settingsElement(id).value =
+      Math.round(volumeSettingsDraft[key] * 1000) / 10;
+  renderVolumePoints();
+  updateVolumeSettingsStatus();
+}
+function renderVolumePoints() {
+  const container = settingsElement('points');
+  container.replaceChildren();
+  volumeSettingsDraft.dailyCurve.forEach((point, index, points) => {
+    const row = document.createElement('div');
+    row.className = 'settings-point';
+    const timeLabel = document.createElement('label');
+    timeLabel.textContent = `Tidpunkt ${index + 1}`;
+    const time = document.createElement('input');
+    time.type = index === points.length - 1 ? 'text' : 'time';
+    time.value = settingsTime(point.minute);
+    time.required = true;
+    time.disabled = index === 0 || index === points.length - 1;
+    timeLabel.append(time);
+    const numberLabel = document.createElement('label');
+    numberLabel.textContent = 'Tillägg (pp)';
+    const number = document.createElement('input');
+    number.type = 'number';
+    number.min = '-100';
+    number.max = '100';
+    number.step = '0.1';
+    number.required = true;
+    number.value = Math.round(point.offset * 1000) / 10;
+    numberLabel.append(number);
+    const sliderLabel = document.createElement('label');
+    sliderLabel.className = 'settings-point-slider';
+    sliderLabel.textContent = `Justera tillägg vid ${settingsTime(point.minute)}`;
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '-100';
+    slider.max = '100';
+    slider.step = '0.1';
+    slider.value = number.value;
+    sliderLabel.append(slider);
+    function changeOffset(value) {
+      point.offset = Number.isFinite(value) ? value / 100 : null;
+      if (index === 0 || index === points.length - 1) {
+        points[0].offset = point.offset;
+        points.at(-1).offset = point.offset;
+        for (const endpoint of [
+          container.firstElementChild,
+          container.lastElementChild,
+        ]) {
+          if (!endpoint) continue;
+          endpoint.querySelector('input[type=number]').value = Number.isFinite(
+            value,
+          )
+            ? value
+            : '';
+          endpoint.querySelector('input[type=range]').value = Number.isFinite(
+            value,
+          )
+            ? value
+            : 0;
+        }
+      }
+      updateVolumeSettingsStatus();
+    }
+    number.addEventListener('input', () => {
+      slider.value = number.value;
+      changeOffset(number.valueAsNumber);
+    });
+    slider.addEventListener('input', () => {
+      number.value = slider.value;
+      changeOffset(slider.valueAsNumber);
+    });
+    time.addEventListener('input', () => {
+      point.minute = time.value ? settingsMinute(time.value) : null;
+      sliderLabel.firstChild.textContent = `Justera tillägg vid ${time.value || 'okänd tid'}`;
+      updateVolumeSettingsStatus();
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'button button-quiet';
+    remove.textContent = 'Ta bort';
+    remove.setAttribute('aria-label', `Ta bort tidpunkt ${index + 1}`);
+    remove.disabled = index === 0 || index === points.length - 1;
+    remove.addEventListener('click', () => {
+      points.splice(index, 1);
+      renderVolumePoints();
+      updateVolumeSettingsStatus();
+    });
+    row.append(timeLabel, numberLabel, sliderLabel, remove);
+    container.append(row);
+  });
+}
+function drawVolumeCurve() {
+  const svg = settingsElement('curve');
+  const points = volumeSettingsDraft.dailyCurve;
+  const values = points.map((point) => point.offset).filter(Number.isFinite);
+  const min = Math.min(-0.2, ...values),
+    max = Math.max(0.05, ...values);
+  const y = (value) => 140 - ((value - min) / (max - min)) * 100;
+  const create = (tag, attributes) => {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attributes))
+      node.setAttribute(key, value);
+    svg.append(node);
+    return node;
+  };
+  svg.replaceChildren();
+  create('line', {
+    x1: 40,
+    x2: 680,
+    y1: y(0),
+    y2: y(0),
+    stroke: 'currentColor',
+    'stroke-opacity': 0.4,
+  });
+  create('polyline', {
+    points: points
+      .filter((p) => Number.isFinite(p.minute) && Number.isFinite(p.offset))
+      .map((p) => `${40 + (p.minute / 1440) * 640},${y(p.offset)}`)
+      .join(' '),
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-width': 2,
+  });
+  points.forEach((p) => {
+    if (Number.isFinite(p.minute) && Number.isFinite(p.offset))
+      create('circle', {
+        cx: 40 + (p.minute / 1440) * 640,
+        cy: y(p.offset),
+        r: 4,
+        fill: 'currentColor',
+      });
+  });
+  for (const [hour, x] of [
+    ['00', 40],
+    ['06', 200],
+    ['12', 360],
+    ['18', 520],
+    ['24', 680],
+  ])
+    create('text', {
+      x,
+      y: 185,
+      'text-anchor': 'middle',
+      fill: 'currentColor',
+    }).textContent = `${hour}:00`;
+  create('text', { x: 40, y: 25, fill: 'currentColor' }).textContent =
+    `${Math.round(max * 100)} pp`;
+  create('text', { x: 40, y: 160, fill: 'currentColor' }).textContent =
+    `${Math.round(min * 100)} pp`;
+}
+function updateVolumeSettingsStatus() {
+  volumePreviewRevision++;
+  settingsElement('preview-result').textContent =
+    'Förhandsvisningen behöver beräknas för detta utkast.';
+  settingsElement('status').textContent = volumeSettingsDirty()
+    ? 'Osparade ändringar. Spelarens volym har inte ändrats av utkastet.'
+    : 'Inga osparade ändringar.';
+  settingsElement('status').removeAttribute('data-tone');
+  settingsElement('save').disabled =
+    volumeSettingsBusy || !volumeSettingsDirty();
+  settingsElement('cancel').disabled =
+    volumeSettingsBusy || !volumeSettingsDirty();
+  settingsElement('add-point').disabled =
+    volumeSettingsDraft.dailyCurve.length >= 48;
+  drawVolumeCurve();
+}
+async function musicSettingsRequest(path, body) {
+  const response = await fetch(`${API_ROOT}/music-settings${path}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/json', 'X-Lugn-CSRF': csrfToken },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    const messages = {
+      volume_settings_changed:
+        'Inställningarna har ändrats någon annanstans. Ditt utkast finns kvar. Avbryt ändringarna för att hämta senaste versionen.',
+      volume_settings_save_failed:
+        'Kunde inte lagra inställningarna. Ditt utkast finns kvar. Försök igen.',
+      unauthorized:
+        'Sessionen har gått ut. Logga in igen; utkastet finns kvar.',
+      csrf_failed: 'Sessionen har ändrats. Försök igen eller logga in igen.',
+    };
+    const details = result.issues
+      ?.map((issue) => `${issue.path}: ${issue.message}`)
+      .join(' ');
+    throw new Error(
+      messages[result.error] ?? details ?? 'Begäran misslyckades. Försök igen.',
+    );
+  }
+  return result;
+}
+for (const [id, key] of [
+  ['person', 'personOffset'],
+  ['minimum', 'minimum'],
+  ['maximum', 'maximum'],
+])
+  settingsElement(id).addEventListener('input', (event) => {
+    volumeSettingsDraft[key] = Number.isFinite(event.target.valueAsNumber)
+      ? event.target.valueAsNumber / 100
+      : null;
+    updateVolumeSettingsStatus();
+  });
+settingsElement('enabled').addEventListener('change', (event) => {
+  volumeSettingsDraft.enabled = event.target.checked;
+  updateVolumeSettingsStatus();
+});
+settingsElement('add-point').addEventListener('click', () => {
+  const points = volumeSettingsDraft.dailyCurve;
+  let index = 1;
+  for (let i = 2; i < points.length; i++)
+    if (
+      points[i].minute - points[i - 1].minute >
+      points[index].minute - points[index - 1].minute
+    )
+      index = i;
+  if (points[index].minute - points[index - 1].minute < 2) return;
+  points.splice(index, 0, {
+    minute: Math.floor((points[index].minute + points[index - 1].minute) / 2),
+    offset: points[index - 1].offset,
+  });
+  renderVolumePoints();
+  updateVolumeSettingsStatus();
+});
+settingsElement('cancel').addEventListener('click', () => {
+  volumeSettingsOriginal = structuredClone(overview.musicSettings);
+  volumeSettingsDraft = structuredClone(volumeSettingsOriginal);
+  fillMusicSettings();
+});
+settingsElement('reset').addEventListener('click', () => {
+  volumeSettingsDraft = structuredClone(overview.musicSettingsDefaults);
+  fillMusicSettings();
+  settingsElement('status').textContent =
+    'Standardvärden i utkastet. Spara för att tillämpa dem, eller avbryt.';
+});
+for (const id of ['preview-target', 'preview-time', 'preview-people'])
+  settingsElement(id).addEventListener('input', () => {
+    volumePreviewRevision++;
+    settingsElement('preview-result').textContent =
+      'Förhandsvisningen behöver beräknas igen.';
+  });
+settingsElement('preview-button').addEventListener('click', async () => {
+  const revision = ++volumePreviewRevision;
+  settingsElement('preview-button').disabled = true;
+  settingsElement('preview-result').textContent = 'Beräknar…';
+  try {
+    const result = await musicSettingsRequest('/preview', {
+      settings: volumeSettingsDraft,
+      target: settingsElement('preview-target').value,
+      minute: settingsElement('preview-time').value
+        ? settingsMinute(settingsElement('preview-time').value)
+        : null,
+      personCount: settingsElement('preview-people').valueAsNumber,
+    });
+    if (revision !== volumePreviewRevision) return;
+    settingsElement('preview-result').textContent =
+      `Baslinje ${volumePercent(result.baseline)} + dygn ${volumeOffset(result.dailyOffset)} + personer ${volumeOffset(result.personOffset)} → automatiskt mål ${volumePercent(result.target)} (inom utkastets gränser). Rapporterad volym: ${volumePercent(result.observedVolume)}. Nuvarande volymägare: ${volumeOwner(result.activeOwner)}. ${result.enabled ? '' : 'Automatiken är avstängd i utkastet.'} Inga kommandon skickades.`;
+  } catch (error) {
+    if (revision === volumePreviewRevision)
+      settingsElement('preview-result').textContent = error.message;
+  } finally {
+    settingsElement('preview-button').disabled = false;
+  }
+});
+document
+  .getElementById('music-settings-form')
+  .addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (volumeSettingsBusy || !volumeSettingsDirty()) return;
+    volumeSettingsBusy = true;
+    settingsElement('fields').disabled = true;
+    for (const id of ['save', 'cancel', 'reset', 'preview-button'])
+      settingsElement(id).disabled = true;
+    settingsElement('save').textContent = 'Sparar…';
+    settingsElement('status').textContent = 'Sparar inställningar…';
+    try {
+      const result = await musicSettingsRequest('', {
+        settings: volumeSettingsDraft,
+        expectedSettings: volumeSettingsOriginal,
+      });
+      overview.musicSettings = result.settings;
+      volumeSettingsOriginal = structuredClone(result.settings);
+      volumeSettingsDraft = structuredClone(result.settings);
+      volumeSettingsBusy = false;
+      fillMusicSettings();
+      settingsElement('status').textContent =
+        'Sparat och tillämpat. Manuella volymhållningar behålls.';
+    } catch (error) {
+      settingsElement('status').textContent = error.message;
+      settingsElement('status').dataset.tone = 'bad';
+    } finally {
+      volumeSettingsBusy = false;
+      settingsElement('fields').disabled = false;
+      settingsElement('save').textContent = 'Spara och tillämpa';
+      settingsElement('save').disabled = !volumeSettingsDirty();
+      settingsElement('cancel').disabled = !volumeSettingsDirty();
+      settingsElement('reset').disabled = false;
+      settingsElement('preview-button').disabled = false;
+    }
+  });
+window.addEventListener('beforeunload', (event) => {
+  if (volumeSettingsDirty() || volumeSettingsBusy) {
+    event.preventDefault();
+    event.returnValue = '';
+  }
+});

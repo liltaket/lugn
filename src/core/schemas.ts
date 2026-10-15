@@ -1,3 +1,4 @@
+import { MusicVolumeSettingsSchema } from './music-volume-settings.js';
 import { z } from 'zod';
 
 export const PresenceSchema = z.enum([
@@ -353,6 +354,7 @@ export const MusicIntentSnapshotSchema = z
   .object({
     version: z.literal(1),
     volumeAutomationEnabled: z.boolean(),
+    volumeSettings: MusicVolumeSettingsSchema.optional(),
     temporaryVolumeAutomationRestore: z.boolean().nullable(),
     confirmedAbsence: z.boolean(),
     absenceExpiresAt: z.number().finite().nonnegative().nullable(),

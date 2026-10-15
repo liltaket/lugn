@@ -1,3 +1,4 @@
+import { type MusicVolumeSettings } from '../core/music-volume-settings.js';
 import { MusicController, type MusicOptions } from './music-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
@@ -74,6 +75,7 @@ export type EngineOptions = {
   /** Dashboard-managed presets retain applied intent until explicit activation. */
   preserveRestoredSceneIds?: readonly string[];
   restoredMusicIntent?: MusicIntentSnapshot;
+  musicVolumeSettings?: MusicVolumeSettings;
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
   continuityMs?: number;
@@ -500,6 +502,9 @@ export class LugnEngine {
     );
     this.musicAutomation = new MusicAutomation({
       targets: Object.keys(options.music?.targets ?? {}),
+      ...(options.musicVolumeSettings === undefined
+        ? {}
+        : { volumeSettings: options.musicVolumeSettings }),
       clock,
       holds: this.holds,
       getState: (target) => this.musicController.getState(target),
@@ -593,9 +598,10 @@ export class LugnEngine {
         throw new Error(
           'Restored music intent targets do not match configuration',
         );
-      this.musicAutomation.restoreIntent(restoredMusic);
-      this.bilresaPriorVolumeAutomation =
-        restoredMusic.temporaryVolumeAutomationRestore;
+      const restoredEnable = this.musicAutomation.restoreIntent(restoredMusic);
+      this.bilresaPriorVolumeAutomation = restoredEnable
+        ? restoredMusic.temporaryVolumeAutomationRestore
+        : null;
       for (const [target, intent] of Object.entries(restoredMusic.targets))
         if (intent.pause)
           this.musicController.restorePauseIntent(
@@ -727,6 +733,17 @@ export class LugnEngine {
 
   getMusicState(target: string): DeviceMusicState {
     return this.musicController.getState(target);
+  }
+
+  getMusicVolumeSettings(): MusicVolumeSettings {
+    return this.musicAutomation.getVolumeSettings();
+  }
+
+  applyMusicVolumeSettings(settings: MusicVolumeSettings): void {
+    this.musicAutomation.applyVolumeSettings(settings);
+    if (this.bilresaPriorVolumeAutomation !== null)
+      this.bilresaPriorVolumeAutomation = settings.enabled;
+    this.publish(['music', 'intent']);
   }
 
   getMusicVolumePolicySnapshots(): Record<string, MusicVolumePolicySnapshot> {
