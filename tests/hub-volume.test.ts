@@ -757,7 +757,9 @@ describe('Hub music authority explanations', () => {
         expect(ui.get('#music-volume-observed-label').textContent).toBe(
           'Senast',
         );
-        expect(ui.get('#music-player-status').textContent).toBe('Pausad');
+        expect(ui.get('#music-player-status').textContent).toBe(
+          'Senast rapporterat: Pausad',
+        );
       } finally {
         ui.windowListeners.get('pagehide')?.();
         ui.engine.dispose();
@@ -815,7 +817,7 @@ describe('Hub music authority explanations', () => {
       );
       expect(ui.get('#music-volume-policy-enabled').textContent).toBe('På');
       expect(ui.get('#music-volume-policy-activity').textContent).toBe(
-        'Pausad',
+        'Manuell volym',
       );
       expect(ui.get('#music-volume-value').textContent).toBe('30%');
       expect(ui.get('#music-volume-requested').textContent).toBe('55%');
@@ -1410,6 +1412,145 @@ describe('Hub volume steps preserve accepted user intent', () => {
         0.35, 0.4,
       ]);
     } finally {
+      ui.engine.dispose();
+    }
+  });
+});
+
+describe('truthful Hub music and presence labels', () => {
+  it.each([
+    ['playing', 'Spelar'],
+    ['paused', 'Pausad'],
+    ['idle', 'Inaktiv'],
+    ['off', 'Av'],
+    ['unknown', 'Okänt'],
+  ])(
+    'renders reported %s separately from requests',
+    async (playback, label) => {
+      vi.useFakeTimers();
+      const ui = dashboard();
+      try {
+        await microtasks();
+        const payload = ui.payload();
+        Object.assign(payload.state.music.devices['music.room']!.observed, {
+          playback,
+          title: 'Previous track',
+        });
+        runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+        expect(ui.get('#music-player-status').textContent).toBe(label);
+        expect(ui.get('#music-title').textContent).toBe(
+          playback === 'playing'
+            ? 'Previous track'
+            : 'Senaste titel: Previous track',
+        );
+      } finally {
+        ui.windowListeners.get('pagehide')?.();
+        ui.engine.dispose();
+      }
+    },
+  );
+
+  it.each([
+    ['manual_hold', 'Manuell volym'],
+    ['automation_disabled', 'Automatik av'],
+    ['presence_unknown', 'Väntar på närvaro'],
+    ['confirmed_empty', 'Rummet tomt'],
+    ['home_away', 'Borta'],
+    ['fade_active', 'Toning pågår'],
+    ['volume_unavailable', 'Spelaren saknar volymrapport'],
+  ])('explains inactive volume policy: %s', async (activityReason, label) => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = explainedMusic(ui);
+      Object.assign(payload.musicVolumePolicies['music.room'], {
+        activityReason,
+        policyActive: false,
+      });
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-volume-policy-activity').textContent).toBe(label);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('keeps playback Pause and quiet hours independent from active volume automation', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = explainedMusic(ui);
+      Object.assign(payload.musicVolumePolicies['music.room'], {
+        activityReason: 'active',
+        policyActive: true,
+        activeOwner: 'lugn',
+        manualHold: null,
+      });
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-volume-policy-activity').textContent).toBe('Aktiv');
+      expect(ui.get('#music-playback-policy').textContent).toContain(
+        'Manuell paus',
+      );
+      expect(ui.get('#music-playback-quiet').textContent).toContain('23–06');
+      expect(ui.get('#music-player-status').textContent).toBe('Pausad');
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('qualifies cached presence and playback on stream + polling loss and restores them on recovery', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard(0.3, true);
+    try {
+      await microtasks();
+      const payload = ui.payload();
+      payload.state.presence.state = 'occupied';
+      payload.state.presence.personCount = 2;
+      payload.state.music.devices['music.room']!.observed.playback = 'playing';
+      ui.streams[0]!.emit(payload);
+      const release = ui.holdNextState(503);
+      ui.streams[0]!.fail();
+      release();
+      await microtasks();
+      expect(ui.get('#room-presence').textContent).toBe(
+        'Senast rapporterat: I rummet · 2 personer',
+      );
+      expect(ui.get('#music-player-status').textContent).toBe(
+        'Senast rapporterat: Spelar',
+      );
+      expect(ui.get('#music-playback').disabled).toBe(true);
+      runInContext(`acceptPayload(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#room-presence').textContent).toBe(
+        'I rummet · 2 personer',
+      );
+      expect(ui.get('#music-player-status').textContent).toBe('Spelar');
+      expect(ui.get('#music-playback').disabled).toBe(false);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('marks observations as last reported when the player becomes unavailable', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = ui.payload();
+      payload.state.music.devices['music.room']!.availability = 'unavailable';
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-player-status').textContent).toBe(
+        'Senast rapporterat: Pausad',
+      );
+      expect(ui.get('#music-volume-controller').textContent).toBe(
+        'Styrning okänd',
+      );
+      expect(ui.get('#music-volume-up').disabled).toBe(true);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
       ui.engine.dispose();
     }
   });

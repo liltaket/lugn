@@ -69,6 +69,8 @@ let sessionRenewTimer = null;
 let sessionRenewInProgress = false;
 let sessionRenewDone = null;
 let overview = null;
+let overviewStale = false;
+let lastOverviewAt = 0;
 let eventSource = null;
 let pollTimer = null;
 let actionMessage = '';
@@ -931,18 +933,27 @@ async function retryClerkSignOut() {
 }
 
 async function fetchOverview() {
-  const response = await fetch(`${API_ROOT}/overview`, {
-    credentials: 'same-origin',
-    cache: 'no-store',
-    headers: { accept: 'application/json' },
-  });
-  if (response.status === 401 || response.status === 403)
-    throw new SessionExpiredError('Sessionen har gått ut.');
-  if (!response.ok) throw new Error('Rumsstatus kunde inte hämtas.');
-  const result = await response.json();
-  if (!result?.state?.presence || !result?.state?.lighting?.devices)
-    throw new Error('Servern returnerade ett ogiltigt rumsstatus.');
-  return result;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(`${API_ROOT}/overview`, {
+      signal: controller.signal,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+    });
+    if (response.status === 401 || response.status === 403)
+      throw new SessionExpiredError('Sessionen har gått ut.');
+    if (!response.ok) throw new Error('Rumsstatus kunde inte hämtas.');
+    const result = await response.json();
+    if (!result?.state?.presence || !result?.state?.lighting?.devices)
+      throw new Error('Servern returnerade ett ogiltigt rumsstatus.');
+    overviewStale = false;
+    lastOverviewAt = Date.now();
+    return result;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 function startLiveUpdates() {
@@ -957,6 +968,8 @@ function startLiveUpdates() {
       const next = JSON.parse(event.data);
       if (!next?.state?.presence || !next?.state?.lighting?.devices) return;
       overview = next;
+      overviewStale = false;
+      lastOverviewAt = Date.now();
       render();
     } catch {
       setLiveStatus('Ogiltig liveuppdatering', 'warn');
@@ -970,7 +983,10 @@ function startLiveUpdates() {
     }
   };
   pollTimer = window.setInterval(() => {
-    if (!eventSource || eventSource.readyState === EventSource.OPEN) return;
+    if (lastOverviewAt && Date.now() - lastOverviewAt > 30000) {
+      overviewStale = true;
+      if (overview) render();
+    }
     void refreshOverview();
   }, 15000);
 }
@@ -996,6 +1012,15 @@ async function refreshOverview() {
       return;
     }
     setLiveStatus('Kan inte hämta status', 'bad');
+    if (
+      !lastOverviewAt ||
+      Date.now() - lastOverviewAt > 30000 ||
+      !eventSource ||
+      eventSource.readyState !== EventSource.OPEN
+    ) {
+      overviewStale = true;
+      if (overview) render();
+    }
   }
 }
 
@@ -1129,7 +1154,7 @@ function renderRoomStatus(data) {
     confirmed_empty: 'Rummet är tomt',
     unknown: 'Närvaro okänd',
   };
-  presenceTitle.textContent = presenceLabels[presence.state] ?? 'Närvaro okänd';
+  presenceTitle.textContent = `${overviewStale ? 'Senast rapporterat: ' : ''}${presenceLabels[presence.state] ?? 'Närvaro okänd'}`;
   if (presence.state === 'occupied' && Number.isInteger(presence.personCount)) {
     const count = presence.personCount;
     presenceDetail.textContent = `${count} ${count === 1 ? 'person' : 'personer'} registrerade`;
@@ -1653,27 +1678,40 @@ function renderMusicPlayer(target, device, commands, fade) {
   article.append(identity);
 
   const observed = device.observed ?? {};
+  const newerPlaybackReport = commands.some(
+    (command) =>
+      command.target === target &&
+      command.recovery?.verifiedAt > (device.observedAt ?? -1) &&
+      typeof command.recovery?.reported?.playback === 'string' &&
+      command.recovery.reported.playback !== observed.playback,
+  );
+  const reportedOnly =
+    overviewStale || device.availability !== 'available' || newerPlaybackReport;
   const readings = node('dl', 'music-readings');
   appendReading(
     readings,
-    'Rapporterad uppspelning',
+    reportedOnly ? 'Senast rapporterad uppspelning' : 'Rapporterad uppspelning',
     musicPlaybackLabel(observed.playback),
   );
   appendReading(
     readings,
-    'Nu spelas',
+    reportedOnly
+      ? 'Senast rapporterad titel'
+      : observed.playback === 'playing'
+        ? 'Nu spelas'
+        : 'Senaste titel',
     typeof observed.title === 'string' && observed.title.trim()
       ? observed.title
       : 'Ingen titel rapporterad',
   );
   appendReading(
     readings,
-    'Rapporterad volym',
+    reportedOnly ? 'Senast rapporterad volym' : 'Rapporterad volym',
     musicVolumeLabel(observed.volume),
   );
   appendReading(
     readings,
-    'Rapporterad källa',
+    reportedOnly ? 'Senast rapporterad källa' : 'Rapporterad källa',
     typeof observed.source === 'string' && observed.source
       ? observed.source
       : 'Okänd',
@@ -1681,7 +1719,7 @@ function renderMusicPlayer(target, device, commands, fade) {
   article.append(readings);
 
   const controls = node('div', 'music-controls');
-  const unavailable = device.availability !== 'available';
+  const unavailable = reportedOnly;
   const playbackCommand = latestMusicCommand(commands, target, 'playback');
   const volumeCommand = latestMusicCommand(commands, target, 'volume');
   const sourceCommand = latestMusicCommand(commands, target, 'source');
