@@ -10,6 +10,7 @@ export class RoomSessions {
   private session: RoomSession | null = null;
   private timer: TimerHandle | undefined;
   private disposed = false;
+  private recoveringPauseBoundary = false;
 
   constructor(
     private readonly clock: Clock,
@@ -17,6 +18,7 @@ export class RoomSessions {
     private readonly onChange: (
       session: RoomSession,
       transition?: RoomSessionTransition,
+      recoveringPauseBoundary?: boolean,
     ) => void,
   ) {
     if (
@@ -34,7 +36,13 @@ export class RoomSessions {
       // An occupied event at the deadline belongs to a new session even if a
       // delayed timer callback has not run yet.
       if (this.session?.state === 'suspended') this.expire(this.session.id);
-      if (this.session === null || this.session.state === 'ended') {
+      if (
+        this.session === null ||
+        this.session.state === 'ended' ||
+        this.recoveringPauseBoundary
+      ) {
+        this.clearTimer();
+        this.recoveringPauseBoundary = false;
         this.session = {
           id: randomUUID(),
           state: 'active',
@@ -65,6 +73,30 @@ export class RoomSessions {
     }
   }
 
+  /** Recover only a Pause's safe visit boundary, never published sensor/session state. */
+  restorePauseBoundary(
+    boundary: Pick<RoomSession, 'expiresAt' | 'suspendedAt'>,
+  ): void {
+    const { expiresAt, suspendedAt } = boundary;
+    const now = this.clock.now();
+    this.recoveringPauseBoundary = true;
+    this.session = {
+      id: randomUUID(),
+      state: expiresAt === null ? 'active' : 'suspended',
+      startedAt: now,
+      lastActiveAt: now,
+      suspendedAt,
+      expiresAt,
+      endedAt: null,
+    };
+    this.emit();
+    if (expiresAt !== null) {
+      this.expire(this.session.id);
+      if (this.session.state === 'suspended')
+        this.armExpiry(this.session.id, expiresAt - now);
+    }
+  }
+
   dispose(): void {
     this.disposed = true;
     this.clearTimer();
@@ -88,18 +120,21 @@ export class RoomSessions {
 
   private armExpiry(id: string, delayMs: number): void {
     this.clearTimer();
-    this.timer = this.clock.setTimeout(() => {
-      this.timer = undefined;
-      this.expire(id);
-      // Wall-clock adjustment must not end a session ahead of its deadline.
-      if (
-        !this.disposed &&
-        this.session?.id === id &&
-        this.session.state === 'suspended' &&
-        this.session.expiresAt !== null
-      )
-        this.armExpiry(id, this.session.expiresAt - this.clock.now());
-    }, delayMs);
+    this.timer = this.clock.setTimeout(
+      () => {
+        this.timer = undefined;
+        this.expire(id);
+        // Wall-clock adjustment must not end a session ahead of its deadline.
+        if (
+          !this.disposed &&
+          this.session?.id === id &&
+          this.session.state === 'suspended' &&
+          this.session.expiresAt !== null
+        )
+          this.armExpiry(id, this.session.expiresAt - this.clock.now());
+      },
+      Math.min(2 ** 31 - 1, Math.max(0, delayMs)),
+    );
   }
 
   private clearTimer(): void {
@@ -108,6 +143,11 @@ export class RoomSessions {
   }
 
   private emit(transition?: RoomSessionTransition): void {
-    if (this.session) this.onChange(structuredClone(this.session), transition);
+    if (this.session)
+      this.onChange(
+        structuredClone(this.session),
+        transition,
+        this.recoveringPauseBoundary,
+      );
   }
 }

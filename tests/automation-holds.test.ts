@@ -110,7 +110,7 @@ describe('scoped human automation holds', () => {
     }
   });
   it.each(['user', 'physical_remote', 'home_assistant'] as const)(
-    '%s pause blocks only playback through timeouts and long absence until newer explicit play',
+    '%s pause blocks only playback through timeouts and short absence until newer explicit play',
     async (type: Actor['type']) => {
       const { clock, engine, music, presence } = setup();
       try {
@@ -127,11 +127,11 @@ describe('scoped human automation holds', () => {
             target: 'music.room',
             intent: 'paused',
             provenance: { actor: { type }, source: 'bed-hub' },
-            resetPolicy: 'explicit_playback',
+            resetPolicy: 'room_session_or_explicit_playback',
           }),
         );
         await presence('confirmed_empty');
-        clock.advanceBy(25 * 60_000);
+        clock.advanceBy(5 * 60_000);
         music.observe(
           'music.room',
           { ...playing, title: 'Late metadata' },

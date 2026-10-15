@@ -194,8 +194,17 @@ room continues to pause music regardless of home status.
 
 An explicit user Pause cancels automatic resume eligibility immediately, even
 if playback feedback is delayed or the room is already empty. Room re-entry
-does not resume or start a preset until the user explicitly plays or starts a
-preset again, or a genuinely newer physical Playing transition is observed.
+before the room-session deadline does not resume or start a preset. The Pause
+belongs to that visit: the authoritative session end releases it, and a later
+fresh entry may start normal playback, subject to quiet hours, home/away and
+availability guards. The default session window is 20 minutes, independently
+configurable through `roomSessionContinuityMs`. A return strictly before the
+deadline keeps Pause; at or after the deadline it is a new visit, even if the
+expiry callback runs late. Expiry itself never sends Play or a preset.
+Explicit Play/preset or a genuinely newer physical Playing transition releases
+Pause immediately. A newer Pause made while absent survives the older visit's
+expiry and binds to the next confirmed occupied visit. Unknown gaps, duplicate
+empty samples and home/away changes neither renew nor cancel this boundary.
 Metadata-only Home Assistant updates keep the reported state visible but do not
 cancel that Pause, including after command timeout or history pruning. Playback
 transition ordering uses `last_changed`, rather than attribute-update time
@@ -335,9 +344,30 @@ resume eligibility. Expired manual ownership is discarded without sending volume
 commands, including when its deadline passed during downtime. Repeated restarts
 cannot extend an absence.
 
-Explicit Pause does not expire with either continuity window. Its original
-timestamp protects it from stale Playing transitions and metadata updates. The
-first Playing snapshot after startup or availability recovery preserves Pause,
+Visit-scoped Pause persists a safe session boundary (`sessionBoundary`, with
+absolute `suspendedAt`/`expiresAt`; both null until confirmed empty). RoomSessions
+recovers only that boundary: startup still has no public session or known
+presence. A short return preserves Pause, and an expired saved deadline releases
+it without sending a command. Repeated empty samples/restarts or a changed
+session duration cannot extend a saved deadline. If the saved visit had no
+confirmed exit, startup/unknown time is not evidence of absence: the first fresh
+confirmed-empty sample establishes the deadline. A Pause made while absent, or
+legacy intent without a boundary, is conservatively retained until explicit
+playback or the end of the next confirmed occupied visit.
+
+A persisted `playbackReleasedAt` watermark prevents delayed feedback from the
+ended visit from recreating Pause, including after restart and command-history
+pruning. Paused feedback dated strictly before the original confirmed exit
+still belongs to that visit even when delivered during absence. At the exit
+timestamp an ambiguous physical Pause is conservatively treated as newer intent.
+After release, timestamp-less Paused snapshots cannot establish a new physical
+Pause; a newer HA `last_changed` or explicit human Pause is required. Reported
+playback remains visible. None of these release paths modifies volume holds,
+baselines or volume-policy enable state.
+
+A retained Pause's original timestamp protects it from stale Playing transitions
+and metadata updates. The first Playing snapshot after startup or availability
+recovery preserves Pause,
 even if HA advanced `last_changed`; that snapshot cannot prove human Play.
 An explicit Play/preset or an attributed newer physical Playing transition after
 a known observation baseline can release it. Freshly reported physical states

@@ -10,6 +10,7 @@ import type {
   MusicIntentSnapshot,
   MusicCommandRecord,
   ManualVolumeHold,
+  RoomSession,
 } from '../core/schemas.js';
 import type { MusicFadeLifecycleEvent } from './music-controller.js';
 import { z } from 'zod';
@@ -83,11 +84,19 @@ export type MusicAutomationOptions = {
   onError?: (target: string, operation: string) => void;
   cancelAutomaticFade?: (target: string) => void;
   onChange?: () => void;
+  onPauseReleased?: (target: string, endedAt: number) => void;
   onPolicyTick?: () => void;
 };
 
 /** Presence-driven playback and volume policy for configured room players. */
 export class MusicAutomation {
+  private session: RoomSession | null = null;
+  private readonly pauseSessions = new Map<
+    string,
+    Pick<RoomSession, 'id' | 'expiresAt' | 'suspendedAt'>
+  >();
+  private readonly restoredVisitPauses = new Set<string>();
+  private readonly playbackReleasedAt = new Map<string, number>();
   private readonly baselines = new Map<string, number>();
   private readonly explicitBaselines = new Set<string>();
   private readonly volumeControllers = new Map<string, 'you' | 'lugn'>();
@@ -240,14 +249,13 @@ export class MusicAutomation {
       isHumanActor(provenance.actor)
     ) {
       if (request.value === 'paused') {
-        this.holds.set('music.playback', target, provenance);
-        this.resumeUntil.set(target, 0);
-      } else this.holds.clear('music.playback', target);
+        this.setManualPause(target, provenance);
+      } else this.clearManualPause(target);
     } else if (
       request.property === 'preset' &&
       isHumanActor(provenance.actor)
     ) {
-      this.holds.clear('music.playback', target);
+      this.clearManualPause(target);
     }
   }
 
@@ -326,15 +334,73 @@ export class MusicAutomation {
       actor: { type: 'home_assistant' },
       source: 'external_observation',
     },
+    changedAt?: number,
   ): void {
     if (this.disposed) return;
     if (playback === 'playing') {
-      this.holds.clear('music.playback', target);
+      this.clearManualPause(target);
       return;
     }
     if (playback === 'paused') {
-      this.holds.set('music.playback', target, provenance);
-      this.resumeUntil.set(target, 0);
+      this.setManualPause(target, provenance, changedAt);
+    }
+  }
+
+  private setManualPause(
+    target: string,
+    provenance: Provenance,
+    changedAt?: number,
+  ): void {
+    this.holds.set('music.playback', target, provenance);
+    this.pauseSessions.delete(target);
+    this.restoredVisitPauses.delete(target);
+    this.resumeUntil.set(target, 0);
+    if (
+      this.session &&
+      (this.session.state === 'active' ||
+        (this.session.state === 'suspended' &&
+          changedAt !== undefined &&
+          this.session.suspendedAt !== null &&
+          changedAt < this.session.suspendedAt))
+    )
+      this.bindPause(target, this.session);
+  }
+
+  private clearManualPause(target: string): void {
+    this.holds.clear('music.playback', target);
+    this.pauseSessions.delete(target);
+    this.restoredVisitPauses.delete(target);
+  }
+
+  private bindPause(target: string, session: RoomSession): void {
+    this.pauseSessions.set(target, {
+      id: session.id,
+      expiresAt: session.expiresAt,
+      suspendedAt: session.suspendedAt,
+    });
+    this.holds.scopeMusicPauseToSession(target);
+  }
+
+  /** The room lifecycle alone owns visit expiry, including recovered boundaries. */
+  handleRoomSession(session: RoomSession): void {
+    this.session = session;
+    for (const target of this.options.targets) {
+      if (this.restoredVisitPauses.delete(target))
+        this.bindPause(target, session);
+      const binding = this.pauseSessions.get(target);
+      if (session.state === 'ended') {
+        if (binding?.id !== session.id) continue;
+        this.clearManualPause(target);
+        const endedAt = session.endedAt!;
+        this.playbackReleasedAt.set(target, endedAt);
+        this.options.onPauseReleased?.(target, endedAt);
+      } else if (
+        binding?.id === session.id ||
+        (session.state === 'active' &&
+          this.holds.blocks('music.playback', target))
+      ) {
+        this.bindPause(target, session);
+      }
     }
   }
 
@@ -502,7 +568,19 @@ export class MusicAutomation {
         .filter((hold) => hold.scope === 'music.playback')
         .map((hold) => [
           hold.target,
-          { createdAt: hold.createdAt, provenance: hold.provenance },
+          {
+            createdAt: hold.createdAt,
+            provenance: hold.provenance,
+            ...(this.pauseSessions.has(hold.target)
+              ? {
+                  sessionBoundary: {
+                    expiresAt: this.pauseSessions.get(hold.target)!.expiresAt,
+                    suspendedAt: this.pauseSessions.get(hold.target)!
+                      .suspendedAt,
+                  },
+                }
+              : {}),
+          },
         ]),
     );
     return {
@@ -534,6 +612,9 @@ export class MusicAutomation {
                 this.getManualVolumeHold(target) ?? null,
               ),
               pause: pauses.get(target) ?? null,
+              ...(this.playbackReleasedAt.has(target)
+                ? { playbackReleasedAt: this.playbackReleasedAt.get(target)! }
+                : {}),
               resumeUntil:
                 this.lastConfirmedPresence === 'confirmed_empty'
                   ? (this.resumeUntil.get(target) ?? 0)
@@ -569,7 +650,13 @@ export class MusicAutomation {
         this.manualVolumeHolds.set(target, structuredClone(hold));
         this.manualRevisions.set(target, 1);
       }
-      if (intent.pause) this.holds.restoreMusicPause(target, intent.pause);
+      if (intent.pause) {
+        this.holds.restoreMusicPause(target, intent.pause);
+        if (intent.pause.sessionBoundary !== undefined)
+          this.restoredVisitPauses.add(target);
+      }
+      if (intent.playbackReleasedAt !== undefined)
+        this.playbackReleasedAt.set(target, intent.playbackReleasedAt);
       this.resumeUntil.set(target, intent.resumeUntil);
       if (snapshot.confirmedAbsence)
         this.restoredPlaybackContinuityTargets.add(target);

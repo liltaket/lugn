@@ -18,12 +18,16 @@ async function flush() {
   for (let i = 0; i < 12; i += 1) await Promise.resolve();
 }
 
-function setup(start = '2026-10-04T21:59:00+02:00') {
+function setup(
+  start = '2026-10-04T21:59:00+02:00',
+  roomSessionContinuityMs = continuityMs,
+) {
   const clock = new FakeClock(Date.parse(start));
   const adapter = new SimulatedMusicAdapter(clock);
   const engine = new LugnEngine(clock, {
     deviceIds: [],
     scenes: [],
+    roomSessionContinuityMs,
     music: { targets: { 'music.room': [] }, adapter },
   });
   adapter.observe('music.room', playing);
@@ -560,8 +564,8 @@ it.each(['pending', 'unconfirmed', 'confirmed', 'correlated'] as const)(
   },
 );
 
-it('keeps an explicit Pause after volume continuity expires and explicit automation hand-back', async () => {
-  const s = setup('2026-10-04T12:00:00+02:00');
+it('keeps Pause through independent volume expiry and hand-back while the visit remains open', async () => {
+  const s = setup('2026-10-04T12:00:00+02:00', 25 * 60_000);
   try {
     await s.presence('occupied');
     await s.manual();
