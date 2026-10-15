@@ -1,3 +1,4 @@
+import { MusicVolumeSettingsStore } from './music-volume-settings-store.js';
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
@@ -11,6 +12,7 @@ import { HomeAssistantSwitchAdapter } from '../adapters/home-assistant-switch.js
 import {
   HomeAssistantWebSocketTransport,
   type HomeAssistantSocketFactory,
+  type HomeAssistantConnection,
 } from '../adapters/home-assistant-websocket.js';
 import { PresenceEventIngress } from '../adapters/presence-event-ingress.js';
 import {
@@ -176,7 +178,15 @@ export async function startRuntime(
       restoredLightingIntent.detachedOffScene = true;
   }
   lightingIntentStore.setKnownSceneIds(scenes.map((scene) => scene.id));
+  const volumeSettingsStore = new MusicVolumeSettingsStore(
+    `${lightingIntentPath}.volume.json`,
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  const savedVolumeSettings = await volumeSettingsStore.load();
   const restoredMusicIntent = lightingIntentStore.restoredMusicIntent;
+  // The engine can request policy snapshots during construction, before the
+  // subscription and reconciliation lifecycle below has been established.
+  let isMusicObservationTrusted: (target: string) => boolean = () => false;
   const engine = new LugnEngine(systemClock, {
     adapter: homeAssistantLighting,
     deviceIds,
@@ -185,6 +195,12 @@ export async function startRuntime(
     ...(defaultSceneId === undefined ? {} : { defaultSceneId }),
     ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
     ...(restoredMusicIntent === undefined ? {} : { restoredMusicIntent }),
+    ...(savedVolumeSettings === undefined
+      ? {}
+      : { musicVolumeSettings: savedVolumeSettings }),
+    ...(volumeSettingsStore.generation === undefined
+      ? {}
+      : { musicVolumeSettingsGeneration: volumeSettingsStore.generation }),
     prelight: config.prelight,
     ...(config.lightingControlModes === undefined
       ? {}
@@ -199,6 +215,7 @@ export async function startRuntime(
               ),
             ),
             adapter: homeAssistantMusic,
+            observationTrusted: (target) => isMusicObservationTrusted(target),
           },
         }),
     ...(homeAssistantSwitch === undefined
@@ -240,7 +257,28 @@ export async function startRuntime(
       : { buttonAdapter: homeAssistantButton }),
   });
   let syncingHomeAssistantStates = false;
-  let homeAssistantStateSyncGeneration = 0;
+  let homeAssistantConnection: HomeAssistantConnection | undefined;
+  const trustedMusicTargets = new Set<string>();
+  const reconciledMusicTargets = new Set<string>();
+  isMusicObservationTrusted = (target) =>
+    homeAssistantConnection?.isCurrent() === true &&
+    trustedMusicTargets.has(target);
+  // Only actual adapter emissions count; rejected old/invalid reports cannot
+  // restore trust. Seeding emissions remain provisional until the query succeeds.
+  homeAssistantMusic?.subscribe(({ target }) => {
+    if (!homeAssistantConnection?.isCurrent()) return;
+    (syncingHomeAssistantStates
+      ? reconciledMusicTargets
+      : trustedMusicTargets
+    ).add(target);
+  });
+  const musicObservationTrust = (): Record<string, boolean> =>
+    Object.fromEntries(
+      Object.keys(config.homeAssistant.music).map((target) => [
+        target,
+        isMusicObservationTrusted(target),
+      ]),
+    );
   const bufferedHomeAssistantEvents: unknown[] = [];
   const forwardHomeAssistantEvent = (event: unknown): void => {
     homeAssistantLighting.acceptStateChangedEvent(event);
@@ -250,11 +288,15 @@ export async function startRuntime(
     homeAssistantHomePresence.acceptStateChangedEvent(event);
     homeAssistantBilresa.acceptStateChangedFrame(event);
   };
-  const refreshHomeAssistantStates = async (): Promise<void> => {
-    const generation = ++homeAssistantStateSyncGeneration;
+  const refreshHomeAssistantStates = async (
+    connection: HomeAssistantConnection,
+  ): Promise<void> => {
+    homeAssistantConnection = connection;
+    trustedMusicTargets.clear();
+    reconciledMusicTargets.clear();
     syncingHomeAssistantStates = true;
     bufferedHomeAssistantEvents.length = 0;
-    await seedHomeAssistantObservations(
+    const reconciled = await seedHomeAssistantObservations(
       config.homeAssistant.baseUrl,
       config.homeAssistant.token,
       homeAssistantLighting,
@@ -263,9 +305,14 @@ export async function startRuntime(
       homeAssistantEnvironment,
       homeAssistantHomePresence,
       homeAssistantFetch,
-      () => generation === homeAssistantStateSyncGeneration,
+      () => connection.isCurrent(),
     );
-    if (generation !== homeAssistantStateSyncGeneration) return;
+    if (homeAssistantConnection !== connection || !connection.isCurrent())
+      return;
+    if (reconciled)
+      for (const target of reconciledMusicTargets)
+        trustedMusicTargets.add(target);
+    reconciledMusicTargets.clear();
     syncingHomeAssistantStates = false;
     for (const event of bufferedHomeAssistantEvents.splice(0))
       forwardHomeAssistantEvent(event);
@@ -337,7 +384,9 @@ export async function startRuntime(
     ...config.http,
     engine,
     scenePresetStore,
+    volumeSettingsStore,
     capabilities,
+    musicObservationTrustProvider: musicObservationTrust,
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
     integrations: () => ({
       home_assistant: homeAssistantSocket.status,
@@ -364,6 +413,9 @@ export async function startRuntime(
         scenes: Array.from(engine.scenes.values()),
         scenesProvider: () => Array.from(engine.scenes.values()),
         stateProvider: () => engine.state,
+        musicObservationConnectedProvider: () =>
+          homeAssistantSocket.status === 'connected',
+        musicObservationTrustProvider: musicObservationTrust,
         stateStream: engine.stream,
         musicVolumePoliciesProvider: () =>
           engine.getMusicVolumePolicySnapshots(),
@@ -483,7 +535,7 @@ async function seedHomeAssistantObservations(
   homePresenceAdapter?: HomeAssistantHomePresenceAdapter,
   fetcher: typeof fetch = fetch,
   shouldApply: () => boolean = () => true,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const response = await fetcher(`${baseUrl}/api/states`, {
       headers: {
@@ -496,15 +548,15 @@ async function seedHomeAssistantObservations(
       console.warn(
         `[lugn] initial Home Assistant state query failed (HTTP ${response.status}); waiting for WebSocket observations`,
       );
-      return;
+      return false;
     }
     const states: unknown = await response.json();
-    if (!shouldApply()) return;
+    if (!shouldApply()) return false;
     if (!Array.isArray(states)) {
       console.warn(
         '[lugn] initial Home Assistant state query returned an unexpected response',
       );
-      return;
+      return false;
     }
     for (const state of states) {
       if (typeof state !== 'object' || state === null) continue;
@@ -519,10 +571,12 @@ async function seedHomeAssistantObservations(
       environmentAdapter?.acceptState(candidate);
       homePresenceAdapter?.acceptState(candidate);
     }
+    return true;
   } catch {
     console.warn(
       '[lugn] initial Home Assistant state query failed; waiting for WebSocket observations',
     );
+    return false;
   }
 }
 

@@ -28,8 +28,8 @@ lighting and music actions; home status is separate from room occupancy. See
 the full config shape.
 
 The `/ui/` operational control panel can optionally use Clerk for human
-sign-in. This does not provide a visual configuration editor; settings still
-come from the validated JSON file. See [Control panel authentication](OPERATIONS.md#control-panel-authentication).
+sign-in. Lighting presets and volume automation preferences can be edited there;
+other configuration still comes from the validated JSON file. See [Control panel authentication](OPERATIONS.md#control-panel-authentication).
 
 Credentials are named in JSON but supplied through the process environment or
 a protected secret file. Never put credential values in checked-in config.
@@ -37,13 +37,14 @@ a protected secret file. Never put credential values in checked-in config.
 ## Future configuration goals
 
 The `/ui/` operational panel supports optional Clerk sign-in, but it does not
-edit configuration. A future configuration UI should edit the same validated
+edit general configuration. Its preset and volume editors share typed runtime
+models. A broader configuration UI should edit the same validated
 schema, while advanced users can inspect or export JSON. Potential areas for
 visual editing include:
 
 - device and adapter mappings;
 - scenes and quiet-hour policy;
-- music preset IDs, sources, and volume schedule;
+- music preset IDs and sources;
 - routines and advanced remote bindings (BILRESA button events are configured
   under `homeAssistant.bilresa` in JSON);
 - Hub roles and DashCast behavior;
@@ -132,3 +133,15 @@ measurement.
 
 Room and music schedules use Europe/Stockholm local time. Core time-dependent
 behavior uses an injectable clock so it can be exercised deterministically.
+
+## Saved volume automation preferences
+
+`/ui/` supports a focused typed volume settings editor. Settings are stored in
+`<statePath>.volume.json` with atomic serialized writes and loaded before HA
+state seeding. Include this file in state backups. With no saved preferences,
+the existing daily curve, −10pp multi-person offset, 5–80% limits and existing
+persisted enable intent remain in effect. Invalid/unreadable saved preferences
+fall back to existing defaults with a warning and block writes to avoid data
+loss. A separate optional settings marker in music intent lets later BILRESA
+toggles survive restart when preferences match, while newly saved preferences
+win over older intent after a crash between the two writes.

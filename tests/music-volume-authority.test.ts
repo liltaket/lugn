@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { SimulatedMusicAdapter } from '../src/adapters/simulated-music.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
+import type { MusicOptions } from '../src/application/music-controller.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { FakeClock } from '../src/core/clock.js';
 import type { Presence, Provenance } from '../src/core/schemas.js';
@@ -21,13 +22,17 @@ const values = {
 async function flush() {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
-function setup() {
+function setup(observationTrusted?: MusicOptions['observationTrusted']) {
   const clock = new FakeClock(Date.parse('2026-10-04T12:00:00+02:00'));
   const adapter = new SimulatedMusicAdapter(clock);
   const engine = new LugnEngine(clock, {
     deviceIds: [],
     scenes: [],
-    music: { targets: { 'music.room': [], 'music.other': [] }, adapter },
+    music: {
+      targets: { 'music.room': [], 'music.other': [] },
+      adapter,
+      ...(observationTrusted ? { observationTrusted } : {}),
+    },
   });
   const registry = new CapabilityRegistry(engine);
   for (const target of ['music.room', 'music.other'])
@@ -513,3 +518,44 @@ it('a repeated Manual tap refreshes trusted selector volume without creating adj
     s.engine.dispose();
   }
 });
+
+it.each(['auto', 'manual'] as const)(
+  'rechecks live upstream trust for %s even when cached available volume is old',
+  async (mode) => {
+    let trusted = true;
+    const trust = vi.fn((target: string) => target !== 'music.room' || trusted);
+    const s = setup(trust);
+    try {
+      await s.presence();
+      await s.select('manual');
+      const before = s.policy();
+      const durableIntent = s.engine.getMusicIntentSnapshot();
+      expect(before.authorityControlBlocked).toBeNull();
+      s.clock.advanceBy(60 * 60_000);
+      trusted = false; // No new adapter observation or engine publication.
+      await expect(s.select(mode)).rejects.toMatchObject({
+        code: 'volume_unavailable',
+      });
+      expect(s.engine.state.music.devices['music.room']).toMatchObject({
+        availability: 'available',
+        observed: { volume: 0.3 },
+      });
+      expect(s.policy()).toMatchObject({
+        authorityControlBlocked: 'volume_unavailable',
+        selectorIntent: before.selectorIntent,
+        lastAuthorityIntent: before.lastAuthorityIntent,
+        baseline: before.baseline,
+        manualHold: before.manualHold,
+      });
+      expect(s.engine.getMusicIntentSnapshot()).toEqual(durableIntent);
+      expect(s.adapter.dispatched).toHaveLength(0);
+      expect(s.policy('music.other').authorityControlBlocked).toBeNull();
+      expect(trust).toHaveBeenCalledWith('music.room');
+      trusted = true;
+      await s.select(mode);
+      expect(s.policy().authorityControlBlocked).toBeNull();
+    } finally {
+      s.engine.dispose();
+    }
+  },
+);

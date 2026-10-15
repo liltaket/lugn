@@ -1,3 +1,4 @@
+import { MusicVolumeSettingsSchema } from './music-volume-settings.js';
 import { z } from 'zod';
 
 export const PresenceSchema = z.enum([
@@ -46,6 +47,7 @@ export const AutomationHoldSchema = z.object({
   createdAt: z.number().nonnegative(),
   resetPolicy: z.enum([
     'explicit_playback',
+    'room_session_or_explicit_playback',
     'explicit_lighting',
     'lighting_continuity',
   ]),
@@ -342,6 +344,20 @@ export type ManualVolumeHold = z.infer<typeof ManualVolumeHoldSchema>;
 
 export const MusicPauseIntentSchema = z
   .object({
+    // Missing means unbound/legacy Pause; null timestamps mean no confirmed exit.
+    sessionBoundary: z
+      .object({
+        suspendedAt: z.number().finite().nonnegative().nullable(),
+        expiresAt: z.number().finite().nonnegative().nullable(),
+      })
+      .strict()
+      .refine((boundary) =>
+        boundary.suspendedAt === null
+          ? boundary.expiresAt === null
+          : boundary.expiresAt !== null &&
+            boundary.expiresAt >= boundary.suspendedAt,
+      )
+      .optional(),
     createdAt: z.number().finite().nonnegative(),
     provenance: PersistedHumanMusicProvenanceSchema,
   })
@@ -353,6 +369,8 @@ export const MusicIntentSnapshotSchema = z
   .object({
     version: z.literal(1),
     volumeAutomationEnabled: z.boolean(),
+    volumeSettings: MusicVolumeSettingsSchema.optional(),
+    volumeSettingsGeneration: z.uuid().optional(),
     temporaryVolumeAutomationRestore: z.boolean().nullable(),
     confirmedAbsence: z.boolean(),
     absenceExpiresAt: z.number().finite().nonnegative().nullable(),
@@ -365,6 +383,7 @@ export const MusicIntentSnapshotSchema = z
           lastIntentActor: z.enum(['manual', 'lugn', 'unknown']),
           manualVolume: ManualVolumeHoldSchema.nullable(),
           pause: MusicPauseIntentSchema.nullable(),
+          playbackReleasedAt: z.number().finite().nonnegative().optional(),
           resumeUntil: z.number().finite().nonnegative(),
         })
         .strict()
@@ -385,7 +404,17 @@ export const MusicIntentSnapshotSchema = z
           snapshot.confirmedAbsence ||
           (target.manualVolume?.expiresAt == null && target.resumeUntil === 0),
       ),
-  );
+  )
+  .refine((snapshot) => {
+    const boundaries = Object.values(snapshot.targets).flatMap((target) =>
+      target.pause?.sessionBoundary ? [target.pause.sessionBoundary] : [],
+    );
+    return boundaries.every(
+      (boundary) =>
+        boundary.expiresAt === boundaries[0]?.expiresAt &&
+        boundary.suspendedAt === boundaries[0]?.suspendedAt,
+    );
+  });
 export type MusicIntentSnapshot = z.infer<typeof MusicIntentSnapshotSchema>;
 
 export const PresenceEventSchema = z.object({

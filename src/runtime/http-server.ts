@@ -1,4 +1,15 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  MusicVolumeSettingsSchema,
+  defaultMusicVolumeSettings,
+  calculateMusicVolume,
+  type MusicVolumeSettings,
+} from '../core/music-volume-settings.js';
+import {
+  type MusicVolumeSettingsStore,
+  MusicVolumeSettingsError,
+} from './music-volume-settings-store.js';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+
 import { readFileSync } from 'node:fs';
 import {
   createServer,
@@ -58,7 +69,10 @@ export type LugnHttpServerOptions = {
   engine: LugnEngine;
   capabilities: CapabilityRegistry;
   integrations: () => Record<string, string>;
+  /** Trust in each player's observations, independent of subscription health. */
+  musicObservationTrustProvider?: () => Record<string, boolean>;
   scenePresetStore?: ScenePresetStore;
+  volumeSettingsStore?: MusicVolumeSettingsStore;
   webAssetsDirectory?: string;
   trustedOrigins?: string[];
   clerk?: {
@@ -72,6 +86,8 @@ export type LugnHttpServerOptions = {
 /** Local HTTP surface for health, state inspection, and typed capabilities. */
 export class LugnHttpServer {
   private server: Server | undefined;
+  private readonly instanceId = randomUUID();
+  private nextDeliveryRevision = 0;
   private readonly uiSessions = new Map<
     string,
     { csrfToken: string; expiresAt: number; clerkSessionId?: string }
@@ -426,6 +442,98 @@ export class LugnHttpServer {
       this.startUiEventStream(response, sessionId, session.expiresAt);
       return true;
     }
+    if (
+      request.method === 'POST' &&
+      (pathname === '/ui/api/music-settings' ||
+        pathname === '/ui/api/music-settings/preview')
+    ) {
+      if (!this.isSameOrigin(request)) {
+        sendJson(response, 403, { error: 'same_origin_required' });
+        return true;
+      }
+      const csrf = request.headers['x-lugn-csrf'];
+      if (
+        typeof csrf !== 'string' ||
+        !this.constantTimeEqual(csrf, session.csrfToken)
+      ) {
+        sendJson(response, 403, { error: 'csrf_failed' });
+        return true;
+      }
+      if (!isJsonRequest(request)) {
+        sendJson(response, 415, {
+          error: 'content_type_must_be_application_json',
+        });
+        return true;
+      }
+      const preview = pathname.endsWith('/preview');
+      const schema = preview
+        ? z
+            .object({
+              settings: MusicVolumeSettingsSchema,
+              target: z.string(),
+              minute: z.number().int().min(0).max(1440),
+              personCount: z.number().int().min(0).max(100),
+            })
+            .strict()
+        : z
+            .object({
+              settings: MusicVolumeSettingsSchema,
+              expectedSettings: MusicVolumeSettingsSchema,
+            })
+            .strict();
+      const parsed = schema.safeParse(await readJsonBody(request));
+      if (!parsed.success) {
+        sendJson(response, 400, {
+          error: 'invalid_request',
+          issues: safeIssues(parsed.error),
+        });
+        return true;
+      }
+      if (this.getUiSession(request)?.csrfToken !== session.csrfToken) {
+        sendJson(response, 401, { error: 'unauthorized' });
+        return true;
+      }
+      if ('target' in parsed.data) {
+        const { target, settings, minute, personCount } = parsed.data;
+        if (!Object.hasOwn(this.options.engine.state.music.devices, target)) {
+          sendJson(response, 400, { error: 'target_not_configured' });
+          return true;
+        }
+        const policy =
+          this.options.engine.getMusicPolicySnapshot(target).volume;
+        sendJson(response, 200, {
+          ...calculateMusicVolume(
+            settings,
+            policy.baseline,
+            minute,
+            personCount,
+          ),
+          activeOwner: policy.activeOwner,
+          baselineSource: policy.baselineSource,
+          observedVolume:
+            this.options.engine.getMusicState(target).observed.volume,
+          enabled: settings.enabled,
+        });
+      } else {
+        if (!this.options.volumeSettingsStore) {
+          sendJson(response, 503, { error: 'volume_settings_unavailable' });
+          return true;
+        }
+        try {
+          const settings = await this.options.volumeSettingsStore.save(
+            this.options.engine,
+            parsed.data.settings,
+            parsed.data.expectedSettings,
+          );
+          sendJson(response, 200, { settings });
+        } catch (error) {
+          if (error instanceof MusicVolumeSettingsError)
+            sendJson(response, error.status, { error: error.code });
+          else throw error;
+        }
+      }
+      return true;
+    }
     const sceneMatch = /^\/ui\/api\/scenes(?:\/([^/]+))?$/.exec(pathname);
     if (
       sceneMatch &&
@@ -635,6 +743,9 @@ export class LugnHttpServer {
 
   private uiOverview(): {
     health: { status: 'ok' | 'degraded'; integrations: Record<string, string> };
+    instanceId: string;
+    deliveryRevision: number;
+    musicObservationTrust: Record<string, boolean>;
     state: LugnEngine['state'];
     scenes: Array<
       LightingScene & {
@@ -644,6 +755,12 @@ export class LugnHttpServer {
       }
     >;
     presetsEnabled: boolean;
+    musicSettings: MusicVolumeSettings;
+    musicSettingsDefaults: MusicVolumeSettings;
+    musicSettingsEnabled: boolean;
+    musicVolumePolicies: ReturnType<
+      LugnEngine['getMusicVolumePolicySnapshots']
+    >;
   } {
     const integrations = this.options.integrations();
     const connected = Object.values(integrations).every(
@@ -651,8 +768,16 @@ export class LugnHttpServer {
     );
     return {
       health: { status: connected ? 'ok' : 'degraded', integrations },
+      instanceId: this.instanceId,
+      deliveryRevision: ++this.nextDeliveryRevision,
+      musicObservationTrust:
+        this.options.musicObservationTrustProvider?.() ?? {},
       state: structuredClone(this.options.engine.state),
       presetsEnabled: this.options.scenePresetStore !== undefined,
+      musicSettings: this.options.engine.getMusicVolumeSettings(),
+      musicSettingsDefaults: structuredClone(defaultMusicVolumeSettings),
+      musicSettingsEnabled: this.options.volumeSettingsStore !== undefined,
+      musicVolumePolicies: this.options.engine.getMusicVolumePolicySnapshots(),
       scenes: [...this.options.engine.scenes.values()].map((scene) =>
         this.uiScene(scene),
       ),

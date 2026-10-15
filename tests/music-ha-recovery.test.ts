@@ -440,10 +440,8 @@ it.each([false, true])(
       });
       // Service acceptance is not a new player observation.
       expect(s.engine.getMusicState('music.room').observed.volume).toBe(0.4);
-      if (pause) {
-        expect(s.pauseHold()!.createdAt).toBe(pauseAt);
-        expect(s.positivePlayback()).toEqual([]);
-      } else expect(s.positivePlayback()).toHaveLength(1);
+      expect(s.pauseHold()).toBeUndefined();
+      expect(s.positivePlayback()).toHaveLength(1);
     } finally {
       s.stop();
     }

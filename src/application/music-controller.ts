@@ -38,6 +38,8 @@ export type MusicOptions = {
   targets?: Record<string, string[]>;
   adapter?: MusicAdapter;
   feedbackTimeoutMs?: number;
+  /** Live upstream observation trust; omitted for adapters such as simulations. */
+  observationTrusted?: (target: string) => boolean;
 };
 
 export class MusicFadeUnavailableError extends Error {
@@ -82,6 +84,7 @@ export class MusicController {
   readonly state: MusicState = { devices: {}, commands: [], fades: {} };
   private readonly adapter: MusicAdapter;
   private readonly timeoutMs: number;
+  private readonly observationTrusted: (target: string) => boolean;
   private readonly recovery: MusicCommandRecovery;
   private disposed = false;
   private readonly intentGenerations = new Map<
@@ -104,6 +107,7 @@ export class MusicController {
   >();
   // Intent/transition ordering must outlive command timeout and bounded ledger
   // history. A metadata-only HA snapshot cannot cancel a user's playback intent.
+  private readonly releasedPauseAt = new Map<string, number>();
   private readonly latestPlaybackIntentAt = new Map<string, number>();
   private readonly latestPlaybackChangedAt = new Map<string, number>();
   private readonly latestHumanVolumeIntent = new Map<
@@ -132,6 +136,7 @@ export class MusicController {
         target: string,
         playback: MusicObservation['values']['playback'],
         provenance: Provenance,
+        changedAt?: number,
       ) => void)
     | undefined;
   private onFadeLifecycle:
@@ -147,6 +152,7 @@ export class MusicController {
     private readonly publish: () => void,
   ) {
     this.timeoutMs = options.feedbackTimeoutMs ?? 10_000;
+    this.observationTrusted = options.observationTrusted ?? (() => true);
     if (
       !Number.isFinite(this.timeoutMs) ||
       this.timeoutMs < 1 ||
@@ -260,6 +266,7 @@ export class MusicController {
   ): 'volume_unavailable' | 'volume_pending' | 'fade_active' | null {
     const device = this.requireTarget(target);
     if (
+      !this.observationTrusted(target) ||
       device.availability !== 'available' ||
       device.observed.volume === null ||
       device.observedAt === null ||
@@ -328,13 +335,38 @@ export class MusicController {
   }
   restorePauseIntent(target: string, createdAt: number): void {
     this.requireTarget(target);
-    this.latestPlaybackIntentAt.set(target, createdAt);
+    this.latestPlaybackIntentAt.set(
+      target,
+      Math.max(this.latestPlaybackIntentAt.get(target) ?? 0, createdAt),
+    );
+  }
+  /** Session expiry releases human Pause delivery without issuing a player command. */
+  releasePauseIntent(target: string, endedAt: number): void {
+    this.requireTarget(target);
+    this.releasedPauseAt.set(target, endedAt);
+    this.latestPlaybackIntentAt.set(
+      target,
+      Math.max(this.latestPlaybackIntentAt.get(target) ?? 0, endedAt),
+    );
+    // Empty/away Pause commands have their own policy authorization and can
+    // remain valid after this visit's manual hold ends. Only cancel the human
+    // Pause being released; leave playback ordering and newer intent intact.
+    for (const command of this.state.commands)
+      if (
+        command.target === target &&
+        command.requested.property === 'playback' &&
+        command.requested.value === 'paused' &&
+        isHumanActor(command.provenance.actor) &&
+        command.issuedAt <= endedAt
+      )
+        this.recovery.stop(command.id, 'superseded', false);
   }
   setExternalPlaybackChangeHandler(
     handler: (
       target: string,
       playback: MusicObservation['values']['playback'],
       provenance: Provenance,
+      changedAt?: number,
     ) => void,
   ): void {
     this.onExternalPlaybackChange = handler;
@@ -608,6 +640,7 @@ export class MusicController {
     this.fades.clear();
     this.issuedSequence.clear();
     this.latestPlaybackIntentAt.clear();
+    this.releasedPauseAt.clear();
     this.latestPlaybackChangedAt.clear();
     this.latestHumanVolumeIntent.clear();
     this.authorityIntentSequences.clear();
@@ -1150,6 +1183,7 @@ export class MusicController {
         observation.target,
         observedPlayback,
         device.observedProvenance,
+        observation.playbackChangedAt,
       );
     }
     const fade = this.fades.get(observation.target);
@@ -1163,6 +1197,15 @@ export class MusicController {
     previousPlayback: MusicObservation['values']['playback'],
   ): boolean {
     const changedAt = observation.playbackChangedAt;
+    const releasedAt = this.releasedPauseAt.get(observation.target);
+    // A snapshot of the ended visit cannot resurrect its Pause. Without a
+    // transition timestamp, delayed Paused feedback is not new human intent.
+    if (
+      releasedAt !== undefined &&
+      ((changedAt !== undefined && changedAt <= releasedAt) ||
+        (changedAt === undefined && observation.values.playback === 'paused'))
+    )
+      return false;
     if (changedAt === undefined)
       return observation.values.playback !== previousPlayback;
     if (

@@ -300,6 +300,150 @@
           <div class="music-list" id="music-list"></div>
         </section>
 
+        <section
+          class="music-settings-section"
+          id="music-settings-section"
+          aria-labelledby="music-settings-title"
+          hidden
+        >
+          <div class="section-heading">
+            <div>
+              <h2 id="music-settings-title">Musikautomatik</h2>
+              <p>
+                Justera automatisk volym. Uppspelning styrs separat. Ändringar
+                gäller först när du sparar.
+              </p>
+            </div>
+          </div>
+          <p id="music-settings-current" class="field-help"></p>
+          <form id="music-settings-form" novalidate>
+            <fieldset id="settings-fields">
+              <label class="settings-toggle"
+                ><input id="settings-enabled" type="checkbox" /> Automatisk
+                volymkontroll</label
+              >
+              <h3>Dygnskurva</h3>
+              <p class="field-help">
+                Volymtillägg i procentenheter, lokal tid i Stockholm. Mellan
+                punkterna ändras tillägget jämnt. Midnattspunkterna följs åt.
+              </p>
+              <svg
+                id="settings-curve"
+                viewBox="0 0 720 190"
+                role="img"
+                aria-label="Dygnskurva för volymtillägg"
+              ></svg>
+              <div id="settings-points"></div>
+              <button
+                type="button"
+                class="button button-quiet"
+                id="settings-add-point"
+              >
+                Lägg till tidpunkt
+              </button>
+              <details class="settings-advanced">
+                <summary>Avancerat · personer och volymgränser</summary>
+                <div class="settings-grid">
+                  <label
+                    >Extra tillägg vid fler än en person (pp)<input
+                      id="settings-person"
+                      type="number"
+                      min="-100"
+                      max="0"
+                      step="0.1"
+                      required
+                  /></label>
+                  <label
+                    >Lägsta automatiska volym (%)<input
+                      id="settings-minimum"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      required
+                  /></label>
+                  <label
+                    >Högsta automatiska volym (%)<input
+                      id="settings-maximum"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      required
+                  /></label>
+                </div>
+                <p class="field-help">
+                  Gränserna gäller bara automatiken. Manuellt vald volym
+                  behålls.
+                </p>
+              </details>
+            </fieldset>
+            <div class="settings-preview">
+              <h3>Förhandsvisa utkast</h3>
+              <p class="field-help">
+                Beräknar ett automatiskt mål utan att skicka kommandon. En
+                manuell volymhållning gäller fortfarande.
+              </p>
+              <div class="settings-grid">
+                <label
+                  >Spelare<select id="settings-preview-target"></select
+                ></label>
+                <label
+                  >Tid i Stockholm<input
+                    id="settings-preview-time"
+                    type="time"
+                    value="12:00"
+                    required
+                /></label>
+                <label
+                  >Antal personer<input
+                    id="settings-preview-people"
+                    type="number"
+                    min="0"
+                    max="100"
+                    value="1"
+                    step="1"
+                    required
+                /></label>
+              </div>
+              <button
+                class="button button-quiet"
+                id="settings-preview-button"
+                type="button"
+              >
+                Förhandsvisa
+              </button>
+              <p id="settings-preview-result" role="status" aria-live="polite">
+                Välj tid och antal personer för att prova utkastet.
+              </p>
+            </div>
+            <div class="settings-actions">
+              <button
+                class="button button-primary"
+                id="settings-save"
+                type="submit"
+              >
+                Spara och tillämpa
+              </button>
+              <button
+                class="button button-quiet"
+                id="settings-cancel"
+                type="button"
+              >
+                Avbryt ändringar
+              </button>
+              <button
+                class="button button-quiet"
+                id="settings-reset"
+                type="button"
+              >
+                Återställ standardvärden
+              </button>
+            </div>
+            <p id="settings-status" role="status" aria-live="polite"></p>
+          </form>
+        </section>
+
         <section class="lights-section" aria-labelledby="lights-title">
           <div class="section-heading light-section-heading">
             <div>

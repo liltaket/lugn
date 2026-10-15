@@ -1,3 +1,4 @@
+import { type MusicVolumeSettings } from '../core/music-volume-settings.js';
 import { MusicController, type MusicOptions } from './music-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
@@ -77,6 +78,8 @@ export type EngineOptions = {
   /** Dashboard-managed presets retain applied intent until explicit activation. */
   preserveRestoredSceneIds?: readonly string[];
   restoredMusicIntent?: MusicIntentSnapshot;
+  musicVolumeSettings?: MusicVolumeSettings;
+  musicVolumeSettingsGeneration?: string;
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
   continuityMs?: number;
@@ -167,6 +170,7 @@ export class LugnEngine {
   private readonly roomSessions: RoomSessions;
   private lastNonOffSceneId: string | null = null;
   private bilresaPriorVolumeAutomation: boolean | null = null;
+  private musicVolumeEnableIntentRevision = 0;
   private readonly lastMusicDecisionContexts = new Map<string, string>();
   private readonly convergenceTimeoutMs: number;
   private readonly retryDelayMs: number;
@@ -503,6 +507,12 @@ export class LugnEngine {
     );
     this.musicAutomation = new MusicAutomation({
       targets: Object.keys(options.music?.targets ?? {}),
+      ...(options.musicVolumeSettings === undefined
+        ? {}
+        : { volumeSettings: options.musicVolumeSettings }),
+      ...(options.musicVolumeSettingsGeneration === undefined
+        ? {}
+        : { volumeSettingsGeneration: options.musicVolumeSettingsGeneration }),
       clock,
       holds: this.holds,
       authorityControlBlocked: (target) =>
@@ -512,6 +522,14 @@ export class LugnEngine {
         this.musicController.request(target, request, provenance),
       cancelAutomaticFade: (target) => this.musicController.cancelFade(target),
       onChange: () => this.publish(['music', 'intent']),
+      onPauseReleased: (target, endedAt) => {
+        this.musicController.releasePauseIntent(target, endedAt);
+        this.addDiagnostic(
+          'music.pause_released',
+          `Manual Pause released for ${target}: room session ended`,
+          { target, endedAt },
+        );
+      },
       onPolicyTick: () => {
         if (this.refreshMusicDecisions()) this.publish(['music']);
       },
@@ -539,11 +557,12 @@ export class LugnEngine {
         ),
     );
     this.musicController.setExternalPlaybackChangeHandler(
-      (target, playback, provenance) =>
+      (target, playback, provenance, changedAt) =>
         this.musicAutomation.noteExternalPlaybackChange(
           target,
           playback,
           provenance,
+          changedAt,
         ),
     );
     this.musicController.setFadeLifecycleHandler((event) =>
@@ -598,20 +617,32 @@ export class LugnEngine {
         throw new Error(
           'Restored music intent targets do not match configuration',
         );
-      this.musicAutomation.restoreIntent(restoredMusic);
-      this.bilresaPriorVolumeAutomation =
-        restoredMusic.temporaryVolumeAutomationRestore;
-      for (const [target, intent] of Object.entries(restoredMusic.targets))
+      const restoredEnable = this.musicAutomation.restoreIntent(restoredMusic);
+      this.bilresaPriorVolumeAutomation = restoredEnable
+        ? restoredMusic.temporaryVolumeAutomationRestore
+        : null;
+      for (const [target, intent] of Object.entries(restoredMusic.targets)) {
+        if (intent.playbackReleasedAt !== undefined)
+          this.musicController.releasePauseIntent(
+            target,
+            intent.playbackReleasedAt,
+          );
         if (intent.pause)
           this.musicController.restorePauseIntent(
             target,
             intent.pause.createdAt,
           );
+      }
     }
     this.roomSessions = new RoomSessions(
       clock,
       options.roomSessionContinuityMs ?? 20 * 60_000,
-      (session, transition) => {
+      (session, transition, recoveringPauseBoundary) => {
+        this.musicAutomation.handleRoomSession(session);
+        if (recoveringPauseBoundary) {
+          this.publish(['music', 'intent', 'diagnostics']);
+          return;
+        }
         this.state.session = session;
         if (transition)
           this.addDiagnostic(
@@ -622,6 +653,11 @@ export class LugnEngine {
         this.publish(['presence', 'session', 'diagnostics']);
       },
     );
+    const restoredPause = Object.values(
+      options.restoredMusicIntent?.targets ?? {},
+    ).find((intent) => intent.pause?.sessionBoundary !== undefined)?.pause;
+    if (restoredPause?.sessionBoundary !== undefined)
+      this.roomSessions.restorePauseBoundary(restoredPause.sessionBoundary);
     if (expiredRestoredSceneToPreserve) {
       const revision = this.state.lighting.sceneRevision;
       this.intentByRevision.set(revision, {
@@ -734,6 +770,31 @@ export class LugnEngine {
     return this.musicController.getState(target);
   }
 
+  getMusicVolumeSettings(): MusicVolumeSettings {
+    return this.musicAutomation.getVolumeSettings();
+  }
+
+  getMusicVolumeEnableIntentRevision(): number {
+    return this.musicVolumeEnableIntentRevision;
+  }
+
+  applyMusicVolumeSettings(
+    settings: MusicVolumeSettings,
+    generation?: string,
+    expectedEnableIntentRevision = this.musicVolumeEnableIntentRevision,
+  ): void {
+    const preserveEnableIntent =
+      expectedEnableIntentRevision !== this.musicVolumeEnableIntentRevision;
+    this.musicAutomation.applyVolumeSettings(
+      settings,
+      generation,
+      preserveEnableIntent,
+    );
+    if (!preserveEnableIntent && this.bilresaPriorVolumeAutomation !== null)
+      this.bilresaPriorVolumeAutomation = settings.enabled;
+    this.publish(['music', 'intent']);
+  }
+
   getMusicVolumePolicySnapshots(): Record<string, MusicVolumePolicySnapshot> {
     return Object.fromEntries(
       Object.keys(this.state.music.devices).map((target) => [
@@ -783,6 +844,7 @@ export class LugnEngine {
       return;
     }
     if (button === '2' && gesture === 'multi_press_1') {
+      this.musicVolumeEnableIntentRevision++;
       const enabled = !this.musicAutomation.isVolumeAutomationEnabled;
       this.musicAutomation.setVolumeAutomationEnabled(enabled);
       this.addDiagnostic(
@@ -808,6 +870,7 @@ export class LugnEngine {
       return;
     }
     if (button === '2' && gesture === 'long_press') {
+      this.musicVolumeEnableIntentRevision++;
       if (this.bilresaPriorVolumeAutomation === null) {
         this.bilresaPriorVolumeAutomation =
           this.musicAutomation.isVolumeAutomationEnabled;
