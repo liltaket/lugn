@@ -141,9 +141,9 @@ function acceptPayload(payload) {
   latestDeliveryRevision = Number.isInteger(payload.deliveryRevision)
     ? payload.deliveryRevision
     : latestDeliveryRevision;
+  lastFreshAt = Date.now();
   setConnection('connected', 'Lugn ansluten');
   render(payload);
-  lastFreshAt = Date.now();
   return true;
 }
 
@@ -245,10 +245,13 @@ function setConnection(state, message, retry = false) {
   syncFeedback();
   renderScenes(latestPayload);
   renderPresenceCorrection(latestPayload);
+  renderRoomPresence(latestPayload?.state);
   renderMusic(latestPayload);
 }
 
 function setClock() {
+  if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
+    setConnection('offline', 'Inga färska uppdateringar från Lugn.');
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
   const time = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Europe/Stockholm',
@@ -471,22 +474,23 @@ function renderEnvironment(environment) {
 
 function renderRoomPresence(state) {
   const presence = state?.presence;
+  const prefix = isUnavailable() ? 'Senast rapporterat: ' : '';
   if (presence?.state === 'confirmed_empty') {
-    setText(refs.roomPresence, 'Rummet är tomt');
+    setText(refs.roomPresence, `${prefix}Rummet är tomt`);
     return;
   }
   if (presence?.state !== 'occupied') {
-    setText(refs.roomPresence, 'Närvaro okänd');
+    setText(refs.roomPresence, `${prefix}Närvaro okänd`);
     return;
   }
   const count = presence.personCount;
   if (!Number.isInteger(count) || count < 1) {
-    setText(refs.roomPresence, 'I rummet · antal okänt');
+    setText(refs.roomPresence, `${prefix}I rummet · antal okänt`);
     return;
   }
   setText(
     refs.roomPresence,
-    `I rummet · ${count} ${count === 1 ? 'person' : 'personer'}`,
+    `${prefix}I rummet · ${count} ${count === 1 ? 'person' : 'personer'}`,
   );
 }
 
@@ -516,8 +520,18 @@ function formatVolumeOffset(value) {
   return `${value < 0 ? '−' : '+'}${percentagePoints} pp`;
 }
 
+function musicObservationTrusted(payload, target) {
+  return (
+    payload?.musicObservationConnected !== false &&
+    payload?.musicObservationTrust?.[target] !== false
+  );
+}
+
 function renderMusicVolumePolicy(payload, target) {
-  const stale = isUnavailable();
+  const stale =
+    isUnavailable() ||
+    !musicObservationTrusted(payload, target) ||
+    payload?.state?.music?.devices?.[target]?.availability !== 'available';
   const policy = target ? payload?.musicVolumePolicies?.[target] : null;
   const baseline = volumeFraction(policy?.baseline);
   const requested = volumeFraction(
@@ -572,7 +586,11 @@ function renderMusicVolumePolicy(payload, target) {
   setText(refs.musicVolumeTarget, formatVolume(goal));
   const hold = policy?.manualHold;
   const explanation = stale
-    ? 'Lugn svarar inte · visar senaste värden'
+    ? isUnavailable()
+      ? 'Lugn svarar inte · visar senaste värden'
+      : !musicObservationTrusted(payload, target)
+        ? 'Home Assistant-återkoppling saknas · visar senaste värden'
+        : 'Spelaren är frånkopplad · visar senaste värden'
     : hold && typeof hold.expiresAt === 'number'
       ? continuityText(hold.expiresAt, 'Manuellt val')
       : volumeReason(policy?.activityReason);
@@ -595,7 +613,13 @@ function renderMusicVolumePolicy(payload, target) {
   );
   setText(
     refs.musicVolumePolicyActivity,
-    !stale && activityKnown ? (active ? 'Aktiv' : 'Pausad') : 'Okänt',
+    stale
+      ? 'Okänt'
+      : activityKnown
+        ? active
+          ? 'Aktiv'
+          : volumeActivityLabel(policy?.activityReason)
+        : 'Okänt',
   );
   const change = payload?.state?.music?.volumeChanges?.[target];
   setText(
@@ -659,6 +683,20 @@ function volumeReason(reason) {
   );
 }
 
+function volumeActivityLabel(reason) {
+  return (
+    {
+      manual_hold: 'Manuell volym',
+      automation_disabled: 'Automatik av',
+      presence_unknown: 'Väntar på närvaro',
+      confirmed_empty: 'Rummet tomt',
+      home_away: 'Borta',
+      fade_active: 'Toning pågår',
+      volume_unavailable: 'Spelaren saknar volymrapport',
+    }[reason] ?? 'Aktivitet okänd'
+  );
+}
+
 function playbackReason(reason) {
   return (
     {
@@ -717,7 +755,9 @@ function renderMusicExplanations(payload, target) {
     stale
       ? 'Pausspärr okänd · Lugn svarar inte.'
       : policy?.manualPause
-        ? 'Spela eller välj preset för att släppa pausspärren.'
+        ? policy.manualPause.resetPolicy === 'room_session_or_explicit_playback'
+          ? 'Pausspärren släpps när rumsbesöket avslutas, eller med Spela/preset.'
+          : 'Spela eller välj preset för att släppa pausspärren.'
         : policy
           ? 'Ingen manuell pausspärr.'
           : 'Pausspärr okänd.',
@@ -965,39 +1005,75 @@ function renderMusic(payload) {
   );
   setText(
     refs.musicVolumeObservedLabel,
-    availability === 'available' && connected && !newerVerification
+    availability === 'available' &&
+      connected &&
+      musicObservationTrusted(payload, musicTarget) &&
+      !newerVerification
       ? 'Nu'
       : 'Senast',
   );
   refs.musicVolumeValue.setAttribute(
     'aria-label',
-    availability === 'available' && connected && !newerVerification
+    availability === 'available' &&
+      connected &&
+      musicObservationTrusted(payload, musicTarget) &&
+      !newerVerification
       ? 'Spelarens rapporterade volym'
       : 'Senast rapporterade spelarvolym',
   );
+  const playbackLabels = {
+    playing: 'Spelar',
+    paused: 'Pausad',
+    idle: 'Inaktiv',
+    off: 'Av',
+    unknown: 'Okänt',
+  };
+  const playbackLabel = playbackLabels[observed.playback] ?? 'Okänt';
+  const newerPlaybackReport = (payload?.state?.music?.commands ?? []).some(
+    (command) =>
+      command.target === musicTarget &&
+      command.recovery?.verifiedAt > (device.observedAt ?? -1) &&
+      typeof command.recovery?.reported?.playback === 'string' &&
+      command.recovery.reported.playback !== observed.playback,
+  );
+  const reportedOnly =
+    !connected ||
+    availability !== 'available' ||
+    !musicObservationTrusted(payload, musicTarget) ||
+    newerPlaybackReport;
   const title =
     typeof observed.title === 'string' && observed.title.trim()
       ? observed.title.trim()
-      : isPlaying
-        ? 'Musik spelas'
-        : 'Ingen musik spelar';
-  setText(refs.musicTitle, title);
+      : reportedOnly
+        ? 'Ingen titel rapporterad'
+        : isPlaying
+          ? 'Musik spelas'
+          : ['paused', 'idle', 'off'].includes(observed.playback)
+            ? 'Ingen musik spelar'
+            : 'Uppspelning okänd';
+  setText(
+    refs.musicTitle,
+    typeof observed.title === 'string' && observed.title.trim()
+      ? reportedOnly
+        ? `Senast rapporterat: ${title}`
+        : !isPlaying
+          ? `Senaste titel: ${title}`
+          : title
+      : title,
+  );
   const source = typeof observed.source === 'string' ? observed.source : '';
   setText(
     refs.musicSource,
-    source || (isPlaying ? 'Spelar musik' : 'Välj Spotify DJ eller Optical'),
+    source ||
+      (reportedOnly
+        ? 'Ingen källa rapporterad'
+        : isPlaying
+          ? 'Spelar musik'
+          : 'Välj Spotify DJ eller Optical'),
   );
   setText(
     refs.musicPlayerStatus,
-    isPending
-      ? 'Skickar kommando …'
-      : availability !== 'available'
-        ? 'Frånkopplad'
-        : isPlaying
-          ? 'Spelar'
-          : observed.playback === 'paused'
-            ? 'Pausad'
-            : 'Okänt',
+    reportedOnly ? `Senast rapporterat: ${playbackLabel}` : playbackLabel,
   );
   refs.musicVolumeValue.value = formatVolume(volume);
   setText(refs.musicVolumeValue, refs.musicVolumeValue.value);
@@ -1026,18 +1102,25 @@ function renderPresenceCorrection(payload) {
 }
 
 async function getState() {
-  const response = await fetch(STATE_URL, {
-    method: 'GET',
-    cache: 'no-store',
-    credentials: 'same-origin',
-    headers: { accept: 'application/json' },
-  });
-  if (!response.ok) {
-    const error = new Error(`state_${response.status}`);
-    error.status = response.status;
-    throw error;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(STATE_URL, {
+      signal: controller.signal,
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: { accept: 'application/json' },
+    });
+    if (!response.ok) {
+      const error = new Error(`state_${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return await response.json();
+  } finally {
+    window.clearTimeout(timeout);
   }
-  return response.json();
 }
 
 function syncFeedback() {

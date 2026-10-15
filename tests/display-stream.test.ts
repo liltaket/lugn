@@ -26,6 +26,7 @@ async function setup(streaming = true, music = false) {
     new FakeClock(Date.parse('2026-10-04T12:00:00+02:00')),
     music ? { music: { targets: { 'music.room': [] } } } : {},
   );
+  let musicObservationConnected = true;
   const server = new LugnDisplayServer({
     host: '127.0.0.1',
     port,
@@ -37,6 +38,7 @@ async function setup(streaming = true, music = false) {
       if (snapshotFails) throw new Error('Snapshot temporarily unavailable');
       return engine.state;
     },
+    musicObservationConnectedProvider: () => musicObservationConnected,
     ...(streaming ? { stateStream: engine.stream } : {}),
     ...(music
       ? {
@@ -91,6 +93,9 @@ async function setup(streaming = true, music = false) {
   };
   return {
     engine,
+    disconnectMusic: () => {
+      musicObservationConnected = false;
+    },
     server,
     base,
     open,
@@ -239,5 +244,18 @@ describe('secret-path Hub state stream', () => {
     const fallback = await setup(false);
     expect((await fetch(`${fallback.base}/events`)).status).toBe(503);
     expect((await fetch(`${fallback.base}/state`)).status).toBe(200);
+  });
+});
+
+it('carries upstream observation trust independently of cached player availability', async () => {
+  const s = await setup(true, true);
+  const live = await fetch(`${s.base}/state`).then((r) => r.json());
+  expect(live).toMatchObject({ musicObservationConnected: true });
+  s.disconnectMusic();
+  const cached = await fetch(`${s.base}/state`).then((r) => r.json());
+  expect(cached).toMatchObject({ musicObservationConnected: false });
+  const stream = await s.open();
+  expect(await stream.next()).toMatchObject({
+    musicObservationConnected: false,
   });
 });

@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
   createServer,
@@ -58,6 +58,8 @@ export type LugnHttpServerOptions = {
   engine: LugnEngine;
   capabilities: CapabilityRegistry;
   integrations: () => Record<string, string>;
+  /** Trust in each player's observations, independent of subscription health. */
+  musicObservationTrustProvider?: () => Record<string, boolean>;
   scenePresetStore?: ScenePresetStore;
   webAssetsDirectory?: string;
   trustedOrigins?: string[];
@@ -72,6 +74,8 @@ export type LugnHttpServerOptions = {
 /** Local HTTP surface for health, state inspection, and typed capabilities. */
 export class LugnHttpServer {
   private server: Server | undefined;
+  private readonly instanceId = randomUUID();
+  private nextDeliveryRevision = 0;
   private readonly uiSessions = new Map<
     string,
     { csrfToken: string; expiresAt: number; clerkSessionId?: string }
@@ -635,6 +639,9 @@ export class LugnHttpServer {
 
   private uiOverview(): {
     health: { status: 'ok' | 'degraded'; integrations: Record<string, string> };
+    instanceId: string;
+    deliveryRevision: number;
+    musicObservationTrust: Record<string, boolean>;
     state: LugnEngine['state'];
     scenes: Array<
       LightingScene & {
@@ -651,6 +658,10 @@ export class LugnHttpServer {
     );
     return {
       health: { status: connected ? 'ok' : 'degraded', integrations },
+      instanceId: this.instanceId,
+      deliveryRevision: ++this.nextDeliveryRevision,
+      musicObservationTrust:
+        this.options.musicObservationTrustProvider?.() ?? {},
       state: structuredClone(this.options.engine.state),
       presetsEnabled: this.options.scenePresetStore !== undefined,
       scenes: [...this.options.engine.scenes.values()].map((scene) =>
