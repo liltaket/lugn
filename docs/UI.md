@@ -206,7 +206,18 @@ persists before applying volume policy to eligible players. Manual volume holds
 and playback/Pause are retained. **Avbryt ändringar** reloads current settings;
 **Återställ standardvärden** only changes the draft until saved. Live state
 updates retain dirty drafts, navigation warns about unsaved work, and concurrent
-saves are rejected with the draft retained.
+saves are rejected with the draft retained. A BILRESA enable/suspension change
+during save preparation also rejects the save before replacing preferences. If
+it arrives while the atomic replacement is completing or afterward, the saved
+curve/limits apply while the newer BILRESA intent retains control of enable state.
+
+Each saved preference document has a generation also recorded in music intent.
+On restart, BILRESA enable/suspension state is restored only for the same saved
+generation; older intent cannot override newer preferences even if their values
+are identical. Legacy documents without generation metadata remain readable.
+A failure before replacement leaves the previous preferences and generation
+intact. A directory-sync failure after replacement warns about durability while
+keeping the committed preferences and generation in use.
 
 This editor uses the existing authenticated web session, same-origin and CSRF
 write protections. It is absent from Nest Hub pages and their API allowlist.

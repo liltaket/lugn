@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import * as filesystem from 'node:fs/promises';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,10 +17,15 @@ import { FakeClock } from '../src/core/clock.js';
 import { MusicVolumeSettingsStore } from '../src/runtime/music-volume-settings-store.js';
 import { LugnHttpServer } from '../src/runtime/http-server.js';
 
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof filesystem>()),
+}));
+
 const directories: string[] = [];
 const engines: LugnEngine[] = [];
 const servers: LugnHttpServer[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await Promise.all(servers.splice(0).map((server) => server.stop()));
   engines.splice(0).forEach((engine) => engine.dispose());
@@ -419,6 +425,7 @@ it.each([false, true])(
       music: { targets: { 'music.room': [] } },
       restoredMusicIntent: intent,
       musicVolumeSettings: settings,
+      musicVolumeSettingsGeneration: store.generation!,
     });
     engines.push(restored);
     expect(restored.getMusicVolumeSettings().enabled).toBe(false);
@@ -502,4 +509,265 @@ it('runtime loads the persisted policy before HA seeding and publishes it after 
   } finally {
     await runtime.stop();
   }
+});
+
+it('distinguishes identical disabled saves across an ABA enable and a crash before intent flush', async () => {
+  const { engine, store, path, clock } = await fixture();
+  const disabled = { ...engine.getMusicVolumeSettings(), enabled: false };
+  await store.save(engine, disabled, engine.getMusicVolumeSettings());
+  await engine.handleBilresaPress('2', 'multi_press_1');
+  await engine.requestMusic(
+    'music.room',
+    { property: 'volume', value: 0.95 },
+    {
+      actor: { type: 'user' },
+      source: 'test',
+    },
+  );
+  await engine.requestMusic(
+    'music.room',
+    { property: 'playback', value: 'paused' },
+    {
+      actor: { type: 'user' },
+      source: 'test',
+    },
+  );
+  // The previous intent flush records the first save plus a later human enable.
+  const staleIntent = engine.getMusicIntentSnapshot();
+  expect(staleIntent.volumeAutomationEnabled).toBe(true);
+  await store.save(engine, disabled, engine.getMusicVolumeSettings());
+  const durable = JSON.parse(await readFile(path, 'utf8'));
+  const restored = new LugnEngine(clock, {
+    deviceIds: [],
+    scenes: [],
+    music: { targets: { 'music.room': [] } },
+    musicVolumeSettings: durable.settings,
+    musicVolumeSettingsGeneration: durable.generation,
+    restoredMusicIntent: staleIntent,
+  });
+  engines.push(restored);
+  expect(restored.getMusicVolumeSettings().enabled).toBe(false);
+  expect(
+    restored.getMusicVolumePolicySnapshots()['music.room']?.manualHold?.volume,
+  ).toBe(0.95);
+  expect(
+    restored.getMusicPolicySnapshot('music.room').playback.manualPause,
+  ).not.toBeNull();
+});
+
+it.each([1, 2])(
+  'conflicts after %s BILRESA presses during settings preparation without replacing durable settings',
+  async (presses) => {
+    const { engine, store, path } = await fixture();
+    const original = engine.getMusicVolumeSettings();
+    await store.save(engine, original, original);
+    const before = await readFile(path, 'utf8');
+    const mkdir = filesystem.mkdir;
+    vi.spyOn(filesystem, 'mkdir').mockImplementationOnce(async (...args) => {
+      for (let press = 0; press < presses; press++)
+        await engine.handleBilresaPress('2', 'multi_press_1');
+      return mkdir(...args);
+    });
+    await expect(
+      store.save(engine, { ...original, minimum: 0.1 }, original),
+    ).rejects.toMatchObject({ status: 409, code: 'volume_settings_changed' });
+    expect(engine.getMusicVolumeSettings()).toEqual({
+      ...original,
+      enabled: presses === 2,
+    });
+    expect(await readFile(path, 'utf8')).toBe(before);
+    expect(store.generation).toBe(JSON.parse(before).generation);
+    expect(engine.getMusicIntentSnapshot().volumeSettingsGeneration).toBe(
+      store.generation,
+    );
+  },
+);
+
+it.each(['rename', 'cleanup', 'directory-sync', 'directory-close'] as const)(
+  'preserves newer BILRESA intent during %s while applying unrelated saved settings',
+  async (boundary) => {
+    const { engine, store, path, directory, clock } = await fixture();
+    const original = engine.getMusicVolumeSettings();
+    const changed = { ...original, minimum: 0.1 };
+    if (boundary === 'rename') {
+      const rename = filesystem.rename;
+      vi.spyOn(filesystem, 'rename').mockImplementationOnce(async (...args) => {
+        await rename(...args);
+        await engine.handleBilresaPress('2', 'multi_press_1');
+      });
+    } else if (boundary === 'cleanup') {
+      const unlink = filesystem.unlink;
+      vi.spyOn(filesystem, 'unlink').mockImplementationOnce(async (...args) => {
+        await engine.handleBilresaPress('2', 'multi_press_1');
+        return unlink(...args);
+      });
+    } else {
+      const open = filesystem.open;
+      vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (args[0] === directory) {
+          const method = boundary === 'directory-sync' ? 'sync' : 'close';
+          const originalMethod = handle[method].bind(handle);
+          vi.spyOn(handle, method).mockImplementationOnce(async () => {
+            await engine.handleBilresaPress('2', 'multi_press_1');
+            return originalMethod();
+          });
+        }
+        return handle;
+      });
+    }
+    await expect(store.save(engine, changed, original)).resolves.toEqual({
+      ...changed,
+      enabled: false,
+    });
+    expect(engine.getMusicVolumeSettings()).toEqual({
+      ...changed,
+      enabled: false,
+    });
+    const durable = JSON.parse(await readFile(path, 'utf8'));
+    expect(durable.settings).toEqual(changed);
+    const restored = new LugnEngine(clock, {
+      deviceIds: [],
+      scenes: [],
+      music: { targets: { 'music.room': [] } },
+      musicVolumeSettings: durable.settings,
+      musicVolumeSettingsGeneration: durable.generation,
+      restoredMusicIntent: engine.getMusicIntentSnapshot(),
+    });
+    engines.push(restored);
+    expect(restored.getMusicVolumeSettings()).toEqual({
+      ...changed,
+      enabled: false,
+    });
+  },
+);
+
+it('retains newer temporary BILRESA suspension and its restore state during rename', async () => {
+  const { engine, store, clock, path } = await fixture();
+  const original = engine.getMusicVolumeSettings();
+  const changed = { ...original, minimum: 0.1 };
+  const rename = filesystem.rename;
+  vi.spyOn(filesystem, 'rename').mockImplementationOnce(async (...args) => {
+    await rename(...args);
+    await engine.handleBilresaPress('2', 'long_press');
+  });
+  await expect(store.save(engine, changed, original)).resolves.toEqual({
+    ...changed,
+    enabled: false,
+  });
+  const durable = JSON.parse(await readFile(path, 'utf8'));
+  const restored = new LugnEngine(clock, {
+    deviceIds: [],
+    scenes: [...engine.scenes.values()],
+    music: { targets: { 'music.room': [] } },
+    musicVolumeSettings: durable.settings,
+    musicVolumeSettingsGeneration: durable.generation,
+    restoredMusicIntent: engine.getMusicIntentSnapshot(),
+  });
+  engines.push(restored);
+  expect(restored.getMusicVolumeSettings()).toEqual({
+    ...changed,
+    enabled: false,
+  });
+  await restored.handleBilresaPress('2', 'long_press');
+  expect(restored.getMusicVolumeSettings()).toEqual(changed);
+});
+
+it('keeps the previous generation and preferences when rename fails, allowing later intent to restore', async () => {
+  const { engine, store, clock, path } = await fixture();
+  const original = engine.getMusicVolumeSettings();
+  await store.save(engine, original, original);
+  const before = await readFile(path, 'utf8');
+  const generation = store.generation;
+  vi.spyOn(filesystem, 'rename').mockRejectedValueOnce(
+    new Error('disk failure'),
+  );
+  await expect(
+    store.save(engine, { ...original, minimum: 0.1 }, original),
+  ).rejects.toMatchObject({ status: 503, code: 'volume_settings_save_failed' });
+  expect(await readFile(path, 'utf8')).toBe(before);
+  expect(store.generation).toBe(generation);
+  expect(engine.getMusicVolumeSettings()).toEqual(original);
+  await engine.handleBilresaPress('2', 'multi_press_1');
+  const restored = new LugnEngine(clock, {
+    deviceIds: [],
+    scenes: [],
+    music: { targets: { 'music.room': [] } },
+    musicVolumeSettings: original,
+    musicVolumeSettingsGeneration: generation!,
+    restoredMusicIntent: engine.getMusicIntentSnapshot(),
+  });
+  engines.push(restored);
+  expect(restored.getMusicVolumeSettings().enabled).toBe(false);
+});
+
+it('publishes the committed generation before a directory-sync warning and retains later BILRESA intent', async () => {
+  const { engine, clock, path, directory } = await fixture();
+  const onWarning = vi.fn();
+  const store = new MusicVolumeSettingsStore(path, onWarning);
+  const generationsAtSync: Array<string | undefined> = [];
+  const open = filesystem.open;
+  vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (args[0] === directory) {
+      vi.spyOn(handle, 'sync').mockImplementationOnce(async () => {
+        // This is already committed intent even though directory durability is uncertain.
+        generationsAtSync.push(
+          engine.getMusicIntentSnapshot().volumeSettingsGeneration,
+          store.generation,
+        );
+        await engine.handleBilresaPress('2', 'multi_press_1');
+        throw new Error('directory sync failed');
+      });
+    }
+    return handle;
+  });
+  const original = engine.getMusicVolumeSettings();
+  const changed = { ...original, minimum: 0.1 };
+  await expect(store.save(engine, changed, original)).resolves.toEqual({
+    ...changed,
+    enabled: false,
+  });
+  expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+    'Volume settings saved, but directory sync failed.',
+  );
+  expect(store.generation).toBeDefined();
+  expect(generationsAtSync).toEqual([store.generation, store.generation]);
+  const reloaded = new MusicVolumeSettingsStore(path);
+  expect(await reloaded.load()).toEqual(changed);
+  expect(reloaded.generation).toBe(store.generation);
+  const restored = new LugnEngine(clock, {
+    deviceIds: [],
+    scenes: [],
+    music: { targets: { 'music.room': [] } },
+    musicVolumeSettings: changed,
+    musicVolumeSettingsGeneration: reloaded.generation!,
+    restoredMusicIntent: engine.getMusicIntentSnapshot(),
+  });
+  engines.push(restored);
+  expect(restored.getMusicVolumeSettings()).toEqual({
+    ...changed,
+    enabled: false,
+  });
+});
+
+it('loads legacy preferences and restores matching legacy enable intent without generation metadata', async () => {
+  const { engine, path, clock } = await fixture();
+  const settings = engine.getMusicVolumeSettings();
+  await writeFile(path, JSON.stringify({ version: 1, settings }));
+  const store = new MusicVolumeSettingsStore(path);
+  expect(await store.load()).toEqual(settings);
+  expect(store.generation).toBeUndefined();
+  await engine.handleBilresaPress('2', 'multi_press_1');
+  const intent = engine.getMusicIntentSnapshot();
+  expect(intent.volumeSettingsGeneration).toBeUndefined();
+  const restored = new LugnEngine(clock, {
+    deviceIds: [],
+    scenes: [],
+    music: { targets: { 'music.room': [] } },
+    musicVolumeSettings: settings,
+    restoredMusicIntent: intent,
+  });
+  engines.push(restored);
+  expect(restored.getMusicVolumeSettings().enabled).toBe(false);
 });

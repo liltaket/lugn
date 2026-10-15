@@ -10,7 +10,11 @@ import {
 import type { LugnEngine } from '../application/lugn-engine.js';
 
 const StoreSchema = z
-  .object({ version: z.literal(1), settings: MusicVolumeSettingsSchema })
+  .object({
+    version: z.literal(1),
+    settings: MusicVolumeSettingsSchema,
+    generation: z.uuid().optional(),
+  })
   .strict();
 export class MusicVolumeSettingsError extends Error {
   constructor(
@@ -24,6 +28,11 @@ export class MusicVolumeSettingsError extends Error {
 /** One atomic, serialized settings document; unreadable preferences are never overwritten. */
 export class MusicVolumeSettingsStore {
   private writable = true;
+  private savedGeneration: string | undefined;
+
+  get generation(): string | undefined {
+    return this.savedGeneration;
+  }
   private pending: Promise<unknown> = Promise.resolve();
   constructor(
     private readonly filePath: string,
@@ -43,8 +52,11 @@ export class MusicVolumeSettingsStore {
       const info = await handle.stat();
       if (!info.isFile() || info.size > 64 * 1024)
         throw new Error('Invalid settings file');
-      return StoreSchema.parse(JSON.parse(await handle.readFile('utf8')))
-        .settings;
+      const document = StoreSchema.parse(
+        JSON.parse(await handle.readFile('utf8')),
+      );
+      this.savedGeneration = document.generation;
+      return document.settings;
     } catch (error) {
       if (!(
         error instanceof Error &&
@@ -77,6 +89,8 @@ export class MusicVolumeSettingsStore {
         throw new MusicVolumeSettingsError(409, 'volume_settings_changed');
       if (!this.writable)
         throw new MusicVolumeSettingsError(503, 'volume_settings_save_failed');
+      const enableIntentRevision = engine.getMusicVolumeEnableIntentRevision();
+      const generation = randomUUID();
       const directory = dirname(this.filePath);
       const temporaryPath = `${this.filePath}.${randomUUID()}.tmp`;
       let handle: Awaited<ReturnType<typeof open>> | undefined;
@@ -87,7 +101,9 @@ export class MusicVolumeSettingsStore {
           throw new Error('Invalid directory');
         handle = await open(temporaryPath, 'wx', 0o600);
         await handle.writeFile(
-          JSON.stringify(StoreSchema.parse({ version: 1, settings })) + '\n',
+          JSON.stringify(
+            StoreSchema.parse({ version: 1, settings, generation }),
+          ) + '\n',
         );
         await handle.sync();
         await handle.close();
@@ -99,8 +115,26 @@ export class MusicVolumeSettingsStore {
           info.ino !== current.ino
         )
           throw new Error('Directory changed');
+        // A remote press during preparation invalidates the proposed write,
+        // even if multiple presses have returned enabled to its original value.
+        if (
+          engine.getMusicVolumeEnableIntentRevision() !==
+            enableIntentRevision ||
+          JSON.stringify(engine.getMusicVolumeSettings()) !==
+            JSON.stringify(expected)
+        )
+          throw new MusicVolumeSettingsError(409, 'volume_settings_changed');
         await rename(temporaryPath, this.filePath);
-      } catch {
+        this.savedGeneration = generation;
+        // Rename commits the preferences. Publish their generation before any
+        // cleanup/directory-sync awaits; a press during rename keeps authority.
+        engine.applyMusicVolumeSettings(
+          settings,
+          generation,
+          enableIntentRevision,
+        );
+      } catch (error) {
+        if (error instanceof MusicVolumeSettingsError) throw error;
         throw new MusicVolumeSettingsError(503, 'volume_settings_save_failed');
       } finally {
         await handle?.close().catch(() => undefined);
@@ -122,7 +156,6 @@ export class MusicVolumeSettingsStore {
           await directoryHandle?.close().catch(() => undefined);
         }
       }
-      engine.applyMusicVolumeSettings(settings);
       return engine.getMusicVolumeSettings();
     });
     this.pending = operation.catch(() => undefined);

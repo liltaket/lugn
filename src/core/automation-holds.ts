@@ -43,6 +43,11 @@ export class AutomationHolds {
     this.holds.delete(`${scope}:${target}`);
   }
 
+  scopeMusicPauseToSession(target: string): void {
+    const hold = this.holds.get(`music.playback:${target}`);
+    if (hold) hold.resetPolicy = 'room_session_or_explicit_playback';
+  }
+
   restoreMusicPause(target: string, intent: MusicPauseIntent): void {
     this.holds.set(`music.playback:${target}`, {
       scope: 'music.playback',

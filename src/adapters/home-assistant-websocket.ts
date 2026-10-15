@@ -63,12 +63,15 @@ export type HomeAssistantConnectionStatus =
   | 'disconnected'
   | 'failed';
 
+/** Valid only for this authenticated subscription; invalidated on loss or stop. */
+export type HomeAssistantConnection = { isCurrent(): boolean };
+
 export type HomeAssistantWebSocketOptions = {
   createSocket?: HomeAssistantSocketFactory;
   clock?: Clock;
   reconnectDelayMs?: number;
   maxReconnectDelayMs?: number;
-  onConnected?: () => void | Promise<void>;
+  onConnected?: (connection: HomeAssistantConnection) => void | Promise<void>;
   onError?: (kind: 'socket' | 'event_handler' | 'malformed_message') => void;
 };
 
@@ -214,7 +217,12 @@ export class HomeAssistantWebSocketTransport {
         this._status = 'connected';
         this.reconnectAttempt = 0;
         try {
-          const result = this.onConnected?.();
+          const generation = this.generation;
+          const result = this.onConnected?.({
+            isCurrent: () =>
+              this.isCurrent(socket, generation) &&
+              this._status === 'connected',
+          });
           void Promise.resolve(result).catch(() =>
             this.reportError('event_handler'),
           );

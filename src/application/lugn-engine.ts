@@ -76,6 +76,7 @@ export type EngineOptions = {
   preserveRestoredSceneIds?: readonly string[];
   restoredMusicIntent?: MusicIntentSnapshot;
   musicVolumeSettings?: MusicVolumeSettings;
+  musicVolumeSettingsGeneration?: string;
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
   continuityMs?: number;
@@ -166,6 +167,7 @@ export class LugnEngine {
   private readonly roomSessions: RoomSessions;
   private lastNonOffSceneId: string | null = null;
   private bilresaPriorVolumeAutomation: boolean | null = null;
+  private musicVolumeEnableIntentRevision = 0;
   private readonly lastMusicDecisionContexts = new Map<string, string>();
   private readonly convergenceTimeoutMs: number;
   private readonly retryDelayMs: number;
@@ -505,6 +507,9 @@ export class LugnEngine {
       ...(options.musicVolumeSettings === undefined
         ? {}
         : { volumeSettings: options.musicVolumeSettings }),
+      ...(options.musicVolumeSettingsGeneration === undefined
+        ? {}
+        : { volumeSettingsGeneration: options.musicVolumeSettingsGeneration }),
       clock,
       holds: this.holds,
       getState: (target) => this.musicController.getState(target),
@@ -512,6 +517,14 @@ export class LugnEngine {
         this.musicController.request(target, request, provenance),
       cancelAutomaticFade: (target) => this.musicController.cancelFade(target),
       onChange: () => this.publish(['music', 'intent']),
+      onPauseReleased: (target, endedAt) => {
+        this.musicController.releasePauseIntent(target, endedAt);
+        this.addDiagnostic(
+          'music.pause_released',
+          `Manual Pause released for ${target}: room session ended`,
+          { target, endedAt },
+        );
+      },
       onPolicyTick: () => {
         if (this.refreshMusicDecisions()) this.publish(['music']);
       },
@@ -539,11 +552,12 @@ export class LugnEngine {
         ),
     );
     this.musicController.setExternalPlaybackChangeHandler(
-      (target, playback, provenance) =>
+      (target, playback, provenance, changedAt) =>
         this.musicAutomation.noteExternalPlaybackChange(
           target,
           playback,
           provenance,
+          changedAt,
         ),
     );
     this.musicController.setFadeLifecycleHandler((event) =>
@@ -602,17 +616,28 @@ export class LugnEngine {
       this.bilresaPriorVolumeAutomation = restoredEnable
         ? restoredMusic.temporaryVolumeAutomationRestore
         : null;
-      for (const [target, intent] of Object.entries(restoredMusic.targets))
+      for (const [target, intent] of Object.entries(restoredMusic.targets)) {
+        if (intent.playbackReleasedAt !== undefined)
+          this.musicController.releasePauseIntent(
+            target,
+            intent.playbackReleasedAt,
+          );
         if (intent.pause)
           this.musicController.restorePauseIntent(
             target,
             intent.pause.createdAt,
           );
+      }
     }
     this.roomSessions = new RoomSessions(
       clock,
       options.roomSessionContinuityMs ?? 20 * 60_000,
-      (session, transition) => {
+      (session, transition, recoveringPauseBoundary) => {
+        this.musicAutomation.handleRoomSession(session);
+        if (recoveringPauseBoundary) {
+          this.publish(['music', 'intent', 'diagnostics']);
+          return;
+        }
         this.state.session = session;
         if (transition)
           this.addDiagnostic(
@@ -623,6 +648,11 @@ export class LugnEngine {
         this.publish(['presence', 'session', 'diagnostics']);
       },
     );
+    const restoredPause = Object.values(
+      options.restoredMusicIntent?.targets ?? {},
+    ).find((intent) => intent.pause?.sessionBoundary !== undefined)?.pause;
+    if (restoredPause?.sessionBoundary !== undefined)
+      this.roomSessions.restorePauseBoundary(restoredPause.sessionBoundary);
     if (expiredRestoredSceneToPreserve) {
       const revision = this.state.lighting.sceneRevision;
       this.intentByRevision.set(revision, {
@@ -739,9 +769,23 @@ export class LugnEngine {
     return this.musicAutomation.getVolumeSettings();
   }
 
-  applyMusicVolumeSettings(settings: MusicVolumeSettings): void {
-    this.musicAutomation.applyVolumeSettings(settings);
-    if (this.bilresaPriorVolumeAutomation !== null)
+  getMusicVolumeEnableIntentRevision(): number {
+    return this.musicVolumeEnableIntentRevision;
+  }
+
+  applyMusicVolumeSettings(
+    settings: MusicVolumeSettings,
+    generation?: string,
+    expectedEnableIntentRevision = this.musicVolumeEnableIntentRevision,
+  ): void {
+    const preserveEnableIntent =
+      expectedEnableIntentRevision !== this.musicVolumeEnableIntentRevision;
+    this.musicAutomation.applyVolumeSettings(
+      settings,
+      generation,
+      preserveEnableIntent,
+    );
+    if (!preserveEnableIntent && this.bilresaPriorVolumeAutomation !== null)
       this.bilresaPriorVolumeAutomation = settings.enabled;
     this.publish(['music', 'intent']);
   }
@@ -795,6 +839,7 @@ export class LugnEngine {
       return;
     }
     if (button === '2' && gesture === 'multi_press_1') {
+      this.musicVolumeEnableIntentRevision++;
       const enabled = !this.musicAutomation.isVolumeAutomationEnabled;
       this.musicAutomation.setVolumeAutomationEnabled(enabled);
       this.addDiagnostic(
@@ -820,6 +865,7 @@ export class LugnEngine {
       return;
     }
     if (button === '2' && gesture === 'long_press') {
+      this.musicVolumeEnableIntentRevision++;
       if (this.bilresaPriorVolumeAutomation === null) {
         this.bilresaPriorVolumeAutomation =
           this.musicAutomation.isVolumeAutomationEnabled;

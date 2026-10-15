@@ -69,6 +69,12 @@ let sessionRenewTimer = null;
 let sessionRenewInProgress = false;
 let sessionRenewDone = null;
 let overview = null;
+let overviewStale = false;
+let lastOverviewAt = 0;
+let overviewInstanceId;
+let overviewInstanceGeneration = 0;
+let overviewDeliveryRevision = -1;
+const retiredOverviewInstances = new Set();
 let eventSource = null;
 let pollTimer = null;
 let actionMessage = '';
@@ -619,7 +625,7 @@ async function renewClerkSession() {
     csrfToken = result.csrfToken;
     scheduleSessionRenewal(expiresAt);
     try {
-      overview = await fetchOverview();
+      await fetchOverview();
     } catch (error) {
       if (error instanceof SessionExpiredError)
         throw new ClerkAuthorizationError(
@@ -824,7 +830,7 @@ async function openDashboard(sessionCsrfToken, expiresAt = null) {
   csrfToken = sessionCsrfToken;
   scheduleSessionRenewal(expiresAt);
   try {
-    overview = await fetchOverview();
+    await fetchOverview();
   } catch (error) {
     csrfToken = null;
     clearSessionRenewal();
@@ -943,19 +949,67 @@ async function retryClerkSignOut() {
   }
 }
 
-async function fetchOverview() {
-  const response = await fetch(`${API_ROOT}/overview`, {
-    credentials: 'same-origin',
-    cache: 'no-store',
-    headers: { accept: 'application/json' },
-  });
-  if (response.status === 401 || response.status === 403)
-    throw new SessionExpiredError('Sessionen har gått ut.');
-  if (!response.ok) throw new Error('Rumsstatus kunde inte hämtas.');
-  const result = await response.json();
-  if (!result?.state?.presence || !result?.state?.lighting?.devices)
+// HTTP reads and SSE frames share the server's per-instance delivery sequence.
+function acceptOverview(next) {
+  if (
+    !next?.state?.presence ||
+    !next?.state?.lighting?.devices ||
+    !Number.isInteger(next.state.revision) ||
+    next.state.revision < 0
+  )
     throw new Error('Servern returnerade ett ogiltigt rumsstatus.');
-  return result;
+  if (
+    typeof next.instanceId === 'string' &&
+    next.instanceId !== overviewInstanceId
+  ) {
+    if (retiredOverviewInstances.has(next.instanceId)) return false;
+    if (overviewInstanceId) retiredOverviewInstances.add(overviewInstanceId);
+    overviewInstanceId = next.instanceId;
+    overviewInstanceGeneration += 1;
+    overview = null;
+    overviewDeliveryRevision = -1;
+  }
+  if (next.state.revision < (overview?.state?.revision ?? -1)) return false;
+  if (
+    Number.isInteger(next.deliveryRevision) &&
+    next.deliveryRevision < overviewDeliveryRevision
+  )
+    return false;
+  overviewDeliveryRevision = Number.isInteger(next.deliveryRevision)
+    ? next.deliveryRevision
+    : overviewDeliveryRevision;
+  overview = next;
+  overviewStale = false;
+  lastOverviewAt = Date.now();
+  return true;
+}
+
+async function fetchOverview() {
+  const readGeneration = overviewInstanceGeneration;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(`${API_ROOT}/overview`, {
+      signal: controller.signal,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+    });
+    if (response.status === 401 || response.status === 403)
+      throw new SessionExpiredError('Sessionen har gått ut.');
+    if (!response.ok) throw new Error('Rumsstatus kunde inte hämtas.');
+    const result = await response.json();
+    // A response from an earlier connection cannot introduce another instance.
+    if (
+      readGeneration !== overviewInstanceGeneration &&
+      result?.instanceId !== overviewInstanceId
+    )
+      return overview;
+    acceptOverview(result);
+    return overview;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 function startLiveUpdates() {
@@ -968,9 +1022,7 @@ function startLiveUpdates() {
   eventSource.onmessage = (event) => {
     try {
       const next = JSON.parse(event.data);
-      if (!next?.state?.presence || !next?.state?.lighting?.devices) return;
-      overview = next;
-      render();
+      if (acceptOverview(next)) render();
     } catch {
       setLiveStatus('Ogiltig liveuppdatering', 'warn');
     }
@@ -983,7 +1035,10 @@ function startLiveUpdates() {
     }
   };
   pollTimer = window.setInterval(() => {
-    if (!eventSource || eventSource.readyState === EventSource.OPEN) return;
+    if (lastOverviewAt && Date.now() - lastOverviewAt > 30000) {
+      overviewStale = true;
+      if (overview) render();
+    }
     void refreshOverview();
   }, 15000);
 }
@@ -997,7 +1052,7 @@ function stopLiveUpdates() {
 
 async function refreshOverview() {
   try {
-    overview = await fetchOverview();
+    await fetchOverview();
     render();
   } catch (error) {
     if (error instanceof SessionExpiredError) {
@@ -1009,6 +1064,15 @@ async function refreshOverview() {
       return;
     }
     setLiveStatus('Kan inte hämta status', 'bad');
+    if (
+      !lastOverviewAt ||
+      Date.now() - lastOverviewAt > 30000 ||
+      !eventSource ||
+      eventSource.readyState !== EventSource.OPEN
+    ) {
+      overviewStale = true;
+      if (overview) render();
+    }
   }
 }
 
@@ -1143,7 +1207,7 @@ function renderRoomStatus(data) {
     confirmed_empty: 'Rummet är tomt',
     unknown: 'Närvaro okänd',
   };
-  presenceTitle.textContent = presenceLabels[presence.state] ?? 'Närvaro okänd';
+  presenceTitle.textContent = `${overviewStale ? 'Senast rapporterat: ' : ''}${presenceLabels[presence.state] ?? 'Närvaro okänd'}`;
   if (presence.state === 'occupied' && Number.isInteger(presence.personCount)) {
     const count = presence.personCount;
     presenceDetail.textContent = `${count} ${count === 1 ? 'person' : 'personer'} registrerade`;
@@ -1667,27 +1731,45 @@ function renderMusicPlayer(target, device, commands, fade) {
   article.append(identity);
 
   const observed = device.observed ?? {};
+  const newerPlaybackReport = commands.some(
+    (command) =>
+      command.target === target &&
+      command.recovery?.verifiedAt > (device.observedAt ?? -1) &&
+      typeof command.recovery?.reported?.playback === 'string' &&
+      command.recovery.reported.playback !== observed.playback,
+  );
+  const reportedOnly =
+    overviewStale ||
+    device.availability !== 'available' ||
+    overview?.musicObservationTrust?.[target] === false ||
+    (overview?.health?.integrations?.home_assistant !== undefined &&
+      overview.health.integrations.home_assistant !== 'connected') ||
+    newerPlaybackReport;
   const readings = node('dl', 'music-readings');
   appendReading(
     readings,
-    'Rapporterad uppspelning',
+    reportedOnly ? 'Senast rapporterad uppspelning' : 'Rapporterad uppspelning',
     musicPlaybackLabel(observed.playback),
   );
   appendReading(
     readings,
-    'Nu spelas',
+    reportedOnly
+      ? 'Senast rapporterad titel'
+      : observed.playback === 'playing'
+        ? 'Nu spelas'
+        : 'Senaste titel',
     typeof observed.title === 'string' && observed.title.trim()
       ? observed.title
       : 'Ingen titel rapporterad',
   );
   appendReading(
     readings,
-    'Rapporterad volym',
+    reportedOnly ? 'Senast rapporterad volym' : 'Rapporterad volym',
     musicVolumeLabel(observed.volume),
   );
   appendReading(
     readings,
-    'Rapporterad källa',
+    reportedOnly ? 'Senast rapporterad källa' : 'Rapporterad källa',
     typeof observed.source === 'string' && observed.source
       ? observed.source
       : 'Okänd',
@@ -1695,7 +1777,7 @@ function renderMusicPlayer(target, device, commands, fade) {
   article.append(readings);
 
   const controls = node('div', 'music-controls');
-  const unavailable = device.availability !== 'available';
+  const unavailable = overviewStale || device.availability !== 'available';
   const playbackCommand = latestMusicCommand(commands, target, 'playback');
   const volumeCommand = latestMusicCommand(commands, target, 'volume');
   const sourceCommand = latestMusicCommand(commands, target, 'source');

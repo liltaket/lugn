@@ -306,7 +306,7 @@ describe('room session lifecycle', () => {
     },
   );
 
-  it('does not clear an explicit music Pause when a session ends', async () => {
+  it('clears the visit music Pause when a session ends', async () => {
     const clock = new FakeClock(startAt);
     const adapter = new SimulatedMusicAdapter(clock);
     const engine = new LugnEngine(clock, {
@@ -349,7 +349,9 @@ describe('room session lifecycle', () => {
     });
     await flush();
     expect(engine.state.session!.id).not.toBe(id);
-    expect(adapter.dispatched).toHaveLength(beforeReturn);
+    expect(
+      adapter.dispatched.slice(beforeReturn).map((c) => c.requested),
+    ).toEqual([{ property: 'preset', value: 'spotify_dj' }]);
   });
 
   it('clears the independent session timer on engine disposal', async () => {
