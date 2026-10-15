@@ -69,6 +69,8 @@ it.each([
   'nonhuman pause',
   'invalid hold',
   'wrong target',
+  'invalid pause boundary',
+  'invalid release watermark',
 ] as const)('retains valid lighting when music has %s', async (scenario) => {
   const f = await fixture();
   const music = structuredClone(f.music);
@@ -78,30 +80,50 @@ it.each([
       ? { ...music, version: 99 }
       : scenario === 'extra state'
         ? { ...music, observed: { playback: 'playing' } }
-        : scenario === 'wrong target'
-          ? { ...music, targets: { 'music.other': target } }
-          : scenario === 'nonhuman pause'
+        : scenario === 'invalid pause boundary'
+          ? {
+              ...music,
+              targets: {
+                'music.room': {
+                  ...target,
+                  pause: {
+                    ...target.pause,
+                    sessionBoundary: { suspendedAt: 20_000, expiresAt: 10_000 },
+                  },
+                },
+              },
+            }
+          : scenario === 'invalid release watermark'
             ? {
                 ...music,
                 targets: {
-                  'music.room': {
-                    ...target,
-                    pause: {
-                      createdAt: 10_000,
-                      provenance: { actor: { type: 'automation' } },
-                    },
-                  },
+                  'music.room': { ...target, playbackReleasedAt: -1 },
                 },
               }
-            : {
-                ...music,
-                targets: {
-                  'music.room': {
-                    ...target,
-                    manualVolume: { ...target.manualVolume, expiresAt: -1 },
-                  },
-                },
-              };
+            : scenario === 'wrong target'
+              ? { ...music, targets: { 'music.other': target } }
+              : scenario === 'nonhuman pause'
+                ? {
+                    ...music,
+                    targets: {
+                      'music.room': {
+                        ...target,
+                        pause: {
+                          createdAt: 10_000,
+                          provenance: { actor: { type: 'automation' } },
+                        },
+                      },
+                    },
+                  }
+                : {
+                    ...music,
+                    targets: {
+                      'music.room': {
+                        ...target,
+                        manualVolume: { ...target.manualVolume, expiresAt: -1 },
+                      },
+                    },
+                  };
   await writeFile(
     f.filePath,
     JSON.stringify({ version: 2, snapshot: f.snapshot, music: invalid }),
@@ -212,6 +234,54 @@ it('persists human intent from music/intent events even after rejected dispatch'
     expect(reloaded.restoredMusicIntent?.targets['music.room']).toMatchObject({
       manualVolume: { volume: 1 },
       pause: { createdAt: 10_000, provenance: user },
+    });
+  } finally {
+    await store.stop();
+    engine.dispose();
+  }
+});
+
+it('persists the Pause session boundary and its release watermark through the intent store', async () => {
+  const f = await fixture();
+  const clock = new FakeClock(10_000);
+  const engine = new LugnEngine(clock, {
+    deviceIds: [],
+    scenes: [],
+    roomSessionContinuityMs: 5_000,
+    music: { targets: { 'music.room': [] } },
+  });
+  const store = f.store();
+  store.start(engine);
+  try {
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+    });
+    await engine.requestMusic(
+      'music.room',
+      { property: 'playback', value: 'paused' },
+      user,
+    );
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+    });
+    await store.flush();
+    const saved = f.store();
+    await saved.load();
+    expect(
+      saved.restoredMusicIntent?.targets['music.room']?.pause?.sessionBoundary,
+    ).toEqual({
+      suspendedAt: 10_000,
+      expiresAt: 15_000,
+    });
+    clock.advanceBy(5_000);
+    await store.flush();
+    const released = f.store();
+    await released.load();
+    expect(released.restoredMusicIntent?.targets['music.room']).toMatchObject({
+      pause: null,
+      playbackReleasedAt: 15_000,
     });
   } finally {
     await store.stop();
