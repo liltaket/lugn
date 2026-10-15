@@ -70,22 +70,26 @@ Names are illustrative; the concrete API should be designed before implementatio
 
 ### Implemented music capabilities
 
-| Capability           | Input                                                      |
-| -------------------- | ---------------------------------------------------------- |
-| `music.getState`     | `{ target: "music.room" }`                                 |
-| `music.play`         | `{ target: "music.room" }`                                 |
-| `music.pause`        | `{ target: "music.room" }`                                 |
-| `music.setVolume`    | `{ target: "music.room", volume: 0.35 }`                   |
-| `music.fadeVolume`   | `{ target: "music.room", volume: 0.35, durationMs: 5000 }` |
-| `music.cancelFade`   | `{ target: "music.room" }`                                 |
-| `music.selectSource` | `{ target: "music.room", source: "Optical" }`              |
+| Capability                 | Input                                                      |
+| -------------------------- | ---------------------------------------------------------- |
+| `music.getState`           | `{ target: "music.room" }`                                 |
+| `music.play`               | `{ target: "music.room" }`                                 |
+| `music.pause`              | `{ target: "music.room" }`                                 |
+| `music.setVolumeAuthority` | `{ target: "music.room", mode: "auto" }`                   |
+| `music.setVolume`          | `{ target: "music.room", volume: 0.35 }`                   |
+| `music.fadeVolume`         | `{ target: "music.room", volume: 0.35, durationMs: 5000 }` |
+| `music.cancelFade`         | `{ target: "music.room" }`                                 |
+| `music.selectSource`       | `{ target: "music.room", source: "Optical" }`              |
 
 All reject unconfigured semantic targets and extra arguments. Volume uses HA's
 0..1 scale; source must appear in that target's configured allowlist.
-`music.getState` returns `{ device }`; actions return
+`music.setVolumeAuthority` accepts `auto` or `manual` from a human actor and returns
+`{ accepted: true, policy }`; it changes transient volume authority without
+changing playback or the global enable setting.
+`music.getState` returns `{ device }`; other direct actions return
 `{ accepted: true, commandId, status }`. `music.fadeVolume` returns an accepted
 fade state; `music.cancelFade` returns whether it cancelled and the latest fade
-state. `accepted` means dispatch acceptance, not observed device state.
+state. For dispatched actions, `accepted` means dispatch acceptance, not observed device state.
 `room.getState` includes `music.devices`, `music.commands`, and `music.fades`,
 and the `music` domain participates in revisioned state replay. See
 [Music](MUSIC.md) for confirmation, timeout and fade semantics.

@@ -22,6 +22,7 @@ import {
   type MusicRequest,
 } from '../core/schemas.js';
 import type { EnvironmentSnapshot } from '../adapters/home-assistant-environment.js';
+import { VolumeAuthorityRequestSchema } from '../application/music-automation.js';
 import type {
   MusicVolumePolicySnapshot,
   MusicPlaybackPolicySnapshot,
@@ -337,9 +338,15 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'POST' &&
-        hubRequest.route === '/display-api/music'
+        (hubRequest.route === '/display-api/music' ||
+          hubRequest.route === '/display-api/volume-authority')
       ) {
-        await this.invokeMusic(request, response, hubRequest.hub);
+        await this.invokeMusic(
+          request,
+          response,
+          hubRequest.hub,
+          hubRequest.route === '/display-api/volume-authority',
+        );
         return;
       }
       if (
@@ -540,6 +547,7 @@ export class LugnDisplayServer {
     request: IncomingMessage,
     response: ServerResponse,
     hub: LugnDisplayHub,
+    authority = false,
   ): Promise<void> {
     if (!isJsonRequest(request)) {
       sendJson(response, 415, {
@@ -547,8 +555,16 @@ export class LugnDisplayServer {
       });
       return;
     }
-    const input = DisplayMusicRequestSchema.parse(await readJsonBody(request));
-    const capability = musicCapability(input.target, input.request);
+    const body = await readJsonBody(request);
+    const capability = authority
+      ? {
+          name: 'music.setVolumeAuthority' as const,
+          input: VolumeAuthorityRequestSchema.parse(body),
+        }
+      : (() => {
+          const input = DisplayMusicRequestSchema.parse(body);
+          return musicCapability(input.target, input.request);
+        })();
     try {
       const result = await this.options.capabilities.invoke(
         capability.name,

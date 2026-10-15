@@ -828,3 +828,30 @@ h2 {
     grid-template-rows: 108px 48px minmax(0, 1fr);
   }
 }
+
+/* Runtime volume authority shares the existing policy strip on both Hubs. */
+.volume-authority {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  min-width: 0;
+}
+.volume-authority button {
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  font-size: 14px;
+  font-weight: 570;
+}
+.volume-authority button[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+@media (hover: hover) {
+  .volume-authority button:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+}

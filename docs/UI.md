@@ -105,6 +105,15 @@ daily/person-count offsets and the calculated automatic target. A matching
 uncorrelated report is labelled as matching a request, rather than proof of
 who moved the physical control. Missing attribution remains unknown.
 
+The compact Automatisk/Manuell buttons in the volume strip select temporary
+per-player authority. The highlight comes from backend ownership, with neither
+selected when no controller is active. Manual claims current trusted volume
+without sending a volume change; Auto releases that player's hold and re-evaluates
+eligible volume policy. Both leave playback/Pause independent. Backend reasons
+explain offline, unsettled volume and active fades. The soft Manual selection
+ends on meaningful room/count/home/enable transitions; real volume adjustments
+keep their existing continuity. See [temporary authority](MUSIC.md#temporary-hub-authority-selector).
+
 Manual volume continuity counts down only when the backend supplies a confirmed
 absence deadline. The countdown uses server time plus elapsed client time; at
 the boundary the dashboard waits for backend authority instead of releasing a

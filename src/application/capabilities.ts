@@ -27,6 +27,8 @@ import {
 } from './music-controller.js';
 import {
   MusicVolumePolicySnapshotSchema,
+  VolumeAuthorityRequestSchema,
+  VolumeAuthorityError,
   MusicPlaybackPolicySnapshotSchema,
 } from './music-automation.js';
 
@@ -70,7 +72,11 @@ export class CapabilityInputError extends Error {
       | 'source_not_allowed'
       | 'scene_not_found'
       | 'music_state_unavailable'
-      | 'music_fade_duration_too_short',
+      | 'music_fade_duration_too_short'
+      | 'volume_unavailable'
+      | 'volume_pending'
+      | 'fade_active'
+      | 'human_actor_required',
   ) {
     super(code);
     this.name = 'CapabilityInputError';
@@ -78,6 +84,13 @@ export class CapabilityInputError extends Error {
 }
 
 export const CapabilitySchemas = {
+  'music.setVolumeAuthority': {
+    input: VolumeAuthorityRequestSchema,
+    output: z.object({
+      accepted: z.literal(true),
+      policy: MusicVolumePolicySnapshotSchema,
+    }),
+  },
   'music.getPolicy': {
     input: GetMusicInput,
     output: z.object({
@@ -191,6 +204,21 @@ export class CapabilityRegistry {
     const provenance = ProvenanceSchema.parse(invocation);
     let output: unknown;
     switch (name) {
+      case 'music.setVolumeAuthority': {
+        const input = VolumeAuthorityRequestSchema.parse(rawInput);
+        getMusicTarget(this.engine, input.target);
+        try {
+          output = {
+            accepted: true,
+            policy: this.engine.setMusicVolumeAuthority(input, provenance),
+          };
+        } catch (error) {
+          if (error instanceof VolumeAuthorityError)
+            throw new CapabilityInputError(error.code);
+          throw error;
+        }
+        break;
+      }
       case 'music.getPolicy': {
         const input = GetMusicInput.parse(rawInput);
         getMusicTarget(this.engine, input.target);

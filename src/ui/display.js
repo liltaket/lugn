@@ -3,6 +3,7 @@ const STATE_URL = `${BASE_PATH}display-api/state`;
 const EVENTS_URL = `${BASE_PATH}display-api/events`;
 const SCENE_URL = `${BASE_PATH}display-api/scene`;
 const MUSIC_URL = `${BASE_PATH}display-api/music`;
+const VOLUME_AUTHORITY_URL = `${BASE_PATH}display-api/volume-authority`;
 const MUSIC_PRESET_URL = `${BASE_PATH}display-api/music-preset`;
 const PRESENCE_COUNT_URL = `${BASE_PATH}display-api/presence-count-one`;
 const POLL_MS = 2000;
@@ -23,6 +24,9 @@ const refs = {
   sceneSection: document.querySelector('#scene-section'),
   musicDetails: document.querySelector('#music-details'),
   musicDetailsButton: document.querySelector('#music-details-button'),
+  musicVolumeAuto: document.querySelector('#music-volume-auto'),
+  musicVolumeManual: document.querySelector('#music-volume-manual'),
+  musicAuthorityState: document.querySelector('#music-authority-state'),
   musicVolumeRequested: document.querySelector('#music-volume-requested'),
   musicVolumeAutomaticTarget: document.querySelector(
     '#music-volume-automatic-target',
@@ -516,7 +520,47 @@ function formatVolumeOffset(value) {
   return `${value < 0 ? '−' : '+'}${percentagePoints} pp`;
 }
 
+function renderVolumeAuthority(payload, target) {
+  const policy = payload?.musicVolumePolicies?.[target];
+  const busy = pending.has(`volume-authority:${target}`);
+  const blocked = policy?.authorityControlBlocked;
+  const unavailable = isUnavailable();
+  const disabled =
+    unavailable ||
+    !policy ||
+    blocked !== null ||
+    busy ||
+    pending.has(`music:${target}`) ||
+    pending.has(`music-preset:${target}`);
+  for (const [button, selected] of [
+    [refs.musicVolumeAuto, policy?.activeOwner === 'lugn'],
+    [refs.musicVolumeManual, policy?.activeOwner === 'manual'],
+  ]) {
+    button.disabled = disabled;
+    button.setAttribute('aria-pressed', String(!unavailable && selected));
+    button.setAttribute('aria-busy', String(busy));
+  }
+  const reason = unavailable
+    ? 'Lugn svarar inte · försök när kontakten är tillbaka'
+    : !policy
+      ? 'Väntar på volymstatus'
+      : busy
+        ? 'Byter volymstyrning …'
+        : blocked === 'volume_unavailable'
+          ? 'Spelaren saknar tillförlitlig volym · vänta på status'
+          : blocked === 'volume_pending'
+            ? 'Väntar på volymkvittens · försök igen när spelaren svarat'
+            : blocked === 'fade_active'
+              ? 'Volymen tonas · vänta tills toningen är klar'
+              : policy.selectorIntent
+                ? 'Tillfälligt val · släpps när rumsläget ändras'
+                : '';
+  setText(refs.musicAuthorityState, reason);
+  refs.musicAuthorityState.hidden = !reason;
+}
+
 function renderMusicVolumePolicy(payload, target) {
+  renderVolumeAuthority(payload, target);
   const stale = isUnavailable();
   const policy = target ? payload?.musicVolumePolicies?.[target] : null;
   const baseline = volumeFraction(policy?.baseline);
@@ -915,6 +959,7 @@ function renderMusic(payload) {
   const isPending =
     pending.has(`music:${musicTarget}`) ||
     pending.has(`music-preset:${musicTarget}`);
+  const authorityPending = pending.has(`volume-authority:${musicTarget}`);
   const connected = !isUnavailable();
   const canControl = availability === 'available' && connected && !isPending;
   const volumeAvailable =
@@ -952,9 +997,15 @@ function renderMusic(payload) {
     playbackAction === 'paused' ? 'Pausa' : 'Spela',
   );
   refs.musicVolumeDown.disabled =
-    !canControl || controlVolume === null || controlVolume <= 0;
+    !canControl ||
+    authorityPending ||
+    controlVolume === null ||
+    controlVolume <= 0;
   refs.musicVolumeUp.disabled =
-    !canControl || controlVolume === null || controlVolume >= 1;
+    !canControl ||
+    authorityPending ||
+    controlVolume === null ||
+    controlVolume >= 1;
   const newerVerification = (payload?.state?.music?.commands ?? []).some(
     (command) =>
       command.target === musicTarget &&
@@ -1142,6 +1193,8 @@ async function postJson(url, body) {
     if (!response.ok) {
       const error = new Error(`command_${response.status}`);
       error.status = response.status;
+      if (url === VOLUME_AUTHORITY_URL)
+        error.code = (await response.json().catch(() => ({}))).error;
       throw error;
     }
     return await response.json().catch(() => ({}));
@@ -1167,7 +1220,9 @@ async function runCommand(key, body) {
           ? SCENE_URL
           : key.startsWith('music-preset:')
             ? MUSIC_PRESET_URL
-            : MUSIC_URL;
+            : key.startsWith('volume-authority:')
+              ? VOLUME_AUTHORITY_URL
+              : MUSIC_URL;
     await postJson(url, body);
     if (key === 'presence:one')
       showToast(
@@ -1188,6 +1243,16 @@ async function runCommand(key, body) {
           ? 'Räknaren kunde inte bekräfta ändringen. Kontrollera antalet och försök igen.'
           : 'Kvittens saknas. Kommandot kan ha nått enheten; status uppdateras när den svarar.',
         'pending',
+      );
+      await refresh(true);
+    } else if (key.startsWith('volume-authority:')) {
+      showToast(
+        error.code === 'volume_pending' || error.code === 'fade_active'
+          ? 'Volymen ändras redan. Vänta på kvittens och försök igen.'
+          : error.code === 'volume_unavailable'
+            ? 'Spelaren saknar tillförlitlig volym. Vänta på status och försök igen.'
+            : 'Volymstyrningen kunde inte ändras. Kontrollera status och försök igen.',
+        'error',
       );
       await refresh(true);
     } else {
@@ -1212,6 +1277,19 @@ refs.sceneGrid.addEventListener('click', (event) => {
   if (!sceneId) return;
   void runCommand(`scene:${sceneId}`, { sceneId });
 });
+
+for (const [button, mode] of [
+  [refs.musicVolumeAuto, 'auto'],
+  [refs.musicVolumeManual, 'manual'],
+]) {
+  button.addEventListener('click', () => {
+    if (!musicTarget) return;
+    void runCommand(`volume-authority:${musicTarget}`, {
+      target: musicTarget,
+      mode,
+    });
+  });
+}
 
 refs.musicPlayback.addEventListener('click', () => {
   const device = latestPayload?.state?.music?.devices?.[musicTarget];

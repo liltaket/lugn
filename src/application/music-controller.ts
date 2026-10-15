@@ -119,6 +119,7 @@ export class MusicController {
     }
   >();
   private readonly commandSequences = new Map<string, number>();
+  private readonly authorityIntentSequences = new Map<string, number>();
   private readonly dispatchingCommands = new Set<string>();
   private readonly attributedOlderAutomaticVolumeCommands = new Set<string>();
   private onExternalVolumeChange:
@@ -252,6 +253,46 @@ export class MusicController {
   }
   getState(target: string): DeviceMusicState {
     return structuredClone(this.requireTarget(target));
+  }
+  /** A selector needs settled feedback, never an in-flight or stale destination. */
+  volumeAuthorityBlocked(
+    target: string,
+  ): 'volume_unavailable' | 'volume_pending' | 'fade_active' | null {
+    const device = this.requireTarget(target);
+    if (
+      device.availability !== 'available' ||
+      device.observed.volume === null ||
+      device.observedAt === null ||
+      this.lastObservations.get(target)?.staleVolumeFeedback
+    )
+      return 'volume_unavailable';
+    if (this.fades.has(target)) return 'fade_active';
+    if (
+      this.state.commands.some(
+        (command) =>
+          command.target === target &&
+          command.requested.property === 'volume' &&
+          (command.status === 'pending' ||
+            this.dispatchingCommands.has(command.id) ||
+            (command.recovery &&
+              !['matched', 'stopped'].includes(command.recovery.stage)) ||
+            (command.recovery?.verifiedAt !== undefined &&
+              command.recovery.verifiedAt > device.observedAt! &&
+              command.recovery.reported?.volume !== device.observed.volume)),
+      )
+    )
+      return 'volume_pending';
+    return null;
+  }
+
+  /** Invalidate retries and attribute delayed older feedback without a volume_set. */
+  noteVolumeAuthorityIntent(target: string): void {
+    this.authorityIntentSequences.set(target, this.nextCommandId);
+    this.latestHumanVolumeIntent.set(target, {
+      sequence: this.nextCommandId,
+      at: this.clock.now(),
+    });
+    this.bumpIntent(target, 'volume');
   }
   setExternalVolumeChangeHandler(
     handler: (target: string, volume: number, provenance: Provenance) => void,
@@ -569,6 +610,7 @@ export class MusicController {
     this.latestPlaybackIntentAt.clear();
     this.latestPlaybackChangedAt.clear();
     this.latestHumanVolumeIntent.clear();
+    this.authorityIntentSequences.clear();
     this.latestExternalPlaybackIntent.clear();
     this.commandSequences.clear();
     this.dispatchingCommands.clear();
@@ -1219,9 +1261,21 @@ export class MusicController {
       Math.abs(volume - command.requested.value) <= 0.005 + Number.EPSILON &&
       !(
         intent !== undefined &&
-        !isHumanActor(command.provenance.actor) &&
-        (this.commandSequences.get(command.id) ?? Infinity) <= intent.sequence
+        this.volumeCommandPredatesIntent(command, intent.sequence)
       )
+    );
+  }
+
+  private volumeCommandPredatesIntent(
+    command: MusicCommandRecord,
+    sequence: number,
+  ): boolean {
+    const issuedSequence = this.commandSequences.get(command.id) ?? Infinity;
+    return (
+      issuedSequence <= sequence &&
+      (!isHumanActor(command.provenance.actor) ||
+        issuedSequence <=
+          (this.authorityIntentSequences.get(command.target) ?? -1))
     );
   }
 
@@ -1261,13 +1315,9 @@ export class MusicController {
             (candidate.id !== latestVolume?.id ||
               candidate.status !== 'pending' ||
               (intent !== undefined &&
-                !isHumanActor(candidate.provenance.actor) &&
-                (this.commandSequences.get(candidate.id) ?? Infinity) <=
-                  intent.sequence))
+                this.volumeCommandPredatesIntent(candidate, intent.sequence)))
           : intent !== undefined &&
-            !isHumanActor(candidate.provenance.actor) &&
-            (this.commandSequences.get(candidate.id) ?? Infinity) <=
-              intent.sequence &&
+            this.volumeCommandPredatesIntent(candidate, intent.sequence) &&
             this.clock.now() - intent.at < LATE_VOLUME_ATTRIBUTION_MS &&
             this.clock.now() -
               (candidate.recovery?.lastAttemptAt ?? candidate.issuedAt) <

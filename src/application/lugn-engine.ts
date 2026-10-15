@@ -2,6 +2,9 @@ import { MusicController, type MusicOptions } from './music-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
   MusicAutomation,
+  VolumeAuthorityRequestSchema,
+  VolumeAuthorityError,
+  type VolumeAuthorityRequest,
   type MusicVolumePolicySnapshot,
   type MusicPlaybackPolicySnapshot,
 } from './music-automation.js';
@@ -502,6 +505,8 @@ export class LugnEngine {
       targets: Object.keys(options.music?.targets ?? {}),
       clock,
       holds: this.holds,
+      authorityControlBlocked: (target) =>
+        this.musicController.volumeAuthorityBlocked(target),
       getState: (target) => this.musicController.getState(target),
       request: (target, request, provenance) =>
         this.musicController.request(target, request, provenance),
@@ -893,6 +898,23 @@ export class LugnEngine {
       this.defaultSceneOnOccupancy !== undefined &&
       !this.restoredIntentAwaitingOccupancy
     );
+  }
+
+  setMusicVolumeAuthority(
+    request: VolumeAuthorityRequest,
+    provenance: Provenance,
+  ): MusicVolumePolicySnapshot {
+    request = VolumeAuthorityRequestSchema.parse(request);
+    provenance = ProvenanceSchema.parse(provenance);
+    this.musicController.getState(request.target);
+    if (!isHumanActor(provenance.actor))
+      throw new VolumeAuthorityError('human_actor_required');
+    const blocked = this.musicController.volumeAuthorityBlocked(request.target);
+    if (blocked) throw new VolumeAuthorityError(blocked);
+    this.musicController.noteVolumeAuthorityIntent(request.target);
+    this.musicAutomation.setVolumeAuthority(request, provenance);
+    this.publish(['music', 'intent']);
+    return this.musicAutomation.getVolumePolicySnapshot(request.target);
   }
 
   requestMusic(

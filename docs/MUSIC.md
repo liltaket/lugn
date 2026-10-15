@@ -15,7 +15,7 @@ The custom room dashboard provides:
 - Volume down/up in 5 percentage-point steps.
 
 The capability API includes `music.getState`, `music.getPolicy`, `music.play`, `music.pause`,
-`music.setVolume` (0..1), `music.fadeVolume`, `music.cancelFade`, and
+`music.setVolume` (0..1), `music.setVolumeAuthority`, `music.fadeVolume`, `music.cancelFade`, and
 `music.selectSource`. Fade requests use `{ target, volume, durationMs }`, with a
 1 second to 2 minute duration. Source names must appear in the target's
 configured `sources` allowlist; copy their exact spelling from the entity's
@@ -256,6 +256,41 @@ automatic fade steps; intentional human fades are still allowed. A human fade
 crossing an absence deadline may finish intentionally, but its completion does
 not recreate the expired hold. An already dispatched HA service call cannot be
 recalled.
+
+### Temporary Hub authority selector
+
+`music.setVolumeAuthority({ target, mode: "manual" | "auto" })` is a human-only,
+per-player runtime action. The authenticated Hub path supplies actor/source;
+body-supplied provenance is rejected. The response includes the resulting policy,
+not a claim of a physical volume change.
+
+Manual captures the settled, available reported volume without `volume_set`,
+changing the baseline, or persisting a new hold. This selector-only intent releases
+on a changed room presence, changed person count, changed home presence, or a
+changed global volume enable setting. A new visit therefore releases it too.
+Identical sensor reports, minute ticks and metadata repeats do not release it.
+A repeated Manual tap refreshes only this soft selection. An actual human volume
+request, fade or attributed physical change replaces it with the established
+manual ownership/continuity semantics above; selecting Manual cannot weaken that
+ownership.
+
+Auto clears this player's selector and manual volume hold, even when global volume
+policy was already enabled, then evaluates only this player's normal volume
+policy. It leaves the global enable setting and playback/Pause untouched. It
+cannot Play, bypass empty/away/unknown presence, or enable disabled automation.
+
+Both choices reject unavailable/unknown or stale-attributed volume, outstanding
+volume dispatch/recovery, newer disagreeing readback, and active/settling fades.
+The caller waits for settled feedback and retries. Accepted selections invalidate
+older retries for that player; delayed older command feedback cannot replace the
+new intent. An already dispatched physical service call cannot be recalled.
+
+Snapshots expose `selectorIntent`, `lastAuthorityIntent` (mode/time/provenance),
+and `authorityControlBlocked` (null or a typed reason). `manualHold` includes the
+effective soft hold while it applies, while the durable intent snapshot excludes
+it. Last physical volume-change attribution is unaffected. The Hub highlights
+only the backend's effective owner; neither option is selected while no controller
+is active. It explains blocked requests and never stores a local selected mode.
 
 The backend volume snapshot exposes `activeOwner`, `lastIntentActor`, `policyEnabled`,
 `policyActive`, a typed `activityReason`, and `manualHold` with provenance, creation
