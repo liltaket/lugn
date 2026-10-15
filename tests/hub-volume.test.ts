@@ -1569,11 +1569,58 @@ describe('truthful Hub music and presence labels', () => {
         'Styrning okänd',
       );
       expect(ui.get('#music-playback').disabled).toBe(false);
+      expect(ui.get('#music-volume-observed-label').textContent).toBe('Senast');
+      expect(ui.get('#music-volume-value').getAttribute('aria-label')).toBe(
+        'Senast rapporterade spelarvolym',
+      );
     } finally {
       ui.windowListeners.get('pagehide')?.();
       ui.engine.dispose();
     }
   });
+  it('preserves uncertainty when playback is unknown and no title is reported', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = ui.payload();
+      payload.state.music.devices['music.room']!.observed.playback = 'unknown';
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-player-status').textContent).toBe('Okänt');
+      expect(ui.get('#music-title').textContent).toBe('Uppspelning okänd');
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('qualifies only the music target awaiting reconciliation', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = {
+        ...ui.payload(),
+        musicObservationTrust: { 'music.room': false },
+      };
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-player-status').textContent).toBe(
+        'Senast rapporterat: Pausad',
+      );
+      expect(ui.get('#music-volume-observed-label').textContent).toBe('Senast');
+      expect(ui.get('#music-volume-value').getAttribute('aria-label')).toBe(
+        'Senast rapporterade spelarvolym',
+      );
+      expect(ui.get('#music-volume-controller').textContent).toBe(
+        'Styrning okänd',
+      );
+      expect(ui.get('#music-playback').disabled).toBe(false);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
   it('explains the backend session-scoped Pause release condition', async () => {
     vi.useFakeTimers();
     const ui = dashboard();

@@ -49,13 +49,20 @@ function webPanel() {
         'systemAlert',
       ].map((id) => [id, get(id)]),
     ),
-    window: { setTimeout, clearTimeout },
+    window: {
+      setTimeout,
+      clearTimeout,
+      setInterval: () => 0,
+      clearInterval() {},
+    },
     AbortController,
     Date,
   });
   runInContext(
-    `let overviewStale = false; let lastOverviewAt = 0; let overviewUpdateGeneration = 0;
-    let overview = null; let eventSource = null;
+    `let overviewStale = false; let lastOverviewAt = 0; let overviewInstanceGeneration = 0;
+    let overviewInstanceId; let overviewDeliveryRevision = -1;
+    const retiredOverviewInstances = new Set();
+    let overview = null; let eventSource = null; let pollTimer = null;
     let authProvider = 'token'; let clerkClient = null;
     const API_ROOT = '/ui/api'; const pendingActions = new Set();
     class SessionExpiredError extends Error {}
@@ -77,6 +84,56 @@ const device = {
   requested: {},
   allowedSources: [],
 };
+
+function overviewPayload(
+  revision: number,
+  deliveryRevision: number,
+  playback = 'playing',
+  instanceId = 'runtime-a',
+) {
+  return {
+    instanceId,
+    deliveryRevision,
+    state: {
+      revision,
+      presence: {},
+      lighting: { devices: {} },
+      music: {
+        devices: {
+          'music.room': {
+            ...device,
+            observed: { ...device.observed, playback },
+          },
+        },
+      },
+    },
+  };
+}
+
+function liveWebPanel() {
+  const ui = webPanel();
+  const streams: Array<{ onmessage?: (event: { data: string }) => void }> = [];
+  class EventSource {
+    onmessage?: (event: { data: string }) => void;
+    constructor() {
+      streams.push(this);
+    }
+    close() {}
+  }
+  Object.assign(ui.context, { EventSource });
+  runInContext('render = () => {}; startLiveUpdates()', ui.context);
+  return {
+    ...ui,
+    emit: (payload: unknown) =>
+      streams[0]!.onmessage?.({ data: JSON.stringify(payload) }),
+    respond: (payload: unknown) => {
+      ui.context['fetch'] = async () => ({
+        ok: true,
+        json: async () => payload,
+      });
+    },
+  };
+}
 
 describe('web music observation labels', () => {
   it.each([
@@ -159,6 +216,7 @@ describe('web music observation labels', () => {
       const ui = webPanel();
       const data = {
         state: {
+          revision: 1,
           presence: { state: 'occupied', personCount: 2 },
           lighting: { devices: {} },
         },
@@ -187,23 +245,102 @@ describe('web music observation labels', () => {
       vi.useRealTimers();
     }
   });
-  it('does not let an older polling response overwrite a newer live update', async () => {
-    const ui = webPanel();
-    let release!: (value: unknown) => void;
-    const pending = new Promise((resolve) => {
-      release = resolve;
+  it.each(['http-first', 'sse-first'])(
+    'orders HTTP and SSE snapshots regardless of arrival order: %s',
+    async (order) => {
+      const ui = liveWebPanel();
+      const older = overviewPayload(10, 10, 'playing');
+      const newer = overviewPayload(11, 11, 'paused');
+      if (order === 'http-first') {
+        ui.respond(newer);
+        await runInContext('refreshOverview()', ui.context);
+        ui.emit(older);
+      } else {
+        let release!: (value: unknown) => void;
+        ui.context['fetch'] = () =>
+          new Promise((resolve) => {
+            release = resolve;
+          });
+        const poll = runInContext('refreshOverview()', ui.context);
+        ui.emit(newer);
+        release({ ok: true, json: async () => older });
+        await poll;
+      }
+      expect(runInContext('overview.state.revision', ui.context)).toBe(11);
+      expect(
+        runInContext(
+          "overview.state.music.devices['music.room'].observed.playback",
+          ui.context,
+        ),
+      ).toBe('paused');
+    },
+  );
+
+  it.each([false, true])(
+    'accepts the newest overlapping poll (reverse completion: %s)',
+    async (reverse) => {
+      const ui = liveWebPanel();
+      const releases: Array<(value: unknown) => void> = [];
+      ui.context['fetch'] = () =>
+        new Promise((resolve) => releases.push(resolve));
+      const first = runInContext('refreshOverview()', ui.context);
+      const second = runInContext('refreshOverview()', ui.context);
+      const old = () =>
+        releases[0]!({ ok: true, json: async () => overviewPayload(12, 12) });
+      const fresh = () =>
+        releases[1]!({ ok: true, json: async () => overviewPayload(13, 13) });
+      if (reverse) {
+        fresh();
+        await second;
+        old();
+        await first;
+      } else {
+        old();
+        await first;
+        fresh();
+        await second;
+      }
+      expect(runInContext('overview.state.revision', ui.context)).toBe(13);
+    },
+  );
+
+  it('orders equal-revision health changes, accepts restart and rejects retired or obsolete in-flight instances', async () => {
+    const ui = liveWebPanel();
+    ui.emit(overviewPayload(100, 100));
+    ui.respond({
+      ...overviewPayload(100, 102),
+      musicObservationTrust: { 'music.room': false },
     });
-    const older = {
-      state: { revision: 10, presence: {}, lighting: { devices: {} } },
-    };
-    const newer = {
-      state: { revision: 11, presence: {}, lighting: { devices: {} } },
-    };
-    Object.assign(ui.context, { fetch: () => pending, newer });
-    const poll = runInContext('fetchOverview()', ui.context);
-    runInContext('overview = newer; overviewUpdateGeneration += 1', ui.context);
-    release({ ok: true, json: async () => older });
-    await expect(poll).resolves.toMatchObject({ state: { revision: 11 } });
+    await runInContext('refreshOverview()', ui.context);
+    ui.emit({
+      ...overviewPayload(100, 101),
+      musicObservationTrust: { 'music.room': true },
+    });
+    expect(
+      runInContext("overview.musicObservationTrust['music.room']", ui.context),
+    ).toBe(false);
+    ui.emit({
+      ...overviewPayload(100, 103),
+      musicObservationTrust: { 'music.room': true },
+    });
+    expect(
+      runInContext("overview.musicObservationTrust['music.room']", ui.context),
+    ).toBe(true);
+    let release!: (value: unknown) => void;
+    ui.context['fetch'] = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    const poll = runInContext('refreshOverview()', ui.context);
+    ui.emit(overviewPayload(1, 1, 'paused', 'runtime-b'));
+    release({
+      ok: true,
+      json: async () => overviewPayload(200, 200, 'playing', 'runtime-c'),
+    });
+    await poll;
+    ui.emit(overviewPayload(201, 201));
+    expect(runInContext('overview.instanceId', ui.context)).toBe('runtime-b');
+    expect(runInContext('overview.state.revision', ui.context)).toBe(1);
   });
 
   it('qualifies HA-disconnected observations while keeping commands available', () => {
@@ -217,6 +354,21 @@ describe('web music observation labels', () => {
       ui.context,
     ) as Element;
     expect(texts(article)).toContain('Senast rapporterad titel');
+    expect(texts(article)).not.toContain('Nu spelas');
+  });
+
+  it('keeps cached observations qualified while HA is connected but unreconciled', () => {
+    const ui = webPanel();
+    runInContext(
+      `overview = { health: { integrations: { home_assistant: 'connected' } }, musicObservationTrust: { 'music.room': false } }`,
+      ui.context,
+    );
+    const article = runInContext(
+      `renderMusicPlayer('music.room', ${JSON.stringify(device)}, [])`,
+      ui.context,
+    ) as Element;
+    expect(texts(article)).toContain('Senast rapporterad uppspelning');
+    expect(texts(article)).toContain('Senast rapporterad volym');
     expect(texts(article)).not.toContain('Nu spelas');
   });
 

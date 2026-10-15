@@ -71,7 +71,10 @@ let sessionRenewDone = null;
 let overview = null;
 let overviewStale = false;
 let lastOverviewAt = 0;
-let overviewUpdateGeneration = 0;
+let overviewInstanceId;
+let overviewInstanceGeneration = 0;
+let overviewDeliveryRevision = -1;
+const retiredOverviewInstances = new Set();
 let eventSource = null;
 let pollTimer = null;
 let actionMessage = '';
@@ -618,7 +621,7 @@ async function renewClerkSession() {
     csrfToken = result.csrfToken;
     scheduleSessionRenewal(expiresAt);
     try {
-      overview = await fetchOverview();
+      await fetchOverview();
     } catch (error) {
       if (error instanceof SessionExpiredError)
         throw new ClerkAuthorizationError(
@@ -823,7 +826,7 @@ async function openDashboard(sessionCsrfToken, expiresAt = null) {
   csrfToken = sessionCsrfToken;
   scheduleSessionRenewal(expiresAt);
   try {
-    overview = await fetchOverview();
+    await fetchOverview();
   } catch (error) {
     csrfToken = null;
     clearSessionRenewal();
@@ -933,8 +936,43 @@ async function retryClerkSignOut() {
   }
 }
 
+// HTTP reads and SSE frames share the server's per-instance delivery sequence.
+function acceptOverview(next) {
+  if (
+    !next?.state?.presence ||
+    !next?.state?.lighting?.devices ||
+    !Number.isInteger(next.state.revision) ||
+    next.state.revision < 0
+  )
+    throw new Error('Servern returnerade ett ogiltigt rumsstatus.');
+  if (
+    typeof next.instanceId === 'string' &&
+    next.instanceId !== overviewInstanceId
+  ) {
+    if (retiredOverviewInstances.has(next.instanceId)) return false;
+    if (overviewInstanceId) retiredOverviewInstances.add(overviewInstanceId);
+    overviewInstanceId = next.instanceId;
+    overviewInstanceGeneration += 1;
+    overview = null;
+    overviewDeliveryRevision = -1;
+  }
+  if (next.state.revision < (overview?.state?.revision ?? -1)) return false;
+  if (
+    Number.isInteger(next.deliveryRevision) &&
+    next.deliveryRevision < overviewDeliveryRevision
+  )
+    return false;
+  overviewDeliveryRevision = Number.isInteger(next.deliveryRevision)
+    ? next.deliveryRevision
+    : overviewDeliveryRevision;
+  overview = next;
+  overviewStale = false;
+  lastOverviewAt = Date.now();
+  return true;
+}
+
 async function fetchOverview() {
-  const readGeneration = overviewUpdateGeneration;
+  const readGeneration = overviewInstanceGeneration;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 8000);
   try {
@@ -948,15 +986,14 @@ async function fetchOverview() {
       throw new SessionExpiredError('Sessionen har gått ut.');
     if (!response.ok) throw new Error('Rumsstatus kunde inte hämtas.');
     const result = await response.json();
-    if (!result?.state?.presence || !result?.state?.lighting?.devices)
-      throw new Error('Servern returnerade ett ogiltigt rumsstatus.');
-    // A stream update or newer completed poll wins over an older in-flight read.
-    if (readGeneration !== overviewUpdateGeneration && overview)
+    // A response from an earlier connection cannot introduce another instance.
+    if (
+      readGeneration !== overviewInstanceGeneration &&
+      result?.instanceId !== overviewInstanceId
+    )
       return overview;
-    overviewUpdateGeneration += 1;
-    overviewStale = false;
-    lastOverviewAt = Date.now();
-    return result;
+    acceptOverview(result);
+    return overview;
   } finally {
     window.clearTimeout(timeout);
   }
@@ -972,12 +1009,7 @@ function startLiveUpdates() {
   eventSource.onmessage = (event) => {
     try {
       const next = JSON.parse(event.data);
-      if (!next?.state?.presence || !next?.state?.lighting?.devices) return;
-      overview = next;
-      overviewUpdateGeneration += 1;
-      overviewStale = false;
-      lastOverviewAt = Date.now();
-      render();
+      if (acceptOverview(next)) render();
     } catch {
       setLiveStatus('Ogiltig liveuppdatering', 'warn');
     }
@@ -1007,7 +1039,7 @@ function stopLiveUpdates() {
 
 async function refreshOverview() {
   try {
-    overview = await fetchOverview();
+    await fetchOverview();
     render();
   } catch (error) {
     if (error instanceof SessionExpiredError) {
@@ -1695,6 +1727,7 @@ function renderMusicPlayer(target, device, commands, fade) {
   const reportedOnly =
     overviewStale ||
     device.availability !== 'available' ||
+    overview?.musicObservationTrust?.[target] === false ||
     (overview?.health?.integrations?.home_assistant !== undefined &&
       overview.health.integrations.home_assistant !== 'connected') ||
     newerPlaybackReport;

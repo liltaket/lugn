@@ -520,10 +520,17 @@ function formatVolumeOffset(value) {
   return `${value < 0 ? '−' : '+'}${percentagePoints} pp`;
 }
 
+function musicObservationTrusted(payload, target) {
+  return (
+    payload?.musicObservationConnected !== false &&
+    payload?.musicObservationTrust?.[target] !== false
+  );
+}
+
 function renderMusicVolumePolicy(payload, target) {
   const stale =
     isUnavailable() ||
-    payload?.musicObservationConnected === false ||
+    !musicObservationTrusted(payload, target) ||
     payload?.state?.music?.devices?.[target]?.availability !== 'available';
   const policy = target ? payload?.musicVolumePolicies?.[target] : null;
   const baseline = volumeFraction(policy?.baseline);
@@ -581,7 +588,7 @@ function renderMusicVolumePolicy(payload, target) {
   const explanation = stale
     ? isUnavailable()
       ? 'Lugn svarar inte · visar senaste värden'
-      : payload?.musicObservationConnected === false
+      : !musicObservationTrusted(payload, target)
         ? 'Home Assistant-återkoppling saknas · visar senaste värden'
         : 'Spelaren är frånkopplad · visar senaste värden'
     : hold && typeof hold.expiresAt === 'number'
@@ -998,13 +1005,19 @@ function renderMusic(payload) {
   );
   setText(
     refs.musicVolumeObservedLabel,
-    availability === 'available' && connected && !newerVerification
+    availability === 'available' &&
+      connected &&
+      musicObservationTrusted(payload, musicTarget) &&
+      !newerVerification
       ? 'Nu'
       : 'Senast',
   );
   refs.musicVolumeValue.setAttribute(
     'aria-label',
-    availability === 'available' && connected && !newerVerification
+    availability === 'available' &&
+      connected &&
+      musicObservationTrusted(payload, musicTarget) &&
+      !newerVerification
       ? 'Spelarens rapporterade volym'
       : 'Senast rapporterade spelarvolym',
   );
@@ -1026,7 +1039,7 @@ function renderMusic(payload) {
   const reportedOnly =
     !connected ||
     availability !== 'available' ||
-    payload?.musicObservationConnected === false ||
+    !musicObservationTrusted(payload, musicTarget) ||
     newerPlaybackReport;
   const title =
     typeof observed.title === 'string' && observed.title.trim()
@@ -1035,7 +1048,9 @@ function renderMusic(payload) {
         ? 'Ingen titel rapporterad'
         : isPlaying
           ? 'Musik spelas'
-          : 'Ingen musik spelar';
+          : ['paused', 'idle', 'off'].includes(observed.playback)
+            ? 'Ingen musik spelar'
+            : 'Uppspelning okänd';
   setText(
     refs.musicTitle,
     typeof observed.title === 'string' && observed.title.trim()

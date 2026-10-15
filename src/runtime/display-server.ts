@@ -84,6 +84,8 @@ export type LugnDisplayServerOptions = {
   stateProvider: () => RoomState;
   /** Whether the upstream subscription can currently supply live player observations. */
   musicObservationConnectedProvider?: () => boolean;
+  /** Per-player reconciliation trust, independent of subscription health. */
+  musicObservationTrustProvider?: () => Record<string, boolean>;
   stateStream?: StateEventStream;
   musicVolumePoliciesProvider?: () => Record<string, MusicVolumePolicySnapshot>;
   musicPlaybackPoliciesProvider?: () => Record<
@@ -380,6 +382,8 @@ export class LugnDisplayServer {
       deliveryRevision: ++this.nextDeliveryRevision,
       instanceId: this.instanceId,
       generatedAt: Date.now(),
+      musicObservationTrust:
+        this.options.musicObservationTrustProvider?.() ?? {},
       musicObservationConnected:
         this.options.musicObservationConnectedProvider?.() ?? true,
       musicVolumePolicies: this.options.musicVolumePoliciesProvider?.() ?? {},

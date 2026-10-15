@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   HomeAssistantWebSocketTransport,
+  type HomeAssistantConnection,
   type HomeAssistantSocket,
   type HomeAssistantSocketMessageEvent,
 } from '../src/adapters/home-assistant-websocket.js';
@@ -202,6 +203,46 @@ describe('Home Assistant WebSocket transport', () => {
     expect(transport.status).toBe('stopped');
     expect(events).toEqual([]);
     expect(sockets).toHaveLength(1);
+  });
+
+  it('invalidates reconciliation context immediately on loss, auth failure and stop', () => {
+    const clock = new FakeClock();
+    const sockets: FakeSocket[] = [];
+    const connections: HomeAssistantConnection[] = [];
+    const transport = new HomeAssistantWebSocketTransport(
+      { baseUrl: 'http://ha.invalid', token: 'test-secret' },
+      () => {},
+      {
+        clock,
+        createSocket: () => {
+          const socket = new FakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        onConnected: (connection) => {
+          connections.push(connection);
+        },
+      },
+    );
+    transport.start();
+    const id = authenticate(sockets[0]!);
+    sockets[0]!.receive({ type: 'result', id, success: true });
+    expect(connections[0]!.isCurrent()).toBe(true);
+    sockets[0]!.fail();
+    expect(connections[0]!.isCurrent()).toBe(false);
+    clock.advanceBy(1000);
+    const second = authenticate(sockets[1]!);
+    sockets[1]!.receive({ type: 'result', id: second, success: true });
+    expect(connections[0]!.isCurrent()).toBe(false);
+    expect(connections[1]!.isCurrent()).toBe(true);
+    sockets[1]!.receive({ type: 'auth_invalid' });
+    expect(connections[1]!.isCurrent()).toBe(false);
+    transport.start();
+    const third = authenticate(sockets[2]!);
+    sockets[2]!.receive({ type: 'result', id: third, success: true });
+    expect(connections[2]!.isCurrent()).toBe(true);
+    transport.stop();
+    expect(connections[2]!.isCurrent()).toBe(false);
   });
 
   it('reports callback failures without disconnecting or leaking frame data', () => {
