@@ -1,5 +1,6 @@
 import { createServer } from 'node:net';
 import { expect, it, vi } from 'vitest';
+import { SimulatedMusicAdapter } from '../src/adapters/simulated-music.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { FakeClock } from '../src/core/clock.js';
@@ -12,7 +13,9 @@ async function setup() {
   const address = finder.address();
   if (!address || typeof address === 'string') throw new Error('No test port');
   await new Promise<void>((resolve) => finder.close(() => resolve()));
-  const engine = new LugnEngine(new FakeClock(10_000), {
+  const clock = new FakeClock(10_000);
+  const adapter = new SimulatedMusicAdapter(clock);
+  const engine = new LugnEngine(clock, {
     deviceIds: ['lighting.entry'],
     scenes: [
       {
@@ -21,7 +24,13 @@ async function setup() {
         lighting: { 'lighting.entry': { power: true, brightness: 20 } },
       },
     ],
-    music: { targets: { 'music.room': ['Optical'] } },
+    music: { targets: { 'music.room': ['Optical'] }, adapter },
+  });
+  adapter.observe('music.room', {
+    playback: 'paused',
+    volume: 0.3,
+    source: 'Optical',
+    title: null,
   });
   const registry = new CapabilityRegistry(engine, {
     presenceCountAdapter: new Stl27lPresenceControlAdapter(
@@ -78,6 +87,11 @@ const actions = [
     'light',
     { target: 'lighting.entry', values: { power: false } },
     'lighting.set',
+  ],
+  [
+    'volume-authority',
+    { target: 'music.room', mode: 'auto' },
+    'music.setVolumeAuthority',
   ],
   [
     'music',
@@ -150,7 +164,7 @@ it('rejects body or URL role/source spoofing before invoking capabilities', asyn
             'content-type': 'application/json',
             origin: new URL(s.url('bed')).origin,
           },
-          body: JSON.stringify(actions[3][1]),
+          body: JSON.stringify(actions[4][1]),
         })
       ).status,
     ).toBe(400);
@@ -160,3 +174,58 @@ it('rejects body or URL role/source spoofing before invoking capabilities', asyn
     await s.stop();
   }
 });
+
+it.each(['bed', 'desk'] as const)(
+  'uses authenticated %s provenance for Manual and rejects unsettled handback',
+  async (role) => {
+    const s = await setup();
+    try {
+      const response = await s.post(role, 'volume-authority', {
+        target: 'music.room',
+        mode: 'manual',
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        accepted: true,
+        policy: {
+          activeOwner: 'manual',
+          selectorIntent: {
+            volume: 0.3,
+            provenance: {
+              actor: { type: 'user', id: `nest-dashboard:${role}` },
+              source: `lugn.cast_dashboard.${role}`,
+            },
+          },
+        },
+      });
+      expect(
+        (
+          await s.post(role, 'volume-authority', {
+            target: 'music.room',
+            mode: 'auto',
+          })
+        ).status,
+      ).toBe(200);
+      const before =
+        s.engine.getMusicVolumePolicySnapshots()['music.room']
+          ?.lastAuthorityIntent;
+      await s.engine.requestMusic(
+        'music.room',
+        { property: 'volume', value: 0.4 },
+        { actor: { type: 'user' } },
+      );
+      const blocked = await s.post(role, 'volume-authority', {
+        target: 'music.room',
+        mode: 'auto',
+      });
+      expect(blocked.status).toBe(400);
+      expect(await blocked.json()).toEqual({ error: 'volume_pending' });
+      expect(
+        s.engine.getMusicVolumePolicySnapshots()['music.room']
+          ?.lastAuthorityIntent,
+      ).toEqual(before);
+    } finally {
+      await s.stop();
+    }
+  },
+);

@@ -2579,8 +2579,14 @@ function renderMusicSettings() {
   }
   const target = select.value;
   const policy = overview.musicVolumePolicies?.[target];
+  const current =
+    !overviewStale &&
+    overview.musicObservationTrust?.[target] !== false &&
+    overview.state.music.devices[target]?.availability === 'available' &&
+    (overview.health?.integrations?.home_assistant === undefined ||
+      overview.health.integrations.home_assistant === 'connected');
   document.getElementById('music-settings-current').textContent = policy
-    ? `Nu · Rapporterad volym ${volumePercent(overview.state.music.devices[target].observed.volume)} · Baslinje ${volumePercent(policy.baseline)} (${policy.baselineSource === 'user' ? 'vald av dig' : 'beräknad'}) · Dygn ${volumeOffset(policy.dailyOffset)} · Personer ${volumeOffset(policy.personOffset)} · Automatiskt mål ${volumePercent(policy.target)} · Volymägare: ${volumeOwner(policy.activeOwner)}`
+    ? `${current ? 'Nu' : 'Senast rapporterat'} · Rapporterad volym ${volumePercent(overview.state.music.devices[target].observed.volume)} · Baslinje ${volumePercent(policy.baseline)} (${policy.baselineSource === 'user' ? 'vald av dig' : 'beräknad'}) · Dygn ${volumeOffset(policy.dailyOffset)} · Personer ${volumeOffset(policy.personOffset)} · Automatiskt mål ${volumePercent(policy.target)} · Volymägare: ${volumeOwner(policy.activeOwner)}`
     : 'Väntar på volympolicy.';
   if (
     !volumeSettingsDraft ||

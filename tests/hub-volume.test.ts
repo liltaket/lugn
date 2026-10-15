@@ -156,6 +156,7 @@ function dashboard(
     target: string;
     request: { property: string; value: number | string };
   }> = [];
+  const authorityCalls: Array<{ target: string; mode: 'auto' | 'manual' }> = [];
   let nextStateGate: Promise<void> | undefined;
   let nextStateStatus = 200;
   let stateReads = 0;
@@ -200,6 +201,30 @@ function dashboard(
       expect(JSON.parse(options.body ?? '{}')).toEqual({});
       presenceCorrections += 1;
       return { ok: true, json: async () => ({ accepted: true, count: 1 }) };
+    }
+    if (url.endsWith('/display-api/volume-authority')) {
+      const input = JSON.parse(options.body ?? '{}') as {
+        target: string;
+        mode: 'auto' | 'manual';
+      };
+      authorityCalls.push(input);
+      try {
+        const result = await registry.invoke(
+          'music.setVolumeAuthority',
+          input,
+          {
+            actor: { type: 'user', id: 'nest-dashboard:desk' },
+            source: 'lugn.cast_dashboard.desk',
+          },
+        );
+        return { ok: true, json: async () => result };
+      } catch (error) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: (error as { code: string }).code }),
+        };
+      }
     }
     const body = JSON.parse(options.body ?? '{}') as {
       target: string;
@@ -264,6 +289,7 @@ function dashboard(
     engine,
     get,
     apiCalls,
+    authorityCalls,
     context,
     holdNextState,
     stateReads: () => stateReads,
@@ -1639,3 +1665,176 @@ describe('truthful Hub music and presence labels', () => {
     }
   });
 });
+
+it.each(['bed', 'desk'] as const)(
+  'renders %s volume authority from backend and blocks rapid taps without optimistic selection',
+  async (role) => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      await ui.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+        personCount: 1,
+      });
+      runInContext(
+        `render(${JSON.stringify({ ...ui.payload(), role })})`,
+        ui.context,
+      );
+      const manual = ui.get('#music-volume-manual');
+      const auto = ui.get('#music-volume-auto');
+      expect(auto.getAttribute('aria-pressed')).toBe('true');
+      expect(manual.disabled).toBe(false);
+      const release = ui.holdNextState();
+      manual.click();
+      manual.click();
+      auto.click();
+      await microtasks();
+      expect(ui.authorityCalls).toEqual([
+        { target: 'music.room', mode: 'manual' },
+      ]);
+      expect(manual.disabled).toBe(true);
+      expect(manual.getAttribute('aria-busy')).toBe('true');
+      expect(ui.get('#music-playback').disabled).toBe(false);
+      expect(ui.get('#music-volume-up').disabled).toBe(true);
+      expect(manual.getAttribute('aria-pressed')).toBe('false');
+      expect(ui.adapter.dispatched).toHaveLength(0);
+      release();
+      await microtasks();
+      expect(manual.getAttribute('aria-pressed')).toBe('true');
+      expect(ui.get('#music-authority-state').textContent).toContain(
+        'Tillfälligt',
+      );
+      await ui.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+        personCount: 1,
+      });
+      runInContext(
+        `render(${JSON.stringify({ ...ui.payload(), role })})`,
+        ui.context,
+      );
+      expect(manual.getAttribute('aria-pressed')).toBe('true');
+      await ui.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'unknown',
+        personCount: null,
+      });
+      runInContext(
+        `render(${JSON.stringify({ ...ui.payload(), role })})`,
+        ui.context,
+      );
+      expect(manual.getAttribute('aria-pressed')).toBe('false');
+      expect(auto.getAttribute('aria-pressed')).toBe('false');
+      expect(ui.get('#music-volume-target-state').textContent).toContain(
+        'närvaro okänd',
+      );
+    } finally {
+      ui.engine.dispose();
+    }
+  },
+);
+
+it('explains unknown/offline/pending volume and handles a backend race without claiming success', async () => {
+  vi.useFakeTimers();
+  const ui = dashboard();
+  try {
+    await microtasks();
+    ui.adapter.observe(
+      'music.room',
+      { playback: 'paused', volume: null, source: 'Optical', title: null },
+      false,
+    );
+    runInContext(`render(${JSON.stringify(ui.payload())})`, ui.context);
+    expect(ui.get('#music-volume-manual').disabled).toBe(true);
+    expect(ui.get('#music-authority-state').textContent).toContain(
+      'tillförlitlig volym',
+    );
+    ui.adapter.observe('music.room', {
+      playback: 'paused',
+      volume: 0.3,
+      source: 'Optical',
+      title: null,
+    });
+    runInContext(`render(${JSON.stringify(ui.payload())})`, ui.context);
+    expect(ui.get('#music-volume-manual').disabled).toBe(false);
+    // State changes after the last snapshot, before the tap reaches the backend.
+    await ui.engine.requestMusic(
+      'music.room',
+      { property: 'volume', value: 0.4 },
+      { actor: { type: 'user' } },
+    );
+    ui.get('#music-volume-manual').click();
+    await microtasks();
+    expect(ui.get('#toast').textContent).toContain('Volymen ändras redan');
+    expect(
+      ui.engine.getMusicVolumePolicySnapshots()['music.room']?.selectorIntent,
+    ).toBeNull();
+    expect(ui.get('#music-volume-auto').disabled).toBe(true);
+    expect(ui.get('#music-authority-state').textContent).toContain(
+      'volymkvittens',
+    );
+    runInContext(
+      `setConnection('offline', 'Offline', true); renderMusic(latestPayload);`,
+      ui.context,
+    );
+    expect(ui.get('#music-volume-manual').disabled).toBe(true);
+    expect(ui.get('#music-volume-manual').getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(ui.get('#music-authority-state').textContent).toContain(
+      'Lugn svarar inte',
+    );
+  } finally {
+    ui.engine.dispose();
+  }
+});
+
+it.each(['bed', 'desk'] as const)(
+  '%s disables and qualifies authority when upstream observations disconnect while Lugn stays fresh',
+  async (role) => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      await ui.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+        personCount: 1,
+      });
+      const payload = { ...ui.payload(), role };
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-volume-auto').getAttribute('aria-pressed')).toBe(
+        'true',
+      );
+      expect(ui.get('#music-volume-manual').disabled).toBe(false);
+      runInContext(
+        `render(${JSON.stringify({ ...payload, musicObservationConnected: false })})`,
+        ui.context,
+      );
+      for (const id of ['#music-volume-auto', '#music-volume-manual']) {
+        expect(ui.get(id).disabled).toBe(true);
+        expect(ui.get(id).getAttribute('aria-pressed')).toBe('false');
+        ui.get(id).click();
+      }
+      expect(ui.authorityCalls).toHaveLength(0);
+      expect(ui.get('#music-authority-state').textContent).toContain(
+        'Spelarstatus saknar kontakt',
+      );
+      expect(ui.get('#music-authority-state').hidden).toBe(false);
+      for (const restored of [
+        { ...payload, musicObservationConnected: true },
+        payload,
+      ]) {
+        runInContext(`render(${JSON.stringify(restored)})`, ui.context);
+        expect(ui.get('#music-volume-manual').disabled).toBe(false);
+        expect(ui.get('#music-volume-auto').getAttribute('aria-pressed')).toBe(
+          'true',
+        );
+      }
+    } finally {
+      ui.engine.dispose();
+    }
+  },
+);

@@ -411,3 +411,40 @@ describe('runtime music observation trust', () => {
     }
   });
 });
+
+it('enforces per-player runtime trust at the authority capability boundary', async () => {
+  const ui = await setup();
+  const manual = (target = 'music.room') =>
+    ui.runtime.engine.setMusicVolumeAuthority(
+      { target, mode: 'manual' },
+      { actor: { type: 'user' }, source: 'test' },
+    );
+  try {
+    expect(() => manual()).toThrow('volume_unavailable');
+    const first = ui.connect();
+    ui.requests[0]!.resolve(report());
+    await settle();
+    expect(manual().activeOwner).toBe('manual');
+    first.socket.fail();
+    expect(
+      ui.runtime.engine.state.music.devices['music.room']!.availability,
+    ).toBe('available');
+    expect(() => manual()).toThrow('volume_unavailable');
+    expect(
+      ui.runtime.engine.getMusicVolumePolicySnapshots()['music.room']!
+        .authorityControlBlocked,
+    ).toBe('volume_unavailable');
+    await vi.advanceTimersByTimeAsync(1000);
+    const second = ui.connect();
+    expect(() => manual()).toThrow('volume_unavailable');
+    ui.requests[1]!.resolve(new Response(null, { status: 503 }));
+    await settle();
+    expect(() => manual()).toThrow('volume_unavailable');
+    second.emit(reported('room', 'paused', '2026-10-02T12:00:00Z'));
+    await settle();
+    expect(manual().activeOwner).toBe('manual');
+    expect(() => manual('music.other')).toThrow('volume_unavailable');
+  } finally {
+    await ui.cleanup();
+  }
+});

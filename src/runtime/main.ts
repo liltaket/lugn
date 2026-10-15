@@ -184,6 +184,9 @@ export async function startRuntime(
   );
   const savedVolumeSettings = await volumeSettingsStore.load();
   const restoredMusicIntent = lightingIntentStore.restoredMusicIntent;
+  // The engine can request policy snapshots during construction, before the
+  // subscription and reconciliation lifecycle below has been established.
+  let isMusicObservationTrusted: (target: string) => boolean = () => false;
   const engine = new LugnEngine(systemClock, {
     adapter: homeAssistantLighting,
     deviceIds,
@@ -212,6 +215,7 @@ export async function startRuntime(
               ),
             ),
             adapter: homeAssistantMusic,
+            observationTrusted: (target) => isMusicObservationTrusted(target),
           },
         }),
     ...(homeAssistantSwitch === undefined
@@ -256,6 +260,9 @@ export async function startRuntime(
   let homeAssistantConnection: HomeAssistantConnection | undefined;
   const trustedMusicTargets = new Set<string>();
   const reconciledMusicTargets = new Set<string>();
+  isMusicObservationTrusted = (target) =>
+    homeAssistantConnection?.isCurrent() === true &&
+    trustedMusicTargets.has(target);
   // Only actual adapter emissions count; rejected old/invalid reports cannot
   // restore trust. Seeding emissions remain provisional until the query succeeds.
   homeAssistantMusic?.subscribe(({ target }) => {
@@ -269,8 +276,7 @@ export async function startRuntime(
     Object.fromEntries(
       Object.keys(config.homeAssistant.music).map((target) => [
         target,
-        homeAssistantConnection?.isCurrent() === true &&
-          trustedMusicTargets.has(target),
+        isMusicObservationTrusted(target),
       ]),
     );
   const bufferedHomeAssistantEvents: unknown[] = [];

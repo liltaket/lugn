@@ -808,6 +808,13 @@ h2 {
 /* Feedback has its own row. On the shorter Hub, secondary policy details
    yield space while the clock, sensors, target and every control stay visible. */
 @media (max-height: 700px) {
+  #music-volume-target-state,
+  #music-playback-policy,
+  .music-command-state {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .screen[data-feedback='true'] {
     grid-template-rows: 134px 48px minmax(0, 1fr);
   }
@@ -818,7 +825,10 @@ h2 {
     padding-block: 6px;
     margin-top: 6px;
   }
-  .screen[data-feedback='true'] .volume-policy-detail {
+  .screen[data-feedback='true'] .volume-policy-detail,
+  .screen[data-feedback='true'] #music-volume-target-state,
+  .screen[data-feedback='true'] #music-playback-policy,
+  .screen[data-feedback='true'] .music-command-state {
     display: none;
   }
 }
@@ -826,5 +836,66 @@ h2 {
 @media (max-height: 540px) and (min-width: 761px) {
   .screen[data-feedback='true'] {
     grid-template-rows: 108px 48px minmax(0, 1fr);
+  }
+}
+
+/* Runtime volume authority shares the existing policy strip on both Hubs. */
+.volume-authority {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  min-width: 0;
+}
+.volume-authority button {
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  font-size: 14px;
+  font-weight: 570;
+}
+.volume-authority button[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+@media (hover: hover) {
+  .volume-authority button:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+}
+
+/* Reserve transport space before allocating room to explanatory text. */
+.music-heading,
+.music-presets,
+.music-transport {
+  flex-shrink: 0;
+}
+#music-authority-state {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+#music-player-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+@media (max-height: 540px) and (min-width: 761px) {
+  /* Full policy explanations remain available in Details on the short Hub. */
+  #music-volume-target-state,
+  #music-playback-policy {
+    display: none;
+  }
+  .screen[data-feedback='true'] .music-now-playing {
+    min-height: 28px;
+    padding-block: 2px;
+  }
+  .screen[data-feedback='true'] .music-now-playing span {
+    display: none;
   }
 }

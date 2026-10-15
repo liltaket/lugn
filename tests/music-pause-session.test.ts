@@ -12,6 +12,22 @@ import type {
   StateUpdate,
 } from '../src/core/schemas.js';
 
+import type { MusicVolumePolicySnapshot } from '../src/application/music-automation.js';
+
+function volumeOwnership(policy: MusicVolumePolicySnapshot) {
+  return {
+    activeOwner: policy.activeOwner,
+    manualHold: policy.manualHold,
+    baseline: policy.baseline,
+    baselineSource: policy.baselineSource,
+    policyEnabled: policy.policyEnabled,
+    target: policy.target,
+    effectiveTarget: policy.effectiveTarget,
+    dailyOffset: policy.dailyOffset,
+    personOffset: policy.personOffset,
+  };
+}
+
 const start = Date.parse('2026-10-04T12:00:00+02:00');
 const minute = 60_000;
 const target = 'music.room';
@@ -174,7 +190,7 @@ it('releases only playback at a short session boundary and publishes policy/hist
     activityReason: 'confirmed_empty',
     entryEligible: true,
   });
-  expect(s.volume()).toEqual(beforeVolume);
+  expect(volumeOwnership(s.volume())).toEqual(volumeOwnership(beforeVolume));
   expect(
     s.engine.state.intent.holds.some((h) => h.scope === 'music.playback'),
   ).toBe(false);
@@ -378,7 +394,7 @@ it.each(['playing', 'preset', 'physical'] as const)(
         user,
       );
     expect(s.playback().manualPause).toBeNull();
-    expect(s.volume()).toEqual(volume);
+    expect(volumeOwnership(s.volume())).toEqual(volumeOwnership(volume));
   },
 );
 

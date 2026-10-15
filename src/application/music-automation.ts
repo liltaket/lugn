@@ -25,10 +25,40 @@ import {
   ManualVolumeHoldSchema,
   MusicVolumeActivityReasonSchema,
   MusicPlaybackActivityReasonSchema,
+  SemanticMusicIdSchema,
+  ProvenanceSchema,
 } from '../core/schemas.js';
 
 const automationActor = { type: 'automation' as const, id: 'lugn.music' };
 const musicContinuityMs = 20 * 60_000;
+
+export const VolumeAuthorityRequestSchema = z
+  .object({ target: SemanticMusicIdSchema, mode: z.enum(['auto', 'manual']) })
+  .strict();
+export type VolumeAuthorityRequest = z.infer<
+  typeof VolumeAuthorityRequestSchema
+>;
+export const VolumeAuthorityBlockReasonSchema = z.enum([
+  'volume_unavailable',
+  'volume_pending',
+  'fade_active',
+]);
+export type VolumeAuthorityBlockReason = z.infer<
+  typeof VolumeAuthorityBlockReasonSchema
+>;
+
+export class VolumeAuthorityError extends Error {
+  constructor(
+    readonly code: VolumeAuthorityBlockReason | 'human_actor_required',
+  ) {
+    super(code);
+  }
+}
+const VolumeAuthorityIntentSchema = z.object({
+  mode: z.enum(['auto', 'manual']),
+  at: z.number().finite().nonnegative(),
+  provenance: ProvenanceSchema,
+});
 
 type ActiveFade = {
   id: string;
@@ -61,6 +91,9 @@ export const MusicVolumePolicySnapshotSchema = z.object({
   policyActive: z.boolean(),
   activityReason: MusicVolumeActivityReasonSchema,
   manualHold: ManualVolumeHoldSchema.nullable(),
+  selectorIntent: ManualVolumeHoldSchema.nullable(),
+  lastAuthorityIntent: VolumeAuthorityIntentSchema.nullable(),
+  authorityControlBlocked: VolumeAuthorityBlockReasonSchema.nullable(),
   controller: z.enum(['you', 'lugn']),
   automatic: z.boolean(),
   baselineSource: z.enum(['user', 'inferred', 'unknown']),
@@ -91,6 +124,9 @@ export type MusicAutomationOptions = {
   onChange?: () => void;
   onPauseReleased?: (target: string, endedAt: number) => void;
   onPolicyTick?: () => void;
+  authorityControlBlocked?: (
+    target: string,
+  ) => VolumeAuthorityBlockReason | null;
 };
 
 /** Presence-driven playback and volume policy for configured room players. */
@@ -108,6 +144,11 @@ export class MusicAutomation {
   private readonly resumeUntil = new Map<string, number>();
   private readonly activeFades = new Map<string, ActiveFade>();
   private readonly manualVolumeHolds = new Map<string, ManualVolumeHold>();
+  private readonly authorityIntents = new Map<
+    string,
+    z.infer<typeof VolumeAuthorityIntentSchema>
+  >();
+  private readonly selectorIntents = new Map<string, ManualVolumeHold>();
   private readonly manualRevisions = new Map<string, number>();
   private absenceExpiresAt: number | null = null;
   private absenceTimer: TimerHandle | undefined;
@@ -142,8 +183,10 @@ export class MusicAutomation {
     personCount: number | null,
   ): void {
     if (this.disposed) return;
-    if (this.presence !== presence || this.personCount !== personCount)
+    if (this.presence !== presence || this.personCount !== personCount) {
+      this.selectorIntents.clear();
       this.recoveryRevision.volume++;
+    }
     if (this.presence !== presence) this.recoveryRevision.playback++;
     this.expireManualVolumeHolds();
     this.presence = presence;
@@ -223,6 +266,7 @@ export class MusicAutomation {
   handleHomePresence(homePresence: HomePresence): void {
     if (this.disposed) return;
     if (this.homePresence !== homePresence) {
+      this.selectorIntents.clear();
       this.recoveryRevision.volume++;
       this.recoveryRevision.playback++;
     }
@@ -463,6 +507,12 @@ export class MusicAutomation {
       policyActive: automatic,
       activityReason,
       manualHold: hold ? structuredClone(hold) : null,
+      selectorIntent: structuredClone(this.selectorIntents.get(target) ?? null),
+      lastAuthorityIntent: structuredClone(
+        this.authorityIntents.get(target) ?? null,
+      ),
+      authorityControlBlocked:
+        this.options.authorityControlBlocked?.(target) ?? null,
       controller: hold || activeFade?.isUser ? 'you' : 'lugn',
       automatic,
       baselineSource:
@@ -488,6 +538,7 @@ export class MusicAutomation {
   ): void {
     if (this.disposed || this.volumeAutomationEnabled === enabled) return;
     this.recoveryRevision.volume++;
+    this.selectorIntents.clear();
     this.volumeAutomationEnabled = enabled;
     if (!enabled) {
       this.cancelTimer();
@@ -533,6 +584,42 @@ export class MusicAutomation {
       this.homePresence !== 'away'
     )
       this.scheduleNextMinute();
+  }
+
+  /** A soft selector never rewrites the baseline or playback intent. */
+  setVolumeAuthority(
+    request: VolumeAuthorityRequest,
+    provenance: Provenance,
+  ): void {
+    this.authorityIntents.set(request.target, {
+      mode: request.mode,
+      at: this.options.clock.now(),
+      provenance: structuredClone(provenance),
+    });
+    this.manualRevisions.set(
+      request.target,
+      (this.manualRevisions.get(request.target) ?? 0) + 1,
+    );
+    if (request.mode === 'manual') {
+      // Selecting Manual again must not weaken an actual volume adjustment.
+      const adjustment = this.manualVolumeHolds.get(request.target);
+      if (
+        !adjustment ||
+        (adjustment.expiresAt !== null &&
+          adjustment.expiresAt <= this.options.clock.now())
+      ) {
+        this.selectorIntents.set(request.target, {
+          volume: this.options.getState(request.target).observed.volume!,
+          createdAt: this.options.clock.now(),
+          expiresAt: null,
+          provenance: structuredClone(provenance),
+        });
+      }
+    } else {
+      this.selectorIntents.delete(request.target);
+      this.manualVolumeHolds.delete(request.target);
+      this.applyVolumePolicy(request.target);
+    }
   }
 
   get isVolumeAutomationEnabled(): boolean {
@@ -660,7 +747,7 @@ export class MusicAutomation {
                     ? 'lugn'
                     : 'unknown',
               manualVolume: structuredClone(
-                this.getManualVolumeHold(target) ?? null,
+                this.manualVolumeHolds.get(target) ?? null,
               ),
               pause: pauses.get(target) ?? null,
               ...(this.playbackReleasedAt.has(target)
@@ -767,7 +854,7 @@ export class MusicAutomation {
     if (isHumanActor(provenance.actor)) return;
     this.expireManualVolumeHolds();
     if (
-      this.manualVolumeHolds.has(target) ||
+      this.getManualVolumeHold(target) ||
       this.activeFades.get(target)?.isUser
     )
       throw new Error(
@@ -786,6 +873,7 @@ export class MusicAutomation {
     volume: number,
     provenance: Provenance,
   ): void {
+    this.selectorIntents.delete(target);
     this.manualRevisions.set(
       target,
       (this.manualRevisions.get(target) ?? 0) + 1,
@@ -832,7 +920,8 @@ export class MusicAutomation {
   }
 
   private getManualVolumeHold(target: string): ManualVolumeHold | undefined {
-    const hold = this.manualVolumeHolds.get(target);
+    const hold =
+      this.selectorIntents.get(target) ?? this.manualVolumeHolds.get(target);
     return hold &&
       (hold.expiresAt === null || this.options.clock.now() < hold.expiresAt)
       ? hold
@@ -886,7 +975,7 @@ export class MusicAutomation {
     this.cancelAbsenceTimer();
   }
 
-  private applyVolumePolicy(): void {
+  private applyVolumePolicy(onlyTarget?: string): void {
     if (
       !this.volumeAutomationEnabled ||
       this.presence !== 'occupied' ||
@@ -896,6 +985,7 @@ export class MusicAutomation {
     const offsets = this.currentOffsets();
     const offset = offsets.daily + offsets.person;
     for (const target of this.options.targets) {
+      if (onlyTarget !== undefined && target !== onlyTarget) continue;
       const device = this.options.getState(target);
       const baseline =
         this.baselines.get(target) ?? this.inferBaseline(device, offset);

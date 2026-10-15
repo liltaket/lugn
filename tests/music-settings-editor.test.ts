@@ -89,6 +89,7 @@ function editor() {
   };
   const context = createContext({
     overview,
+    overviewStale: false,
     fetch,
     structuredClone,
     API_ROOT: '/ui/api',
@@ -215,4 +216,19 @@ it('preview uses the pure endpoint and ignores a response after the draft change
     'behöver beräknas',
   );
   expect(s.get('settings-preview-button').disabled).toBe(false);
+});
+
+it('qualifies settings observations after upstream trust is lost without dropping drafts', () => {
+  const s = editor();
+  s.run(`overview.state.music.devices['music.room'].availability = 'available';
+    overview.musicVolumePolicies['music.room'] = { baseline:0.4,baselineSource:'user',dailyOffset:0,personOffset:0,target:0.4,activeOwner:'manual' };
+    renderMusicSettings();`);
+  expect(s.get('music-settings-current').textContent).toMatch(/^Nu ·/);
+  s.run(
+    `volumeSettingsDraft.minimum = 0.2; overview.musicObservationTrust = { 'music.room':false }; renderMusicSettings();`,
+  );
+  expect(s.get('music-settings-current').textContent).toMatch(
+    /^Senast rapporterat ·/,
+  );
+  expect(s.run('volumeSettingsDraft.minimum')).toBe(0.2);
 });
