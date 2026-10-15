@@ -71,6 +71,7 @@ let sessionRenewDone = null;
 let overview = null;
 let overviewStale = false;
 let lastOverviewAt = 0;
+let overviewUpdateGeneration = 0;
 let eventSource = null;
 let pollTimer = null;
 let actionMessage = '';
@@ -933,6 +934,7 @@ async function retryClerkSignOut() {
 }
 
 async function fetchOverview() {
+  const readGeneration = overviewUpdateGeneration;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 8000);
   try {
@@ -948,6 +950,10 @@ async function fetchOverview() {
     const result = await response.json();
     if (!result?.state?.presence || !result?.state?.lighting?.devices)
       throw new Error('Servern returnerade ett ogiltigt rumsstatus.');
+    // A stream update or newer completed poll wins over an older in-flight read.
+    if (readGeneration !== overviewUpdateGeneration && overview)
+      return overview;
+    overviewUpdateGeneration += 1;
     overviewStale = false;
     lastOverviewAt = Date.now();
     return result;
@@ -968,6 +974,7 @@ function startLiveUpdates() {
       const next = JSON.parse(event.data);
       if (!next?.state?.presence || !next?.state?.lighting?.devices) return;
       overview = next;
+      overviewUpdateGeneration += 1;
       overviewStale = false;
       lastOverviewAt = Date.now();
       render();
@@ -1686,7 +1693,11 @@ function renderMusicPlayer(target, device, commands, fade) {
       command.recovery.reported.playback !== observed.playback,
   );
   const reportedOnly =
-    overviewStale || device.availability !== 'available' || newerPlaybackReport;
+    overviewStale ||
+    device.availability !== 'available' ||
+    (overview?.health?.integrations?.home_assistant !== undefined &&
+      overview.health.integrations.home_assistant !== 'connected') ||
+    newerPlaybackReport;
   const readings = node('dl', 'music-readings');
   appendReading(
     readings,
@@ -1719,7 +1730,7 @@ function renderMusicPlayer(target, device, commands, fade) {
   article.append(readings);
 
   const controls = node('div', 'music-controls');
-  const unavailable = reportedOnly;
+  const unavailable = overviewStale || device.availability !== 'available';
   const playbackCommand = latestMusicCommand(commands, target, 'playback');
   const volumeCommand = latestMusicCommand(commands, target, 'volume');
   const sourceCommand = latestMusicCommand(commands, target, 'source');

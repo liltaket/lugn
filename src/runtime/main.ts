@@ -364,6 +364,8 @@ export async function startRuntime(
         scenes: Array.from(engine.scenes.values()),
         scenesProvider: () => Array.from(engine.scenes.values()),
         stateProvider: () => engine.state,
+        musicObservationConnectedProvider: () =>
+          homeAssistantSocket.status === 'connected',
         stateStream: engine.stream,
         musicVolumePoliciesProvider: () =>
           engine.getMusicVolumePolicySnapshots(),

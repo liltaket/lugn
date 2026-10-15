@@ -1554,4 +1554,41 @@ describe('truthful Hub music and presence labels', () => {
       ui.engine.dispose();
     }
   });
+  it('qualifies cached playback when the HA subscription is disconnected', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = { ...ui.payload(), musicObservationConnected: false };
+      payload.state.music.devices['music.room']!.observed.playback = 'playing';
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-player-status').textContent).toBe(
+        'Senast rapporterat: Spelar',
+      );
+      expect(ui.get('#music-volume-controller').textContent).toBe(
+        'Styrning okänd',
+      );
+      expect(ui.get('#music-playback').disabled).toBe(false);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+  it('explains the backend session-scoped Pause release condition', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = explainedMusic(ui);
+      const hold = payload.musicPlaybackPolicies['music.room']!.manualPause!;
+      Object.assign(hold, { resetPolicy: 'room_session_or_explicit_playback' });
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-playback-hold').textContent).toContain(
+        'rumsbesöket avslutas',
+      );
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
 });

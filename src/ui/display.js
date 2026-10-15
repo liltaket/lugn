@@ -523,6 +523,7 @@ function formatVolumeOffset(value) {
 function renderMusicVolumePolicy(payload, target) {
   const stale =
     isUnavailable() ||
+    payload?.musicObservationConnected === false ||
     payload?.state?.music?.devices?.[target]?.availability !== 'available';
   const policy = target ? payload?.musicVolumePolicies?.[target] : null;
   const baseline = volumeFraction(policy?.baseline);
@@ -578,7 +579,11 @@ function renderMusicVolumePolicy(payload, target) {
   setText(refs.musicVolumeTarget, formatVolume(goal));
   const hold = policy?.manualHold;
   const explanation = stale
-    ? 'Lugn svarar inte · visar senaste värden'
+    ? isUnavailable()
+      ? 'Lugn svarar inte · visar senaste värden'
+      : payload?.musicObservationConnected === false
+        ? 'Home Assistant-återkoppling saknas · visar senaste värden'
+        : 'Spelaren är frånkopplad · visar senaste värden'
     : hold && typeof hold.expiresAt === 'number'
       ? continuityText(hold.expiresAt, 'Manuellt val')
       : volumeReason(policy?.activityReason);
@@ -743,7 +748,9 @@ function renderMusicExplanations(payload, target) {
     stale
       ? 'Pausspärr okänd · Lugn svarar inte.'
       : policy?.manualPause
-        ? 'Spela eller välj preset för att släppa pausspärren.'
+        ? policy.manualPause.resetPolicy === 'room_session_or_explicit_playback'
+          ? 'Pausspärren släpps när rumsbesöket avslutas, eller med Spela/preset.'
+          : 'Spela eller välj preset för att släppa pausspärren.'
         : policy
           ? 'Ingen manuell pausspärr.'
           : 'Pausspärr okänd.',
@@ -1017,7 +1024,10 @@ function renderMusic(payload) {
       command.recovery.reported.playback !== observed.playback,
   );
   const reportedOnly =
-    !connected || availability !== 'available' || newerPlaybackReport;
+    !connected ||
+    availability !== 'available' ||
+    payload?.musicObservationConnected === false ||
+    newerPlaybackReport;
   const title =
     typeof observed.title === 'string' && observed.title.trim()
       ? observed.title.trim()

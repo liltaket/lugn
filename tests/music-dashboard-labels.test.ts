@@ -54,7 +54,7 @@ function webPanel() {
     Date,
   });
   runInContext(
-    `let overviewStale = false; let lastOverviewAt = 0;
+    `let overviewStale = false; let lastOverviewAt = 0; let overviewUpdateGeneration = 0;
     let overview = null; let eventSource = null;
     let authProvider = 'token'; let clerkClient = null;
     const API_ROOT = '/ui/api'; const pendingActions = new Set();
@@ -186,5 +186,63 @@ describe('web music observation labels', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+  it('does not let an older polling response overwrite a newer live update', async () => {
+    const ui = webPanel();
+    let release!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    const older = {
+      state: { revision: 10, presence: {}, lighting: { devices: {} } },
+    };
+    const newer = {
+      state: { revision: 11, presence: {}, lighting: { devices: {} } },
+    };
+    Object.assign(ui.context, { fetch: () => pending, newer });
+    const poll = runInContext('fetchOverview()', ui.context);
+    runInContext('overview = newer; overviewUpdateGeneration += 1', ui.context);
+    release({ ok: true, json: async () => older });
+    await expect(poll).resolves.toMatchObject({ state: { revision: 11 } });
+  });
+
+  it('qualifies HA-disconnected observations while keeping commands available', () => {
+    const ui = webPanel();
+    runInContext(
+      `overview = {health:{integrations:{home_assistant:'disconnected'}}}`,
+      ui.context,
+    );
+    const article = runInContext(
+      `renderMusicPlayer('music.room', ${JSON.stringify(device)}, [])`,
+      ui.context,
+    ) as Element;
+    expect(texts(article)).toContain('Senast rapporterad titel');
+    expect(texts(article)).not.toContain('Nu spelas');
+  });
+
+  it('qualifies older observations without permanently locking controls after recovery', () => {
+    const ui = webPanel();
+    const commands = [
+      {
+        target: 'music.room',
+        requested: { property: 'playback', value: 'paused' },
+        status: 'unconfirmed',
+        recovery: { verifiedAt: 10, reported: { playback: 'paused' } },
+      },
+    ];
+    const article = runInContext(
+      `renderMusicPlayer('music.room', ${JSON.stringify(device)}, ${JSON.stringify(commands)})`,
+      ui.context,
+    ) as Element;
+    expect(texts(article)).toContain('Senast rapporterad uppspelning');
+    const descendants = (item: Element): Element[] => [
+      item,
+      ...item.children.flatMap(descendants),
+    ];
+    expect(
+      descendants(article).find(
+        (item) => item.textContent === 'Spela / återuppta',
+      )?.disabled,
+    ).toBe(false);
   });
 });
