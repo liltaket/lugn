@@ -1,5 +1,8 @@
 import { afterEach, expect, it } from 'vitest';
-import { SimulatedMusicAdapter } from '../src/adapters/simulated-music.js';
+import {
+  SimulatedMusicAdapter,
+  type MusicObservation,
+} from '../src/adapters/simulated-music.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { FakeClock, type Clock } from '../src/core/clock.js';
 import { applyStateUpdate } from '../src/core/event-stream.js';
@@ -31,6 +34,7 @@ function setup(
   options: {
     now?: number;
     sessionMs?: number;
+    feedbackTimeoutMs?: number;
     restore?: MusicIntentSnapshot;
     delayedTimers?: boolean;
   } = {},
@@ -49,7 +53,13 @@ function setup(
     deviceIds: [],
     scenes: [],
     roomSessionContinuityMs: options.sessionMs ?? 20 * minute,
-    music: { targets: { [target]: [] }, adapter },
+    music: {
+      targets: { [target]: [] },
+      adapter,
+      ...(options.feedbackTimeoutMs === undefined
+        ? {}
+        : { feedbackTimeoutMs: options.feedbackTimeoutMs }),
+    },
     ...(options.restore ? { restoredMusicIntent: options.restore } : {}),
   });
   engines.push(engine);
@@ -464,4 +474,108 @@ it('rejects stale feedback without clearing a newer Pause after the previous vis
   s.observe('playing', boundary);
   s.observe('paused', start + 1);
   expect(s.playback().manualPause).toEqual(newer);
+});
+
+async function unconfirmedPausedVisit(s: ReturnType<typeof setup>) {
+  Object.assign(s.adapter, {
+    readStatus: async (): Promise<MusicObservation> => ({
+      target,
+      values,
+      available: true,
+      observedAt: s.time.now(),
+      playbackChangedAt: start,
+    }),
+  });
+  s.observe('playing', start);
+  await s.presence('occupied');
+  await s.pause();
+  await s.presence('confirmed_empty');
+  await flush();
+}
+
+it('retains fresh away Pause recovery when the default room session ends', async () => {
+  const s = setup();
+  await unconfirmedPausedVisit(s);
+  s.time.advanceBy(20 * minute - 1_000);
+  await flush();
+  await s.engine.handleHomePresence('away');
+  await flush();
+  const command = s.engine.state.music.commands.at(-1)!;
+  expect(command.provenance.reason).toBe('pause while away');
+  expect(command.recovery?.stage).toBe('awaiting_feedback');
+  const before = s.adapter.dispatched.length;
+
+  s.time.advanceBy(1_000);
+  await flush();
+  expect(s.engine.state.session?.state).toBe('ended');
+  expect(s.playback().manualPause).toBeNull();
+  expect(command).toMatchObject({
+    status: 'pending',
+    recovery: { stage: 'awaiting_feedback', stopReason: null },
+  });
+  expect(s.adapter.dispatched).toHaveLength(before);
+  s.time.advanceBy(9_000);
+  await flush();
+  expect(command.recovery?.stage).toBe('waiting_retry');
+  s.time.advanceBy(2_000);
+  await flush();
+  expect(s.adapter.dispatched.slice(before)).toEqual([
+    {
+      id: command.id,
+      target,
+      requested: { property: 'playback', value: 'paused' },
+    },
+  ]);
+  expect(command.recovery).toMatchObject({
+    stage: 'awaiting_feedback',
+    attemptCount: 2,
+    stopReason: null,
+  });
+  s.observe('paused', start, command.id);
+  expect(command.status).toBe('confirmed');
+  expect(s.playback().manualPause).toBeNull();
+});
+
+it('retains a scheduled empty-room Pause retry across a five-second session end', async () => {
+  const s = setup({ sessionMs: 5_000, feedbackTimeoutMs: 4_000 });
+  await unconfirmedPausedVisit(s);
+  const command = s.engine.state.music.commands.at(-1)!;
+  expect(command.provenance.reason).toBe('pause');
+  s.time.advanceBy(4_000);
+  await flush();
+  expect(command.recovery).toMatchObject({
+    stage: 'waiting_retry',
+    nextAttemptAt: start + 6_000,
+  });
+  const before = s.adapter.dispatched.length;
+  s.time.advanceBy(1_000);
+  await flush();
+  expect(s.engine.state.session?.state).toBe('ended');
+  expect(s.playback().manualPause).toBeNull();
+  expect(command).toMatchObject({
+    status: 'unconfirmed',
+    recovery: {
+      stage: 'waiting_retry',
+      nextAttemptAt: start + 6_000,
+      stopReason: null,
+    },
+  });
+  expect(s.adapter.dispatched).toHaveLength(before);
+  s.time.advanceBy(1_000);
+  await flush();
+  expect(s.adapter.dispatched.slice(before)).toEqual([
+    {
+      id: command.id,
+      target,
+      requested: { property: 'playback', value: 'paused' },
+    },
+  ]);
+  expect(command.recovery).toMatchObject({
+    stage: 'awaiting_feedback',
+    attemptCount: 2,
+    stopReason: null,
+  });
+  s.observe('paused', start, command.id);
+  expect(command.status).toBe('confirmed');
+  expect(s.playback().manualPause).toBeNull();
 });

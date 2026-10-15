@@ -294,7 +294,7 @@ export class MusicController {
       Math.max(this.latestPlaybackIntentAt.get(target) ?? 0, createdAt),
     );
   }
-  /** Session expiry supersedes delivery/recovery without issuing a player command. */
+  /** Session expiry releases human Pause delivery without issuing a player command. */
   releasePauseIntent(target: string, endedAt: number): void {
     this.requireTarget(target);
     this.releasedPauseAt.set(target, endedAt);
@@ -302,7 +302,18 @@ export class MusicController {
       target,
       Math.max(this.latestPlaybackIntentAt.get(target) ?? 0, endedAt),
     );
-    this.bumpIntent(target, 'playback');
+    // Empty/away Pause commands have their own policy authorization and can
+    // remain valid after this visit's manual hold ends. Only cancel the human
+    // Pause being released; leave playback ordering and newer intent intact.
+    for (const command of this.state.commands)
+      if (
+        command.target === target &&
+        command.requested.property === 'playback' &&
+        command.requested.value === 'paused' &&
+        isHumanActor(command.provenance.actor) &&
+        command.issuedAt <= endedAt
+      )
+        this.recovery.stop(command.id, 'superseded', false);
   }
   setExternalPlaybackChangeHandler(
     handler: (
