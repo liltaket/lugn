@@ -1,3 +1,4 @@
+import { type MusicVolumeSettings } from '../core/music-volume-settings.js';
 import { MusicController, type MusicOptions } from './music-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
@@ -74,6 +75,8 @@ export type EngineOptions = {
   /** Dashboard-managed presets retain applied intent until explicit activation. */
   preserveRestoredSceneIds?: readonly string[];
   restoredMusicIntent?: MusicIntentSnapshot;
+  musicVolumeSettings?: MusicVolumeSettings;
+  musicVolumeSettingsGeneration?: string;
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
   continuityMs?: number;
@@ -164,6 +167,7 @@ export class LugnEngine {
   private readonly roomSessions: RoomSessions;
   private lastNonOffSceneId: string | null = null;
   private bilresaPriorVolumeAutomation: boolean | null = null;
+  private musicVolumeEnableIntentRevision = 0;
   private readonly lastMusicDecisionContexts = new Map<string, string>();
   private readonly convergenceTimeoutMs: number;
   private readonly retryDelayMs: number;
@@ -500,6 +504,12 @@ export class LugnEngine {
     );
     this.musicAutomation = new MusicAutomation({
       targets: Object.keys(options.music?.targets ?? {}),
+      ...(options.musicVolumeSettings === undefined
+        ? {}
+        : { volumeSettings: options.musicVolumeSettings }),
+      ...(options.musicVolumeSettingsGeneration === undefined
+        ? {}
+        : { volumeSettingsGeneration: options.musicVolumeSettingsGeneration }),
       clock,
       holds: this.holds,
       getState: (target) => this.musicController.getState(target),
@@ -602,9 +612,10 @@ export class LugnEngine {
         throw new Error(
           'Restored music intent targets do not match configuration',
         );
-      this.musicAutomation.restoreIntent(restoredMusic);
-      this.bilresaPriorVolumeAutomation =
-        restoredMusic.temporaryVolumeAutomationRestore;
+      const restoredEnable = this.musicAutomation.restoreIntent(restoredMusic);
+      this.bilresaPriorVolumeAutomation = restoredEnable
+        ? restoredMusic.temporaryVolumeAutomationRestore
+        : null;
       for (const [target, intent] of Object.entries(restoredMusic.targets)) {
         if (intent.playbackReleasedAt !== undefined)
           this.musicController.releasePauseIntent(
@@ -754,6 +765,31 @@ export class LugnEngine {
     return this.musicController.getState(target);
   }
 
+  getMusicVolumeSettings(): MusicVolumeSettings {
+    return this.musicAutomation.getVolumeSettings();
+  }
+
+  getMusicVolumeEnableIntentRevision(): number {
+    return this.musicVolumeEnableIntentRevision;
+  }
+
+  applyMusicVolumeSettings(
+    settings: MusicVolumeSettings,
+    generation?: string,
+    expectedEnableIntentRevision = this.musicVolumeEnableIntentRevision,
+  ): void {
+    const preserveEnableIntent =
+      expectedEnableIntentRevision !== this.musicVolumeEnableIntentRevision;
+    this.musicAutomation.applyVolumeSettings(
+      settings,
+      generation,
+      preserveEnableIntent,
+    );
+    if (!preserveEnableIntent && this.bilresaPriorVolumeAutomation !== null)
+      this.bilresaPriorVolumeAutomation = settings.enabled;
+    this.publish(['music', 'intent']);
+  }
+
   getMusicVolumePolicySnapshots(): Record<string, MusicVolumePolicySnapshot> {
     return Object.fromEntries(
       Object.keys(this.state.music.devices).map((target) => [
@@ -803,6 +839,7 @@ export class LugnEngine {
       return;
     }
     if (button === '2' && gesture === 'multi_press_1') {
+      this.musicVolumeEnableIntentRevision++;
       const enabled = !this.musicAutomation.isVolumeAutomationEnabled;
       this.musicAutomation.setVolumeAutomationEnabled(enabled);
       this.addDiagnostic(
@@ -828,6 +865,7 @@ export class LugnEngine {
       return;
     }
     if (button === '2' && gesture === 'long_press') {
+      this.musicVolumeEnableIntentRevision++;
       if (this.bilresaPriorVolumeAutomation === null) {
         this.bilresaPriorVolumeAutomation =
           this.musicAutomation.isVolumeAutomationEnabled;

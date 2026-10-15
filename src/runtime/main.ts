@@ -1,3 +1,4 @@
+import { MusicVolumeSettingsStore } from './music-volume-settings-store.js';
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
@@ -177,6 +178,11 @@ export async function startRuntime(
       restoredLightingIntent.detachedOffScene = true;
   }
   lightingIntentStore.setKnownSceneIds(scenes.map((scene) => scene.id));
+  const volumeSettingsStore = new MusicVolumeSettingsStore(
+    `${lightingIntentPath}.volume.json`,
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  const savedVolumeSettings = await volumeSettingsStore.load();
   const restoredMusicIntent = lightingIntentStore.restoredMusicIntent;
   const engine = new LugnEngine(systemClock, {
     adapter: homeAssistantLighting,
@@ -186,6 +192,12 @@ export async function startRuntime(
     ...(defaultSceneId === undefined ? {} : { defaultSceneId }),
     ...(restoredLightingIntent === undefined ? {} : { restoredLightingIntent }),
     ...(restoredMusicIntent === undefined ? {} : { restoredMusicIntent }),
+    ...(savedVolumeSettings === undefined
+      ? {}
+      : { musicVolumeSettings: savedVolumeSettings }),
+    ...(volumeSettingsStore.generation === undefined
+      ? {}
+      : { musicVolumeSettingsGeneration: volumeSettingsStore.generation }),
     prelight: config.prelight,
     ...(config.lightingControlModes === undefined
       ? {}
@@ -366,6 +378,7 @@ export async function startRuntime(
     ...config.http,
     engine,
     scenePresetStore,
+    volumeSettingsStore,
     capabilities,
     musicObservationTrustProvider: musicObservationTrust,
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),

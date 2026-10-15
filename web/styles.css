@@ -1352,3 +1352,134 @@ a:focus-visible {
     animation-iteration-count: 1 !important;
   }
 }
+
+.music-settings-section {
+  margin-top: 36px;
+  padding-top: 28px;
+  border-top: 1px solid var(--line);
+}
+#settings-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.music-settings-section h3 {
+  margin: 24px 0 8px;
+  font-size: 18px;
+}
+.settings-toggle {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-height: 44px;
+}
+.settings-toggle input {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+}
+#settings-curve {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  color: var(--accent);
+  margin: 20px 0;
+}
+#settings-curve text {
+  font-size: 13px;
+}
+.settings-point {
+  display: grid;
+  grid-template-columns: 125px 120px minmax(140px, 1fr) auto;
+  gap: 16px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 16px 0;
+}
+.settings-point label,
+.settings-grid label {
+  display: grid;
+  gap: 6px;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+.settings-point input,
+.settings-grid input,
+.settings-grid select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--small-radius);
+  font: inherit;
+}
+.settings-point input[type='range'] {
+  padding: 0;
+  accent-color: var(--accent);
+}
+.settings-point-slider {
+  min-width: 0;
+}
+.settings-advanced {
+  margin-top: 24px;
+}
+.settings-advanced summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding: 10px 0;
+}
+.settings-preview {
+  margin: 24px 0;
+  padding: 16px 0;
+  border-block: 1px solid var(--line);
+}
+.settings-preview h3 {
+  margin-top: 0;
+}
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+#settings-status {
+  color: var(--ink-muted);
+  min-height: 24px;
+}
+#settings-status[data-tone='bad'] {
+  color: var(--bad);
+}
+@media (max-width: 700px) {
+  .settings-point {
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+  .settings-actions .button {
+    width: 100%;
+  }
+}
+.music-settings-section .button {
+  min-height: 44px;
+}
+.settings-advanced summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+@media (max-width: 700px) {
+  #settings-curve text {
+    font-size: 26px;
+  }
+}
