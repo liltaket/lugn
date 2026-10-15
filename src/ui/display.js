@@ -248,27 +248,33 @@ function setConnection(state, message, retry = false) {
   renderMusic(latestPayload);
 }
 
+const timeFormat = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+const dateFormat = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+});
+
+const datePartsFormat = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
 function setClock() {
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
-  const time = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(now);
-  const date = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-  }).format(now);
+  const time = timeFormat.format(now);
+  const date = dateFormat.format(now);
   setText(refs.clockTime, time);
   setText(refs.clockDate, date);
-  const dateParts = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now);
+  const dateParts = datePartsFormat.formatToParts(now);
   const dateValue = Object.fromEntries(
     dateParts
       .filter((part) => part.type !== 'literal')
@@ -785,11 +791,7 @@ function renderMusicExplanations(payload, target) {
     const time = document.createElement('time');
     time.textContent =
       typeof decision.at === 'number' && Number.isFinite(decision.at)
-        ? new Intl.DateTimeFormat('sv-SE', {
-            timeZone: 'Europe/Stockholm',
-            hour: '2-digit',
-            minute: '2-digit',
-          }).format(new Date(decision.at))
+        ? timeFormat.format(new Date(decision.at))
         : '—';
     const copy = document.createElement('span');
     copy.textContent =

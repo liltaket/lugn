@@ -3054,13 +3054,15 @@ export class LugnEngine {
     );
   }
 
+  private timeFormat = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Stockholm',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+
   private isPrelightQuietHours(): boolean {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Stockholm',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(this.clock.now()));
+    const parts = this.timeFormat.formatToParts(new Date(this.clock.now()));
     const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
     return hour >= 23 || hour < 6;
   }

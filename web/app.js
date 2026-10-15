@@ -2279,6 +2279,12 @@ function renderMappingSummary(devices, presenceState) {
     : 'Inga lampor att visa';
 }
 
+const timeFormat = new Intl.DateTimeFormat('sv-SE', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
 function renderUpdatedAt(value) {
   if (!Number.isFinite(value) || value < 0) {
     updatedAt.textContent = 'Uppdateringstid saknas';
@@ -2287,11 +2293,7 @@ function renderUpdatedAt(value) {
   const date = new Date(value);
   updatedAt.textContent = Number.isNaN(date.getTime())
     ? 'Uppdateringstid saknas'
-    : `Tillstånd ändrat ${new Intl.DateTimeFormat('sv-SE', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      }).format(date)}`;
+    : `Tillstånd ändrat ${timeFormat.format(date)}`;
 }
 
 function integrationLabel(name) {

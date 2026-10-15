@@ -797,13 +797,17 @@ export class MusicAutomation {
     return offsets.daily + offsets.person;
   }
 
+  private timeFormat = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Stockholm',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+
   private localHour(): number {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Stockholm',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(this.options.clock.now()));
+    const parts = this.timeFormat.formatToParts(
+      new Date(this.options.clock.now()),
+    );
     const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
     const minute = Number(
       parts.find((part) => part.type === 'minute')?.value ?? 0,
