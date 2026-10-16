@@ -416,6 +416,42 @@ describe('ComputerMqttAdapter v1', () => {
     },
   );
 
+  it('preserves a new-session candidate across the previous session Last Will', () => {
+    const { live, state, availability, last } = setup();
+    live();
+    state({ session_id: NEXT_SESSION, reason: 'reconnect' });
+    expect(last().availability).toBe('unknown');
+    availability('offline', SESSION);
+    expect(last()).toMatchObject({
+      availability: 'offline',
+      observed: unknownComputerReadings(),
+    });
+    availability('online', NEXT_SESSION);
+    expect(last()).toMatchObject({
+      availability: 'online',
+      freshness: 'fresh',
+      sessionId: NEXT_SESSION,
+      sequence: 1,
+    });
+  });
+
+  it('does not extend a pending new-session snapshot across an old Last Will', () => {
+    const { live, state, availability, clock, last } = setup();
+    live();
+    state({ session_id: NEXT_SESSION });
+    clock.advanceBy(4_000);
+    availability('offline', SESSION);
+    expect(last().availability).toBe('offline');
+    clock.advanceBy(1_000);
+    availability('online', NEXT_SESSION);
+    expect(last()).toMatchObject({
+      availability: 'unknown',
+      observed: unknownComputerReadings(),
+    });
+    state({ session_id: NEXT_SESSION, sequence: 2 });
+    expect(last().availability).toBe('online');
+  });
+
   it('does not let retained state from another session satisfy online availability', () => {
     const { state, availability, last } = setup();
     state({}, true);

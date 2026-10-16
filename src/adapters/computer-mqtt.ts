@@ -247,7 +247,15 @@ export class ComputerMqttAdapter {
       }
       this.availability = incoming;
       if (incoming.status === 'offline') {
-        this.invalidate('offline');
+        // An old process's Last Will can arrive between a new process's state
+        // and online messages. Keep that new candidate and its original expiry;
+        // it remains hidden until matching online availability arrives.
+        if (
+          this.candidate &&
+          this.candidate.message.session_id !== incoming.session_id
+        )
+          this.reason = 'offline';
+        else this.invalidate('offline');
         this.lastEvent = null;
       } else if (
         this.candidate &&
