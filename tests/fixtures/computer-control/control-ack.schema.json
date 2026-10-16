@@ -47,10 +47,7 @@
       "maxLength": 36
     },
     "action": {
-      "enum": [
-        "pause",
-        "resume"
-      ]
+      "enum": ["pause", "resume"]
     },
     "player": {
       "type": "string",
@@ -75,11 +72,7 @@
       "maximum": 9007199254740991
     },
     "outcome": {
-      "enum": [
-        "applied",
-        "rejected",
-        "uncertain"
-      ]
+      "enum": ["applied", "rejected", "uncertain"]
     },
     "reason": {
       "enum": [

@@ -47,10 +47,7 @@
       "maxLength": 36
     },
     "action": {
-      "enum": [
-        "pause",
-        "resume"
-      ]
+      "enum": ["pause", "resume"]
     },
     "player": {
       "type": "string",

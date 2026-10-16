@@ -92,11 +92,7 @@
           "playback_status": {
             "anyOf": [
               {
-                "enum": [
-                  "Playing",
-                  "Paused",
-                  "Stopped"
-                ]
+                "enum": ["Playing", "Paused", "Stopped"]
               },
               {
                 "type": "null"
