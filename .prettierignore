@@ -1,3 +1,6 @@
 node_modules
 dist
 coverage
+
+# Canonical schemas are copied verbatim from the Linux agent.
+tests/fixtures/computer-control/*.schema.json

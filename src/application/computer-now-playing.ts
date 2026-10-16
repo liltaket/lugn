@@ -121,6 +121,14 @@ export class ComputerNowPlayingSelector {
     return result;
   }
 
+  /** Exact observation identity for targeted control; presentation ranking stays shared. */
+  selectedPlayer(state: RoomState, target: string): string | null {
+    const projection = this.snapshot(state)[target];
+    return projection?.status === 'playing'
+      ? (this.histories.get(projection.deviceId)?.winner ?? null)
+      : null;
+  }
+
   private select(
     deviceId: string,
     computer: ComputerObservation | undefined,

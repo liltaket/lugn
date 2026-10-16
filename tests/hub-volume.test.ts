@@ -5,7 +5,10 @@ import { SimulatedMusicAdapter } from '../src/adapters/simulated-music.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { FakeClock } from '../src/core/clock.js';
-import { MusicCommandRecoverySchema } from '../src/core/schemas.js';
+import {
+  MusicCommandRecoverySchema,
+  type ComputerPlaybackRouteSnapshot,
+} from '../src/core/schemas.js';
 import { lightingFeedbackBrowserScript } from '../src/runtime/lighting-feedback-script.js';
 
 type Listener = (...args: unknown[]) => void;
@@ -592,6 +595,14 @@ function mappedComputerPayload(
     title: '4',
   });
   payload.computerNowPlaying = { 'music.room': projection };
+  return payload;
+}
+
+function withComputerPlayback(
+  payload: ReturnType<ReturnType<typeof dashboard>['payload']>,
+  route: ComputerPlaybackRouteSnapshot,
+) {
+  payload.state.music.computerPlayback = { 'music.room': route };
   return payload;
 }
 
@@ -2330,6 +2341,253 @@ describe('Hub Optical computer media projection', () => {
         'Senast rapporterat',
       );
       expect(ui.get('#music-source').textContent).toBe('Optical');
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+});
+
+describe('Hub desktop playback controls', () => {
+  const route = (
+    values: Partial<ComputerPlaybackRouteSnapshot>,
+  ): ComputerPlaybackRouteSnapshot => ({
+    active: true,
+    deviceId: 'kuffe',
+    playback: 'unknown',
+    canPause: false,
+    canResume: false,
+    pending: false,
+    lastCommand: null,
+    ...values,
+  });
+
+  it('offers Play for a paused owned desktop lease while HA still reports playing', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = mappedComputerPayload(ui, {
+        status: 'idle',
+        title: null,
+        artist: null,
+        application: null,
+        deviceId: 'kuffe',
+        reason: 'no_playing_media',
+      });
+      withComputerPlayback(
+        payload,
+        route({ playback: 'paused', canResume: true }),
+      );
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+
+      expect(payload.state.music.devices['music.room']!.observed.playback).toBe(
+        'playing',
+      );
+      expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(
+        'false',
+      );
+      expect(ui.get('#music-playback').getAttribute('aria-label')).toBe(
+        'Starta musik',
+      );
+      expect(ui.get('#music-playback-label').textContent).toBe('Spela');
+      expect(ui.get('#music-playback').disabled).toBe(false);
+
+      const volume = ui.get('#music-volume-value').value;
+      ui.get('#music-playback').click();
+      await microtasks();
+      expect(ui.apiCalls).toEqual([
+        {
+          target: 'music.room',
+          request: { property: 'playback', value: 'playing' },
+        },
+      ]);
+      expect(ui.get('#music-volume-value').value).toBe(volume);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('disables Play for a paused desktop without an owned resumable lease', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = mappedComputerPayload(ui, {
+        status: 'idle',
+        title: null,
+        artist: null,
+        application: null,
+        deviceId: 'kuffe',
+        reason: 'no_playing_media',
+      });
+      withComputerPlayback(
+        payload,
+        route({ playback: 'paused', canResume: false }),
+      );
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+
+      expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(
+        'false',
+      );
+      expect(ui.get('#music-playback-label').textContent).toBe('Spela');
+      expect(ui.get('#music-playback').disabled).toBe(true);
+      ui.get('#music-playback').click();
+      await microtasks();
+      expect(ui.apiCalls).toEqual([]);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('offers Pause for desktop playback even during a manual music hold', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = mappedComputerPayload(ui, {
+        status: 'playing',
+        title: 'Desktop track',
+        artist: 'Artist',
+        application: 'Spotify',
+        deviceId: 'kuffe',
+        reason: 'active_audio',
+      });
+      withComputerPlayback(
+        payload,
+        route({ playback: 'playing', canPause: true }),
+      );
+      Object.assign(payload.musicPlaybackPolicies['music.room']!, {
+        manualPause: { createdAt: Date.now() },
+      });
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+
+      expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(
+        'true',
+      );
+      expect(ui.get('#music-playback').getAttribute('aria-label')).toBe(
+        'Pausa musik',
+      );
+      expect(ui.get('#music-playback-label').textContent).toBe('Pausa');
+      expect(ui.get('#music-playback').disabled).toBe(false);
+      ui.get('#music-playback').click();
+      await microtasks();
+      expect(ui.apiCalls).toEqual([
+        {
+          target: 'music.room',
+          request: { property: 'playback', value: 'paused' },
+        },
+      ]);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('disables a pending desktop command and exposes its busy state', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = mappedComputerPayload(ui, {
+        status: 'idle',
+        title: null,
+        artist: null,
+        application: null,
+        deviceId: 'kuffe',
+        reason: 'no_playing_media',
+      });
+      withComputerPlayback(
+        payload,
+        route({ playback: 'paused', canResume: true, pending: true }),
+      );
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-playback').disabled).toBe(true);
+      expect(ui.get('#music-playback').getAttribute('aria-busy')).toBe('true');
+      expect(ui.get('#music-playback-label').textContent).toBe('Spela');
+      ui.get('#music-playback').click();
+      await microtasks();
+      expect(ui.apiCalls).toEqual([]);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('disables unknown desktop playback even if a resume capability is present', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = mappedComputerPayload(ui, {
+        status: 'unavailable',
+        title: null,
+        artist: null,
+        application: null,
+        deviceId: 'kuffe',
+        reason: 'computer_unavailable',
+      });
+      withComputerPlayback(
+        payload,
+        route({ playback: 'unknown', canResume: true }),
+      );
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-playback').disabled).toBe(true);
+      expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(
+        'false',
+      );
+      ui.get('#music-playback').click();
+      await microtasks();
+      expect(ui.apiCalls).toEqual([]);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('uses receiver playback and leaves volume controls unchanged when the desktop route is inactive', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = ui.payload();
+      Object.assign(payload.state.music.devices['music.room']!.observed, {
+        playback: 'paused',
+        source: 'Spotify DJ',
+        title: 'Receiver track',
+      });
+      withComputerPlayback(
+        payload,
+        route({ active: false, playback: 'playing', canPause: true }),
+      );
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+
+      expect(ui.get('#music-title').textContent).toBe(
+        'Senaste titel: Receiver track',
+      );
+      expect(ui.get('#music-source').textContent).toBe('Spotify DJ');
+      expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(
+        'false',
+      );
+      expect(ui.get('#music-playback-label').textContent).toBe('Spela');
+      expect(ui.get('#music-playback').disabled).toBe(false);
+      expect(ui.get('#music-volume-value').value).toBe('30%');
+      expect(ui.get('#music-volume-down').disabled).toBe(false);
+      expect(ui.get('#music-volume-up').disabled).toBe(false);
+
+      ui.get('#music-playback').click();
+      await microtasks();
+      expect(ui.apiCalls).toEqual([
+        {
+          target: 'music.room',
+          request: { property: 'playback', value: 'playing' },
+        },
+      ]);
+      expect(ui.get('#music-volume-value').value).toBe('30%');
+      expect(ui.get('#music-volume-down').disabled).toBe(false);
+      expect(ui.get('#music-volume-up').disabled).toBe(false);
     } finally {
       ui.windowListeners.get('pagehide')?.();
       ui.engine.dispose();

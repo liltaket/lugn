@@ -19,6 +19,7 @@ import type {
   RoomSession,
 } from '../core/schemas.js';
 import type { MusicFadeLifecycleEvent } from './music-controller.js';
+import type { ComputerPlaybackControl } from './computer-playback-controller.js';
 import { z } from 'zod';
 import {
   AutomationHoldSchema,
@@ -114,6 +115,10 @@ export type MusicAutomationOptions = {
   clock: Clock;
   holds?: AutomationHolds;
   getState: (target: string) => DeviceMusicState;
+  computerPlayback?: Pick<
+    ComputerPlaybackControl,
+    'handles' | 'getPlayback' | 'canResume'
+  >;
   request: (
     target: string,
     request: MusicRequest,
@@ -206,10 +211,7 @@ export class MusicAutomation {
       if (newConfirmedAbsence || this.restoredAbsenceAwaitingPresence) {
         this.restoredAbsenceAwaitingPresence = false;
         for (const target of this.options.targets) {
-          const device = this.options.getState(target);
-          const wasPlaying =
-            device.observed.playback === 'playing' ||
-            device.requested.playback === 'playing';
+          const wasPlaying = this.isPlaying(target);
           if (newConfirmedAbsence)
             this.resumeUntil.set(
               target,
@@ -273,7 +275,7 @@ export class MusicAutomation {
     this.homePresence = homePresence;
     if (homePresence === 'away') {
       for (const target of this.options.targets) {
-        if (this.isPlaying(this.options.getState(target)))
+        if (this.isPlaying(target))
           this.send(
             target,
             { property: 'playback', value: 'paused' },
@@ -646,7 +648,9 @@ export class MusicAutomation {
             : this.requiresAvailableEntry(target)
               ? 'player_unavailable'
               : this.presence === 'confirmed_empty' && action === null
-                ? 'already_playing'
+                ? this.options.computerPlayback?.handles(target)
+                  ? 'computer_not_resumable'
+                  : 'already_playing'
                 : this.presence === 'confirmed_empty'
                   ? 'confirmed_empty'
                   : 'awaiting_new_entry';
@@ -689,8 +693,14 @@ export class MusicAutomation {
     )
       return null;
     if ((this.resumeUntil.get(target) ?? 0) > this.options.clock.now())
-      return 'resume';
-    return this.isPlaying(this.options.getState(target)) ? null : 'preset';
+      return this.options.computerPlayback?.handles(target)
+        ? this.options.computerPlayback.canResume(target)
+          ? 'resume'
+          : null
+        : 'resume';
+    // A desktop input never falls through to starting a receiver preset.
+    if (this.options.computerPlayback?.handles(target)) return null;
+    return this.isPlaying(target) ? null : 'preset';
   }
 
   getIntentSnapshot(
@@ -1057,7 +1067,10 @@ export class MusicAutomation {
     this.timer = undefined;
   }
 
-  private isPlaying(device: DeviceMusicState): boolean {
+  private isPlaying(target: string): boolean {
+    if (this.options.computerPlayback?.handles(target))
+      return this.options.computerPlayback.getPlayback(target) === 'playing';
+    const device = this.options.getState(target);
     return (
       device.observed.playback === 'playing' ||
       device.requested.playback === 'playing'

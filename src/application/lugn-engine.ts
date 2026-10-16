@@ -4,6 +4,7 @@ import {
   type ComputerObservation,
 } from '../core/computer.js';
 import { MusicController, type MusicOptions } from './music-controller.js';
+import type { ComputerPlaybackControl } from './computer-playback-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
   MusicAutomation,
@@ -94,6 +95,7 @@ export type EngineOptions = {
   switchAdapter?: SwitchAdapter;
   switchFeedbackTimeoutMs?: number;
   music?: MusicOptions;
+  computerPlayback?: ComputerPlaybackControl;
   stateHistoryLimit?: number;
   prelight?: {
     targets: Record<string, LightingValues>;
@@ -171,6 +173,7 @@ export class LugnEngine {
   private readonly holds: AutomationHolds;
   private readonly musicController: MusicController;
   private readonly musicAutomation: MusicAutomation;
+  private readonly computerPlayback: ComputerPlaybackControl | undefined;
   private readonly roomSessions: RoomSessions;
   private lastNonOffSceneId: string | null = null;
   private bilresaPriorVolumeAutomation: boolean | null = null;
@@ -506,8 +509,14 @@ export class LugnEngine {
         latestCommandId: null,
       };
     }
-    this.musicController = new MusicController(clock, options.music ?? {}, () =>
-      this.publish(['music']),
+    this.computerPlayback = options.computerPlayback;
+    this.musicController = new MusicController(
+      clock,
+      options.music ?? {},
+      () => {
+        this.computerPlayback?.observe();
+        this.publish(['music']);
+      },
     );
     this.musicAutomation = new MusicAutomation({
       targets: Object.keys(options.music?.targets ?? {}),
@@ -522,8 +531,11 @@ export class LugnEngine {
       authorityControlBlocked: (target) =>
         this.musicController.volumeAuthorityBlocked(target),
       getState: (target) => this.musicController.getState(target),
+      ...(options.computerPlayback === undefined
+        ? {}
+        : { computerPlayback: options.computerPlayback }),
       request: (target, request, provenance) =>
-        this.musicController.request(target, request, provenance),
+        this.dispatchMusicRequest(target, request, provenance),
       cancelAutomaticFade: (target) => this.musicController.cancelFade(target),
       onChange: () => this.publish(['music', 'intent']),
       onPauseReleased: (target, endedAt) => {
@@ -561,13 +573,16 @@ export class LugnEngine {
         ),
     );
     this.musicController.setExternalPlaybackChangeHandler(
-      (target, playback, provenance, changedAt) =>
+      (target, playback, provenance, changedAt) => {
+        // Receiver transport state does not describe desktop playback intent.
+        if (this.computerPlayback?.handles(target)) return;
         this.musicAutomation.noteExternalPlaybackChange(
           target,
           playback,
           provenance,
           changedAt,
-        ),
+        );
+      },
     );
     this.musicController.setFadeLifecycleHandler((event) =>
       this.musicAutomation.handleFadeLifecycle(event),
@@ -610,6 +625,8 @@ export class LugnEngine {
       diagnostics: [],
       timings: [],
     };
+    if (options.computerPlayback?.state)
+      this.state.music.computerPlayback = options.computerPlayback.state;
     if (options.restoredMusicIntent) {
       const restoredMusic = MusicIntentSnapshotSchema.parse(
         options.restoredMusicIntent,
@@ -779,7 +796,12 @@ export class LugnEngine {
   acceptComputerObservation(observation: ComputerObservation): void {
     const parsed = ComputerObservationSchema.parse(observation);
     this.state.computer.devices[parsed.deviceId] = structuredClone(parsed);
+    this.computerPlayback?.observe();
     this.publish(['computer']);
+  }
+
+  notifyComputerPlaybackChanged(): void {
+    this.publish(['music']);
   }
 
   getMusicVolumeSettings(): MusicVolumeSettings {
@@ -1010,9 +1032,24 @@ export class LugnEngine {
     if (requested.property === 'volume')
       this.musicAutomation.assertVolumeRequestAllowed(target, provenance);
     this.musicAutomation.noteExplicitRequest(target, requested, provenance);
-    const command = this.musicController.request(target, requested, provenance);
+    const command = this.dispatchMusicRequest(target, requested, provenance);
     this.publish(['intent']);
     return command;
+  }
+
+  private dispatchMusicRequest(
+    target: string,
+    requested: MusicRequest,
+    provenance: Provenance,
+  ): Promise<MusicCommandRecord> {
+    if (
+      requested.property === 'playback' &&
+      this.computerPlayback?.handles(target)
+    )
+      return this.computerPlayback.request(target, requested, provenance);
+    if (requested.property === 'source' || requested.property === 'preset')
+      this.computerPlayback?.invalidate(target);
+    return this.musicController.request(target, requested, provenance);
   }
 
   startMusicFade(
@@ -2047,6 +2084,7 @@ export class LugnEngine {
     this.terminateAllFastPathEvents();
     this.musicAutomation.dispose();
     this.musicController.dispose();
+    this.computerPlayback?.dispose();
     for (const handle of this.lightingFeedbackTimers.values())
       this.clock.clearTimeout(handle);
     this.lightingFeedbackTimers.clear();

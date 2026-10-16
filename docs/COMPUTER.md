@@ -1,4 +1,4 @@
-# Computer observations
+# Computer observations and targeted playback
 
 Lugn optionally consumes the Linux Desktop Agent MQTT v1 protocol. Configure
 both services with the same broker, topic prefix and unique device ID. The
@@ -37,7 +37,8 @@ Each computer subscribes at QoS 1 to:
 - `{baseTopic}/{deviceId}/availability`: retained v1 JSON online/offline, including Last Will.
 - `{baseTopic}/{deviceId}/events`: non-retained v1 JSON `state_changed` notifications.
 
-There is no computer command topic, control capability or automation policy.
+These observation subscriptions remain read-only. Targeted playback is a separate,
+explicit opt-in extension described below.
 
 ## Liveness and recovery
 
@@ -91,8 +92,8 @@ state, not elapsed idle seconds.
 The operational dashboard shows a compact computer section only when configured,
 with secondary details expandable. `Bedömd aktivitet` displays the agent's
 classification separately from readings. It is advisory context, not physical
-room occupancy, music-player intent or a requested automation. No computer
-observation changes lighting, music, room sessions or presence.
+room occupancy, music-player intent or a requested automation. Computer observations never stand in for physical room presence. Observation-only
+configuration does not change lighting, music or room sessions.
 
 ## Validation
 
@@ -128,7 +129,7 @@ When the receiver is playing the mapped input and both receiver and computer
 observations are trustworthy, the Hub shows the selected computer title,
 artist/channel without application names or repeated source labels. Titles are
 shortened to 56 characters and artist/channel to 42. Spotify DJ and
-other inputs retain their receiver metadata. Playback and volume controls
+other inputs retain their receiver metadata. Without playback control enabled, playback and volume controls
 continue controlling the receiver; the media projection does not rewrite
 physical observations or create automation intent.
 
@@ -160,3 +161,54 @@ the sounding player, and silent Playing video remains a candidate. The v1 feed
 contains no reliable audible-loudness measurement; selection does not claim to
 pick the loudest stream. If no reliable title exists, or either link is stale,
 the Hub shows a generic idle/unknown Optical status instead of `4` or an old song.
+
+## Optional Optical playback control
+
+Set `homeAssistant.music["music.room"].computerAudio.playbackControl` to `true`
+and enable `control_enabled = true` in the Linux agent's protected configuration.
+Both default to off. Configure authenticated broker credentials and device-scoped
+ACLs; Lugn uses its existing `mqtt.usernameEnv` / `passwordEnv` references. No
+credentials, lease tokens or private broker payloads belong in logs or Git.
+
+The additive CONTROL v1 contract is maintained in the agent's
+`agents/linux/protocol/CONTROL.md` and `control-*.schema.json`. Lugn vendors its
+examples under `tests/fixtures/computer-control/`. Observation v1 is unchanged.
+The extra topics are `{baseTopic}/{deviceId}/control/state` (retained, read),
+`control/command` (non-retained, write), and `control/ack` (non-retained, read),
+all QoS 1. Commands have a 10-second delivery expiry and are never intentionally
+retried. Retained state cannot authorize commands; both observation and control
+feeds must be live, fresh and in the same session. A new broker connection nonce,
+player instance or content identity invalidates old permission.
+
+Only the **observed** configured Optical input selects this route. Volume and
+input/preset commands still address the receiver. Playback requests, including
+Nest Pause/Play, address the exact selected MPRIS player instead of muting Optical.
+Unknown or unavailable desktop control blocks playback; it never falls back to
+receiver Pause or starting a Spotify preset. Other observed inputs retain their
+existing behavior.
+
+The existing room-presence policy still determines exit/return timing, the
+20-minute continuity window, quiet hours, home-away and explicit manual-pause
+holds. On confirmed exit Lugn requests Pause for the selected Playing media.
+Only a verified applied pause grants a short-lived lease. On return Lugn may
+resume that exact player instance/content using the one-use lease; it cannot
+start an arbitrary player or claim a pause the user already made. Nest Play is
+available only for a pause owned by this Lugn process. Rapid returns wait for
+pause confirmation and the matching lease report, with a bounded telemetry wait.
+
+Stopping, externally restarting or replacing the media, losing the device or
+broker, switching input, expiry, and agent/controller restarts revoke permission.
+Leases are memory-only and are never reconstructed from retained state after a
+restart. A lost or uncertain command result grants no new ownership or automatic
+retry. The receiver's physical playback/source/title remain in
+`state.music.devices`; separate command eligibility, effective desktop playback,
+pending state and the last command appear in `state.music.computerPlayback` over
+the existing state/API streams.
+
+MPRIS has no atomic compare-and-resume operation or causal pause acknowledgement.
+The agent pins the unique D-Bus owner, checks content and capabilities, observes
+transitions and rechecks immediately before calling Pause/Play. A user action
+racing the final check cannot be excluded, and an already-sent D-Bus method cannot
+be retracted by a local timeout. This is guarded best effort; ambiguous outcomes
+never establish ownership. No shell commands, seeking, volume control, computer
+power control or generic D-Bus invocation is exposed.

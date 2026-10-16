@@ -278,6 +278,7 @@ export const MusicPlaybackActivityReasonSchema = z.enum([
   'confirmed_empty',
   'player_unavailable',
   'already_playing',
+  'computer_not_resumable',
   'awaiting_new_entry',
 ]);
 export type MusicPlaybackActivityReason = z.infer<
@@ -309,8 +310,24 @@ export const MusicDecisionSchema = z.object({
   resumeExpiresAt: z.number().finite().nonnegative().nullable(),
 });
 export type MusicDecision = z.infer<typeof MusicDecisionSchema>;
+/** Command/eligibility context; receiver observations remain in music.devices. */
+export const ComputerPlaybackRouteSnapshotSchema = z.object({
+  active: z.boolean(),
+  deviceId: z.string(),
+  playback: z.enum(['playing', 'paused', 'unknown']),
+  canPause: z.boolean(),
+  canResume: z.boolean(),
+  pending: z.boolean(),
+  lastCommand: MusicCommandRecordSchema.nullable(),
+});
+export type ComputerPlaybackRouteSnapshot = z.infer<
+  typeof ComputerPlaybackRouteSnapshotSchema
+>;
 export const MusicStateSchema = z.object({
   devices: z.record(SemanticMusicIdSchema, DeviceMusicStateSchema),
+  computerPlayback: z
+    .record(SemanticMusicIdSchema, ComputerPlaybackRouteSnapshotSchema)
+    .optional(),
   commands: z.array(MusicCommandRecordSchema),
   fades: z.record(SemanticMusicIdSchema, MusicFadeStateSchema).default({}),
   volumeChanges: z

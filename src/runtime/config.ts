@@ -316,6 +316,21 @@ const FileConfigSchema = z
       config.homeAssistant.music,
     )) {
       if (
+        mapping.computerAudio?.playbackControl &&
+        (!config.mqtt?.usernameEnv || !config.mqtt.passwordEnv)
+      )
+        context.addIssue({
+          code: 'custom',
+          path: [
+            'homeAssistant',
+            'music',
+            target,
+            'computerAudio',
+            'playbackControl',
+          ],
+          message: 'Computer playback requires authenticated MQTT credentials',
+        });
+      if (
         mapping.computerAudio &&
         !configuredComputers.has(mapping.computerAudio.deviceId)
       )

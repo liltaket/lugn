@@ -902,6 +902,7 @@ function playbackReason(reason) {
       confirmed_empty: 'Autostart väntar · rummet tomt',
       player_unavailable: 'Autostart väntar · spelaren frånkopplad',
       already_playing: 'Spelaren spelar · ingen ny autostart',
+      computer_not_resumable: 'Ingen datorpaus att återuppta',
       awaiting_new_entry: 'Autostart först vid en ny entré',
     }[reason] ?? 'Autostartvillkor okända'
   );
@@ -1146,7 +1147,11 @@ function renderMusic(payload) {
   refs.musicDetailsButton.disabled = false;
   const observed = device.observed ?? {};
   const availability = device.availability ?? 'unavailable';
-  const isPlaying = observed.playback === 'playing';
+  const desktop = payload?.state?.music?.computerPlayback?.[musicTarget];
+  const desktopControl = desktop?.active === true;
+  const isPlaying = desktopControl
+    ? desktop.playback === 'playing'
+    : observed.playback === 'playing';
   const playbackAction = musicPlaybackAction(payload, musicTarget);
   const isPending =
     pending.has(`music:${musicTarget}`) ||
@@ -1163,7 +1168,16 @@ function renderMusic(payload) {
   renderMusicVolumePolicy(payload, musicTarget);
   renderMusicExplanations(payload, musicTarget);
 
-  refs.musicPlayback.disabled = !canControl;
+  refs.musicPlayback.disabled =
+    !canControl ||
+    (desktopControl &&
+      (desktop.playback === 'unknown' ||
+        desktop.pending ||
+        !(playbackAction === 'paused' ? desktop.canPause : desktop.canResume)));
+  refs.musicPlayback.setAttribute(
+    'aria-busy',
+    String(desktopControl && desktop.pending),
+  );
   refs.musicPresetDj.disabled = !canControl;
   refs.musicPresetOptical.disabled = !canControl;
   refs.musicPresetDj.setAttribute('aria-busy', String(isPending));
@@ -1545,6 +1559,9 @@ refs.musicPlayback.addEventListener('click', () => {
 });
 
 function musicPlaybackAction(payload, target) {
+  const desktop = payload?.state?.music?.computerPlayback?.[target];
+  if (desktop?.active === true)
+    return desktop.playback === 'playing' ? 'paused' : 'playing';
   return payload?.musicPlaybackPolicies?.[target]?.manualPause
     ? 'playing'
     : payload?.state?.music?.devices?.[target]?.observed?.playback === 'playing'

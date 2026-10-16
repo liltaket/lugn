@@ -77,6 +77,47 @@ describe('runtime configuration cross references', () => {
     ).toThrow();
   });
 
+  it('keeps computer playback opt-in and requires authenticated MQTT when enabled', () => {
+    const config = {
+      ...minimal,
+      homeAssistant: {
+        ...minimal.homeAssistant,
+        music: {
+          'music.room': {
+            entityId: 'media_player.room',
+            computerAudio: {
+              deviceId: 'kuffe',
+              source: 'Optical In',
+              playbackControl: true,
+            },
+          },
+        },
+      },
+      mqtt: {
+        url: 'mqtt://broker.test:1883',
+        computers: [{ deviceId: 'kuffe' }],
+      },
+    };
+    expect(() => loadConfig(config)).toThrow(
+      'Computer playback requires authenticated MQTT',
+    );
+    const authenticated = {
+      ...config,
+      mqtt: {
+        ...config.mqtt,
+        usernameEnv: 'MQTT_USER',
+        passwordEnv: 'MQTT_PASSWORD',
+      },
+    };
+    expect(
+      loadConfig(authenticated, {
+        HA_TOKEN: 'ha',
+        MQTT_USER: 'controller',
+        MQTT_PASSWORD: 'test-only',
+      }).homeAssistant.music['music.room']?.computerAudio?.playbackControl,
+    ).toBe(true);
+  });
+
   it('defaults computer MQTT integrations and validates their topic and freshness settings', () => {
     expect(
       loadConfig({ ...minimal, mqtt: { url: 'mqtt://broker.test:1883' } }).mqtt

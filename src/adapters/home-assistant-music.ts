@@ -18,6 +18,7 @@ export const HomeAssistantMusicMappingSchema = z
     computerAudio: z
       .object({
         deviceId: ComputerDeviceIdSchema,
+        playbackControl: z.boolean().optional(),
         source: z.string().trim().min(1),
       })
       .strict()
