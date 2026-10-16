@@ -309,6 +309,22 @@ const FileConfigSchema = z
   })
   .strict()
   .superRefine((config, context) => {
+    const configuredComputers = new Set(
+      (config.mqtt?.computers ?? []).map((computer) => computer.deviceId),
+    );
+    for (const [target, mapping] of Object.entries(
+      config.homeAssistant.music,
+    )) {
+      if (
+        mapping.computerAudio &&
+        !configuredComputers.has(mapping.computerAudio.deviceId)
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['homeAssistant', 'music', target, 'computerAudio', 'deviceId'],
+          message: 'Computer audio device must be configured in mqtt.computers',
+        });
+    }
     const configuredLights = new Set(
       Object.keys(config.homeAssistant.entities),
     );

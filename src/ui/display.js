@@ -573,6 +573,79 @@ function musicObservationTrusted(payload, target) {
   );
 }
 
+function renderComputerNowPlaying(
+  payload,
+  target,
+  device,
+  connected,
+  reportedOnly,
+  playbackLabel,
+) {
+  const projections = payload?.computerNowPlaying;
+  const projection = projections?.[target];
+  if (!projection || typeof projection !== 'object') return;
+
+  // The API only includes this projection when the configured Optical input is
+  // actually observed. Keep that source visible even while the HA report is
+  // stale, so the receiver's preset number never replaces the computer state.
+  const observed = device.observed ?? {};
+  const source =
+    typeof observed.source === 'string' && observed.source.trim()
+      ? observed.source.trim()
+      : 'Optical';
+  setText(refs.musicSource, source);
+  const status = projection.status;
+  const freshPlaying =
+    !reportedOnly &&
+    connected &&
+    device.availability === 'available' &&
+    musicObservationTrusted(payload, target) &&
+    observed.playback === 'playing';
+
+  if (!freshPlaying) {
+    if (reportedOnly) {
+      setText(refs.musicTitle, 'Datorns media är okänt');
+      setText(refs.musicPlayerStatus, 'Senast rapporterat');
+    } else if (
+      device.availability !== 'available' ||
+      status === 'unavailable' ||
+      observed.playback === 'unknown'
+    ) {
+      setText(refs.musicTitle, 'Datorns media är okänt');
+      setText(refs.musicPlayerStatus, 'Okänt');
+    } else if (['paused', 'idle', 'off'].includes(observed.playback)) {
+      setText(refs.musicTitle, 'Ingen musik spelar');
+      setText(refs.musicPlayerStatus, playbackLabel);
+    } else {
+      setText(refs.musicTitle, 'Datorns media är okänt');
+      setText(refs.musicPlayerStatus, 'Okänt');
+    }
+    return;
+  }
+
+  if (status === 'playing') {
+    const title =
+      typeof projection.title === 'string' && projection.title.trim()
+        ? projection.title.trim()
+        : 'Media spelas från datorn';
+    const subtitle = [projection.artist, projection.application, source]
+      .filter((part) => typeof part === 'string' && part.trim())
+      .map((part) => part.trim());
+    setText(refs.musicTitle, title);
+    setText(refs.musicSource, subtitle.join(' · '));
+    setText(refs.musicPlayerStatus, 'Spelar från datorn');
+  } else if (status === 'idle') {
+    setText(refs.musicTitle, 'Inget media spelas på datorn');
+    setText(refs.musicPlayerStatus, 'Inget media spelas');
+  } else if (status === 'ambiguous') {
+    setText(refs.musicTitle, 'Flera medier spelas på datorn');
+    setText(refs.musicPlayerStatus, 'Flera medier spelas');
+  } else {
+    setText(refs.musicTitle, 'Datorns media är okänt');
+    setText(refs.musicPlayerStatus, 'Okänt');
+  }
+}
+
 function renderMusicVolumePolicy(payload, target) {
   renderVolumeAuthority(payload, target);
   const stale =
@@ -1129,6 +1202,14 @@ function renderMusic(payload) {
   setText(
     refs.musicPlayerStatus,
     reportedOnly ? `Senast rapporterat: ${playbackLabel}` : playbackLabel,
+  );
+  renderComputerNowPlaying(
+    payload,
+    musicTarget,
+    device,
+    connected,
+    reportedOnly,
+    playbackLabel,
   );
   refs.musicVolumeValue.value = formatVolume(volume);
   setText(refs.musicVolumeValue, refs.musicVolumeValue.value);

@@ -102,3 +102,53 @@ malformed payloads, session changes, broker reconnects and non-authoritative
 events. Engine/stream and composed-runtime checks cover API delivery and
 observation-only behavior. Hardware and real-broker interoperability should be
 verified with the companion Linux agent before marking the Draft PR ready.
+
+## Optical now playing on Nest dashboards
+
+Map the receiver's actual computer input to a configured MQTT computer in
+`homeAssistant.music`:
+
+```json
+{
+  "music.room": {
+    "entityId": "media_player.room",
+    "sources": ["Spotify", "Optical In"],
+    "computerAudio": {
+      "deviceId": "kuffe",
+      "source": "Optical In"
+    }
+  }
+}
+```
+
+The source is an exact Home Assistant observed input name. A requested Optical
+preset or the receiver's title `4` does not confirm that input. Both Nest roles
+receive the same `computerNowPlaying` presentation context over polling and SSE.
+When the receiver is playing the mapped input and both receiver and computer
+observations are trustworthy, the Hub shows the selected computer title,
+artist/channel and application alongside the Optical source. Spotify DJ and
+other inputs retain their receiver metadata. Playback and volume controls
+continue controlling the receiver; the media projection does not rewrite
+physical observations or create automation intent.
+
+Selection only considers fresh online computer media reported as `Playing`
+with a useful title. It prefers a unique active application/DesktopEntry match,
+then unique application-name audio corroboration, then the most recently
+observed transition into Playing, then a meaningful title/artist/album change.
+Equal candidates keep the prior winner when still eligible; otherwise the
+screen says multiple media are playing. There is no intrinsic video/music
+preference and paused media never appears as now playing.
+
+Heartbeats, first discovery and identity enrichment do not establish recency.
+Fingerprints survive the producer's transient `media: null` refresh within a
+healthy session; unknown data is hidden, and unchanged recovery is no new
+track. Offline/stale data and new producer sessions rebase selection history.
+Known player removal clears that player's history. These times describe changes
+observed by Lugn, not actual playback-start time or transitions missed offline.
+
+PipeWire application names can corroborate some MPRIS players but cannot
+reliably distinguish browser tabs. Global `audio.playing`/roles do not identify
+the sounding player, and silent Playing video remains a candidate. The v1 feed
+contains no reliable audible-loudness measurement; selection does not claim to
+pick the loudest stream. If no reliable title exists, or either link is stale,
+the Hub shows a generic idle/unknown Optical status instead of `4` or an old song.

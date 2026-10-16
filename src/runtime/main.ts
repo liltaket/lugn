@@ -434,6 +434,12 @@ export async function startRuntime(
           homeAssistantSocket.status === 'connected',
         musicObservationTrustProvider: musicObservationTrust,
         stateStream: engine.stream,
+        computerAudioMappings: Object.fromEntries(
+          Object.entries(config.homeAssistant.music).flatMap(
+            ([target, mapping]) =>
+              mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
+          ),
+        ),
         musicVolumePoliciesProvider: () =>
           engine.getMusicVolumePolicySnapshots(),
         musicPlaybackPoliciesProvider: () =>

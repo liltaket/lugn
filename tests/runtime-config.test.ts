@@ -29,6 +29,54 @@ describe('runtime configuration cross references', () => {
     },
     scenes: [],
   };
+  it('routes computer media only through an explicitly configured MQTT computer and input', () => {
+    const config = {
+      ...minimal,
+      homeAssistant: {
+        ...minimal.homeAssistant,
+        music: {
+          'music.room': {
+            entityId: 'media_player.room',
+            computerAudio: { deviceId: 'kuffe', source: 'Optical In' },
+          },
+        },
+      },
+      mqtt: {
+        url: 'mqtt://broker.test:1883',
+        computers: [{ deviceId: 'kuffe' }],
+      },
+    };
+    expect(
+      loadConfig(config).homeAssistant.music['music.room']?.computerAudio,
+    ).toEqual({ deviceId: 'kuffe', source: 'Optical In' });
+    expect(() => loadConfig({ ...config, mqtt: undefined })).toThrow(
+      'Computer audio device must be configured',
+    );
+    expect(() =>
+      loadConfig({
+        ...config,
+        mqtt: {
+          url: 'mqtt://broker.test:1883',
+          computers: [{ deviceId: 'other' }],
+        },
+      }),
+    ).toThrow('Computer audio device must be configured');
+    expect(() =>
+      loadConfig({
+        ...config,
+        homeAssistant: {
+          ...config.homeAssistant,
+          music: {
+            'music.room': {
+              entityId: 'media_player.room',
+              computerAudio: { deviceId: 'kuffe', source: ' ' },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
   it('defaults computer MQTT integrations and validates their topic and freshness settings', () => {
     expect(
       loadConfig({ ...minimal, mqtt: { url: 'mqtt://broker.test:1883' } }).mqtt
