@@ -8,7 +8,12 @@ import {
   type MusicVolumeSettingsStore,
   MusicVolumeSettingsError,
 } from './music-volume-settings-store.js';
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 
 import { readFileSync } from 'node:fs';
 import {
@@ -964,10 +969,10 @@ export class LugnHttpServer {
   private constantTimeEqual(left: string, right: string): boolean {
     const leftBytes = Buffer.from(left);
     const rightBytes = Buffer.from(right);
-    return (
-      leftBytes.length === rightBytes.length &&
-      timingSafeEqual(leftBytes, rightBytes)
-    );
+    const leftHash = createHash('sha256').update(leftBytes).digest();
+    const rightHash = createHash('sha256').update(rightBytes).digest();
+    const hashesEqual = timingSafeEqual(leftHash, rightHash);
+    return hashesEqual && leftBytes.length === rightBytes.length;
   }
 
   private async invokeCapability(
@@ -1041,9 +1046,10 @@ export class LugnHttpServer {
     if (!match?.[1]) return false;
     const provided = Buffer.from(match[1]);
     const expected = Buffer.from(configuredToken);
-    return (
-      provided.length === expected.length && timingSafeEqual(provided, expected)
-    );
+    const providedHash = createHash('sha256').update(provided).digest();
+    const expectedHash = createHash('sha256').update(expected).digest();
+    const hashesEqual = timingSafeEqual(providedHash, expectedHash);
+    return hashesEqual && provided.length === expected.length;
   }
 }
 
