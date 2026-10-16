@@ -148,6 +148,16 @@ presetConfirmYes.addEventListener('click', () => {
   else closePresetEditor();
 });
 
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    if (!presetConfirm.hidden) {
+      presetConfirmNo.click();
+    } else if (!presetEditor.hidden) {
+      requestClosePreset();
+    }
+  }
+});
+
 void restoreSessionOnStartup();
 
 function node(tag, className, text) {
