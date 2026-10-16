@@ -1,0 +1,21 @@
+[Unit]
+Description=Lugn Linux desktop observations
+PartOf=graphical-session.target
+# Avoid the target adding an opposite ordering dependency for this wanted unit.
+DefaultDependencies=no
+After=basic.target graphical-session.target
+Conflicts=shutdown.target
+Before=shutdown.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart="%h/.local/bin/lugn-linux-agent" --config "%E/lugn-linux-agent/config.toml"
+EnvironmentFile=-%E/lugn-linux-agent/environment
+UMask=0077
+# Desktop observation needs the session bus, Wayland, PipeWire and shared /tmp.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

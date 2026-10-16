@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lugn computer state v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "device_id",
+    "session_id",
+    "sequence",
+    "timestamp_ms",
+    "reason",
+    "heartbeat_interval_ms",
+    "observations",
+    "inference"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "device_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+      "maxLength": 512
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "maxLength": 512
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "reason": {
+      "enum": ["startup", "change", "heartbeat", "reconnect"]
+    },
+    "heartbeat_interval_ms": {
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 300000
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network_online",
+        "locked",
+        "idle",
+        "active_application",
+        "audio",
+        "media"
+      ],
+      "properties": {
+        "network_online": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locked": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "idle": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active_application": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["app_id", "resource_class", "fullscreen"],
+              "properties": {
+                "app_id": {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                "resource_class": {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                "fullscreen": {
+                  "type": "boolean"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "audio": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["playing", "applications", "roles"],
+              "properties": {
+                "playing": {
+                  "type": "boolean"
+                },
+                "applications": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "maxItems": 128
+                },
+                "roles": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "maxItems": 128
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "media": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "player",
+                  "identity",
+                  "desktop_entry",
+                  "playback_status",
+                  "title",
+                  "artists",
+                  "album",
+                  "content_type"
+                ],
+                "properties": {
+                  "player": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "identity": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 512
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "desktop_entry": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 512
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "playback_status": {
+                    "anyOf": [
+                      {
+                        "enum": ["Playing", "Paused", "Stopped"]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "title": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 512
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "artists": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 512
+                        },
+                        "maxItems": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "album": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 512
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "content_type": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 512
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              "maxItems": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "inference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activity", "basis"],
+      "properties": {
+        "activity": {
+          "enum": ["unknown", "idle", "desktop", "gaming", "video", "music"]
+        },
+        "basis": {
+          "enum": [
+            "locked_or_idle",
+            "application_rule",
+            "application_rule_and_playback",
+            "mpris_content_type",
+            "active_application",
+            "insufficient_evidence"
+          ]
+        }
+      }
+    }
+  }
+}

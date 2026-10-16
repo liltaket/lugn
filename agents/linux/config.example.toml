@@ -1,0 +1,19 @@
+# Copy to ~/.config/lugn-linux-agent/config.toml and chmod 600.
+# Unique per computer. Letters/digits first, then letters/digits/_/-; max 64.
+device_id = "desktop"
+mqtt_host = "127.0.0.1"
+mqtt_port = 1883
+mqtt_tls = false
+# For TLS normally set mqtt_port = 8883 and mqtt_tls = true.
+# mqtt_ca_file = "/home/your-user/.config/lugn-linux-agent/broker-ca.pem"
+# mqtt_username = "desktop-agent"
+# Prefer LUGN_MQTT_PASSWORD in the optional systemd environment file.
+# mqtt_password = "replace-in-your-private-config-only"
+topic_prefix = "lugn/computers"
+heartbeat_secs = 30
+idle_secs = 300
+# Exact KWin desktopFileName IDs, case sensitive; Steam app resource classes
+# steam_app_* are recognized independently. Leave empty until verified locally.
+gaming_app_ids = []
+video_app_ids = []
+music_app_ids = []

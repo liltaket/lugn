@@ -181,6 +181,13 @@ or replay pending device commands after restart.
 - [Music verification](docs/MUSIC-VERIFICATION.md) — scenario evidence, reset
   contract and pending physical-device protocol
 
+## Desktop observations
+
+The standalone [Linux desktop agent](agents/linux/README.md) publishes read-only
+KDE Plasma/Wayland computer observations over MQTT. Installation, protocol schemas
+and hardware-validation steps live alongside the Rust crate. Lugn-side consumption
+is separate from this agent.
+
 ## License
 
 Lugn is source-available under the [PolyForm Small Business License 1.0.0](LICENSE).

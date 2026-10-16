@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lugn computer availability v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "device_id", "session_id", "status"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "device_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+      "maxLength": 512
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "maxLength": 512
+    },
+    "status": {
+      "enum": ["online", "offline"]
+    }
+  }
+}

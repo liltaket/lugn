@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "device_id": "desktop",
+  "session_id": "123e4567-e89b-42d3-a456-426614174000",
+  "sequence": 1,
+  "timestamp_ms": 1792152000000,
+  "reason": "startup",
+  "heartbeat_interval_ms": 30000,
+  "observations": {
+    "network_online": true,
+    "locked": false,
+    "idle": false,
+    "active_application": {
+      "app_id": "org.kde.konsole",
+      "resource_class": "konsole",
+      "fullscreen": false
+    },
+    "audio": {
+      "playing": false,
+      "applications": [],
+      "roles": []
+    },
+    "media": []
+  },
+  "inference": {
+    "activity": "desktop",
+    "basis": "active_application"
+  }
+}
