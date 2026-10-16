@@ -52,8 +52,8 @@ v1 schemas and fixtures are unchanged. Its canonical contract, three schemas and
 five coherent fixtures live under [protocol/CONTROL.md](protocol/CONTROL.md).
 
 - Final Rust checks: 34 unit tests passed, rustfmt passed and Clippy all targets
-  passed with warnings denied. The four serial private-bus lifecycle tests and
-  the separate MQTT wire test passed explicitly (39 automated tests; the opt-in
+  passed with warnings denied. The seven serial private-bus lifecycle tests and
+  the separate MQTT wire test passed explicitly (42 automated tests; the opt-in
   host fixture is recorded separately below).
 - Isolated fake MPRIS tests cover confirmed Pause/owned Resume, exact duplicate
   acknowledgment replay, conflicting IDs, retained/expired/old-epoch commands,
@@ -108,9 +108,40 @@ its D-Bus name was absent afterward and the agent stayed active with zero restar
 The subsequent read-only MQTT probe confirmed the fake absent from control state,
 only the normal Firefox/Spotify players, no leases, all observation sources known
 and advancing live observation sequence in the same healthy session/connection.
-There were no Spotify/Firefox/user-player commands and no synthetic observation
+During this fake-target check there were no Spotify/Firefox/user-player commands and no synthetic observation
 publications. Actual room walks, WiiM Optical passthrough and user-media behavior
 remain separate field acceptance checks.
+
+### Normal Spotify pause and confirmation repair
+
+Subsequent requested room-presence automation sent one actual Spotify Pause at
+2026-10-16 22:41:33 UTC. Spotify became Paused, while the agent returned a correlated
+`uncertain:unconfirmed` acknowledgment and granted no lease. No method was retried
+and no Play or ownership reconstruction was attempted. A read-only GetAll afterward
+reported Paused with CanPause, CanPlay and CanControl all true; the agent had not
+restarted and its journal had no entries around the command. Raw signals and the
+original acknowledgment timestamp were not retained, so the incident's exact
+guard failure cannot be established from that evidence.
+
+Isolated regressions independently reproduced two implementation false negatives:
+Pause/GetAll can complete before a delayed raw Paused signal arrives, and a known
+CanPause change after Pause was incorrectly treated as lost resume authority.
+The repair waits on native events within the original command budget, then
+freshly rechecks owner/properties. It preserves raw Stop/Seeked, content/owner,
+capability-loss and expiry guards; it neither polls nor retries a method or
+claims ownership from a snapshot alone. The old uncertain pause remains unowned.
+This establishes the software bugs without asserting either caused the real
+incident. Actual ownership through a future normal Spotify presence cycle is a
+separate field check.
+
+Both positive fixtures failed with `uncertain:unconfirmed` before the repair and
+pass afterward, including bundled and separate CanPause updates. Twelve negative
+confirmation cases cover missing/late raw signal, Stop, Seeked, content/owner
+changes, CanPlay/CanControl loss or unknown values, malformed/invalidated required
+properties and expiry. They grant no lease, retry no method and issue no Play.
+A separate zero-poll assertion preserves the strict CanPause gate before dispatch.
+Uncertain outcomes now log a validated command UUID, fixed failure stage/reason,
+confirmation flags and elapsed time; no metadata, payloads or tokens are logged.
 
 A 10.004-second installed full-desktop sample of `85a58ec` (control enabled, actual KDE,
 two MPRIS players and native PipeWire helper) measured agent peak RSS

@@ -81,6 +81,15 @@ It then calls `Pause` and confirms `Paused` before issuing a lease. A player
 already Paused is not claimed. An uncertain or unconfirmed pause grants no
 ownership and no resume token.
 
+The method reply alone is not confirmation. The agent waits on native events for
+the expected raw transition, within the original command expiry and a three-second
+confirmation window, then freshly checks the owner and properties again. It
+does not poll, retry the method or claim ownership from a snapshot alone.
+`CanPause` is required before dispatching Pause; an owned Paused lease and Resume
+require playback capability (`CanPlay` and `CanControl`), not `CanPause`. A known
+`CanPause` change alone does not establish user intent or revoke that lease;
+unknown properties and loss of playback/control capability still invalidate it.
+
 For `action: "resume"`, `lease_ttl_ms` must be `null`, while
 `pause_command_id` and `resume_token` must exactly match the still-valid lease
 from the applied pause. A resume uses its own new `command_id`. The agent

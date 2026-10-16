@@ -189,6 +189,7 @@ struct Expected {
     instance: String,
     action: Action,
     observed: bool,
+    generation: u64,
 }
 struct DispatchGuard {
     name: String,
@@ -208,6 +209,7 @@ struct Actor {
     pending: BTreeSet<String>,
     expected: Option<Expected>,
     failed: bool,
+    stage: &'static str,
     states: watch::Sender<Vec<Player>>,
 }
 impl Actor {
@@ -259,7 +261,10 @@ impl Actor {
         ] {
             if let Some(value) = properties.get(key) {
                 let value = bool::try_from(value).ok();
-                if *field != value || value.is_none() {
+                // A known CanPause change is not resume authority. In
+                // particular some players report false once already paused.
+                // Unknown values and CanControl/CanPlay changes still revoke.
+                if value.is_none() || (*field != value && key != "CanPause") {
                     record.generation = record.generation.wrapping_add(1);
                     record.lease = None;
                     record.wire.pause_lease = None;
@@ -416,7 +421,15 @@ impl Actor {
             return Err(Reason::LeaseExpired);
         }
         let (before, after, capable) = match guard.action {
-            Action::Pause => ("Playing", "Paused", record.wire.can_pause),
+            Action::Pause => (
+                "Playing",
+                "Paused",
+                if polled {
+                    record.can_control == Some(true)
+                } else {
+                    record.wire.can_pause
+                },
+            ),
             Action::Resume => ("Paused", "Playing", record.wire.can_play),
         };
         if !capable {
@@ -479,6 +492,64 @@ impl Actor {
             )
             .await?;
         reply.body().deserialize().map_err(|_| Reason::Unavailable)
+    }
+    async fn confirm_transition(
+        &mut self,
+        command: &Command,
+        owner: &str,
+        generation: u64,
+        deadline: Instant,
+        clock: &mut Clock,
+    ) -> Result<(), Reason> {
+        let until = deadline.min(Instant::now() + CALL_LIMIT);
+        loop {
+            if Instant::now() >= deadline || clock.now() >= command.expires_at_ms {
+                self.stage = "confirmation_expired";
+                return Err(Reason::Timeout);
+            }
+            if Instant::now() >= until {
+                self.stage = "no_raw_transition";
+                return Err(Reason::Unconfirmed);
+            }
+            self.stage = "identity_changed";
+            let record = self.target(command)?;
+            if record.owner != owner {
+                return Err(Reason::PlayerChanged);
+            }
+            if record.generation != generation {
+                self.stage = "generation_changed";
+                return Err(Reason::Unconfirmed);
+            }
+            if record.can_control != Some(true) || !record.wire.can_play {
+                self.stage = "capability_lost";
+                return Err(Reason::NotCapable);
+            }
+            let (before, after) = match command.action {
+                Action::Pause => ("Playing", "Paused"),
+                Action::Resume => ("Paused", "Playing"),
+            };
+            if ![Some(before), Some(after)].contains(&record.wire.playback_status.as_deref()) {
+                self.stage = "status_mismatch";
+                return Err(Reason::Unconfirmed);
+            }
+            let observed = self
+                .expected
+                .as_ref()
+                .is_some_and(|expected| expected.observed);
+            self.stage = "no_raw_transition";
+            tokio::select! { biased;
+                message = self.signals.next() => match message {
+                    Some(Ok(message)) => if let Err(reason) = self.signal(message) {
+                        self.failed = true; self.stage = "signal_stream"; return Err(reason);
+                    },
+                    _ => { self.failed = true; self.stage = "signal_stream"; return Err(Reason::Unavailable); }
+                },
+                // Drain already queued invalidations before confirming. Each
+                // iteration checks expiry even under a continuous signal flow.
+                _ = std::future::ready(()), if observed => return Ok(()),
+                _ = tokio::time::sleep_until(until.into()) => {}
+            }
+        }
     }
     async fn snapshot(&mut self, name: &str, owner: &str, deadline: Instant) -> Result<(), Reason> {
         let connection = self.connection.clone();
@@ -572,6 +643,7 @@ impl Actor {
         delivery: &Delivery,
         clock: &mut Clock,
     ) -> Result<(Reason, Option<Lease>), (Outcome, Reason)> {
+        self.stage = "preflight";
         let command = &delivery.command;
         let deadline = delivery.deadline().min(
             Instant::now()
@@ -691,6 +763,7 @@ impl Actor {
             instance: command.player_instance_id.clone(),
             action: command.action,
             observed: false,
+            generation,
         });
         let connection = self.connection.clone();
         let unique = owner.clone();
@@ -698,6 +771,7 @@ impl Actor {
             Action::Pause => "Pause",
             Action::Resume => "Play",
         };
+        self.stage = "method_rpc";
         let result = self
             .wait_action(
                 async move {
@@ -710,41 +784,66 @@ impl Actor {
             )
             .await;
         if let Err(reason) = result {
-            self.expected = None;
             return Err(uncertain(reason));
         }
+        self.stage = "post_owner_rpc";
         if self
             .owner(&command.player, deadline)
             .await
             .map_err(uncertain)?
             != owner
         {
-            self.expected = None;
+            self.stage = "owner_changed";
             return Err(uncertain(Reason::PlayerChanged));
         }
+        self.stage = "post_snapshot_rpc";
+        self.snapshot(&command.player, &owner, deadline)
+            .await
+            .map_err(uncertain)?;
+        self.confirm_transition(command, &owner, generation, deadline, clock)
+            .await
+            .map_err(uncertain)?;
+        // A native transition is necessary but not sufficient: recheck the
+        // exact owner and a fresh full snapshot after observing it.
+        self.stage = "final_owner_rpc";
+        if self
+            .owner(&command.player, deadline)
+            .await
+            .map_err(uncertain)?
+            != owner
+        {
+            self.stage = "owner_changed";
+            return Err(uncertain(Reason::PlayerChanged));
+        }
+        self.stage = "final_snapshot_rpc";
         self.snapshot(&command.player, &owner, deadline)
             .await
             .map_err(uncertain)?;
         let observed = self
             .expected
-            .take()
+            .as_ref()
             .is_some_and(|expected| expected.observed);
+        self.stage = "identity_changed";
         let record = self.target(command).map_err(uncertain)?;
         let target = match command.action {
             Action::Pause => "Paused",
             Action::Resume => "Playing",
         };
-        if record.generation != generation
-            || record.wire.playback_status.as_deref() != Some(target)
-            || !observed
-        {
+        if record.generation != generation {
+            self.stage = "generation_changed";
+            return Err(uncertain(Reason::Unconfirmed));
+        }
+        if record.wire.playback_status.as_deref() != Some(target) || !observed {
+            self.stage = "status_mismatch";
             return Err(uncertain(Reason::Unconfirmed));
         }
         if Instant::now() >= deadline || clock.now() >= command.expires_at_ms {
+            self.stage = "confirmation_expired";
             return Err(uncertain(Reason::Timeout));
         }
         if command.action == Action::Pause {
-            if !record.wire.can_play || !record.wire.can_pause {
+            if !record.wire.can_play || record.can_control != Some(true) {
+                self.stage = "capability_lost";
                 return Err(uncertain(Reason::NotCapable));
             }
             let ttl = command.lease_ttl_ms.unwrap_or(1_200_000);
@@ -894,6 +993,7 @@ async fn connected(states: watch::Sender<Vec<Player>>) -> Result<Actor, zbus::Er
         pending: BTreeSet::new(),
         expected: None,
         failed: false,
+        stage: "idle",
         states,
     };
     let connection = actor.connection.clone();
@@ -955,7 +1055,18 @@ pub async fn run(
                             Ok(Some(ack)) => ack,
                             Err(reason) => context.ack(&delivery.command, Outcome::Rejected, reason),
                             Ok(None) => {
+                                let started = Instant::now();
                                 let result = actor.execute(&delivery, &mut cache.clock).await;
+                                if let Err((Outcome::Uncertain, reason)) = &result {
+                                    let expected = actor.expected.as_ref();
+                                    let record = actor.players.get(&delivery.command.player);
+                                    let raw_observed = expected.is_some_and(|expected| expected.observed);
+                                    let generation_matches = record.zip(expected).is_some_and(|(record, expected)| record.generation == expected.generation);
+                                    let status = match delivery.command.action { Action::Pause => "Paused", Action::Resume => "Playing" };
+                                    let status_matches = record.is_some_and(|record| record.wire.playback_status.as_deref() == Some(status));
+                                    eprintln!("MPRIS control command_id={} stage={} reason={reason:?} raw_observed={raw_observed} generation_matches={generation_matches} status_matches={status_matches} elapsed_ms={}",
+                                        delivery.command.command_id, actor.stage, started.elapsed().as_millis());
+                                }
                                 actor.expected = None;
                                 if matches!(result, Err((Outcome::Uncertain, _))) || actor.failed {
                                     if let Some(record) = actor.players.get_mut(&delivery.command.player) { record.revoke(); }
@@ -1271,6 +1382,10 @@ mod tests {
         pause_race: AtomicBool,
         slow_snapshot: AtomicBool,
         slow_pause: AtomicBool,
+        delayed_pause_signal: AtomicBool,
+        pause_disables_pause: AtomicBool,
+        split_pause_capability: AtomicBool,
+        paused_snapshot: tokio::sync::Notify,
         entered: tokio::sync::Notify,
     }
     fn status(fixture: &Fixture) -> &'static str {
@@ -1398,6 +1513,35 @@ mod tests {
             if self.0.slow_pause.swap(false, Ordering::SeqCst) {
                 tokio::time::sleep(Duration::from_secs(4)).await;
             }
+            if self.0.delayed_pause_signal.load(Ordering::SeqCst) {
+                self.0.status.store(1, Ordering::SeqCst);
+                return;
+            }
+            if self.0.pause_disables_pause.load(Ordering::SeqCst) {
+                self.0.status.store(1, Ordering::SeqCst);
+                if self.0.split_pause_capability.load(Ordering::SeqCst) {
+                    changed(connection, "CanPause", OwnedValue::from(false)).await;
+                    tokio::task::yield_now().await;
+                    changed(connection, "PlaybackStatus", value("Paused")).await;
+                    return;
+                }
+                let properties: Properties = [
+                    ("PlaybackStatus".into(), value("Paused")),
+                    ("CanPause".into(), OwnedValue::from(false)),
+                ]
+                .into();
+                connection
+                    .emit_signal(
+                        None::<&str>,
+                        PATH,
+                        PROPS,
+                        "PropertiesChanged",
+                        &(IFACE, properties, Vec::<String>::new()),
+                    )
+                    .await
+                    .unwrap();
+                return;
+            }
             set_status(connection, &self.0, 1).await;
             if self.0.pause_race.swap(false, Ordering::SeqCst) {
                 set_status(connection, &self.0, 0).await;
@@ -1414,11 +1558,17 @@ mod tests {
                 self.0.entered.notify_one();
                 tokio::time::sleep(Duration::from_millis(400)).await;
             }
+            if self.0.delayed_pause_signal.load(Ordering::SeqCst)
+                && self.0.status.load(Ordering::SeqCst) == 1
+            {
+                self.0.paused_snapshot.notify_one();
+            }
             status(&self.0)
         }
         #[zbus(property)]
         fn can_pause(&self) -> bool {
-            true
+            !(self.0.pause_disables_pause.load(Ordering::SeqCst)
+                && self.0.status.load(Ordering::SeqCst) == 1)
         }
         #[zbus(property)]
         fn can_play(&self) -> bool {
@@ -1433,17 +1583,18 @@ mod tests {
             fixture_metadata(&self.0)
         }
     }
-    async fn state(runtime: &mut control::Runtime, predicate: impl Fn(&Player) -> bool) -> Player {
+    async fn state_for(
+        runtime: &mut control::Runtime,
+        name: &str,
+        predicate: impl Fn(&Player) -> bool,
+    ) -> Player {
         tokio::time::timeout(Duration::from_secs(6), async {
             loop {
                 if let Some(player) = runtime
                     .states
                     .borrow()
                     .iter()
-                    .find(|player| {
-                        player.player == "org.mpris.MediaPlayer2.control_fixture"
-                            && predicate(player)
-                    })
+                    .find(|player| player.player == name && predicate(player))
                     .cloned()
                 {
                     return player;
@@ -1453,6 +1604,256 @@ mod tests {
         })
         .await
         .expect("expected control player state")
+    }
+    async fn state(runtime: &mut control::Runtime, predicate: impl Fn(&Player) -> bool) -> Player {
+        state_for(runtime, "org.mpris.MediaPlayer2.control_fixture", predicate).await
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires isolated dbus-run-session and LUGN_TEST_DBUS=1"]
+    async fn dbus_lifecycle_control_delayed_confirmation() {
+        assert_eq!(std::env::var("LUGN_TEST_DBUS").as_deref(), Ok("1"));
+        assert_eq!(
+            std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap(),
+            std::env::var("DBUS_SYSTEM_BUS_ADDRESS").unwrap()
+        );
+        const NAME: &str = "org.mpris.MediaPlayer2.control_confirmation_fixture";
+        let fixture = Arc::new(Fixture::default());
+        fixture.delayed_pause_signal.store(true, Ordering::SeqCst);
+        let bus = Builder::session()
+            .unwrap()
+            .name(NAME)
+            .unwrap()
+            .serve_at(PATH, Fake(fixture.clone()))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let context = context();
+        let mut runtime = control::spawn(context.clone());
+        let player = state_for(&mut runtime, NAME, |player| {
+            player.can_pause && player.playback_status.as_deref() == Some("Playing")
+        })
+        .await;
+        let pause = command(&context, &player, Action::Pause);
+        runtime
+            .commands
+            .send(Delivery::new(pause.clone(), false))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), fixture.paused_snapshot.notified())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        changed(&bus, "PlaybackStatus", value("Paused")).await;
+        let ack = tokio::time::timeout(Duration::from_secs(4), runtime.acks.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            ack.outcome == Outcome::Applied && ack.reason == Reason::Paused,
+            "delayed confirmation: {:?}:{:?}",
+            ack.outcome,
+            ack.reason
+        );
+        assert!(ack.resume_token.is_some());
+        assert_eq!(fixture.pauses.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.plays.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires isolated dbus-run-session and LUGN_TEST_DBUS=1"]
+    async fn dbus_lifecycle_control_pause_capability() {
+        assert_eq!(std::env::var("LUGN_TEST_DBUS").as_deref(), Ok("1"));
+        assert_eq!(
+            std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap(),
+            std::env::var("DBUS_SYSTEM_BUS_ADDRESS").unwrap()
+        );
+        const NAME: &str = "org.mpris.MediaPlayer2.control_capability_fixture";
+        let fixture = Arc::new(Fixture::default());
+        fixture.pause_disables_pause.store(true, Ordering::SeqCst);
+        let _bus = Builder::session()
+            .unwrap()
+            .name(NAME)
+            .unwrap()
+            .serve_at(PATH, Fake(fixture.clone()))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let context = context();
+        let mut runtime = control::spawn(context.clone());
+        for split in [false, true] {
+            fixture
+                .split_pause_capability
+                .store(split, Ordering::SeqCst);
+            let player = state_for(&mut runtime, NAME, |player| {
+                player.can_pause && player.playback_status.as_deref() == Some("Playing")
+            })
+            .await;
+            let pause = command(&context, &player, Action::Pause);
+            let ack = send(&mut runtime, pause.clone()).await;
+            assert!(
+                ack.outcome == Outcome::Applied && ack.reason == Reason::Paused,
+                "known CanPause loss after pause (split={split}): {:?}:{:?}",
+                ack.outcome,
+                ack.reason
+            );
+            let paused = state_for(&mut runtime, NAME, |player| player.pause_lease.is_some()).await;
+            assert!(!paused.can_pause && paused.can_play);
+            let resumed = send(&mut runtime, resume(&context, &paused, &pause, &ack)).await;
+            assert!(resumed.outcome == Outcome::Applied && resumed.reason == Reason::Resumed);
+        }
+        assert_eq!(fixture.pauses.load(Ordering::SeqCst), 2);
+        assert_eq!(fixture.plays.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires isolated dbus-run-session and LUGN_TEST_DBUS=1"]
+    async fn dbus_lifecycle_control_confirmation_revocation() {
+        assert_eq!(std::env::var("LUGN_TEST_DBUS").as_deref(), Ok("1"));
+        assert_eq!(
+            std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap(),
+            std::env::var("DBUS_SYSTEM_BUS_ADDRESS").unwrap()
+        );
+        for cause in [
+            "stop",
+            "seek",
+            "content",
+            "owner",
+            "can_play",
+            "can_control",
+            "unknown_play",
+            "unknown_control",
+            "unknown",
+            "invalidated",
+            "expiry",
+            "missing",
+        ] {
+            let name = format!("org.mpris.MediaPlayer2.control_confirmation_{cause}");
+            let fixture = Arc::new(Fixture::default());
+            fixture.delayed_pause_signal.store(true, Ordering::SeqCst);
+            let bus = Builder::session()
+                .unwrap()
+                .name(name.as_str())
+                .unwrap()
+                .serve_at(PATH, Fake(fixture.clone()))
+                .unwrap()
+                .build()
+                .await
+                .unwrap();
+            let context = context();
+            let mut runtime = control::spawn(context.clone());
+            let player = state_for(&mut runtime, &name, |player| {
+                player.can_pause && player.playback_status.as_deref() == Some("Playing")
+            })
+            .await;
+            let mut pause = command(&context, &player, Action::Pause);
+            if cause == "expiry" {
+                pause.expires_at_ms = pause.issued_at_ms + 150;
+            }
+            runtime
+                .commands
+                .send(Delivery::new(pause.clone(), false))
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), fixture.paused_snapshot.notified())
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert!(
+                matches!(
+                    runtime.acks.try_recv(),
+                    Err(mpsc::error::TryRecvError::Empty)
+                ),
+                "confirmation did not wait: {cause}"
+            );
+            match cause {
+                "stop" => set_status(&bus, &fixture, 2).await,
+                "seek" => bus
+                    .emit_signal(None::<&str>, PATH, IFACE, "Seeked", &(1_i64,))
+                    .await
+                    .unwrap(),
+                "content" => {
+                    fixture.track.store(1, Ordering::SeqCst);
+                    changed(&bus, "Metadata", metadata("/track/B")).await;
+                }
+                "owner" => {
+                    bus.release_name(name.as_str()).await.unwrap();
+                }
+                "can_play" | "can_control" => {
+                    let key = if cause == "can_play" {
+                        "CanPlay"
+                    } else {
+                        "CanControl"
+                    };
+                    changed(&bus, key, OwnedValue::from(false)).await;
+                    changed(&bus, key, OwnedValue::from(true)).await;
+                }
+                "unknown" => changed(&bus, "CanPause", OwnedValue::from(7_u32)).await,
+                "unknown_play" => changed(&bus, "CanPlay", OwnedValue::from(7_u32)).await,
+                "unknown_control" => changed(&bus, "CanControl", OwnedValue::from(7_u32)).await,
+                "invalidated" => bus
+                    .emit_signal(
+                        None::<&str>,
+                        PATH,
+                        PROPS,
+                        "PropertiesChanged",
+                        &(IFACE, Properties::new(), vec!["CanPause"]),
+                    )
+                    .await
+                    .unwrap(),
+                "expiry" => tokio::time::sleep(Duration::from_millis(180)).await,
+                "missing" => {}
+                _ => unreachable!(),
+            }
+            if cause != "missing" {
+                changed(&bus, "PlaybackStatus", value("Paused")).await;
+            }
+            let ack = tokio::time::timeout(Duration::from_secs(4), runtime.acks.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                ack.outcome == Outcome::Uncertain
+                    && ack.resume_token.is_none()
+                    && ack.lease_expires_at_ms.is_none(),
+                "unsafe confirmation: {cause}"
+            );
+            assert!(
+                runtime
+                    .states
+                    .borrow()
+                    .iter()
+                    .all(|player| player.player != name || player.pause_lease.is_none()),
+                "lease survived: {cause}"
+            );
+            if cause == "missing" {
+                // A signal arriving after the bounded confirmation failure
+                // cannot reclaim the old command or create a lease on replay.
+                changed(&bus, "PlaybackStatus", value("Paused")).await;
+                assert!(send(&mut runtime, pause.clone()).await == ack);
+                assert!(
+                    runtime
+                        .states
+                        .borrow()
+                        .iter()
+                        .all(|player| player.player != name || player.pause_lease.is_none())
+                );
+            }
+            assert_eq!(
+                fixture.pauses.load(Ordering::SeqCst),
+                1,
+                "Pause retried: {cause}"
+            );
+            assert_eq!(
+                fixture.plays.load(Ordering::SeqCst),
+                0,
+                "Play issued: {cause}"
+            );
+            drop(runtime);
+            bus.release_name(name.as_str()).await.unwrap();
+        }
     }
     async fn send(runtime: &mut control::Runtime, command: Command) -> Ack {
         runtime
@@ -1544,6 +1945,45 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert_eq!(polls.get(), 0);
+        let record = actor.players.get(NAME).unwrap();
+        let guard = DispatchGuard {
+            name: NAME.into(),
+            instance: record.wire.player_instance_id.clone(),
+            content: record.wire.content_id.clone().unwrap(),
+            owner: record.owner.clone(),
+            generation: record.generation,
+            action: Action::Pause,
+            command_expiry: control::now_ms() + 10_000,
+            lease_deadline: None,
+            lease_wall_expiry: None,
+        };
+        let generation = guard.generation;
+        let changed_caps: Properties = [("CanPause".into(), OwnedValue::from(false))].into();
+        let cap_signal = Message::signal(PATH, PROPS, "PropertiesChanged")
+            .unwrap()
+            .sender(record.owner.as_str())
+            .unwrap()
+            .build(&(IFACE, changed_caps, Vec::<String>::new()))
+            .unwrap();
+        actor.signals = Box::pin(
+            futures_util::stream::iter(vec![Ok(cap_signal)]).chain(futures_util::stream::pending()),
+        );
+        let cap_polls = Cell::new(0);
+        assert!(matches!(
+            actor
+                .wait_action(
+                    async {
+                        cap_polls.set(cap_polls.get() + 1);
+                        Ok::<_, zbus::Error>(())
+                    },
+                    Instant::now() + CALL_LIMIT,
+                    guard
+                )
+                .await,
+            Err(Reason::NotCapable)
+        ));
+        assert_eq!(cap_polls.get(), 0);
+        assert_eq!(actor.players.get(NAME).unwrap().generation, generation);
         let irrelevant = Message::signal(BUS_PATH, BUS, "NameOwnerChanged")
             .unwrap()
             .sender(BUS)

@@ -127,6 +127,10 @@ manual pause can be indistinguishable from the requested pause, and an already
 sent method can execute after a timeout or disconnect. Uncertain operations never
 grant a lease and are not retried automatically. Control identity may examine
 track IDs and URLs privately; URLs are never emitted into telemetry or logs.
+Uncertain command diagnostics log only the validated command UUID, fixed failure
+stage/reason, confirmation flags and elapsed time. They contain no command payload,
+media metadata or lease tokens. Use the command UUID to correlate the private
+user-service journal with the controller's result.
 
 ## Validate
 
