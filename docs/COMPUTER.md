@@ -181,7 +181,12 @@ feeds must be live, fresh and in the same session. A new broker connection nonce
 player instance or content identity invalidates old permission.
 
 Only the **observed** configured Optical input selects this route. Volume and
-input/preset commands still address the receiver. Playback requests, including
+input/preset commands still address the receiver. If a confirmed Optical input was
+already paused/muted, a fresh return with already Playing desktop media or a
+confirmed owned Resume opens the receiver input again. Explicit Play can also
+restore that pass-through. Source/trust, policy and newer manual holds are
+rechecked first; this never continuously overrides a physical receiver mute.
+Playback requests, including
 Nest Pause/Play, address the exact selected MPRIS player instead of muting Optical.
 Unknown or unavailable desktop control blocks playback; it never falls back to
 receiver Pause or starting a Spotify preset. Other observed inputs retain their
@@ -190,6 +195,11 @@ existing behavior.
 The existing room-presence policy still determines exit/return timing, the
 20-minute continuity window, quiet hours, home-away and explicit manual-pause
 holds. On confirmed exit Lugn requests Pause for the selected Playing media.
+If fresh computer status is still pending at that transition (including a
+restored empty-room exit), Lugn keeps one deferred pause within the original
+continuity deadline. Fresh Playing consumes it once; known Paused, return,
+expiry or newer intent cancels it. It does not repeatedly pause new app starts
+while the room stays empty or renew a restored continuity window.
 Only a verified applied pause grants a short-lived lease. On return Lugn may
 resume that exact player instance/content using the one-use lease; it cannot
 start an arbitrary player or claim a pause the user already made. Nest Play is

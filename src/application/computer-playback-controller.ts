@@ -27,6 +27,7 @@ export interface ComputerPlaybackControl {
   handles(target: string): boolean;
   getPlayback(target: string): MusicObservationValues['playback'];
   canResume(target: string): boolean;
+  needsInputOpen?(target: string): boolean;
   request(
     target: string,
     request: PlaybackRequest,
@@ -162,6 +163,19 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
     return context.control.players.find(
       (player) => player.player === name && player.content_id !== null,
     );
+  }
+
+  needsInputOpen(target: string): boolean {
+    // Pending Resume is effective intent for continuity, not proof that media
+    // already plays. Its caller opens the input only after confirmed delivery.
+    if (
+      !this.context(target) ||
+      this.pending.get(target)?.requested.value === 'playing'
+    )
+      return false;
+    const playback =
+      this.options.getState()?.music.devices[target]?.observed.playback;
+    return playback === 'paused' || playback === 'idle' || playback === 'off';
   }
 
   getPlayback(target: string): MusicObservationValues['playback'] {

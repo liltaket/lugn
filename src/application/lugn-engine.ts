@@ -515,6 +515,7 @@ export class LugnEngine {
       options.music ?? {},
       () => {
         this.computerPlayback?.observe();
+        this.musicAutomation?.reconcileComputerPlayback();
         this.publish(['music']);
       },
     );
@@ -536,6 +537,8 @@ export class LugnEngine {
         : { computerPlayback: options.computerPlayback }),
       request: (target, request, provenance) =>
         this.dispatchMusicRequest(target, request, provenance),
+      openComputerInput: (target, provenance) =>
+        this.openComputerInput(target, provenance),
       cancelAutomaticFade: (target) => this.musicController.cancelFade(target),
       onChange: () => this.publish(['music', 'intent']),
       onPauseReleased: (target, endedAt) => {
@@ -561,9 +564,15 @@ export class LugnEngine {
     this.musicController.setVolumeRequestGuard((target, provenance) =>
       this.musicAutomation.assertVolumeRequestAllowed(target, provenance),
     );
-    this.musicController.setRecoveryPolicyGuard((command) =>
-      this.musicAutomation.recoveryAuthorization(command),
-    );
+    this.musicController.setRecoveryPolicyGuard((command) => {
+      if (
+        command.provenance.reason === 'open computer input' &&
+        (this.computerPlayback?.needsInputOpen?.(command.target) !== true ||
+          this.holds.blocks('music.playback', command.target))
+      )
+        return null;
+      return this.musicAutomation.recoveryAuthorization(command);
+    });
     this.musicController.setExternalVolumeChangeHandler(
       (target, volume, provenance) =>
         this.musicAutomation.noteExternalVolumeChange(
@@ -797,10 +806,12 @@ export class LugnEngine {
     const parsed = ComputerObservationSchema.parse(observation);
     this.state.computer.devices[parsed.deviceId] = structuredClone(parsed);
     this.computerPlayback?.observe();
+    this.musicAutomation.reconcileComputerPlayback();
     this.publish(['computer']);
   }
 
   notifyComputerPlaybackChanged(): void {
+    this.musicAutomation.reconcileComputerPlayback();
     this.publish(['music']);
   }
 
@@ -1037,7 +1048,7 @@ export class LugnEngine {
     return command;
   }
 
-  private dispatchMusicRequest(
+  private async dispatchMusicRequest(
     target: string,
     requested: MusicRequest,
     provenance: Provenance,
@@ -1045,11 +1056,47 @@ export class LugnEngine {
     if (
       requested.property === 'playback' &&
       this.computerPlayback?.handles(target)
-    )
-      return this.computerPlayback.request(target, requested, provenance);
+    ) {
+      if (
+        requested.value === 'playing' &&
+        isHumanActor(provenance.actor) &&
+        !this.computerPlayback.canResume(target) &&
+        this.computerPlayback.getPlayback(target) === 'playing' &&
+        this.computerPlayback.needsInputOpen?.(target) === true
+      ) {
+        const opened = await this.openComputerInput(target, provenance);
+        if (opened) return opened;
+      }
+      const command = await this.computerPlayback.request(
+        target,
+        requested,
+        provenance,
+      );
+      if (requested.value === 'playing' && command.status === 'confirmed')
+        await this.openComputerInput(target, provenance);
+      return command;
+    }
     if (requested.property === 'source' || requested.property === 'preset')
       this.computerPlayback?.invalidate(target);
     return this.musicController.request(target, requested, provenance);
+  }
+
+  private async openComputerInput(
+    target: string,
+    provenance: Provenance,
+  ): Promise<MusicCommandRecord | null> {
+    if (
+      this.computerPlayback?.needsInputOpen?.(target) !== true ||
+      this.holds.blocks('music.playback', target) ||
+      (!isHumanActor(provenance.actor) &&
+        !this.musicAutomation.automaticPlaybackAllowed(target))
+    )
+      return null;
+    return this.musicController.request(
+      target,
+      { property: 'playback', value: 'playing' },
+      { ...provenance, reason: 'open computer input' },
+    );
   }
 
   startMusicFade(

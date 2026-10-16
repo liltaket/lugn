@@ -765,3 +765,35 @@ it('keeps only the latest exit intent through exit-return-exit while Resume is i
     'pause',
   ]);
 });
+
+it.each(['paused', 'idle', 'off', 'playing', 'unknown'] as const)(
+  'opens pass-through only for known inactive receiver playback: %s',
+  (playback) => {
+    const s = setup();
+    s.engine.state.music.devices[target]!.observed.playback = playback;
+    expect(s.controller.needsInputOpen(target)).toBe(
+      ['paused', 'idle', 'off'].includes(playback),
+    );
+    s.refs.trusted = false;
+    expect(s.controller.needsInputOpen(target)).toBe(false);
+  },
+);
+
+it('never treats pending desktop Resume intent as proof for early receiver pass-through', async () => {
+  const s = setup();
+  s.engine.state.music.devices[target]!.observed.playback = 'paused';
+  await s.controller.request(target, pause, automation);
+  let finish: ((ack: ComputerPlaybackAck) => void) | undefined;
+  s.sendCommand.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const pending = s.controller.request(target, resume, automation);
+  expect(s.controller.getPlayback(target)).toBe('playing');
+  expect(s.controller.needsInputOpen(target)).toBe(false);
+  finish!(s.apply(s.sendCommand.mock.calls[1]![0]));
+  await pending;
+  expect(s.controller.needsInputOpen(target)).toBe(true);
+});
