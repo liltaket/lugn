@@ -143,6 +143,16 @@ A separate zero-poll assertion preserves the strict CanPause gate before dispatc
 Uncertain outcomes now log a validated command UUID, fixed failure stage/reason,
 confirmation flags and elapsed time; no metadata, payloads or tokens are logged.
 
+After all 42 automated tests, release build, formatting, Clippy and independent
+review passed, repaired release `f9ef504` was installed on Kuffe with another
+protected rollback backup. Built and installed binary SHA-256 matched:
+`c71ece3c73c728330e7968b65f104d5d24bf2727661fb48e46ac3d8f90cd9047`.
+Read-only MQTT verification observed a new matching online session, fresh live
+observation sequence 2→3 and control sequence 2, all six sources known, and both
+Spotify/Firefox Paused with known identity/capabilities and **no leases**. The
+service remained active with zero restarts. No playback commands, method retries
+or lease reconstruction were used for this repair/install verification.
+
 A 10.004-second installed full-desktop sample of `85a58ec` (control enabled, actual KDE,
 two MPRIS players and native PipeWire helper) measured agent peak RSS
 9,408,512 bytes and `pw-dump` 7,266,304 bytes. Both accumulated zero observed CPU
