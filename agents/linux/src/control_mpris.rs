@@ -1325,6 +1325,72 @@ mod tests {
         changed(connection, "PlaybackStatus", value(status(fixture))).await;
     }
     pub(super) struct Fake(pub(super) Arc<Fixture>);
+    struct HostFixtureRoot;
+    #[zbus::interface(name = "org.mpris.MediaPlayer2")]
+    impl HostFixtureRoot {
+        #[zbus(property)]
+        fn identity(&self) -> &str {
+            "Lugn silent control test"
+        }
+        #[zbus(property)]
+        fn desktop_entry(&self) -> &str {
+            ""
+        }
+    }
+
+    /// Opt-in host fixture. It controls only its own atomic state: no audio,
+    /// external processes, installed-agent requests, or other player calls.
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires explicit LUGN_HOST_CONTROL_FIXTURE=1 on the selected session bus"]
+    async fn host_fake_control_player() {
+        assert_eq!(
+            std::env::var("LUGN_HOST_CONTROL_FIXTURE").as_deref(),
+            Ok("1")
+        );
+        const NAME: &str = "org.mpris.MediaPlayer2.lugn_control_test";
+        let mut start =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1()).unwrap();
+        let fixture = Arc::new(Fixture::default());
+        fixture.status.store(1, Ordering::SeqCst);
+        fixture.identity_mode.store(1, Ordering::SeqCst);
+        let bus = Builder::session()
+            .unwrap()
+            .name(NAME)
+            .unwrap()
+            .serve_at(PATH, HostFixtureRoot)
+            .unwrap()
+            .serve_at(PATH, Fake(fixture.clone()))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        println!(
+            "ready pid={} player={NAME} status=Paused",
+            std::process::id()
+        );
+        let mut deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+        let mut started = false;
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => break,
+                result = tokio::signal::ctrl_c() => { result.unwrap(); break; },
+                signal = start.recv(), if !started => {
+                    if signal.is_none() { break; }
+                    started = true;
+                    deadline = deadline.min(tokio::time::Instant::now() + Duration::from_secs(60));
+                    set_status(&bus, &fixture, 0).await;
+                    println!("playing pid={} player={NAME}", std::process::id());
+                }
+            }
+        }
+        drop(bus);
+        println!(
+            "finished player={NAME} pauses={} plays={}",
+            fixture.pauses.load(Ordering::SeqCst),
+            fixture.plays.load(Ordering::SeqCst)
+        );
+    }
+
     #[zbus::interface(name = "org.mpris.MediaPlayer2.Player")]
     impl Fake {
         async fn pause(&self, #[zbus(connection)] connection: &Connection) {

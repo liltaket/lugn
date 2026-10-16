@@ -149,6 +149,26 @@ loopback Mosquitto instance. It deliberately isolates Wayland/D-Bus and substitu
 PipeWire fixtures. See [validation and measurements](VALIDATION.md) for observed
 results, reproduction and the remaining physical-desktop acceptance checklist.
 
+For an explicitly requested check through the installed agent and broker, the
+ignored host fixture registers only
+`org.mpris.MediaPlayer2.lugn_control_test` on the selected session bus. It starts
+**Paused**, has no track title or desktop-app alias, creates no audio, and never
+calls the agent or another player. Run from `agents/linux` on the intended desktop:
+
+```sh
+LUGN_HOST_CONTROL_FIXTURE=1 cargo test --locked host_fake_control_player -- --ignored --nocapture --test-threads=1
+```
+
+An already-built test executable can be used directly instead:
+`LUGN_HOST_CONTROL_FIXTURE=1 /absolute/path/to/lugn_linux_agent-<test-hash> host_fake_control_player --ignored --nocapture --test-threads=1`.
+`cargo test --locked --no-run` prints that executable's path. The helper prints
+its exact PID, player name and initial Paused state. After the controller is ready,
+send `kill -USR1 <printed-pid>` to announce fake Playing; this changes only the
+fixture's state. Target commands to that exact player. Ctrl-C stops the helper;
+it also exits after 180 seconds total or 60 seconds after the start signal,
+whichever comes first, releasing its bus name and printing final Pause/Play
+counters. It is separate from the `dbus_lifecycle` test filter.
+
 Primary API references: [KDE scripting](https://develop.kde.org/docs/plasma/kwin/),
 [KWin implementation](https://invent.kde.org/plasma/kwin/-/tree/master/src/scripting),
 [Wayland idle protocol](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/staging/ext-idle-notify/ext-idle-notify-v1.xml),

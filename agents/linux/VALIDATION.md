@@ -51,9 +51,10 @@ The explicitly requested CONTROL v1 extension is opt-in; the original observatio
 v1 schemas and fixtures are unchanged. Its canonical contract, three schemas and
 five coherent fixtures live under [protocol/CONTROL.md](protocol/CONTROL.md).
 
-- Final Rust checks: 33 unit tests passed, rustfmt passed and Clippy all targets
+- Final Rust checks: 34 unit tests passed, rustfmt passed and Clippy all targets
   passed with warnings denied. The four serial private-bus lifecycle tests and
-  the separate MQTT wire test passed explicitly (38 tests in total).
+  the separate MQTT wire test passed explicitly (39 automated tests; the opt-in
+  host fixture is recorded separately below).
 - Isolated fake MPRIS tests cover confirmed Pause/owned Resume, exact duplicate
   acknowledgment replay, conflicting IDs, retained/expired/old-epoch commands,
   manual transitions during GetAll/Pause, Seeked/Stopped, content A→B→A,
@@ -61,6 +62,10 @@ five coherent fixtures live under [protocol/CONTROL.md](protocol/CONTROL.md).
   prevents the lazy D-Bus method future's first poll. A continuous ready-signal
   stream cannot starve its deadline. Clock tests cover monotonic expiry,
   command-cache retirement after rollback and MQTT epoch rotation after clock steps.
+  Spotify's string-variant track ID and missing/wrong/NoTrack ID with a usable
+  absolute URL are covered. URL-only content A→B→A and lost identity revoke leases;
+  semantic text alone cannot authorize control. The full-broker fixture uses the
+  same string-path variant observed read-only on Kuffe's real Spotify player.
   An actually sent Pause that times out grants no token; its eventual late Paused
   observation cannot restore ownership or cause another Pause/Play.
 - A real temporary Mosquitto plus the full MQTT publisher/control actor and fake
@@ -77,6 +82,40 @@ Generic MPRIS has no atomic conditional Pause/Play. The documented manual-action
 race and possible late completion of an already-sent method remain accepted
 limitations. Neither successful software tests nor fresh telemetry establish
 physical room/Optical behavior; that belongs to coordinated user acceptance.
+
+The control-enabled release `811fe1e` was installed on Kuffe with a
+protected binary/unit/config backup and `control_enabled=true`. A read-only
+subscription verified fresh non-retained control and observation snapshots,
+matching online session and all six observation sources known. The user service
+was active with zero restarts and no connection/subscription errors. No synthetic
+state was published on its real topics. Spotify was actually Playing with a
+non-null content identity and both playback capabilities true; Firefox was
+Paused with known identity and capabilities. Both had no owned lease. This
+verification used subscriptions and metadata property reads only, without
+invoking either real player's playback methods.
+
+An explicitly requested production-broker check then registered only the silent
+`org.mpris.MediaPlayer2.lugn_control_test` fixture on Kuffe's real session bus.
+It started Paused, had no title or desktop alias, and required SIGUSR1 before a
+bounded Playing phase. The companion deployment owner's actual BrunoCAM
+`ComputerPlaybackMqttAdapter` used its loaded protected credentials to publish
+exactly two commands through the real broker and installed `811fe1e` agent:
+Pause acknowledged applied, matching owned Paused lease observed, Resume
+acknowledged applied, then fresh Playing with no lease. This establishes the
+actual command publish ACL and end-to-end control transport for the fake target.
+The fixture confirmed **one Pause and one Play** and exited cleanly on Ctrl-C;
+its D-Bus name was absent afterward and the agent stayed active with zero restarts.
+The subsequent read-only MQTT probe confirmed the fake absent from control state,
+only the normal Firefox/Spotify players, no leases, all observation sources known
+and advancing live observation sequence in the same healthy session/connection.
+There were no Spotify/Firefox/user-player commands and no synthetic observation
+publications. Actual room walks, WiiM Optical passthrough and user-media behavior
+remain separate field acceptance checks.
+
+A 10.004-second installed full-desktop sample of `85a58ec` (control enabled, actual KDE,
+two MPRIS players and native PipeWire helper) measured agent peak RSS
+9,408,512 bytes and `pw-dump` 7,266,304 bytes. Both accumulated zero observed CPU
+ticks at 100 Hz; this short sample does not establish zero CPU use under load.
 
 ## Basic release resource measurements
 
