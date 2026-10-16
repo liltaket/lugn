@@ -101,6 +101,13 @@ const systemActor: Actor = { type: 'automation', id: 'lugn.core' };
 const maxLightingDeliveryAttempts = 3;
 const lightingEnforcementIntervalMs = 30_000;
 
+const timePartsFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
 export const defaultScenes: LightingScene[] = [
   {
     id: 'scene.cozy',
@@ -3140,12 +3147,7 @@ export class LugnEngine {
   }
 
   private isPrelightQuietHours(): boolean {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Stockholm',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(this.clock.now()));
+    const parts = timePartsFormatter.formatToParts(new Date(this.clock.now()));
     const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
     return hour >= 23 || hour < 6;
   }

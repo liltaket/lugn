@@ -32,6 +32,13 @@ import {
 const automationActor = { type: 'automation' as const, id: 'lugn.music' };
 const musicContinuityMs = 20 * 60_000;
 
+const timePartsFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
 export const VolumeAuthorityRequestSchema = z
   .object({ target: SemanticMusicIdSchema, mode: z.enum(['auto', 'manual']) })
   .strict();
@@ -1027,12 +1034,9 @@ export class MusicAutomation {
   }
 
   private localHour(): number {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Stockholm',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(this.options.clock.now()));
+    const parts = timePartsFormatter.formatToParts(
+      new Date(this.options.clock.now()),
+    );
     const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
     const minute = Number(
       parts.find((part) => part.type === 'minute')?.value ?? 0,

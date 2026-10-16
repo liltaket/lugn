@@ -112,6 +112,32 @@ let currentInstanceId;
 let instanceGeneration = 0;
 const retiredInstances = new Set();
 
+const timeFormatter = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+const dateFormatter = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+});
+const datePartsFormatter = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+const temperatureFormatter = new Intl.NumberFormat('sv-SE', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
+});
+const standardMetricFormatter = new Intl.NumberFormat('sv-SE', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+});
+
 function acceptPayload(payload) {
   if (
     !payload ||
@@ -257,25 +283,11 @@ function setClock() {
   if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
     setConnection('offline', 'Inga färska uppdateringar från Lugn.');
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
-  const time = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(now);
-  const date = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-  }).format(now);
+  const time = timeFormatter.format(now);
+  const date = dateFormatter.format(now);
   setText(refs.clockTime, time);
   setText(refs.clockDate, date);
-  const dateParts = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now);
+  const dateParts = datePartsFormatter.formatToParts(now);
   const dateValue = Object.fromEntries(
     dateParts
       .filter((part) => part.type !== 'literal')
@@ -446,10 +458,11 @@ function renderEnvironment(environment) {
       setText(elements.state, 'Ingen sensordata');
       continue;
     }
-    const formatted = new Intl.NumberFormat('sv-SE', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: name === 'temperature' || name === 'pm25' ? 1 : 0,
-    }).format(value);
+    const formatted = (
+      name === 'temperature' || name === 'pm25'
+        ? temperatureFormatter
+        : standardMetricFormatter
+    ).format(value);
     const displayKey = `${formatted} ${unit}`;
     if (elements.value.dataset.value !== displayKey) {
       const unitLabel = document.createElement('span');
@@ -873,11 +886,7 @@ function renderMusicExplanations(payload, target) {
     const time = document.createElement('time');
     time.textContent =
       typeof decision.at === 'number' && Number.isFinite(decision.at)
-        ? new Intl.DateTimeFormat('sv-SE', {
-            timeZone: 'Europe/Stockholm',
-            hour: '2-digit',
-            minute: '2-digit',
-          }).format(new Date(decision.at))
+        ? timeFormatter.format(new Date(decision.at))
         : '—';
     const copy = document.createElement('span');
     copy.textContent =
