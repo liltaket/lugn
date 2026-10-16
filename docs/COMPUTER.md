@@ -141,7 +141,8 @@ screen says multiple media are playing. There is no intrinsic video/music
 preference. After a known pause/idle transition, the browser retains the last
 playing title for eight seconds, labelled as last played (or paused when the
 receiver explicitly reports paused). Polling does not extend this deadline; new
-playing media appears immediately. Unknown/stale data, ambiguity, source changes,
+playing media appears immediately. A fresh online producer’s temporary `media: null`
+refresh uses that same deadline and last-played label. Offline/stale data, ambiguity, source changes,
 and producer/server restarts clear the presentation cache immediately. A page
 opened while already paused has no cached title. Physical observations and the
 backend selector remain unchanged.

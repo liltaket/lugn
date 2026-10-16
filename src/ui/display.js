@@ -638,12 +638,20 @@ function renderComputerNowPlaying(
     musicObservationTrusted(payload, target) &&
     observed.playback === 'playing';
 
+  const computer = payload?.state?.computer?.devices?.[projection.deviceId];
+  const refreshingMedia =
+    status === 'unavailable' &&
+    computer?.availability === 'online' &&
+    computer?.freshness === 'fresh' &&
+    computer?.observed?.media === null;
   const knownPause =
     !reportedOnly &&
     connected &&
     device.availability === 'available' &&
     musicObservationTrusted(payload, target) &&
-    ((observed.playback === 'playing' && status === 'idle') ||
+    ['playing', 'paused', 'idle'].includes(observed.playback) &&
+    (refreshingMedia ||
+      (observed.playback === 'playing' && status === 'idle') ||
       (['paused', 'idle'].includes(observed.playback) &&
         ['playing', 'idle'].includes(status)));
   if (knownPause && computerMediaDisplay) {

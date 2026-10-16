@@ -1947,6 +1947,57 @@ describe('Hub Optical computer media projection', () => {
     }
   });
 
+  it('bridges the agent media-null refresh into pause without extending the deadline', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      runInContext('window.clearTimeout(timer)', ui.context);
+      const payload = mappedComputerPayload(ui, {
+        status: 'playing',
+        title: 'Last track',
+        artist: 'Artist',
+        application: 'Spotify',
+        deviceId: 'kuffe',
+        reason: 'single_playing',
+      });
+      Object.assign(payload.state.computer.devices, {
+        kuffe: {
+          sessionId: 'same-session',
+          availability: 'online',
+          freshness: 'fresh',
+          observed: { media: null },
+        },
+      });
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      payload.computerNowPlaying!['music.room']!.status = 'unavailable';
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-title').textContent).toBe('Last track');
+      expect(ui.get('#music-player-status').textContent).toBe('Senast spelat');
+      await vi.advanceTimersByTimeAsync(2_000);
+      payload.computerNowPlaying!['music.room']!.status = 'idle';
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(ui.get('#music-title').textContent).toBe(
+        'Inget media spelas på datorn',
+      );
+      payload.computerNowPlaying!['music.room']!.status = 'playing';
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      payload.computerNowPlaying!['music.room']!.status = 'unavailable';
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-title').textContent).toBe('Last track');
+      Object.assign(payload.state.computer.devices['kuffe']!, {
+        availability: 'offline',
+        freshness: 'unknown',
+      });
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-title').textContent).toBe('Datorns media är okänt');
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
   it.each(['paused', 'idle'] as const)(
     'shows resumed or new media immediately after receiver %s and cancels the old pause deadline',
     async (playback) => {
