@@ -1888,12 +1888,8 @@ describe('Hub Optical computer media projection', () => {
         runInContext(`render(${JSON.stringify(payload)})`, ui.context);
 
         expect(ui.get('#music-title').textContent).toBe('Catch Me');
-        expect(ui.get('#music-source').textContent).toBe(
-          'WizTheMc · Spotify · Optical In',
-        );
-        expect(ui.get('#music-player-status').textContent).toBe(
-          'Spelar från datorn',
-        );
+        expect(ui.get('#music-source').textContent).toBe('WizTheMc');
+        expect(ui.get('#music-player-status').textContent).toBe('Spelar');
         expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(
           'true',
         );
@@ -1906,6 +1902,150 @@ describe('Hub Optical computer media projection', () => {
       }
     },
   );
+
+  it('keeps the last title for eight seconds without heartbeats extending the pause', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      // Isolate presentation timing from the harness's background state polling.
+      runInContext('window.clearTimeout(timer)', ui.context);
+      const playing = mappedComputerPayload(ui, {
+        status: 'playing',
+        title: 'Last track',
+        artist: 'Artist',
+        application: 'Spotify',
+        deviceId: 'kuffe',
+        reason: 'active_audio',
+      });
+      runInContext(`render(${JSON.stringify(playing)})`, ui.context);
+      const paused = structuredClone(playing);
+      paused.computerNowPlaying!['music.room'] = {
+        ...paused.computerNowPlaying!['music.room']!,
+        status: 'idle',
+        title: null,
+        artist: null,
+      };
+      runInContext(`render(${JSON.stringify(paused)})`, ui.context);
+      expect(ui.get('#music-title').textContent).toBe('Last track');
+      expect(ui.get('#music-player-status').textContent).toBe('Senast spelat');
+      await vi.advanceTimersByTimeAsync(7_000);
+      runInContext(`render(${JSON.stringify(paused)})`, ui.context);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(ui.get('#music-title').textContent).toBe('Last track');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ui.get('#music-title').textContent).toBe(
+        'Inget media spelas på datorn',
+      );
+      runInContext(`render(${JSON.stringify(paused)})`, ui.context);
+      expect(ui.get('#music-title').textContent).toBe(
+        'Inget media spelas på datorn',
+      );
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it.each(['paused', 'idle'] as const)(
+    'shows resumed or new media immediately after receiver %s and cancels the old pause deadline',
+    async (playback) => {
+      vi.useFakeTimers();
+      const ui = dashboard();
+      try {
+        await microtasks();
+        runInContext('window.clearTimeout(timer)', ui.context);
+        const payload = mappedComputerPayload(ui, {
+          status: 'playing',
+          title: 'First track',
+          artist: 'Artist',
+          application: 'Spotify',
+          deviceId: 'kuffe',
+          reason: 'active_audio',
+        });
+        runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+        payload.state.music.devices['music.room']!.observed.playback = playback;
+        runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+        expect(ui.get('#music-title').textContent).toBe('First track');
+        expect(ui.get('#music-player-status').textContent).toBe(
+          playback === 'paused' ? 'Pausad' : 'Senast spelat',
+        );
+        await vi.advanceTimersByTimeAsync(4_000);
+        payload.state.music.devices['music.room']!.observed.playback =
+          'playing';
+        payload.computerNowPlaying!['music.room']!.title = 'New video';
+        runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+        expect(ui.get('#music-title').textContent).toBe('New video');
+        expect(ui.get('#music-player-status').textContent).toBe('Spelar');
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(ui.get('#music-title').textContent).toBe('New video');
+      } finally {
+        ui.windowListeners.get('pagehide')?.();
+        ui.engine.dispose();
+      }
+    },
+  );
+
+  it.each([
+    'unavailable',
+    'ambiguous',
+    'untrusted',
+    'session',
+    'instance',
+    'source',
+  ])('clears the paused title immediately on %s changes', async (change) => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = mappedComputerPayload(ui, {
+        status: 'playing',
+        title: 'Last track',
+        artist: 'Artist',
+        application: 'Spotify',
+        deviceId: 'kuffe',
+        reason: 'active_audio',
+      });
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      payload.computerNowPlaying!['music.room']!.status = 'idle';
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-title').textContent).toBe('Last track');
+      if (change === 'unavailable' || change === 'ambiguous') {
+        payload.computerNowPlaying!['music.room']!.status = change;
+      } else if (change === 'untrusted') {
+        Object.assign(payload, {
+          musicObservationTrust: { 'music.room': false },
+        });
+      } else if (change === 'instance') {
+        Object.assign(payload, { instanceId: 'new-server' });
+      } else if (change === 'session') {
+        Object.assign(payload.state.computer, {
+          devices: { kuffe: { sessionId: 'new-session' } },
+        });
+      } else {
+        delete payload.computerNowPlaying;
+        payload.state.music.devices['music.room']!.observed.source =
+          'Spotify DJ';
+      }
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-title').textContent).not.toBe('Last track');
+      payload.computerNowPlaying = {
+        'music.room': {
+          status: 'idle',
+          title: null,
+          artist: null,
+          application: null,
+          deviceId: 'kuffe',
+          reason: 'idle',
+        },
+      };
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      expect(ui.get('#music-title').textContent).not.toBe('Last track');
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
 
   it('uses the selected video title when that is the active computer media', async () => {
     vi.useFakeTimers();
@@ -1922,7 +2062,7 @@ describe('Hub Optical computer media projection', () => {
       });
       runInContext(`render(${JSON.stringify(payload)})`, ui.context);
       expect(ui.get('#music-title').textContent).toBe('Gränsbevakarna Sverige');
-      expect(ui.get('#music-source').textContent).toBe('Firefox · Optical In');
+      expect(ui.get('#music-source').textContent).toBe('Optical');
     } finally {
       ui.windowListeners.get('pagehide')?.();
       ui.engine.dispose();
@@ -1951,7 +2091,7 @@ describe('Hub Optical computer media projection', () => {
         runInContext(`render(${JSON.stringify(payload)})`, ui.context);
         expect(ui.get('#music-title').textContent).toBe(title);
         expect(ui.get('#music-title').textContent).not.toBe('4');
-        expect(ui.get('#music-source').textContent).toBe('Optical In');
+        expect(ui.get('#music-source').textContent).toBe('Optical');
         expect(ui.get('#music-player-status').textContent).not.toBe('Spelar');
       } finally {
         ui.windowListeners.get('pagehide')?.();
@@ -1982,7 +2122,7 @@ describe('Hub Optical computer media projection', () => {
       expect(ui.get('#music-player-status').textContent).toBe(
         'Senast rapporterat',
       );
-      expect(ui.get('#music-source').textContent).toBe('Optical In');
+      expect(ui.get('#music-source').textContent).toBe('Optical');
 
       const recovered = mappedComputerPayload(ui, {
         status: 'playing',
@@ -2035,7 +2175,7 @@ describe('Hub Optical computer media projection', () => {
       expect(ui.get('#music-player-status').textContent).toBe(
         'Senast rapporterat',
       );
-      expect(ui.get('#music-source').textContent).toBe('Optical In');
+      expect(ui.get('#music-source').textContent).toBe('Optical');
     } finally {
       ui.windowListeners.get('pagehide')?.();
       ui.engine.dispose();
@@ -2058,7 +2198,7 @@ describe('Hub Optical computer media projection', () => {
       payload.state.music.devices['music.room']!.observed.playback = 'paused';
       runInContext(`render(${JSON.stringify(payload)})`, ui.context);
       expect(ui.get('#music-title').textContent).toBe('Ingen musik spelar');
-      expect(ui.get('#music-source').textContent).toBe('Optical In');
+      expect(ui.get('#music-source').textContent).toBe('Optical');
       expect(ui.get('#music-player-status').textContent).toBe('Pausad');
       expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(
         'false',
@@ -2106,11 +2246,12 @@ describe('Hub Optical computer media projection', () => {
         reason: 'active_audio',
       });
       runInContext(`render(${JSON.stringify(payload)})`, ui.context);
-      expect(ui.get('#music-title').textContent).toBe(title);
+      expect(
+        Array.from(ui.get('#music-title').textContent).length,
+      ).toBeLessThanOrEqual(56);
+      expect(ui.get('#music-title').textContent).toMatch(/^<img.*…$/);
       expect(ui.get('#music-title').children).toHaveLength(0);
-      expect(ui.get('#music-source').textContent).toBe(
-        `Artist · ${application} · Optical In`,
-      );
+      expect(ui.get('#music-source').textContent).toBe('Artist');
       expect(ui.get('#music-source').children).toHaveLength(0);
     } finally {
       ui.windowListeners.get('pagehide')?.();
@@ -2137,7 +2278,7 @@ describe('Hub Optical computer media projection', () => {
       expect(ui.get('#music-player-status').textContent).toBe(
         'Senast rapporterat',
       );
-      expect(ui.get('#music-source').textContent).toBe('Optical In');
+      expect(ui.get('#music-source').textContent).toBe('Optical');
     } finally {
       ui.windowListeners.get('pagehide')?.();
       ui.engine.dispose();

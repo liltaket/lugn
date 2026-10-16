@@ -9,6 +9,7 @@ const PRESENCE_COUNT_URL = `${BASE_PATH}display-api/presence-count-one`;
 const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
+const COMPUTER_MEDIA_PAUSE_GRACE_MS = 8_000;
 
 const root = document.querySelector('#app-root');
 const refs = {
@@ -109,6 +110,8 @@ let reconnectDelay = 1000;
 let streamWatchdog;
 let latestDeliveryRevision = -1;
 let currentInstanceId;
+let computerMediaDisplay = null;
+let computerMediaPauseTimer;
 let instanceGeneration = 0;
 const retiredInstances = new Set();
 
@@ -573,6 +576,28 @@ function musicObservationTrusted(payload, target) {
   );
 }
 
+function clearComputerMediaDisplay() {
+  computerMediaDisplay = null;
+  window.clearTimeout(computerMediaPauseTimer);
+  computerMediaPauseTimer = undefined;
+}
+
+function compactMediaText(value, limit) {
+  const text =
+    typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  const characters = Array.from(text);
+  if (characters.length <= limit) return text;
+  const prefix = characters.slice(0, limit - 1).join('');
+  const space = prefix.lastIndexOf(' ');
+  return `${(space >= limit * 0.6 ? prefix.slice(0, space) : prefix).trimEnd()}…`;
+}
+
+function renderComputerMediaTitle(media, status) {
+  setText(refs.musicTitle, compactMediaText(media.title, 56));
+  setText(refs.musicSource, compactMediaText(media.artist, 42) || 'Optical');
+  setText(refs.musicPlayerStatus, status);
+}
+
 function renderComputerNowPlaying(
   payload,
   target,
@@ -583,7 +608,10 @@ function renderComputerNowPlaying(
 ) {
   const projections = payload?.computerNowPlaying;
   const projection = projections?.[target];
-  if (!projection || typeof projection !== 'object') return;
+  if (!projection || typeof projection !== 'object') {
+    clearComputerMediaDisplay();
+    return;
+  }
 
   // The API only includes this projection when the configured Optical input is
   // actually observed. Keep that source visible even while the HA report is
@@ -593,14 +621,50 @@ function renderComputerNowPlaying(
     typeof observed.source === 'string' && observed.source.trim()
       ? observed.source.trim()
       : 'Optical';
-  setText(refs.musicSource, source);
+  setText(refs.musicSource, 'Optical');
   const status = projection.status;
+  const key = JSON.stringify([
+    target,
+    projection.deviceId,
+    source,
+    payload?.state?.computer?.devices?.[projection.deviceId]?.sessionId ?? null,
+    payload?.instanceId ?? null,
+  ]);
+  if (computerMediaDisplay?.key !== key) clearComputerMediaDisplay();
   const freshPlaying =
     !reportedOnly &&
     connected &&
     device.availability === 'available' &&
     musicObservationTrusted(payload, target) &&
     observed.playback === 'playing';
+
+  const knownPause =
+    !reportedOnly &&
+    connected &&
+    device.availability === 'available' &&
+    musicObservationTrusted(payload, target) &&
+    ((observed.playback === 'playing' && status === 'idle') ||
+      (['paused', 'idle'].includes(observed.playback) &&
+        ['playing', 'idle'].includes(status)));
+  if (knownPause && computerMediaDisplay) {
+    computerMediaDisplay.pausedAt ??= monotonicNow();
+    const remaining =
+      COMPUTER_MEDIA_PAUSE_GRACE_MS -
+      (monotonicNow() - computerMediaDisplay.pausedAt);
+    if (remaining > 0) {
+      renderComputerMediaTitle(
+        computerMediaDisplay,
+        observed.playback === 'paused' ? 'Pausad' : 'Senast spelat',
+      );
+      // One deadline per pause: polling and heartbeats must not extend it.
+      computerMediaPauseTimer ??= window.setTimeout(() => {
+        computerMediaPauseTimer = undefined;
+        if (!stopped && latestPayload) renderMusic(latestPayload);
+      }, remaining);
+      return;
+    }
+  }
+  if (!freshPlaying || status !== 'playing') clearComputerMediaDisplay();
 
   if (!freshPlaying) {
     if (reportedOnly) {
@@ -624,16 +688,18 @@ function renderComputerNowPlaying(
   }
 
   if (status === 'playing') {
-    const title =
-      typeof projection.title === 'string' && projection.title.trim()
-        ? projection.title.trim()
-        : 'Media spelas från datorn';
-    const subtitle = [projection.artist, projection.application, source]
-      .filter((part) => typeof part === 'string' && part.trim())
-      .map((part) => part.trim());
-    setText(refs.musicTitle, title);
-    setText(refs.musicSource, subtitle.join(' · '));
-    setText(refs.musicPlayerStatus, 'Spelar från datorn');
+    window.clearTimeout(computerMediaPauseTimer);
+    computerMediaPauseTimer = undefined;
+    computerMediaDisplay = {
+      key,
+      title:
+        typeof projection.title === 'string' && projection.title.trim()
+          ? projection.title.trim()
+          : 'Media från datorn',
+      artist: projection.artist,
+      pausedAt: null,
+    };
+    renderComputerMediaTitle(computerMediaDisplay, 'Spelar');
   } else if (status === 'idle') {
     setText(refs.musicTitle, 'Inget media spelas på datorn');
     setText(refs.musicPlayerStatus, 'Inget media spelas');
@@ -1038,6 +1104,7 @@ function setMusicDetailsOpen(open) {
 function renderMusic(payload) {
   const entries = musicDevices(payload);
   if (entries.length === 0) {
+    clearComputerMediaDisplay();
     musicTarget = '';
     setMusicDetailsOpen(false);
     refs.musicDetailsButton.disabled = true;
@@ -1543,6 +1610,7 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('pagehide', () => {
   stopped = true;
+  clearComputerMediaDisplay();
   disconnectStream();
   window.clearTimeout(reconnectTimer);
   window.clearTimeout(timer);

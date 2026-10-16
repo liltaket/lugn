@@ -126,7 +126,8 @@ preset or the receiver's title `4` does not confirm that input. Both Nest roles
 receive the same `computerNowPlaying` presentation context over polling and SSE.
 When the receiver is playing the mapped input and both receiver and computer
 observations are trustworthy, the Hub shows the selected computer title,
-artist/channel and application alongside the Optical source. Spotify DJ and
+artist/channel without application names or repeated source labels. Titles are
+shortened to 56 characters and artist/channel to 42. Spotify DJ and
 other inputs retain their receiver metadata. Playback and volume controls
 continue controlling the receiver; the media projection does not rewrite
 physical observations or create automation intent.
@@ -137,7 +138,13 @@ then unique application-name audio corroboration, then the most recently
 observed transition into Playing, then a meaningful title/artist/album change.
 Equal candidates keep the prior winner when still eligible; otherwise the
 screen says multiple media are playing. There is no intrinsic video/music
-preference and paused media never appears as now playing.
+preference. After a known pause/idle transition, the browser retains the last
+playing title for eight seconds, labelled as last played (or paused when the
+receiver explicitly reports paused). Polling does not extend this deadline; new
+playing media appears immediately. Unknown/stale data, ambiguity, source changes,
+and producer/server restarts clear the presentation cache immediately. A page
+opened while already paused has no cached title. Physical observations and the
+backend selector remain unchanged.
 
 Heartbeats, first discovery and identity enrichment do not establish recency.
 Fingerprints survive the producer's transient `media: null` refresh within a
