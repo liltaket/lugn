@@ -1,5 +1,7 @@
 mod audio;
 mod config;
+mod control;
+mod control_mpris;
 mod dbus;
 mod idle;
 mod kwin;

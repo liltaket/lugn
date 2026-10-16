@@ -15,8 +15,10 @@ Configure a unique device ID per computer and use one publisher per device.
   notification. No event history or offline queue. An event points to a state
   snapshot with the same session, sequence and timestamp; it carries no authority.
 
-The publisher subscribes to **no MQTT topics**. Broker ACLs need publish access
-only to those three topics. There is no command protocol.
+In default observation-only mode, the publisher subscribes to **no MQTT topics**;
+broker ACLs need publish access only to those three topics. Separate opt-in
+[CONTROL v1](CONTROL.md) adds targeted Pause/owned Resume without changing any
+observation v1 schema or delivery rule.
 
 All fields shown in the schemas are required, including nullable fields. `null`
 means unknown/unavailable, never false. `media: []` means discovery succeeded and

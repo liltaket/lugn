@@ -1,9 +1,10 @@
 # Linux desktop agent
 
 A standalone Rust observation publisher for Kubuntu KDE Plasma/Wayland. It sends
-computer telemetry over MQTT and does not depend on the Lugn runtime. There are
-no MQTT subscriptions, remote commands, input injection, screen capture or window
-control. Lugn-side consumption belongs to a separate PR.
+computer telemetry over MQTT and does not depend on the Lugn runtime. Default
+operation is observation-only. Optional authenticated MQTT control supports exact
+MPRIS Pause and lease-bound Resume; it provides no shell commands, input injection,
+screen capture or window control. Lugn-side consumption belongs to a separate PR.
 
 ## Install as the desktop user
 
@@ -39,8 +40,8 @@ can live in the mode-0600 config; an optional mode-0600 systemd environment file
 LUGN_MQTT_PASSWORD=your-private-password
 ```
 
-Never commit that file. Grant the publisher MQTT write access only to its three
-topics. Media metadata can contain personal information, so use a trusted broker
+Never commit that file. In the default mode, grant MQTT write access only to the
+three observation topics. Media metadata can contain personal information, so use a trusted broker
 and TLS where appropriate. Different desktops need different device IDs.
 
 Automatic startup is tied to `graphical-session.target`; stopping/logging out of
@@ -105,6 +106,28 @@ activity alone do not identify gaming/video/music. See the canonical
 [MQTT v1 contract](protocol/README.md), schemas and fixtures for fields, precedence,
 freshness rules, session/sequence handling and retained-message semantics.
 
+## Optional targeted media control
+
+Control is disabled by default. Set `control_enabled = true` only with configured
+MQTT username/password and broker ACLs granting the agent subscribe access to its
+own `control/command` and publish access to `control/state` and `control/ack`.
+The existing three observation topics and v1 payloads remain unchanged.
+
+Read the separate [CONTROL v1 contract](protocol/CONTROL.md) before enabling.
+Commands target the exact agent connection, player instance and content generation,
+expire after at most 15 seconds, and are deduplicated. Pause grants ownership only
+after confirming an actual Playing-to-Paused transition. Resume needs that still
+valid pause lease and consumes its token before attempting Play. Reconnect,
+unknown identity, observed user changes and expiry revoke ownership. No automatic
+resume occurs after reconnect, no arbitrary player start is exposed, and no
+`PlayPause` toggle is used. Lugn chooses the player and owns room/source policy.
+
+These are guarded MPRIS operations, not atomic compare-and-swap. A concurrent
+manual pause can be indistinguishable from the requested pause, and an already
+sent method can execute after a timeout or disconnect. Uncertain operations never
+grant a lease and are not retried automatically. Control identity may examine
+track IDs and URLs privately; URLs are never emitted into telemetry or logs.
+
 ## Validate
 
 ```sh
@@ -114,8 +137,9 @@ cargo test --locked
 bash tests/install.sh
 shellcheck scripts/install.sh tests/install.sh
 node tests/kwin.mjs
+cargo test --locked mqtt_control_wire -- --ignored
 # Isolated bus only; these tests create fake KDE/MPRIS service names:
-LUGN_TEST_DBUS=1 dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" cargo test --locked dbus_lifecycle -- --ignored'
+LUGN_TEST_DBUS=1 dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" cargo test --locked dbus_lifecycle -- --ignored --test-threads=1'
 # Real temporary broker, no production broker or actual desktop APIs:
 python3 tests/mqtt_integration.py --broker /usr/sbin/mosquitto --agent target/debug/lugn-linux-agent --password-tool /usr/bin/mosquitto_passwd
 ```

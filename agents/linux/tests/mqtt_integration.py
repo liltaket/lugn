@@ -100,6 +100,11 @@ class Contract:
                         for leaf in ("state", "availability", "events")}
         self.count = 0
         for fixture in protocol.glob("*.example.json"):
+            if fixture.name.startswith("control-"):
+                leaf = fixture.name.split(".")[0].split("-")[1]
+                schema = json.loads((protocol / f"control-{leaf if leaf in ('state', 'ack') else 'command'}.schema.json").read_text())
+                check_schema(json.loads(fixture.read_text()), schema, fixture.name)
+                continue
             leaf = fixture.name.split(".")[0].split("-")[0]
             check_schema(json.loads(fixture.read_text()), self.schemas[leaf], fixture.name)
 

@@ -17,3 +17,7 @@ idle_secs = 300
 gaming_app_ids = []
 video_app_ids = []
 music_app_ids = []
+
+# Optional targeted media Pause/owned Resume over authenticated MQTT.
+# Observation v1 remains unchanged. See protocol/CONTROL.md before enabling.
+control_enabled = false

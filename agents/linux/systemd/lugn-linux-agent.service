@@ -1,5 +1,5 @@
 [Unit]
-Description=Lugn Linux desktop observations
+Description=Lugn Linux desktop agent
 PartOf=graphical-session.target
 # Avoid the target adding an opposite ordering dependency for this wanted unit.
 DefaultDependencies=no

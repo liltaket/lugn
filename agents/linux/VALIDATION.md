@@ -1,6 +1,7 @@
 # Validation evidence and target acceptance
 
-Validated on Kuffe (x86_64 Linux), 2026-10-16. The isolated software evidence and
+Observation baseline validated on Kuffe (x86_64 Linux), 2026-10-16; the control
+extension was validated 2026-10-17. The isolated software evidence and
 the subsequent live desktop installation are distinguished below. The PR remains
 Draft for the remaining interactive desktop acceptance checks.
 
@@ -43,6 +44,39 @@ the Rust, isolated-bus, KWin fixture, installer and real-broker checks. Network
 sockets and D-Bus require a normal execution environment; the development sandbox
 blocked them, so integration checks were rerun outside that sandbox. TLS certificate
 handshake paths are supported through rumqttc/rustls but were not exercised here.
+
+## Guarded control extension (2026-10-17)
+
+The explicitly requested CONTROL v1 extension is opt-in; the original observation
+v1 schemas and fixtures are unchanged. Its canonical contract, three schemas and
+five coherent fixtures live under [protocol/CONTROL.md](protocol/CONTROL.md).
+
+- Final Rust checks: 33 unit tests passed, rustfmt passed and Clippy all targets
+  passed with warnings denied. The four serial private-bus lifecycle tests and
+  the separate MQTT wire test passed explicitly (38 tests in total).
+- Isolated fake MPRIS tests cover confirmed Pause/owned Resume, exact duplicate
+  acknowledgment replay, conflicting IDs, retained/expired/old-epoch commands,
+  manual transitions during GetAll/Pause, Seeked/Stopped, content A→B→A,
+  owner replacement, lease expiry and reconnect invalidation. Ready raw revocation
+  prevents the lazy D-Bus method future's first poll. A continuous ready-signal
+  stream cannot starve its deadline. Clock tests cover monotonic expiry,
+  command-cache retirement after rollback and MQTT epoch rotation after clock steps.
+  An actually sent Pause that times out grants no token; its eventual late Paused
+  observation cannot restore ownership or cause another Pause/Play.
+- A real temporary Mosquitto plus the full MQTT publisher/control actor and fake
+  MPRIS player confirms Pause, duplicate suppression, owned Resume and rejection
+  after a new epoch. These are isolated software tests; they do not control any
+  desktop player. Backend unit/lifecycle/composition tests also pass on Rust 1.85.1.
+- The final release preserves observation behavior in the real temporary broker
+  harness: 31 live payload/schema checks, heartbeat, retained startup, graceful
+  offline, crash LWT, broker restart/coalescing and credentials. All canonical
+  control fixtures pass their schemas; installer, ShellCheck, KWin fixtures and
+  repository formatting pass. Independent review findings were resolved.
+
+Generic MPRIS has no atomic conditional Pause/Play. The documented manual-action
+race and possible late completion of an already-sent method remain accepted
+limitations. Neither successful software tests nor fresh telemetry establish
+physical room/Optical behavior; that belongs to coordinated user acceptance.
 
 ## Basic release resource measurements
 

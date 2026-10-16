@@ -24,6 +24,8 @@ pub struct Config {
     #[serde(default)]
     pub gaming_app_ids: Vec<String>,
     #[serde(default)]
+    pub control_enabled: bool,
+    #[serde(default)]
     pub video_app_ids: Vec<String>,
     #[serde(default)]
     pub music_app_ids: Vec<String>,
@@ -92,6 +94,12 @@ impl Config {
             self.mqtt_tls || self.mqtt_ca_file.is_none(),
             "mqtt_ca_file requires mqtt_tls"
         );
+        ensure!(
+            !self.control_enabled
+                || (self.mqtt_username.as_deref().is_some_and(|v| !v.is_empty())
+                    && self.mqtt_password.as_deref().is_some_and(|v| !v.is_empty())),
+            "control_enabled requires configured MQTT username and password"
+        );
         Ok(())
     }
     pub fn topic(&self, leaf: &str) -> String {
@@ -101,6 +109,17 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn control_is_opt_in_and_requires_credentials() {
+        let mut c: Config = toml::from_str("device_id='desktop'\nmqtt_host='localhost'").unwrap();
+        assert!(!c.control_enabled);
+        c.control_enabled = true;
+        assert!(c.validate().is_err());
+        c.mqtt_username = Some("synthetic-user".into());
+        assert!(c.validate().is_err());
+        c.mqtt_password = Some("synthetic-password".into());
+        assert!(c.validate().is_ok());
+    }
     #[test]
     fn rejects_wildcards_and_invalid_intervals() {
         let mut c: Config = toml::from_str("device_id='desktop'\nmqtt_host='localhost'").unwrap();
