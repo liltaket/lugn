@@ -1,4 +1,5 @@
 import { MusicVolumeSettingsSchema } from './music-volume-settings.js';
+import { ComputerStateSchema } from './computer.js';
 import { z } from 'zod';
 
 export const PresenceSchema = z.enum([
@@ -625,6 +626,7 @@ export const RoomStateSchema = z.object({
   }),
   switches: SwitchStateSchema,
   music: MusicStateSchema,
+  computer: ComputerStateSchema.default({ devices: {} }),
   intent: z
     .object({ holds: z.array(AutomationHoldSchema) })
     .default({ holds: [] }),
@@ -644,6 +646,7 @@ export const StateUpdateSchema = z.object({
       'lighting',
       'switches',
       'music',
+      'computer',
       'intent',
       'commands',
       'diagnostics',
@@ -656,6 +659,7 @@ export const StateUpdateSchema = z.object({
     lighting: RoomStateSchema.shape.lighting.optional(),
     switches: RoomStateSchema.shape.switches.optional(),
     music: RoomStateSchema.shape.music.optional(),
+    computer: RoomStateSchema.shape.computer.removeDefault().optional(),
     intent: RoomStateSchema.shape.intent.removeDefault().optional(),
     commands: RoomStateSchema.shape.commands.optional(),
     diagnostics: RoomStateSchema.shape.diagnostics.optional(),

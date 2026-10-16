@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,7 @@ import type {
 } from '../src/adapters/stl27l-mqtt-presence.js';
 import { startRuntime } from '../src/runtime/main.js';
 import type { MqttSubscriberStatus } from '../src/runtime/mqttjs-subscriber.js';
+import type { StateUpdate } from '../src/core/schemas.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { FakeClock } from '../src/core/clock.js';
 
@@ -758,6 +760,172 @@ describe('composed runtime integration', () => {
       );
     } finally {
       await runtime.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('subscribes configured computers before starting the shared MQTT client', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'lugn-runtime-computer-'));
+    const port = await findEphemeralLoopbackPort();
+    vi.stubEnv('LUGN_TEST_HA_TOKEN', 'test-ha-token');
+    vi.stubEnv('LUGN_TEST_API_TOKEN', 'test-api-token');
+    const configPath = join(directory, 'runtime.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        http: {
+          host: '127.0.0.1',
+          port,
+          bearerTokenEnv: 'LUGN_TEST_API_TOKEN',
+        },
+        homeAssistant: {
+          baseUrl: 'http://home-assistant.invalid:8123',
+          tokenEnv: 'LUGN_TEST_HA_TOKEN',
+          entities: { 'lighting.entry': 'light.entry' },
+        },
+        mqtt: {
+          url: 'mqtt://mqtt.invalid:1883',
+          computers: [
+            {
+              deviceId: 'workstation',
+              baseTopic: 'lab/computers/',
+            },
+          ],
+        },
+        scenes: [],
+      }),
+      'utf8',
+    );
+
+    const mqtt = new FakeMqttSubscriber();
+    mqtt.onStart = () => {
+      const state = JSON.parse(
+        readFileSync(
+          new URL(
+            './fixtures/computer-mqtt/state.example.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      ) as Record<string, unknown>;
+      const sessionId = String(state['session_id']);
+      mqtt.publish(
+        `lab/computers/workstation/availability`,
+        JSON.stringify({
+          schema_version: 1,
+          device_id: 'workstation',
+          session_id: sessionId,
+          status: 'online',
+        }),
+        true,
+      );
+      state['device_id'] = 'workstation';
+      state['timestamp_ms'] = Date.now();
+      state['inference'] = {
+        activity: 'gaming',
+        basis: 'application_rule',
+      };
+      const observations = state['observations'] as Record<string, unknown>;
+      const activeApplication = observations['active_application'] as Record<
+        string,
+        unknown
+      >;
+      activeApplication['app_id'] = 'game.exe';
+      activeApplication['resource_class'] = 'game';
+      activeApplication['fullscreen'] = true;
+      mqtt.publish(
+        `lab/computers/workstation/state`,
+        JSON.stringify(state),
+        false,
+      );
+    };
+
+    let runtime: Awaited<ReturnType<typeof startRuntime>> | undefined;
+    try {
+      runtime = await startRuntime(configPath, {
+        homeAssistantFetch: async (input) =>
+          String(input).endsWith('/api/states')
+            ? Response.json([])
+            : new Response(null, { status: 200 }),
+        createMqttSubscriber: () => mqtt,
+        createHomeAssistantSocket: () => new InertHomeAssistantSocket(),
+        lightingIntentPath: join(directory, 'state', 'lighting-intent.json'),
+      });
+
+      expect(
+        runtime.engine.state.computer.devices['workstation'],
+      ).toMatchObject({
+        availability: 'online',
+        freshness: 'fresh',
+        observed: {
+          activeApplication: { id: 'game.exe', resourceClass: 'game' },
+          fullscreen: true,
+        },
+        activity: { classification: 'gaming' },
+      });
+      expect(runtime.engine.state.presence.state).toBe('unknown');
+      expect(
+        runtime.engine.state.lighting.devices['lighting.entry']
+          ?.effectiveDesired,
+      ).toEqual({});
+
+      const httpStateResponse = await fetch(`http://127.0.0.1:${port}/state`, {
+        headers: { Authorization: 'Bearer test-api-token' },
+      });
+      expect(httpStateResponse.status).toBe(200);
+      const httpState = (await httpStateResponse.json()) as {
+        computer: { devices: Record<string, { availability: string }> };
+      };
+      expect(httpState.computer.devices['workstation']?.availability).toBe(
+        'online',
+      );
+
+      const streamedUpdates: StateUpdate[] = [];
+      const unsubscribe = runtime.engine.stream.subscribe((update) =>
+        streamedUpdates.push(update),
+      );
+      const beforeEventRevision = runtime.engine.state.revision;
+      const event = JSON.parse(
+        readFileSync(
+          new URL(
+            './fixtures/computer-mqtt/events.example.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      ) as Record<string, unknown>;
+      event['device_id'] = 'workstation';
+      event['timestamp_ms'] = Date.now();
+      mqtt.publish(
+        'lab/computers/workstation/events',
+        JSON.stringify(event),
+        false,
+      );
+      expect(streamedUpdates.at(-1)?.domains).toEqual(['computer']);
+      expect(streamedUpdates.at(-1)?.patch.computer?.devices).toHaveProperty(
+        'workstation',
+      );
+      const replay = runtime.engine.stream.resume(
+        beforeEventRevision,
+        runtime.engine.state,
+      );
+      expect(replay.kind).toBe('updates');
+      if (replay.kind !== 'updates') throw new Error('Expected replay updates');
+      expect(replay.updates.at(-1)?.patch.computer?.devices).toHaveProperty(
+        'workstation',
+      );
+      unsubscribe();
+
+      await mqtt.stop();
+      expect(
+        runtime.engine.state.computer.devices['workstation'],
+      ).toMatchObject({
+        availability: 'unknown',
+        freshness: 'unknown',
+        reason: 'broker_disconnected',
+      });
+    } finally {
+      await runtime?.stop();
       await rm(directory, { recursive: true, force: true });
     }
   });

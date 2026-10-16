@@ -136,6 +136,14 @@ confirmed from current Home Assistant observations. Direct WiiM transport is
 not implemented, and software fade timing has not been measured against the
 connected WiiM.
 
+## Linux desktop computer
+
+`ComputerMqttAdapter` consumes the Linux Desktop Agent v1 MQTT state,
+availability and event topics through the existing MQTT connection. Typed
+computer observations appear in the state API/stream and operational dashboard.
+They do not drive room presence, lighting or music policy. Setup, freshness and
+reconnect semantics are in [Computer integration](COMPUTER.md).
+
 ## HASS.Agent / Windows
 
 The initial plan is to use HASS.Agent or an equivalent existing Windows bridge rather than immediately creating a custom Windows agent.

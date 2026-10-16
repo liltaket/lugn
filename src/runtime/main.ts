@@ -19,6 +19,7 @@ import {
   Stl27lMqttPresenceAdapter,
   type Stl27lPresenceMqttSubscriber,
 } from '../adapters/stl27l-mqtt-presence.js';
+import { ComputerMqttAdapter } from '../adapters/computer-mqtt.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
 import { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
 import {
@@ -338,6 +339,7 @@ export async function startRuntime(
   );
   let mqttSubscriber: RuntimeMqttSubscriber | undefined;
   let sensorAdapter: Stl27lMqttPresenceAdapter | undefined;
+  const computerAdapters: ComputerMqttAdapter[] = [];
   let unsubscribeMqttStatus: (() => void) | undefined;
 
   if (config.mqtt) {
@@ -374,10 +376,25 @@ export async function startRuntime(
         clock: systemClock,
       },
     );
+    for (const computer of config.mqtt.computers ?? []) {
+      computerAdapters.push(
+        new ComputerMqttAdapter(
+          mqttSubscriber,
+          (observation) => engine.acceptComputerObservation(observation),
+          {
+            deviceId: computer.deviceId,
+            baseTopic: computer.baseTopic,
+            maxAgeMs: computer.maxAgeMs,
+            clock: systemClock,
+          },
+        ),
+      );
+    }
     unsubscribeMqttStatus = mqttSubscriber.onStatus((status) => {
       sensorAdapter?.setBrokerConnected(status === 'connected');
+      for (const adapter of computerAdapters)
+        adapter.setBrokerConnected(status === 'connected');
     });
-    sensorAdapter.start();
   }
 
   const http = new LugnHttpServer({
@@ -467,6 +484,8 @@ export async function startRuntime(
   displayRefs.castManager = castManager;
 
   try {
+    sensorAdapter?.start();
+    for (const adapter of computerAdapters) adapter.start();
     await seedHomeAssistantObservations(
       config.homeAssistant.baseUrl,
       config.homeAssistant.token,
@@ -487,6 +506,7 @@ export async function startRuntime(
     await displayServer?.stop();
     await http.stop();
     sensorAdapter?.stop();
+    for (const adapter of computerAdapters) adapter.stop();
     unsubscribeMqttStatus?.();
     homeAssistantSocket.stop();
     await lightingIntentStore.stop().catch(() => undefined);
@@ -510,6 +530,7 @@ export async function startRuntime(
       await displayServer?.stop();
       await http.stop();
       sensorAdapter?.stop();
+      for (const adapter of computerAdapters) adapter.stop();
       unsubscribeMqttStatus?.();
       homeAssistantSocket.stop();
       try {

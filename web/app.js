@@ -47,6 +47,8 @@ const presetConfirmYes = document.getElementById('preset-confirm-yes');
 const presetConfirmNo = document.getElementById('preset-confirm-no');
 const mappingSummary = document.getElementById('mapping-summary');
 const musicList = document.getElementById('music-list');
+const computerSection = document.getElementById('computer-section');
+const computerList = document.getElementById('computer-list');
 const lightList = document.getElementById('light-list');
 const actionStatus = document.getElementById('action-status');
 
@@ -1166,6 +1168,7 @@ function render() {
   const music = overview.state?.music ?? {};
   renderMusic(music.devices ?? {}, music.commands ?? [], music.fades ?? {});
   renderMusicSettings();
+  renderComputers(overview.state?.computer?.devices ?? {}, overviewStale);
   const devices = overview.state?.lighting?.devices ?? {};
   const presenceState = overview.state?.presence?.state ?? 'unknown';
   renderLights(devices, presenceState);
@@ -1719,6 +1722,264 @@ function renderMusic(devices, commands, fades = {}) {
       renderMusicPlayer(target, device, commands, fades[target]),
     );
   }
+}
+
+function renderComputers(devices, overviewUnavailable = false) {
+  const entries = Object.entries(devices ?? {}).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  const openDetails = new Map();
+  for (const row of computerList.children) {
+    const details = findComputerDetails(row);
+    if (row.dataset.deviceId && details?.open)
+      openDetails.set(row.dataset.deviceId, true);
+  }
+  computerList.replaceChildren();
+  computerSection.hidden = entries.length === 0;
+  for (const [deviceId, observation] of entries) {
+    const current = overviewUnavailable
+      ? {
+          ...observation,
+          availability: 'unknown',
+          freshness: 'unknown',
+          reason: 'overview_stale',
+          observed: {},
+          activity: { classification: 'unknown' },
+        }
+      : observation;
+    computerList.append(
+      renderComputer(deviceId, current, openDetails.get(deviceId) === true),
+    );
+  }
+}
+
+function findComputerDetails(element) {
+  if (element.className?.split(/\s+/).includes('computer-details'))
+    return element;
+  for (const child of element.children ?? []) {
+    const found = findComputerDetails(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+function renderComputer(deviceId, observation = {}, detailsOpen = false) {
+  const article = node('article', 'computer-row');
+  article.dataset.deviceId = deviceId;
+  const heading = node('header', 'computer-device-heading');
+  const title = node(
+    'h3',
+    '',
+    computerTextValue(observation.deviceId ?? deviceId),
+  );
+  const status = node('div', 'computer-status-chips');
+  const availability = computerAvailabilityStatus(observation.availability);
+  const freshness = computerFreshnessStatus(observation.freshness);
+  status.append(
+    stateChip(availability.label, availability.tone),
+    stateChip(freshness.label, freshness.tone),
+  );
+  heading.append(title, status);
+  article.append(heading);
+  article.append(
+    node(
+      'p',
+      'computer-status-reason',
+      computerReasonLabel(observation.reason),
+    ),
+  );
+
+  const observed = observation.observed ?? {};
+  const readings = node('dl', 'computer-readings');
+  appendReading(
+    readings,
+    'Låsning',
+    computerBooleanLabel(observed.locked, 'Låst', 'Olåst'),
+  );
+  appendReading(
+    readings,
+    'Datoraktivitet',
+    computerBooleanLabel(observed.idle, 'Inaktiv', 'Aktiv'),
+  );
+  appendReading(
+    readings,
+    'Helskärm',
+    computerBooleanLabel(observed.fullscreen, 'Ja', 'Nej'),
+  );
+  appendReading(
+    readings,
+    'Ljud',
+    observed.audio === null || observed.audio === undefined
+      ? 'Okänt'
+      : computerBooleanLabel(
+          observed.audio.playing,
+          'Ljud spelas',
+          'Ljud spelas inte',
+        ),
+  );
+  article.append(readings);
+
+  const activity = node('dl', 'computer-activity');
+  appendReading(
+    activity,
+    'Bedömd aktivitet',
+    computerActivityLabel(observation.activity?.classification),
+  );
+  article.append(activity);
+  article.append(renderComputerDetails(deviceId, observed, detailsOpen));
+  return article;
+}
+
+function renderComputerDetails(deviceId, observed, detailsOpen) {
+  const details = node('details', 'computer-details');
+  details.open = detailsOpen;
+  const summary = node('summary', '', 'App, nätverk och media');
+  summary.dataset.focusKey = `computer:${deviceId}:details`;
+  details.append(summary);
+
+  const readings = node('dl', 'computer-detail-readings');
+  appendReading(
+    readings,
+    'Internetåtkomst',
+    computerBooleanLabel(observed.networkOnline, 'Ja', 'Nej'),
+  );
+  appendReading(
+    readings,
+    'Aktiv app',
+    computerTextValue(observed.activeApplication?.id),
+  );
+  appendReading(
+    readings,
+    'Appklass',
+    computerTextValue(observed.activeApplication?.resourceClass),
+  );
+  appendReading(
+    readings,
+    'Ljudappar',
+    computerValuesLabel(observed.audio?.applications),
+  );
+  appendReading(
+    readings,
+    'Ljudroller',
+    computerValuesLabel(observed.audio?.roles),
+  );
+  details.append(readings);
+
+  const media = node('div', 'computer-media-list');
+  if (observed.media === null || observed.media === undefined) {
+    media.append(node('p', 'computer-media-empty', 'Media: Okänt'));
+  } else if (observed.media.length === 0) {
+    media.append(
+      node('p', 'computer-media-empty', 'Ingen mediaspelare rapporterad'),
+    );
+  } else {
+    for (const item of observed.media) media.append(renderComputerMedia(item));
+  }
+  details.append(media);
+  return details;
+}
+
+function renderComputerMedia(media) {
+  const item = node('section', 'computer-media-item');
+  const heading = node('div', 'computer-media-heading');
+  heading.append(node('h4', '', computerTextValue(media?.player)));
+  heading.append(stateChip(computerPlaybackLabel(media?.playback), 'neutral'));
+  item.append(heading);
+
+  const readings = node('dl', 'computer-media-readings');
+  appendReading(readings, 'Titel', computerTextValue(media?.title));
+  appendReading(readings, 'Artist', computerValuesLabel(media?.artists));
+  appendReading(readings, 'Album', computerTextValue(media?.album));
+  appendReading(
+    readings,
+    'Innehållstyp',
+    computerTextValue(media?.contentType),
+  );
+  appendReading(readings, 'Mediaidentitet', computerTextValue(media?.identity));
+  appendReading(
+    readings,
+    'Skrivbordsapp',
+    computerTextValue(media?.desktopEntry),
+  );
+  item.append(readings);
+  return item;
+}
+
+function computerAvailabilityStatus(availability) {
+  const statuses = {
+    online: { label: 'Online', tone: 'good' },
+    offline: { label: 'Offline', tone: 'bad' },
+    unknown: { label: 'Anslutning okänd', tone: 'neutral' },
+  };
+  return statuses[availability] ?? statuses.unknown;
+}
+
+function computerFreshnessStatus(freshness) {
+  const statuses = {
+    fresh: { label: 'Aktuell', tone: 'good' },
+    stale: { label: 'Föråldrad', tone: 'warn' },
+    unknown: { label: 'Aktualitet okänd', tone: 'neutral' },
+  };
+  return statuses[freshness] ?? statuses.unknown;
+}
+
+function computerReasonLabel(reason) {
+  const labels = {
+    awaiting_state: 'Väntar på datorns första statusrapport.',
+    live: 'Uppdateras från datoragenten.',
+    retained: 'Sparad rapport mottagen; väntar på en aktuell rapport.',
+    stale: 'Ingen ny rapport har kommit in i tid.',
+    offline: 'Datoragenten är offline.',
+    broker_disconnected: 'Anslutningen till MQTT är bruten.',
+    malformed: 'Datorns senaste rapport kunde inte läsas.',
+    stopped: 'Mottagningen av datorstatus har stoppats.',
+    overview_stale: 'Ingen livekontakt med Lugn.',
+  };
+  return labels[reason] ?? 'Statusorsak okänd.';
+}
+
+function computerBooleanLabel(value, trueLabel, falseLabel) {
+  if (value === true) return trueLabel;
+  if (value === false) return falseLabel;
+  return 'Okänt';
+}
+
+function computerActivityLabel(classification) {
+  const labels = {
+    gaming: 'Spel',
+    video: 'Video',
+    music: 'Musik',
+    desktop: 'Skrivbord',
+    idle: 'Inaktiv',
+    unknown: 'Okänd',
+  };
+  return labels[classification] ?? labels.unknown;
+}
+
+function computerPlaybackLabel(playback) {
+  const labels = {
+    playing: 'Spelar',
+    paused: 'Pausad',
+    stopped: 'Stoppad',
+    unknown: 'Okänt',
+  };
+  return labels[playback] ?? labels.unknown;
+}
+
+function computerTextValue(value) {
+  return typeof value === 'string' && value.trim() ? value : 'Okänt';
+}
+
+function computerValuesLabel(values) {
+  if (!Array.isArray(values)) return 'Okänt';
+  if (values.length === 0) return 'Ingen uppgift rapporterad';
+  const labels = values
+    .slice(0, 3)
+    .map(computerTextValue)
+    .filter((value) => value !== 'Okänt');
+  if (labels.length === 0) return 'Ingen uppgift rapporterad';
+  const remaining = values.length - labels.length;
+  return `${labels.join(', ')}${remaining > 0 ? ` (+${remaining})` : ''}`;
 }
 
 function renderMusicPlayer(target, device, commands, fade) {

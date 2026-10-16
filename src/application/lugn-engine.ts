@@ -1,4 +1,8 @@
 import { type MusicVolumeSettings } from '../core/music-volume-settings.js';
+import {
+  ComputerObservationSchema,
+  type ComputerObservation,
+} from '../core/computer.js';
 import { MusicController, type MusicOptions } from './music-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
@@ -600,6 +604,7 @@ export class LugnEngine {
       },
       switches: { devices: switches, commands: [] },
       music: this.musicController.state,
+      computer: { devices: {} },
       intent: { holds: [] },
       commands: this.ledger.records,
       diagnostics: [],
@@ -768,6 +773,13 @@ export class LugnEngine {
 
   getMusicState(target: string): DeviceMusicState {
     return this.musicController.getState(target);
+  }
+
+  /** Adds a validated desktop observation to room state without driving automation. */
+  acceptComputerObservation(observation: ComputerObservation): void {
+    const parsed = ComputerObservationSchema.parse(observation);
+    this.state.computer.devices[parsed.deviceId] = structuredClone(parsed);
+    this.publish(['computer']);
   }
 
   getMusicVolumeSettings(): MusicVolumeSettings {
@@ -3218,12 +3230,25 @@ export class LugnEngine {
       | 'lighting'
       | 'switches'
       | 'music'
+      | 'computer'
       | 'intent'
       | 'commands'
       | 'diagnostics'
       | 'timings'
     >,
   ): void {
+    if (domains.length === 1 && domains[0] === 'computer') {
+      this.state.revision += 1;
+      this.state.updatedAt = this.clock.now();
+      RoomStateSchema.parse(this.state);
+      this.stream.publish({
+        revision: this.state.revision,
+        at: this.state.updatedAt,
+        domains: ['computer'],
+        patch: { computer: structuredClone(this.state.computer) },
+      });
+      return;
+    }
     // Decide from the originating domains, before lighting ownership adds intent.
     // Lighting-only publishes must not recompute music policies or history.
     const refreshMusic =

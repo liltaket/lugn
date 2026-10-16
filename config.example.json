@@ -43,7 +43,8 @@
     "passwordEnv": "MQTT_PASSWORD",
     "clientId": "lugn-controller",
     "baseTopic": "bruno/doorway",
-    "maxAgeMs": 7000
+    "maxAgeMs": 7000,
+    "computers": []
   },
   "lightingControlModes": {},
   "prelight": {

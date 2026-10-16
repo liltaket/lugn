@@ -29,6 +29,54 @@ describe('runtime configuration cross references', () => {
     },
     scenes: [],
   };
+  it('defaults computer MQTT integrations and validates their topic and freshness settings', () => {
+    expect(
+      loadConfig({ ...minimal, mqtt: { url: 'mqtt://broker.test:1883' } }).mqtt
+        ?.computers,
+    ).toEqual([]);
+
+    const mqtt = {
+      url: 'mqtt://broker.test:1883',
+      computers: [
+        { deviceId: 'workstation' },
+        {
+          deviceId: 'media_pc',
+          baseTopic: 'custom/desktops///',
+          maxAgeMs: 120_000,
+        },
+      ],
+    };
+    expect(loadConfig({ ...minimal, mqtt }).mqtt?.computers).toEqual([
+      {
+        deviceId: 'workstation',
+        baseTopic: 'lugn/computers',
+        maxAgeMs: 90_000,
+      },
+      {
+        deviceId: 'media_pc',
+        baseTopic: 'custom/desktops',
+        maxAgeMs: 120_000,
+      },
+    ]);
+
+    for (const computers of [
+      [{ deviceId: 'same' }, { deviceId: 'same' }],
+      [{ deviceId: 'bad id' }],
+      [{ deviceId: 'one', baseTopic: 'desktop/+' }],
+      [{ deviceId: 'one', baseTopic: 'desktop/#' }],
+      [{ deviceId: 'one', baseTopic: 'desktop/\u0000state' }],
+      [{ deviceId: 'one', baseTopic: '///' }],
+      [{ deviceId: 'one', maxAgeMs: 999 }],
+      [{ deviceId: 'one', maxAgeMs: 300_001 }],
+    ]) {
+      expect(() =>
+        loadConfig({
+          ...minimal,
+          mqtt: { url: 'mqtt://broker.test:1883', computers },
+        }),
+      ).toThrow('Invalid configuration');
+    }
+  });
   it('defaults WLED CCT control off and validates its mapped targets and endpoints', () => {
     expect(loadConfig(minimal).homeAssistant.wledCct).toEqual({});
     const wledConfig = (wledCct: unknown) => ({

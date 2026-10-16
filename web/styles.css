@@ -485,7 +485,8 @@ a:focus-visible {
 }
 
 .scene-section,
-.lights-section {
+.lights-section,
+.computer-section {
   margin-top: 36px;
 }
 
@@ -794,6 +795,146 @@ a:focus-visible {
 
 .music-section {
   margin-top: 36px;
+}
+
+.computer-list {
+  display: grid;
+  gap: 9px;
+}
+
+.computer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 0.3fr);
+  column-gap: 15px;
+  min-width: 0;
+  padding: 15px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.computer-device-heading,
+.computer-status-reason,
+.computer-details,
+.computer-media-heading {
+  grid-column: 1 / -1;
+}
+
+.computer-device-heading,
+.computer-media-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.computer-device-heading h3,
+.computer-media-heading h4 {
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.computer-status-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 6px;
+}
+
+.computer-status-reason {
+  margin: 5px 0 12px;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.computer-readings,
+.computer-detail-readings,
+.computer-media-readings {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px 16px;
+  margin: 0;
+}
+
+.computer-readings {
+  grid-column: 1;
+}
+
+.computer-activity {
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 12px;
+  align-self: stretch;
+  margin: 0;
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+}
+
+.computer-activity dt {
+  color: var(--ink-subtle);
+  font-size: 12px;
+}
+
+.computer-activity dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.computer-details {
+  margin-top: 11px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.computer-details summary {
+  width: fit-content;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.computer-details summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.computer-detail-readings {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.computer-media-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.computer-media-item {
+  min-width: 0;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.computer-media-heading {
+  justify-content: flex-start;
+  margin-bottom: 8px;
+}
+
+.computer-media-readings {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.computer-media-empty {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 13px;
 }
 
 .music-list {
@@ -1289,7 +1430,8 @@ a:focus-visible {
 
   .scene-section,
   .lights-section,
-  .music-section {
+  .music-section,
+  .computer-section {
     margin-top: 30px;
   }
 
@@ -1310,6 +1452,39 @@ a:focus-visible {
 
   .scene-button {
     min-height: 60px;
+  }
+
+  .computer-row {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 14px;
+  }
+
+  .computer-device-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .computer-status-chips {
+    justify-content: flex-start;
+  }
+
+  .computer-readings,
+  .computer-detail-readings,
+  .computer-media-readings {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+  }
+
+  .computer-readings,
+  .computer-activity {
+    grid-column: 1;
+  }
+
+  .computer-activity {
+    margin-top: 10px;
+    padding: 10px 0 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
 
   .light-row {
