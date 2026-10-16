@@ -8,6 +8,7 @@ import { FakeClock } from '../src/core/clock.js';
 import {
   MusicCommandRecoverySchema,
   type ComputerPlaybackRouteSnapshot,
+  type MusicCommandRecord,
 } from '../src/core/schemas.js';
 import { lightingFeedbackBrowserScript } from '../src/runtime/lighting-feedback-script.js';
 
@@ -604,6 +605,26 @@ function withComputerPlayback(
 ) {
   payload.state.music.computerPlayback = { 'music.room': route };
   return payload;
+}
+
+function desktopMusicCommand(
+  id: string,
+  issuedAt: number,
+  status: MusicCommandRecord['status'],
+  requested: MusicCommandRecord['requested'] = {
+    property: 'playback',
+    value: 'paused',
+  },
+): MusicCommandRecord {
+  return {
+    id,
+    target: 'music.room',
+    requested,
+    issuedAt,
+    status,
+    ...(status === 'pending' ? { acceptedAt: issuedAt } : {}),
+    provenance: { actor: { type: 'user' }, source: 'test.desktop' },
+  };
 }
 
 describe('Hub music authority explanations', () => {
@@ -2588,6 +2609,132 @@ describe('Hub desktop playback controls', () => {
       expect(ui.get('#music-volume-value').value).toBe('30%');
       expect(ui.get('#music-volume-down').disabled).toBe(false);
       expect(ui.get('#music-volume-up').disabled).toBe(false);
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+});
+
+describe('Hub desktop playback command status', () => {
+  const route = (
+    lastCommand: MusicCommandRecord | null,
+    active = true,
+    pending = false,
+  ): ComputerPlaybackRouteSnapshot => ({
+    active,
+    deviceId: 'kuffe',
+    playback: 'unknown',
+    canPause: false,
+    canResume: false,
+    pending,
+    lastCommand,
+  });
+
+  it('shows an active desktop command without confirmation in Details', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const now = ui.clock.now();
+      const payload = ui.payload();
+      withComputerPlayback(
+        payload,
+        route(desktopMusicCommand('desktop-uncertain', now, 'unconfirmed')),
+      );
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      ui.get('#music-details-button').click();
+
+      expect(ui.get('#music-details').hidden).toBe(false);
+      expect(ui.get('#music-command-state').hidden).toBe(false);
+      expect(ui.get('#music-command-state').textContent).toContain(
+        'Kvittens saknas',
+      );
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('shows a pending active desktop command in the existing Details row', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const now = ui.clock.now();
+      const payload = ui.payload();
+      withComputerPlayback(
+        payload,
+        route(
+          desktopMusicCommand('desktop-pending', now, 'pending'),
+          true,
+          true,
+        ),
+      );
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      ui.get('#music-details-button').click();
+
+      expect(ui.get('#music-command-state').hidden).toBe(false);
+      expect(ui.get('#music-command-state').textContent).toContain(
+        'Musik begärd · inväntar spelaren',
+      );
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('orders active desktop and HA commands by issue time so a newer HA volume command wins', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const now = ui.clock.now();
+      const payload = ui.payload();
+      payload.state.music.commands.push(
+        desktopMusicCommand('ha-volume', now + 1, 'confirmed', {
+          property: 'volume',
+          value: 0.4,
+        }),
+      );
+      withComputerPlayback(
+        payload,
+        route(desktopMusicCommand('older-desktop-pause', now, 'unconfirmed')),
+      );
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      ui.get('#music-details-button').click();
+
+      expect(ui.get('#music-command-state').textContent).toBe(
+        'Begäran rapporterad av spelaren',
+      );
+    } finally {
+      ui.windowListeners.get('pagehide')?.();
+      ui.engine.dispose();
+    }
+  });
+
+  it('omits an old desktop command after the desktop route becomes inactive', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const payload = ui.payload();
+      withComputerPlayback(
+        payload,
+        route(
+          desktopMusicCommand(
+            'inactive-desktop-pause',
+            ui.clock.now(),
+            'unconfirmed',
+          ),
+          false,
+        ),
+      );
+      runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+      ui.get('#music-details-button').click();
+
+      expect(ui.get('#music-command-state').hidden).toBe(true);
+      expect(ui.get('#music-command-state').textContent).toBe('');
     } finally {
       ui.windowListeners.get('pagehide')?.();
       ui.engine.dispose();

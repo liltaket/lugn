@@ -972,6 +972,17 @@ function renderMusicExplanations(payload, target) {
   const commands = (payload?.state?.music?.commands ?? []).filter(
     (item) => item.target === target,
   );
+  const computerRoute = payload?.state?.music?.computerPlayback?.[target];
+  const computerCommand =
+    computerRoute?.active === true ? computerRoute.lastCommand : null;
+  if (computerCommand?.target === target) {
+    const existing = commands.findIndex(
+      (command) => command.id === computerCommand.id,
+    );
+    if (existing === -1) commands.push(computerCommand);
+    else commands[existing] = computerCommand;
+  }
+  commands.sort((left, right) => left.issuedAt - right.issuedAt);
   const outstanding = commands.filter((item) => item.status === 'pending');
   const command = outstanding.at(-1) ?? commands.at(-1);
   const pendingLabel =

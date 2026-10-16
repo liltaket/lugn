@@ -382,7 +382,9 @@ it.each(['rejected', 'uncertain', 'timeout'] as const)(
     const pending = s.controller.request(target, pause, automation);
     if (outcome === 'timeout') s.clock.advanceBy(10_000);
     const result = await pending;
-    expect(result.status).toBe('failed');
+    expect(result.status).toBe(
+      outcome === 'rejected' ? 'failed' : 'unconfirmed',
+    );
     expect(s.controller.canResume(target)).toBe(false);
     await expect(
       s.controller.request(target, resume, automation),
@@ -608,7 +610,7 @@ it.each([false, true])(
       outcome: 'uncertain',
       reason: 'unconfirmed',
     });
-    expect((await pendingResume).status).toBe('failed');
+    expect((await pendingResume).status).toBe('unconfirmed');
     await flush();
     if (!reported) s.clock.advanceBy(2_000);
     await flush();

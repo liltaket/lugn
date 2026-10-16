@@ -536,7 +536,7 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
       const ack: ComputerPlaybackAck =
         await context.transport.sendCommand(command);
       if (ack.outcome !== 'applied') {
-        record.status = 'failed';
+        record.status = ack.outcome === 'uncertain' ? 'unconfirmed' : 'failed';
         record.diagnosticReason = `computer_${ack.outcome}:${ack.reason}`;
         if (claim && this.ownership.get(record.target) === claim)
           this.dropOwnership(record.target);
@@ -572,7 +572,7 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
         }
       }
     } catch {
-      record.status = 'failed';
+      record.status = 'unconfirmed';
       record.diagnosticReason = 'computer_delivery_uncertain';
       if (claim && this.ownership.get(record.target) === claim)
         this.dropOwnership(record.target);
