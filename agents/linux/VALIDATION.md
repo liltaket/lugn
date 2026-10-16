@@ -1,8 +1,8 @@
 # Validation evidence and target acceptance
 
-Measured on Kuffe (x86_64 Linux), 2026-10-16. This is software/integration evidence;
-it does not establish acceptance on Bruno's target Kubuntu desktop. The PR remains
-Draft for that testing. No service was installed on the development host.
+Validated on Kuffe (x86_64 Linux), 2026-10-16. The isolated software evidence and
+the subsequent live desktop installation are distinguished below. The PR remains
+Draft for the remaining interactive desktop acceptance checks.
 
 ## Automated evidence
 
@@ -83,13 +83,43 @@ helper_pid=$(pgrep -P "$agent_pid" -x pw-dump)
 pidstat -u -r -p "$agent_pid,$helper_pid" 1 60
 ```
 
+## Live Kuffe installation
+
+After the final unit/isolated-bus/installer/KWin-fixture checks and successful
+GitHub CI, release commit `5352fb8` was installed on Kuffe as
+`lugn-linux-agent.service`, enabled for graphical-session startup. The binary is
+`~/.local/bin/lugn-linux-agent`; configuration is private mode 0600 under
+`~/.config/lugn-linux-agent/`. Existing Lugn MQTT credential references were
+resolved privately, including their base64url encoding, without logging values.
+
+Read-only subscriptions to the real `lugn/computers/kuffe/` topics verified
+matching online/session identity, fresh non-retained snapshots, increasing
+sequence and live change notifications. All six sources reported known values:
+NetworkManager, lock, idle, active application/fullscreen, actual PipeWire
+playback and MPRIS players. No collector errors were logged. This establishes
+initial real API access; it does not prove every physical transition below.
+
+A controlled SIGKILL of only the installed agent's main process verified actual
+offline Last Will, systemd automatic recovery, a new process session and a fresh
+snapshot with all sources known within **5,196 ms**. The KWin observer recovered
+the already-focused application after restart. No synthetic payloads were sent
+to real device topics, and no screen/input/window control was used.
+
+Companion Lugn PR #65 release `21fa581` was then deployed on BrunoCAM by its
+owner. An independent authenticated read of its real loopback `/state` API
+returned HTTP 200 and `computer.devices.kuffe` as **online / fresh / live**,
+with all normalized readings known. The sequence advanced from 16 in the
+consumer owner's check to 18 in the independent check; source age was about
+16 seconds, within the configured 90-second consumer freshness limit. Thus
+the installed agent → existing MQTT broker → actual Lugn API path is verified.
+
 ## Remaining Kubuntu hardware/service checks
 
 Use a private broker/topic and inspect state, availability and events together.
 Verify the JSON schema and note the installed Plasma/KWin/PipeWire versions.
 
-- Login starts the user service; clean logout stops it. Crash the process and
-  verify systemd recovery after five seconds and a new session ID.
+- Verify login starts the user service and clean logout stops it. Controlled
+  crash recovery and new-session identity have already passed on Kuffe.
 - Start with APIs ready, then stop/restart optional media/PipeWire services and
   verify null clearing and recovery without restarting the agent.
 - Lock/unlock, leave input idle beyond the configured threshold, resume activity,
