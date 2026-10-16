@@ -34,6 +34,7 @@ const REQUIRED: &[&str] = &[
 const CALL_LIMIT: Duration = Duration::from_secs(3);
 const MAX_PLAYERS: usize = 64;
 const MAX_METADATA: usize = 64 * 1024;
+const MAX_IDENTITY: usize = 4096;
 type Properties = HashMap<String, OwnedValue>;
 fn id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -52,14 +53,67 @@ impl Write for Limited {
         Ok(())
     }
 }
+fn usable_track(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_IDENTITY
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+        && value != "/"
+        && value != "/org/mpris/MediaPlayer2/TrackList/NoTrack"
+}
+
+fn absolute_media_url(value: &str) -> bool {
+    if value.len() > MAX_IDENTITY || value.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    let Some((scheme, rest)) = value.split_once(':') else {
+        return false;
+    };
+    if !scheme
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
+        || !scheme
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"+.-".contains(&c))
+        || rest.trim_matches('/').is_empty()
+    {
+        return false;
+    }
+    // HTTP URLs need an authority; file and opaque media URIs such as
+    // spotify:track:... may use their respective absolute forms.
+    if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
+        let Some(authority) = rest.strip_prefix("//") else {
+            return false;
+        };
+        return !authority
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or_default()
+            .is_empty();
+    }
+    true
+}
+
 fn fingerprint(value: &OwnedValue) -> Option<Vec<u8>> {
     // Serialize with a bounded writer before cloning/decoding anything. Sorting
     // JSON dictionaries canonicalizes arbitrary D-Bus dictionary entry order.
     let mut encoded = Limited(Vec::new());
     serde_json::to_writer(&mut encoded, value).ok()?;
     let map: Properties = value.try_clone().ok()?.try_into().ok()?;
-    let track: &ObjectPath<'_> = map.get("mpris:trackid")?.try_into().ok()?;
-    if track.as_str() == "/org/mpris/MediaPlayer2/TrackList/NoTrack" {
+    // Several real players (including Spotify) export trackid as a string
+    // rather than the specified object-path variant. A declared stable id or
+    // absolute media URL is required; titles/artists alone cannot authorize.
+    let track = map.get("mpris:trackid").and_then(|value| {
+        <&ObjectPath<'_>>::try_from(value)
+            .ok()
+            .map(|path| path.as_str())
+            .or_else(|| <&str>::try_from(value).ok())
+    });
+    let url = map
+        .get("xesam:url")
+        .and_then(|value| <&str>::try_from(value).ok());
+    if !track.is_some_and(usable_track) && !url.is_some_and(absolute_media_url) {
         return None;
     }
     let canonical: serde_json::Value = serde_json::from_slice(&encoded.0).ok()?;
@@ -1019,11 +1073,47 @@ mod tests {
     }
 
     #[test]
-    fn full_metadata_fingerprint_is_typed_bounded_and_canonical() {
+    fn full_metadata_fingerprint_requires_a_bounded_strong_identifier() {
         assert!(fingerprint(&metadata("/track/A")).is_some());
-        assert!(fingerprint(&metadata("/org/mpris/MediaPlayer2/TrackList/NoTrack")).is_none());
-        let bad: Properties = [("mpris:trackid".into(), value("/track/A"))].into();
-        assert!(fingerprint(&zbus::zvariant::Value::from(bad).try_into().unwrap()).is_none());
+        // The helper has an absolute URL: it can identify content even when
+        // the declared id is NoTrack. NoTrack alone is tested separately below.
+        assert!(fingerprint(&metadata("/org/mpris/MediaPlayer2/TrackList/NoTrack")).is_some());
+        for track in [
+            value("spotify:track:fixture_A"),
+            value("/track/A"),
+            OwnedValue::from(ObjectPath::try_from("/track/A").unwrap()),
+        ] {
+            let properties: Properties = [("mpris:trackid".into(), track)].into();
+            assert!(
+                fingerprint(&zbus::zvariant::Value::from(properties).try_into().unwrap()).is_some()
+            );
+        }
+        for track in [
+            None,
+            Some(OwnedValue::from(7_u32)),
+            Some(value("")),
+            Some(value("/org/mpris/MediaPlayer2/TrackList/NoTrack")),
+            Some(OwnedValue::from(
+                ObjectPath::try_from("/org/mpris/MediaPlayer2/TrackList/NoTrack").unwrap(),
+            )),
+            Some(value(&"x".repeat(MAX_IDENTITY + 1))),
+        ] {
+            let mut properties: Properties =
+                [("xesam:title".into(), value("A title is insufficient"))].into();
+            if let Some(track) = track {
+                properties.insert("mpris:trackid".into(), track);
+            }
+            let copy: Properties = properties
+                .iter()
+                .map(|(key, value)| (key.clone(), value.try_clone().unwrap()))
+                .collect();
+            let without_url: OwnedValue = zbus::zvariant::Value::from(copy).try_into().unwrap();
+            assert!(fingerprint(&without_url).is_none());
+            properties.insert("xesam:url".into(), value("spotify:track:fixture_A"));
+            assert!(
+                fingerprint(&zbus::zvariant::Value::from(properties).try_into().unwrap()).is_some()
+            );
+        }
         let huge: Properties = [
             (
                 "mpris:trackid".into(),
@@ -1034,6 +1124,36 @@ mod tests {
         .into();
         assert!(fingerprint(&zbus::zvariant::Value::from(huge).try_into().unwrap()).is_none());
         assert!(fingerprint(&metadata("/track/A")) != fingerprint(&metadata("/track/B")));
+    }
+
+    #[test]
+    fn absolute_url_identity_rejects_relative_empty_and_control_values() {
+        for url in [
+            "https://open.spotify.com/track/fixture",
+            "file:///tmp/media.flac",
+            "spotify:track:fixture",
+        ] {
+            assert!(absolute_media_url(url));
+        }
+        for url in [
+            "",
+            "relative/file.mp3",
+            "//example/track",
+            "https://",
+            "https:/example/track",
+            "https://example/a b",
+            "spotify:track:\nfixture",
+            ":track",
+            "1bad:track",
+            "file:///",
+        ] {
+            assert!(!absolute_media_url(url));
+        }
+        assert!(!absolute_media_url(&format!(
+            "https://example/{}",
+            "x".repeat(MAX_IDENTITY)
+        )));
+        assert!(fingerprint(&OwnedValue::from(7_u32)).is_none());
     }
 
     #[test]
@@ -1145,6 +1265,7 @@ mod tests {
     pub(super) struct Fixture {
         status: AtomicU8,
         track: AtomicU8,
+        pub(super) identity_mode: AtomicU8,
         pub(super) pauses: AtomicUsize,
         pub(super) plays: AtomicUsize,
         pause_race: AtomicBool,
@@ -1157,6 +1278,33 @@ mod tests {
             0 => "Playing",
             1 => "Paused",
             _ => "Stopped",
+        }
+    }
+    fn fixture_metadata(fixture: &Fixture) -> Properties {
+        let a = fixture.track.load(Ordering::SeqCst) == 0;
+        match fixture.identity_mode.load(Ordering::SeqCst) {
+            1 => [
+                (
+                    "mpris:trackid".into(),
+                    value(if a { "/track/A" } else { "/track/B" }),
+                ),
+                (
+                    "xesam:url".into(),
+                    value("https://open.spotify.com/track/fixture"),
+                ),
+            ]
+            .into(),
+            2 => [(
+                "xesam:url".into(),
+                value(if a {
+                    "spotify:track:fixture_A"
+                } else {
+                    "spotify:track:fixture_B"
+                }),
+            )]
+            .into(),
+            3 => [("xesam:title".into(), value("A title is insufficient"))].into(),
+            _ => Properties::try_from(metadata(if a { "/track/A" } else { "/track/B" })).unwrap(),
         }
     }
     async fn changed(connection: &Connection, key: &str, value: OwnedValue) {
@@ -1216,12 +1364,7 @@ mod tests {
         }
         #[zbus(property)]
         fn metadata(&self) -> Properties {
-            let path = if self.0.track.load(Ordering::SeqCst) == 0 {
-                "/track/A"
-            } else {
-                "/track/B"
-            };
-            Properties::try_from(metadata(path)).unwrap()
+            fixture_metadata(&self.0)
         }
     }
     async fn state(runtime: &mut control::Runtime, predicate: impl Fn(&Player) -> bool) -> Player {
@@ -1562,6 +1705,72 @@ mod tests {
         assert!(send(&mut next, timed_pause).await == uncertain);
         assert_eq!(fixture.pauses.load(Ordering::SeqCst), pause_calls + 1);
         assert_eq!(fixture.plays.load(Ordering::SeqCst), play_calls);
+
+        // URL fallback has the same observed-generation guarantees as trackid:
+        // URL A->B->A never resurrects the original content id or owned pause.
+        fixture.identity_mode.store(2, Ordering::SeqCst);
+        fixture.track.store(0, Ordering::SeqCst);
+        changed(
+            &bus,
+            "Metadata",
+            zbus::zvariant::Value::from(fixture_metadata(&fixture))
+                .try_into()
+                .unwrap(),
+        )
+        .await;
+        state(&mut next, |player| {
+            player.content_id.is_some() && player.content_id != late_paused.content_id
+        })
+        .await;
+        set_status(&bus, &fixture, 0).await;
+        let (url_a, _, _) = pause_owned(&mut next, &next_context).await;
+        fixture.track.store(1, Ordering::SeqCst);
+        changed(
+            &bus,
+            "Metadata",
+            zbus::zvariant::Value::from(fixture_metadata(&fixture))
+                .try_into()
+                .unwrap(),
+        )
+        .await;
+        let url_b = state(&mut next, |player| {
+            player.content_id != url_a.content_id && player.pause_lease.is_none()
+        })
+        .await;
+        fixture.track.store(0, Ordering::SeqCst);
+        changed(
+            &bus,
+            "Metadata",
+            zbus::zvariant::Value::from(fixture_metadata(&fixture))
+                .try_into()
+                .unwrap(),
+        )
+        .await;
+        state(&mut next, |player| {
+            player.content_id != url_a.content_id && player.content_id != url_b.content_id
+        })
+        .await;
+        set_status(&bus, &fixture, 0).await;
+        let (identified, owned_pause, owned_ack) = pause_owned(&mut next, &next_context).await;
+        fixture.identity_mode.store(3, Ordering::SeqCst);
+        changed(
+            &bus,
+            "Metadata",
+            zbus::zvariant::Value::from(fixture_metadata(&fixture))
+                .try_into()
+                .unwrap(),
+        )
+        .await;
+        state(&mut next, |player| {
+            player.content_id.is_none()
+                && !player.can_pause
+                && !player.can_play
+                && player.pause_lease.is_none()
+        })
+        .await;
+        let revoked = self::resume(&next_context, &identified, &owned_pause, &owned_ack);
+        assert!(send(&mut next, revoked).await.reason == Reason::ContentChanged);
+        assert_eq!(fixture.plays.load(Ordering::SeqCst), play_calls);
     }
 }
 
@@ -1641,6 +1850,7 @@ mod composition_tests {
         .await
         .unwrap();
         let fixture = Arc::new(Fixture::default());
+        fixture.identity_mode.store(1, Ordering::SeqCst);
         let _bus = Builder::session()
             .unwrap()
             .name("org.mpris.MediaPlayer2.control_mqtt_fixture")

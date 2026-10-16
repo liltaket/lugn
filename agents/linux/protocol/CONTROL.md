@@ -101,7 +101,11 @@ command executable again.
 URL, track ID, metadata hash or stable cross-session identity. An observed
 A→B→A transition creates three different generations. The agent compares a
 bounded, full internal identity from track ID, URL and identifying metadata;
-it does not publish URLs. Missing reliable identity produces `content_id: null`
+it accepts a usable track ID as either an object path or a string (needed for
+Spotify's incorrect variant type), or an absolute `xesam:url` as a fallback.
+Empty/sentinel IDs without a usable URL and semantic text alone do not establish
+identity. An identifier must fit 4,096 bytes to establish eligibility; the full
+metadata fingerprint is limited to 65,536 bytes. It does not publish URLs. Missing reliable identity produces `content_id: null`
 and makes the player ineligible for control. Nullable playback status means
 unknown, never Paused. Advertised capability flags do not replace the fresh
 MPRIS checks performed for a command.
