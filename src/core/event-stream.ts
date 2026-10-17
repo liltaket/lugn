@@ -68,6 +68,7 @@ export function applyStateUpdate(
     lighting,
     switches,
     music,
+    computer,
     intent,
     commands,
     diagnostics,
@@ -83,6 +84,7 @@ export function applyStateUpdate(
   if (lighting !== undefined) newState.lighting = cloneDeep(lighting);
   if (switches !== undefined) newState.switches = cloneDeep(switches);
   if (music !== undefined) newState.music = cloneDeep(music);
+  if (computer !== undefined) newState.computer = cloneDeep(computer);
   if (intent !== undefined) newState.intent = cloneDeep(intent);
   if (commands !== undefined) newState.commands = cloneDeep(commands);
   if (diagnostics !== undefined)

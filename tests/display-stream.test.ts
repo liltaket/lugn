@@ -6,6 +6,10 @@ import { LugnEngine } from '../src/application/lugn-engine.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { LugnDisplayServer } from '../src/runtime/display-server.js';
 import { FakeClock } from '../src/core/clock.js';
+import {
+  unknownComputerReadings,
+  type ComputerObservation,
+} from '../src/core/computer.js';
 
 const token = 'a'.repeat(32);
 const cleanups: Array<() => Promise<void>> = [];
@@ -13,7 +17,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setup(streaming = true, music = false) {
+async function setup(streaming = true, music = false, computerAudio = false) {
   const portFinder = createServer();
   await new Promise<void>((resolve) =>
     portFinder.listen(0, '127.0.0.1', resolve),
@@ -34,6 +38,13 @@ async function setup(streaming = true, music = false) {
     capabilities: new CapabilityRegistry(engine),
     scenes: [...engine.scenes.values()],
     scenesProvider: () => [...engine.scenes.values()],
+    ...(computerAudio
+      ? {
+          computerAudioMappings: {
+            'music.room': { deviceId: 'kuffe', source: 'Optical In' },
+          },
+        }
+      : {}),
     stateProvider: () => {
       if (snapshotFails) throw new Error('Snapshot temporarily unavailable');
       return engine.state;
@@ -86,6 +97,10 @@ async function setup(streaming = true, music = false) {
           role: string;
           deliveryRevision: number;
           generatedAt: number;
+          computerNowPlaying: Record<
+            string,
+            { status: string; title: string | null; reason: string }
+          >;
           musicPlaybackPolicies: Record<string, MusicPlaybackPolicySnapshot>;
         };
       },
@@ -106,6 +121,71 @@ async function setup(streaming = true, music = false) {
 }
 
 describe('secret-path Hub state stream', () => {
+  it('delivers current computer media through polling and SSE without rewriting music observations', async () => {
+    const { base, open, engine } = await setup(true, true, true);
+    engine.state.music.devices['music.room']!.observed.source = 'Optical In';
+    engine.state.music.devices['music.room']!.observed.title = '4';
+    const observation: ComputerObservation = {
+      deviceId: 'kuffe',
+      availability: 'online',
+      freshness: 'fresh',
+      reason: 'live',
+      sessionId: 'session',
+      sequence: 1,
+      observedAt: 100,
+      receivedAt: 100,
+      observed: {
+        ...unknownComputerReadings(),
+        media: [
+          {
+            player: 'spotify',
+            desktopEntry: 'spotify',
+            identity: 'Spotify',
+            playback: 'playing',
+            title: 'A song',
+            artists: ['Artist'],
+            album: null,
+            contentType: null,
+          },
+        ],
+      },
+      activity: {
+        classification: 'music',
+        basis: 'mpris_content_type',
+        source: 'desktop-agent',
+      },
+      lastEvent: null,
+    };
+    engine.acceptComputerObservation(observation);
+    const polled = (await (await fetch(`${base}/state`)).json()) as Awaited<
+      ReturnType<Awaited<ReturnType<typeof open>>['next']>
+    >;
+    expect(polled.computerNowPlaying['music.room']).toMatchObject({
+      status: 'playing',
+      title: 'A song',
+    });
+    expect(polled.state.music.devices['music.room']!.observed.title).toBe('4');
+    const stream = await open();
+    expect((await stream.next()).computerNowPlaying['music.room']?.title).toBe(
+      'A song',
+    );
+    engine.acceptComputerObservation({
+      ...observation,
+      availability: 'unknown',
+      freshness: 'stale',
+      reason: 'stale',
+      observed: unknownComputerReadings(),
+    });
+    expect(
+      (await stream.next()).computerNowPlaying['music.room'],
+    ).toMatchObject({ status: 'unavailable', title: null });
+    engine.state.music.devices['music.room']!.observed.source = 'Spotify';
+    const changed = (await (await fetch(`${base}/state`)).json()) as {
+      computerNowPlaying: unknown;
+    };
+    expect(changed.computerNowPlaying).toEqual({});
+  });
+
   it('keeps Hub activation scenes current after dashboard preset edits', async () => {
     const { base, engine } = await setup();
     const scene = {

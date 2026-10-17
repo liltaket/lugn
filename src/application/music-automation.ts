@@ -19,6 +19,7 @@ import type {
   RoomSession,
 } from '../core/schemas.js';
 import type { MusicFadeLifecycleEvent } from './music-controller.js';
+import type { ComputerPlaybackControl } from './computer-playback-controller.js';
 import { z } from 'zod';
 import {
   AutomationHoldSchema,
@@ -114,6 +115,14 @@ export type MusicAutomationOptions = {
   clock: Clock;
   holds?: AutomationHolds;
   getState: (target: string) => DeviceMusicState;
+  computerPlayback?: Pick<
+    ComputerPlaybackControl,
+    'handles' | 'getPlayback' | 'canResume' | 'needsInputOpen'
+  >;
+  openComputerInput?: (
+    target: string,
+    provenance: Provenance,
+  ) => Promise<unknown>;
   request: (
     target: string,
     request: MusicRequest,
@@ -149,6 +158,7 @@ export class MusicAutomation {
   private readonly explicitBaselines = new Set<string>();
   private readonly volumeControllers = new Map<string, 'you' | 'lugn'>();
   private readonly resumeUntil = new Map<string, number>();
+  private readonly deferredComputerPauses = new Map<string, number>();
   private readonly activeFades = new Map<string, ActiveFade>();
   private readonly manualVolumeHolds = new Map<string, ManualVolumeHold>();
   private readonly authorityIntents = new Map<
@@ -213,10 +223,7 @@ export class MusicAutomation {
       if (newConfirmedAbsence || this.restoredAbsenceAwaitingPresence) {
         this.restoredAbsenceAwaitingPresence = false;
         for (const target of this.options.targets) {
-          const device = this.options.getState(target);
-          const wasPlaying =
-            device.observed.playback === 'playing' ||
-            device.requested.playback === 'playing';
+          const wasPlaying = this.isPlaying(target);
           if (newConfirmedAbsence)
             this.resumeUntil.set(
               target,
@@ -224,6 +231,16 @@ export class MusicAutomation {
                 ? this.options.clock.now() + musicContinuityMs
                 : 0,
             );
+          if (this.options.computerPlayback?.handles(target)) {
+            const playback = this.options.computerPlayback.getPlayback(target);
+            if (
+              playback === 'unknown' &&
+              this.absenceExpiresAt !== null &&
+              this.absenceExpiresAt > this.options.clock.now()
+            )
+              this.deferredComputerPauses.set(target, this.absenceExpiresAt);
+            if (playback !== 'playing') continue;
+          }
           this.send(target, { property: 'playback', value: 'paused' }, 'pause');
         }
       }
@@ -233,6 +250,7 @@ export class MusicAutomation {
     }
 
     if (presence === 'occupied') {
+      this.deferredComputerPauses.clear();
       this.restoredAbsenceAwaitingPresence = false;
       this.absenceExpiresAt = null;
       this.cancelAbsenceTimer();
@@ -255,6 +273,16 @@ export class MusicAutomation {
               { property: 'preset', value: 'spotify_dj' },
               'start Spotify DJ preset',
             );
+          } else if (action === 'open_input') {
+            void this.options
+              .openComputerInput?.(target, {
+                actor: automationActor,
+                source: 'presence_music_automation',
+                reason: 'open computer input',
+              })
+              .catch(() =>
+                this.options.onError?.(target, 'open computer input'),
+              );
           }
         }
       }
@@ -273,6 +301,7 @@ export class MusicAutomation {
   handleHomePresence(homePresence: HomePresence): void {
     if (this.disposed) return;
     if (this.homePresence !== homePresence) {
+      this.deferredComputerPauses.clear();
       this.selectorIntents.clear();
       this.recoveryRevision.volume++;
       this.recoveryRevision.playback++;
@@ -280,7 +309,7 @@ export class MusicAutomation {
     this.homePresence = homePresence;
     if (homePresence === 'away') {
       for (const target of this.options.targets) {
-        if (this.isPlaying(this.options.getState(target)))
+        if (this.isPlaying(target))
           this.send(
             target,
             { property: 'playback', value: 'paused' },
@@ -303,6 +332,12 @@ export class MusicAutomation {
     request: MusicRequest,
     provenance: Provenance,
   ): void {
+    if (
+      request.property === 'source' ||
+      request.property === 'preset' ||
+      (request.property === 'playback' && isHumanActor(provenance.actor))
+    )
+      this.deferredComputerPauses.delete(target);
     if (request.property === 'volume' && isHumanActor(provenance.actor)) {
       const offset = this.currentOffset();
       this.baselines.set(target, this.clampBaseline(request.value - offset));
@@ -653,7 +688,9 @@ export class MusicAutomation {
             : this.requiresAvailableEntry(target)
               ? 'player_unavailable'
               : this.presence === 'confirmed_empty' && action === null
-                ? 'already_playing'
+                ? this.options.computerPlayback?.handles(target)
+                  ? 'computer_not_resumable'
+                  : 'already_playing'
                 : this.presence === 'confirmed_empty'
                   ? 'confirmed_empty'
                   : 'awaiting_new_entry';
@@ -687,7 +724,9 @@ export class MusicAutomation {
   }
 
   /** Shared by dispatch and read-only eligibility; fresh entry is checked by the caller. */
-  private entryAction(target: string): 'resume' | 'preset' | null {
+  private entryAction(
+    target: string,
+  ): 'resume' | 'preset' | 'open_input' | null {
     if (
       this.homePresence === 'away' ||
       this.isQuietHours() ||
@@ -695,9 +734,20 @@ export class MusicAutomation {
       this.requiresAvailableEntry(target)
     )
       return null;
+    if (this.options.computerPlayback?.handles(target)) {
+      if (
+        (this.resumeUntil.get(target) ?? 0) > this.options.clock.now() &&
+        this.options.computerPlayback.canResume(target)
+      )
+        return 'resume';
+      return this.options.computerPlayback.getPlayback(target) === 'playing' &&
+        this.options.computerPlayback.needsInputOpen?.(target) === true
+        ? 'open_input'
+        : null;
+    }
     if ((this.resumeUntil.get(target) ?? 0) > this.options.clock.now())
       return 'resume';
-    return this.isPlaying(this.options.getState(target)) ? null : 'preset';
+    return this.isPlaying(target) ? null : 'preset';
   }
 
   getIntentSnapshot(
@@ -857,6 +907,38 @@ export class MusicAutomation {
       : null;
   }
 
+  automaticPlaybackAllowed(target: string): boolean {
+    return (
+      !this.disposed &&
+      this.presence === 'occupied' &&
+      this.homePresence !== 'away' &&
+      !this.isQuietHours() &&
+      !this.holds.blocks('music.playback', target)
+    );
+  }
+
+  reconcileComputerPlayback(): void {
+    if (this.disposed) return;
+    for (const [target, deadline] of this.deferredComputerPauses) {
+      if (this.presence === 'unknown') continue;
+      if (
+        this.presence !== 'confirmed_empty' ||
+        this.options.clock.now() >= deadline ||
+        !this.options.computerPlayback?.handles(target) ||
+        this.holds.blocks('music.playback', target)
+      ) {
+        this.deferredComputerPauses.delete(target);
+        continue;
+      }
+      const playback = this.options.computerPlayback.getPlayback(target);
+      if (playback === 'unknown') continue;
+      this.deferredComputerPauses.delete(target);
+      if (playback !== 'playing') continue;
+      this.resumeUntil.set(target, deadline);
+      this.send(target, { property: 'playback', value: 'paused' }, 'pause');
+    }
+  }
+
   assertVolumeRequestAllowed(target: string, provenance: Provenance): void {
     if (isHumanActor(provenance.actor)) return;
     this.expireManualVolumeHolds();
@@ -978,6 +1060,7 @@ export class MusicAutomation {
 
   dispose(): void {
     this.disposed = true;
+    this.deferredComputerPauses.clear();
     this.cancelTimer();
     this.cancelAbsenceTimer();
   }
@@ -1061,7 +1144,10 @@ export class MusicAutomation {
     this.timer = undefined;
   }
 
-  private isPlaying(device: DeviceMusicState): boolean {
+  private isPlaying(target: string): boolean {
+    if (this.options.computerPlayback?.handles(target))
+      return this.options.computerPlayback.getPlayback(target) === 'playing';
+    const device = this.options.getState(target);
     return (
       device.observed.playback === 'playing' ||
       device.requested.playback === 'playing'

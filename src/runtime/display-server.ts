@@ -1,3 +1,7 @@
+import {
+  ComputerNowPlayingSelector,
+  type ComputerAudioRoute,
+} from '../application/computer-now-playing.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -88,6 +92,7 @@ export type LugnDisplayServerOptions = {
   /** Per-player reconciliation trust, independent of subscription health. */
   musicObservationTrustProvider?: () => Record<string, boolean>;
   stateStream?: StateEventStream;
+  computerAudioMappings?: Readonly<Record<string, ComputerAudioRoute>>;
   musicVolumePoliciesProvider?: () => Record<string, MusicVolumePolicySnapshot>;
   musicPlaybackPoliciesProvider?: () => Record<
     string,
@@ -142,7 +147,13 @@ export class LugnDisplayServer {
   private nextDeliveryRevision = 0;
   private readonly instanceId = randomUUID();
 
+  private readonly computerNowPlaying: ComputerNowPlayingSelector;
+  private unsubscribeComputerObservations: (() => void) | undefined;
+
   constructor(private readonly options: LugnDisplayServerOptions) {
+    this.computerNowPlaying = new ComputerNowPlayingSelector(
+      options.computerAudioMappings ?? {},
+    );
     validateOptions(options);
     this.acceptedHosts = buildAcceptedHosts(options);
     if (this.acceptedHosts.size === 0)
@@ -153,6 +164,15 @@ export class LugnDisplayServer {
 
   async start(): Promise<void> {
     if (this.server) return;
+    this.computerNowPlaying.observe(
+      this.options.stateProvider().computer.devices,
+    );
+    this.unsubscribeComputerObservations = this.options.stateStream?.subscribe(
+      (update) => {
+        if (update.patch.computer)
+          this.computerNowPlaying.observe(update.patch.computer.devices);
+      },
+    );
     const server = createServer((request, response) => {
       void this.handleRequest(request, response);
     });
@@ -171,11 +191,16 @@ export class LugnDisplayServer {
       server.listen(this.options.port, this.options.host);
     }).catch((error: unknown) => {
       this.server = undefined;
+      this.unsubscribeComputerObservations?.();
+      this.unsubscribeComputerObservations = undefined;
       throw error;
     });
   }
 
   async stop(): Promise<void> {
+    this.unsubscribeComputerObservations?.();
+    this.unsubscribeComputerObservations = undefined;
+    this.computerNowPlaying.reset();
     const server = this.server;
     this.server = undefined;
     for (const response of this.eventStreams.keys()) response.destroy();
@@ -384,8 +409,10 @@ export class LugnDisplayServer {
   }
 
   private snapshot(hub: LugnDisplayHub) {
+    const state = this.options.stateProvider();
     return {
-      state: this.options.stateProvider(),
+      state,
+      computerNowPlaying: this.computerNowPlaying.snapshot(state),
       deliveryRevision: ++this.nextDeliveryRevision,
       instanceId: this.instanceId,
       generatedAt: Date.now(),
