@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual, createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import {
@@ -876,12 +876,11 @@ function isWildcardHost(host: string): boolean {
 }
 
 function secretsEqual(supplied: string, configured: string): boolean {
-  const providedBytes = Buffer.from(supplied, 'utf8');
-  const configuredBytes = Buffer.from(configured, 'utf8');
-  return (
-    providedBytes.byteLength === configuredBytes.byteLength &&
-    timingSafeEqual(providedBytes, configuredBytes)
-  );
+  const providedHash = createHash('sha256').update(supplied, 'utf8').digest();
+  const configuredHash = createHash('sha256')
+    .update(configured, 'utf8')
+    .digest();
+  return timingSafeEqual(providedHash, configuredHash);
 }
 
 function findUiAsset(
