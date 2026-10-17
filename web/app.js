@@ -1474,6 +1474,7 @@ function renderPresetLight(target) {
   const control = node('div', 'preset-brightness');
   const slider = document.createElement('input');
   slider.type = 'range';
+  slider.id = `preset-brightness-${target.replace(/[^a-zA-Z0-9_.-]/g, '-')}`;
   slider.min = '0';
   slider.max = '100';
   slider.step = '1';
@@ -1494,7 +1495,8 @@ function renderPresetLight(target) {
   );
   const numberWrap = node('div', 'preset-number');
   numberWrap.append(number, node('span', '', '%'));
-  const status = node('span', 'preset-light-state');
+  const status = node('output', 'preset-light-state');
+  status.htmlFor = slider.id;
   let retained = structuredClone(
     presetDraft.lighting[target] ?? { power: false, brightness: 0 },
   );
