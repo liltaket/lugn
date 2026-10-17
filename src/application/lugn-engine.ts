@@ -155,6 +155,13 @@ const prelightHandoffGraceMs = 1_000;
 const runtimeHistoryLimit = 256;
 
 export class LugnEngine {
+  // Bolt optimization: Cache Intl object to avoid expensive recreation during class lifecycle
+  private readonly timeFormat = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Stockholm',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
   readonly stream: StateEventStream;
   readonly ledger: CommandLedger;
   readonly adapter: LightingAdapter;
@@ -3140,12 +3147,7 @@ export class LugnEngine {
   }
 
   private isPrelightQuietHours(): boolean {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Stockholm',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(this.clock.now()));
+    const parts = this.timeFormat.formatToParts(new Date(this.clock.now()));
     const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
     return hour >= 23 || hour < 6;
   }

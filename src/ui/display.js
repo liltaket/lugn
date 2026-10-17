@@ -10,6 +10,37 @@ const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
 
+// Bolt optimization: Cache Intl instantiations to prevent O(N) object allocations during high-frequency render loops.
+const timeFormat = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+const dateFormat = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+});
+
+const datePartsFormat = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+const environmentNumberFormat = new Intl.NumberFormat('sv-SE', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+});
+
+const environmentNumberFormatWithFractions = new Intl.NumberFormat('sv-SE', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
+});
+
 const root = document.querySelector('#app-root');
 const refs = {
   clockTime: document.querySelector('#clock-time'),
@@ -257,25 +288,11 @@ function setClock() {
   if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
     setConnection('offline', 'Inga färska uppdateringar från Lugn.');
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
-  const time = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(now);
-  const date = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-  }).format(now);
+  const time = timeFormat.format(now);
+  const date = dateFormat.format(now);
   setText(refs.clockTime, time);
   setText(refs.clockDate, date);
-  const dateParts = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now);
+  const dateParts = datePartsFormat.formatToParts(now);
   const dateValue = Object.fromEntries(
     dateParts
       .filter((part) => part.type !== 'literal')
@@ -446,10 +463,11 @@ function renderEnvironment(environment) {
       setText(elements.state, 'Ingen sensordata');
       continue;
     }
-    const formatted = new Intl.NumberFormat('sv-SE', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: name === 'temperature' || name === 'pm25' ? 1 : 0,
-    }).format(value);
+    const formatter =
+      name === 'temperature' || name === 'pm25'
+        ? environmentNumberFormatWithFractions
+        : environmentNumberFormat;
+    const formatted = formatter.format(value);
     const displayKey = `${formatted} ${unit}`;
     if (elements.value.dataset.value !== displayKey) {
       const unitLabel = document.createElement('span');
@@ -873,11 +891,7 @@ function renderMusicExplanations(payload, target) {
     const time = document.createElement('time');
     time.textContent =
       typeof decision.at === 'number' && Number.isFinite(decision.at)
-        ? new Intl.DateTimeFormat('sv-SE', {
-            timeZone: 'Europe/Stockholm',
-            hour: '2-digit',
-            minute: '2-digit',
-          }).format(new Date(decision.at))
+        ? timeFormat.format(new Date(decision.at))
         : '—';
     const copy = document.createElement('span');
     copy.textContent =
