@@ -652,6 +652,9 @@ export class LugnEngine {
     };
     if (options.computerPlayback?.state)
       this.state.music.computerPlayback = options.computerPlayback.state;
+    // Validate the initial snapshot once. Later publications validate each
+    // changed domain through the same schemas in StateUpdateSchema.
+    RoomStateSchema.parse(this.state);
     if (options.restoredMusicIntent) {
       const restoredMusic = MusicIntentSnapshotSchema.parse(
         options.restoredMusicIntent,
@@ -3484,7 +3487,6 @@ export class LugnEngine {
   private publishUpdate(domains: StateUpdate['domains']): void {
     this.state.revision += 1;
     this.state.updatedAt = this.clock.now();
-    RoomStateSchema.parse(this.state);
     const patch: StateUpdate['patch'] = {};
     for (const domain of domains) {
       Object.assign(patch, {

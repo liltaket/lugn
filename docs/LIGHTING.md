@@ -322,6 +322,11 @@ and dashboard notification. Ledger updates, feedback attribution and policy
 checks remain synchronous. The batch is flushed before waiting for any adapter;
 later observations and user actions publish normally.
 
+The engine validates its initial full state once. Each published update then
+validates its changed domains with the same domain schemas, without rechecking
+unrelated room history. Published data is still cloned to isolate stream history
+and subscribers from later mutations.
+
 ## Prelight
 
 Prelight should prioritize "I can see where I am going" rather than perfect scene fidelity.

@@ -23,6 +23,82 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('Lugn deterministic lighting slice', () => {
+  it('publishes prelight without traversing unchanged music state', async () => {
+    const { engine } = setup({ defaultSceneId: 'scene.cozy' });
+    const music = engine.state.music;
+    const readMusic = vi.fn(() => music);
+    Object.defineProperty(engine.state, 'music', {
+      configurable: true,
+      get: readMusic,
+    });
+    try {
+      await engine.handlePrelight({ type: 'presence.prelight', active: true });
+      expect(readMusic).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(engine.state, 'music', {
+        configurable: true,
+        writable: true,
+        value: music,
+      });
+      engine.dispose();
+    }
+  });
+
+  it('rejects invalid initial state and invalid changed lighting before publication', () => {
+    const subscribe = vi.fn(() => () => {});
+    expect(
+      () =>
+        new LugnEngine(new FakeClock(-1), {
+          adapter: { dispatch: async () => {}, subscribe },
+        }),
+    ).toThrow();
+    expect(subscribe).not.toHaveBeenCalled();
+    const { adapter, engine } = setup();
+    const published = vi.fn();
+    const unsubscribe = engine.stream.subscribe(published);
+    expect(() =>
+      adapter.externalChange('lighting.desk', { brightness: 101 }),
+    ).toThrow();
+    expect(published).not.toHaveBeenCalled();
+    unsubscribe();
+    engine.dispose();
+  });
+
+  it('isolates published diagnostic details from later engine and subscriber mutations', async () => {
+    const { engine } = setup({ defaultSceneId: 'scene.cozy' });
+    const before = engine.state.revision;
+    const details = { nested: { values: [1, 2] }, bytes: new Uint8Array([3]) };
+    engine.state.diagnostics.push({
+      id: 10_000,
+      at: engine.state.updatedAt,
+      kind: 'test.details',
+      message: 'Mutable diagnostic payload',
+      details,
+    });
+    const unsubscribe = engine.stream.subscribe((update) => {
+      const diagnostic = update.patch.diagnostics?.find(
+        ({ kind }) => kind === 'test.details',
+      );
+      if (diagnostic)
+        (diagnostic.details['nested'] as typeof details.nested).values[0] = 99;
+    });
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    expect(details.nested.values).toEqual([1, 2]);
+    details.nested.values[0] = 42;
+    details.bytes[0] = 43;
+
+    const delivery = engine.stream.resume(before, engine.state);
+    expect(delivery.kind).toBe('updates');
+    if (delivery.kind !== 'updates') throw new Error('Expected replay');
+    const saved = delivery.updates
+      .flatMap(({ patch }) => patch.diagnostics ?? [])
+      .find(({ kind }) => kind === 'test.details');
+    expect(saved?.details['nested']).toEqual({ values: [1, 2] });
+    expect(saved?.details['bytes']).toEqual(new Uint8Array([3]));
+    unsubscribe();
+    engine.dispose();
+  });
+
   it('allows explicit user light-on while confirmed empty without treating it as occupancy', async () => {
     const { adapter, engine } = setup({
       deviceIds: ['lighting.desk'],
