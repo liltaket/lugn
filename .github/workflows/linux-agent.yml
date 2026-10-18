@@ -1,0 +1,30 @@
+name: Linux desktop agent
+on:
+  push:
+    paths: ['agents/linux/**', '.github/workflows/linux-agent.yml']
+  pull_request:
+    paths: ['agents/linux/**', '.github/workflows/linux-agent.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get update && sudo apt-get install -y cmake mosquitto dbus-daemon shellcheck
+      - run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked && cargo build --locked
+        working-directory: agents/linux
+      - run: bash tests/install.sh && shellcheck scripts/install.sh tests/install.sh && node tests/kwin.mjs
+        working-directory: agents/linux
+      - run: LUGN_TEST_DBUS=1 dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" cargo test --locked dbus_lifecycle -- --ignored --test-threads=1'
+        working-directory: agents/linux
+      - run: cargo test --locked mqtt_control_wire -- --ignored
+        working-directory: agents/linux
+      - run: python3 tests/mqtt_integration.py --broker /usr/sbin/mosquitto --agent target/debug/lugn-linux-agent --password-tool /usr/bin/mosquitto_passwd
+        working-directory: agents/linux
