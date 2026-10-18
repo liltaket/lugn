@@ -22,6 +22,7 @@ import {
   type LightingScene,
   type LightingValues,
 } from '../core/schemas.js';
+import { ComputerDeviceIdSchema } from '../core/computer.js';
 
 const EnvironmentNameSchema = z.string().regex(/^[A-Z_][A-Z0-9_]*$/);
 const ClerkConfigSchema = z
@@ -56,6 +57,31 @@ const TrustedOriginSchema = z
         message: 'trustedOrigins entries must be bare HTTP or HTTPS origins',
       });
   });
+
+const ComputerMqttConfigSchema = z
+  .object({
+    deviceId: ComputerDeviceIdSchema,
+    baseTopic: z
+      .string()
+      .min(1)
+      .superRefine((value, context) => {
+        if (value.includes('+') || value.includes('#') || value.includes('\0'))
+          context.addIssue({
+            code: 'custom',
+            message: 'baseTopic must be a concrete MQTT topic prefix',
+          });
+        if (value.replace(/\/+$/, '').length === 0)
+          context.addIssue({
+            code: 'custom',
+            message:
+              'baseTopic must not be empty after removing trailing slashes',
+          });
+      })
+      .transform((value) => value.replace(/\/+$/, ''))
+      .default('lugn/computers'),
+    maxAgeMs: z.number().int().min(1_000).max(300_000).default(90_000),
+  })
+  .strict();
 
 const HomeAssistantConfigSchema = z
   .object({
@@ -137,6 +163,21 @@ const MqttConfigSchema = z
     clientId: z.string().min(1).max(128).optional(),
     baseTopic: z.string().min(1).default('bruno/doorway'),
     maxAgeMs: z.number().int().positive().max(60_000).default(7_000),
+    computers: z
+      .array(ComputerMqttConfigSchema)
+      .default([])
+      .superRefine((computers, context) => {
+        const ids = new Set<string>();
+        for (const [index, computer] of computers.entries()) {
+          if (ids.has(computer.deviceId))
+            context.addIssue({
+              code: 'custom',
+              path: [index, 'deviceId'],
+              message: 'Computer device IDs must be unique',
+            });
+          ids.add(computer.deviceId);
+        }
+      }),
   })
   .strict()
   .superRefine((config, context) => {
@@ -268,6 +309,37 @@ const FileConfigSchema = z
   })
   .strict()
   .superRefine((config, context) => {
+    const configuredComputers = new Set(
+      (config.mqtt?.computers ?? []).map((computer) => computer.deviceId),
+    );
+    for (const [target, mapping] of Object.entries(
+      config.homeAssistant.music,
+    )) {
+      if (
+        mapping.computerAudio?.playbackControl &&
+        (!config.mqtt?.usernameEnv || !config.mqtt.passwordEnv)
+      )
+        context.addIssue({
+          code: 'custom',
+          path: [
+            'homeAssistant',
+            'music',
+            target,
+            'computerAudio',
+            'playbackControl',
+          ],
+          message: 'Computer playback requires authenticated MQTT credentials',
+        });
+      if (
+        mapping.computerAudio &&
+        !configuredComputers.has(mapping.computerAudio.deviceId)
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['homeAssistant', 'music', target, 'computerAudio', 'deviceId'],
+          message: 'Computer audio device must be configured in mqtt.computers',
+        });
+    }
     const configuredLights = new Set(
       Object.keys(config.homeAssistant.entities),
     );
@@ -377,6 +449,11 @@ export type RuntimeConfig = {
     clientId?: string;
     baseTopic: string;
     maxAgeMs: number;
+    computers?: Array<{
+      deviceId: string;
+      baseTopic: string;
+      maxAgeMs: number;
+    }>;
   };
   display?: {
     host: string;
@@ -502,6 +579,7 @@ export function loadRuntimeConfig(
       url: fileConfig.mqtt.url,
       baseTopic: fileConfig.mqtt.baseTopic,
       maxAgeMs: fileConfig.mqtt.maxAgeMs,
+      computers: fileConfig.mqtt.computers,
       ...(username === undefined ? {} : { username }),
       ...(password === undefined ? {} : { password }),
       ...(fileConfig.mqtt.clientId === undefined

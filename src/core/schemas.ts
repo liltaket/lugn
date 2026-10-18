@@ -1,4 +1,5 @@
 import { MusicVolumeSettingsSchema } from './music-volume-settings.js';
+import { ComputerStateSchema } from './computer.js';
 import { z } from 'zod';
 
 export const PresenceSchema = z.enum([
@@ -277,6 +278,7 @@ export const MusicPlaybackActivityReasonSchema = z.enum([
   'confirmed_empty',
   'player_unavailable',
   'already_playing',
+  'computer_not_resumable',
   'awaiting_new_entry',
 ]);
 export type MusicPlaybackActivityReason = z.infer<
@@ -308,8 +310,24 @@ export const MusicDecisionSchema = z.object({
   resumeExpiresAt: z.number().finite().nonnegative().nullable(),
 });
 export type MusicDecision = z.infer<typeof MusicDecisionSchema>;
+/** Command/eligibility context; receiver observations remain in music.devices. */
+export const ComputerPlaybackRouteSnapshotSchema = z.object({
+  active: z.boolean(),
+  deviceId: z.string(),
+  playback: z.enum(['playing', 'paused', 'unknown']),
+  canPause: z.boolean(),
+  canResume: z.boolean(),
+  pending: z.boolean(),
+  lastCommand: MusicCommandRecordSchema.nullable(),
+});
+export type ComputerPlaybackRouteSnapshot = z.infer<
+  typeof ComputerPlaybackRouteSnapshotSchema
+>;
 export const MusicStateSchema = z.object({
   devices: z.record(SemanticMusicIdSchema, DeviceMusicStateSchema),
+  computerPlayback: z
+    .record(SemanticMusicIdSchema, ComputerPlaybackRouteSnapshotSchema)
+    .optional(),
   commands: z.array(MusicCommandRecordSchema),
   fades: z.record(SemanticMusicIdSchema, MusicFadeStateSchema).default({}),
   volumeChanges: z
@@ -625,6 +643,7 @@ export const RoomStateSchema = z.object({
   }),
   switches: SwitchStateSchema,
   music: MusicStateSchema,
+  computer: ComputerStateSchema.default({ devices: {} }),
   intent: z
     .object({ holds: z.array(AutomationHoldSchema) })
     .default({ holds: [] }),
@@ -644,6 +663,7 @@ export const StateUpdateSchema = z.object({
       'lighting',
       'switches',
       'music',
+      'computer',
       'intent',
       'commands',
       'diagnostics',
@@ -656,6 +676,7 @@ export const StateUpdateSchema = z.object({
     lighting: RoomStateSchema.shape.lighting.optional(),
     switches: RoomStateSchema.shape.switches.optional(),
     music: RoomStateSchema.shape.music.optional(),
+    computer: RoomStateSchema.shape.computer.removeDefault().optional(),
     intent: RoomStateSchema.shape.intent.removeDefault().optional(),
     commands: RoomStateSchema.shape.commands.optional(),
     diagnostics: RoomStateSchema.shape.diagnostics.optional(),

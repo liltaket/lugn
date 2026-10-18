@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ComputerDeviceIdSchema } from '../core/computer.js';
 import type { Clock } from '../core/clock.js';
 import {
   MusicRequestSchema,
@@ -14,6 +15,14 @@ import type {
 export const HomeAssistantMusicMappingSchema = z
   .object({
     entityId: z.string().regex(/^media_player\.[a-z0-9_]+$/),
+    computerAudio: z
+      .object({
+        deviceId: ComputerDeviceIdSchema,
+        playbackControl: z.boolean().optional(),
+        source: z.string().trim().min(1),
+      })
+      .strict()
+      .optional(),
     sources: z.array(z.string().min(1)).default([]),
     presets: z
       .object({

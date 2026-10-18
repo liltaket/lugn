@@ -46,6 +46,8 @@ export class MqttJsSubscriber implements PresenceMqttSubscriber {
     (status: MqttSubscriberStatus) => void
   >();
   private _status: MqttSubscriberStatus = 'stopped';
+  private readonly pendingPublishes = new Set<() => void>();
+  private readonly publicationGuards = new Map<string, Set<number>>();
 
   constructor(
     private readonly config: MqttSubscriberConfig,
@@ -73,6 +75,7 @@ export class MqttJsSubscriber implements PresenceMqttSubscriber {
         reconnectPeriod: this.config.reconnectPeriodMs ?? 1_000,
         reconnectOnConnackError: true,
         resubscribe: false,
+        queueQoSZero: false,
         ...(this.config.clientId === undefined
           ? {}
           : { clientId: this.config.clientId }),
@@ -84,6 +87,32 @@ export class MqttJsSubscriber implements PresenceMqttSubscriber {
           : { password: this.config.password }),
       });
       this.client = client;
+      // MQTT.js can defer publish() while its outgoing store is processing.
+      // Reject that deferred operation if its connection or caller has gone
+      // away, before the packet can enter the QoS 1 reconnect store.
+      const store = client.outgoingStore;
+      const put = store.put.bind(store);
+      store.put = (packet, callback) => {
+        if (packet.cmd === 'publish') {
+          const guard = this.publicationGuards.get(
+            JSON.stringify([packet.topic, String(packet.payload)]),
+          );
+          if (
+            !guard ||
+            !this.active ||
+            this.client !== client ||
+            !client.connected
+          ) {
+            callback(new Error('MQTT publication no longer authorized'));
+            if (packet.messageId !== undefined)
+              client.removeOutgoingMessage(packet.messageId);
+            return store;
+          }
+          if (packet.messageId !== undefined) guard.add(packet.messageId);
+        }
+        put(packet, callback);
+        return store;
+      };
       client.on('connect', () => {
         if (!this.active || this.client !== client) return;
         this.setStatus('connected');
@@ -152,6 +181,53 @@ export class MqttJsSubscriber implements PresenceMqttSubscriber {
     }
   }
 
+  /** Commands must be sent on the current connection, never queued offline. */
+  publish(
+    topic: string,
+    payload: string,
+    options: { qos: 1; retain: false },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const client = this.client;
+    if (!this.active || !client?.connected || this.status !== 'connected')
+      return Promise.reject(new Error('MQTT broker is disconnected'));
+    if (signal?.aborted)
+      return Promise.reject(new Error('MQTT publication aborted'));
+    const key = JSON.stringify([topic, payload]);
+    if (this.publicationGuards.has(key))
+      return Promise.reject(new Error('MQTT publication already pending'));
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const messageIds = new Set<number>();
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener('abort', cancelled);
+        this.pendingPublishes.delete(disconnected);
+        this.publicationGuards.delete(key);
+        if (error) {
+          for (const id of messageIds) client.removeOutgoingMessage(id);
+          reject(error);
+        } else resolve();
+      };
+      const disconnected = () =>
+        finish(new Error('MQTT broker disconnected during publication'));
+      const cancelled = () => finish(new Error('MQTT publication aborted'));
+      this.pendingPublishes.add(disconnected);
+      this.publicationGuards.set(key, messageIds);
+      signal?.addEventListener('abort', cancelled, { once: true });
+      try {
+        client.publish(topic, payload, options, (error) =>
+          finish(error ?? undefined),
+        );
+      } catch (error) {
+        finish(
+          error instanceof Error ? error : new Error('MQTT publication failed'),
+        );
+      }
+    });
+  }
+
   private subscribeRegisteredTopics(client: MqttClient): void {
     const qosByTopic = new Map<string, 0 | 1>();
     for (const subscription of this.subscriptions.values()) {
@@ -174,6 +250,8 @@ export class MqttJsSubscriber implements PresenceMqttSubscriber {
   private setStatus(status: MqttSubscriberStatus): void {
     if (this._status === status) return;
     this._status = status;
+    if (status !== 'connected')
+      for (const cancel of [...this.pendingPublishes]) cancel();
     for (const listener of this.statusListeners) {
       try {
         listener(status);

@@ -19,6 +19,12 @@ import {
   Stl27lMqttPresenceAdapter,
   type Stl27lPresenceMqttSubscriber,
 } from '../adapters/stl27l-mqtt-presence.js';
+import { ComputerPlaybackController } from '../application/computer-playback-controller.js';
+import {
+  ComputerPlaybackMqttAdapter,
+  type ComputerPlaybackMqttPort,
+} from '../adapters/computer-playback-mqtt.js';
+import { ComputerMqttAdapter } from '../adapters/computer-mqtt.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
 import { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
 import {
@@ -45,6 +51,7 @@ export type LugnRuntime = {
 };
 
 type RuntimeMqttSubscriber = Stl27lPresenceMqttSubscriber & {
+  publish?: ComputerPlaybackMqttPort['publish'];
   readonly status: MqttSubscriberStatus;
   onStatus(listener: (status: MqttSubscriberStatus) => void): () => void;
   start(): void;
@@ -187,7 +194,47 @@ export async function startRuntime(
   // The engine can request policy snapshots during construction, before the
   // subscription and reconciliation lifecycle below has been established.
   let isMusicObservationTrusted: (target: string) => boolean = () => false;
+  const engineRef: { current?: LugnEngine } = {};
+  const playbackAdapters = new Map<string, ComputerPlaybackMqttAdapter>();
+  const controlRoutes = Object.fromEntries(
+    Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+      mapping.computerAudio?.playbackControl
+        ? [[target, mapping.computerAudio]]
+        : [],
+    ),
+  );
+  const computerPlayback =
+    Object.keys(controlRoutes).length > 0
+      ? new ComputerPlaybackController({
+          routes: controlRoutes,
+          clock: systemClock,
+          getState: () => engineRef.current?.state,
+          observationTrusted: (target) => isMusicObservationTrusted(target),
+          adapterForDevice: (deviceId) => playbackAdapters.get(deviceId),
+          automaticPauseAllowed: () => {
+            const state = engineRef.current?.state;
+            return (
+              !!state &&
+              (state.presence.state === 'confirmed_empty' ||
+                state.presence.home.state === 'away')
+            );
+          },
+          automaticResumeAllowed: (target) => {
+            const engine = engineRef.current;
+            if (
+              !engine ||
+              engine.state.presence.state !== 'occupied' ||
+              engine.state.presence.home.state === 'away'
+            )
+              return false;
+            const policy = engine.getMusicPlaybackPolicySnapshots()[target];
+            return !!policy && !policy.manualPause && !policy.quietHours;
+          },
+          onChange: () => engineRef.current?.notifyComputerPlaybackChanged(),
+        })
+      : undefined;
   const engine = new LugnEngine(systemClock, {
+    ...(computerPlayback ? { computerPlayback } : {}),
     adapter: homeAssistantLighting,
     deviceIds,
     scenes,
@@ -225,6 +272,7 @@ export async function startRuntime(
           switchAdapter: homeAssistantSwitch,
         }),
   });
+  engineRef.current = engine;
   const homeAssistantHomePresence = new HomeAssistantHomePresenceAdapter(
     config.homeAssistant.homePresence ?? {
       entity: 'device_tracker.lustigkurre',
@@ -271,6 +319,7 @@ export async function startRuntime(
       ? reconciledMusicTargets
       : trustedMusicTargets
     ).add(target);
+    if (!syncingHomeAssistantStates) computerPlayback?.observe();
   });
   const musicObservationTrust = (): Record<string, boolean> =>
     Object.fromEntries(
@@ -291,6 +340,7 @@ export async function startRuntime(
   const refreshHomeAssistantStates = async (
     connection: HomeAssistantConnection,
   ): Promise<void> => {
+    computerPlayback?.invalidate();
     homeAssistantConnection = connection;
     trustedMusicTargets.clear();
     reconciledMusicTargets.clear();
@@ -316,6 +366,7 @@ export async function startRuntime(
     syncingHomeAssistantStates = false;
     for (const event of bufferedHomeAssistantEvents.splice(0))
       forwardHomeAssistantEvent(event);
+    computerPlayback?.observe();
   };
   const homeAssistantSocket = new HomeAssistantWebSocketTransport(
     {
@@ -334,10 +385,17 @@ export async function startRuntime(
         ? {}
         : { createSocket: dependencies.createHomeAssistantSocket }),
       onConnected: refreshHomeAssistantStates,
+      onError: (kind) => {
+        if (kind !== 'socket') return;
+        trustedMusicTargets.clear();
+        computerPlayback?.invalidate();
+        computerPlayback?.observe();
+      },
     },
   );
   let mqttSubscriber: RuntimeMqttSubscriber | undefined;
   let sensorAdapter: Stl27lMqttPresenceAdapter | undefined;
+  const computerAdapters: ComputerMqttAdapter[] = [];
   let unsubscribeMqttStatus: (() => void) | undefined;
 
   if (config.mqtt) {
@@ -374,10 +432,53 @@ export async function startRuntime(
         clock: systemClock,
       },
     );
+    for (const computer of config.mqtt.computers ?? []) {
+      computerAdapters.push(
+        new ComputerMqttAdapter(
+          mqttSubscriber,
+          (observation) => engine.acceptComputerObservation(observation),
+          {
+            deviceId: computer.deviceId,
+            baseTopic: computer.baseTopic,
+            maxAgeMs: computer.maxAgeMs,
+            clock: systemClock,
+          },
+        ),
+      );
+    }
+    if (computerPlayback) {
+      const publish = mqttSubscriber.publish;
+      if (!publish)
+        throw new Error('Computer playback requires MQTT publication support');
+      for (const computer of config.mqtt.computers ?? []) {
+        if (
+          !Object.values(controlRoutes).some(
+            (route) => route.deviceId === computer.deviceId,
+          )
+        )
+          continue;
+        const adapter = new ComputerPlaybackMqttAdapter({
+          deviceId: computer.deviceId,
+          baseTopic: computer.baseTopic,
+          maxAgeMs: Math.min(90_000, computer.maxAgeMs),
+          clock: systemClock,
+          mqtt: {
+            subscribe: mqttSubscriber.subscribe.bind(mqttSubscriber),
+            publish: publish.bind(mqttSubscriber),
+          },
+          onChange: () => computerPlayback.observe(),
+        });
+        playbackAdapters.set(computer.deviceId, adapter);
+      }
+      computerPlayback.observe();
+    }
     unsubscribeMqttStatus = mqttSubscriber.onStatus((status) => {
+      for (const adapter of playbackAdapters.values())
+        adapter.setBrokerConnected(status === 'connected');
       sensorAdapter?.setBrokerConnected(status === 'connected');
+      for (const adapter of computerAdapters)
+        adapter.setBrokerConnected(status === 'connected');
     });
-    sensorAdapter.start();
   }
 
   const http = new LugnHttpServer({
@@ -417,6 +518,12 @@ export async function startRuntime(
           homeAssistantSocket.status === 'connected',
         musicObservationTrustProvider: musicObservationTrust,
         stateStream: engine.stream,
+        computerAudioMappings: Object.fromEntries(
+          Object.entries(config.homeAssistant.music).flatMap(
+            ([target, mapping]) =>
+              mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
+          ),
+        ),
         musicVolumePoliciesProvider: () =>
           engine.getMusicVolumePolicySnapshots(),
         musicPlaybackPoliciesProvider: () =>
@@ -467,6 +574,9 @@ export async function startRuntime(
   displayRefs.castManager = castManager;
 
   try {
+    sensorAdapter?.start();
+    for (const adapter of computerAdapters) adapter.start();
+    for (const adapter of playbackAdapters.values()) adapter.start();
     await seedHomeAssistantObservations(
       config.homeAssistant.baseUrl,
       config.homeAssistant.token,
@@ -487,6 +597,8 @@ export async function startRuntime(
     await displayServer?.stop();
     await http.stop();
     sensorAdapter?.stop();
+    for (const adapter of playbackAdapters.values()) adapter.stop();
+    for (const adapter of computerAdapters) adapter.stop();
     unsubscribeMqttStatus?.();
     homeAssistantSocket.stop();
     await lightingIntentStore.stop().catch(() => undefined);
@@ -510,6 +622,8 @@ export async function startRuntime(
       await displayServer?.stop();
       await http.stop();
       sensorAdapter?.stop();
+      for (const adapter of playbackAdapters.values()) adapter.stop();
+      for (const adapter of computerAdapters) adapter.stop();
       unsubscribeMqttStatus?.();
       homeAssistantSocket.stop();
       try {
