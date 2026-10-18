@@ -523,6 +523,7 @@ export class LugnEngine {
       () => {
         this.computerPlayback?.observe();
         this.musicAutomation?.reconcileComputerPlayback();
+        this.musicAutomation?.reconcilePassiveRestoration();
         this.publish(['music']);
       },
     );
@@ -568,8 +569,12 @@ export class LugnEngine {
         this.publish(['music', 'diagnostics']);
       },
     });
-    this.musicController.setVolumeRequestGuard((target, provenance) =>
-      this.musicAutomation.assertVolumeRequestAllowed(target, provenance),
+    this.musicController.setVolumeRequestGuard((target, provenance, volume) =>
+      this.musicAutomation.assertVolumeRequestAllowed(
+        target,
+        provenance,
+        volume,
+      ),
     );
     this.musicController.setRecoveryPolicyGuard((command) => {
       if (
@@ -1048,7 +1053,11 @@ export class LugnEngine {
     )
       throw new Error('Automatic playback is held by explicit human pause');
     if (requested.property === 'volume')
-      this.musicAutomation.assertVolumeRequestAllowed(target, provenance);
+      this.musicAutomation.assertVolumeRequestAllowed(
+        target,
+        provenance,
+        requested.value,
+      );
     this.musicAutomation.noteExplicitRequest(target, requested, provenance);
     const command = this.dispatchMusicRequest(target, requested, provenance);
     this.publish(['intent']);

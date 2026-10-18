@@ -60,8 +60,8 @@ Volume matching allows a difference of 0.005 in Home Assistant's 0..1 scale.
 An observation cached from before a request cannot confirm it, and a matching
 observation only proves that HA reported the expected value. The volume policy
 tracks authority separately from attribution: explicit/manual volume changes
-claim temporary ownership and update the user baseline. Automatic policy actions
-are attributed to Lugn only when they are allowed. See
+claim persistent manual ownership without changing the configured automatic base.
+Automatic policy actions are attributed to Lugn only when they are allowed. See
 [Volume policy](#volume-policy) for the distinction between active owner, last
 changer, automatic adjustment, baseline and target.
 
@@ -121,7 +121,7 @@ or physical intent invalidates old work through per-target generations that
 outlive equal timestamps and pruned command history. Playback, preset and source
 requests share an ordering domain; volume, fade replacement/cancel and physical
 volume use the independent volume domain. Recovery dispatches preserve the
-original manual intent and absence deadline rather than creating another hold.
+original manual intent and playback absence deadline rather than creating another hold.
 
 A change between two known available source values also cancels playback recovery,
 even if playback and HA `last_changed` stay unchanged. Verification compares the
@@ -165,8 +165,8 @@ subscription; when a newer disagreeing read exists, that volume is labelled
 label. Neither value claims physical or causal confirmation.
 
 Recovery is **process-local** and is not persisted or replayed after restart.
-The existing durable manual volume/Pause intent and continuity policies remain
-unchanged. Disposal cancels timers and invalidates pending continuations. Actual
+The durable volume mode/reference and independent Pause continuity survive restart.
+Disposal cancels timers and invalidates pending continuations. Actual
 HA/WiiM timing and physical behavior remain subject to the protocol below and
 [Music verification](MUSIC-VERIFICATION.md).
 
@@ -229,92 +229,75 @@ When the STL27L snapshot count is greater than one, Lugn subtracts a further
 10 points. An unknown count adds no person offset. These adjustments stack and
 the automatic result is clamped to 5–80%.
 
-Dashboard volume changes set a new user baseline after accounting for the
-current automatic offset. Thus a manual `+` or `−` remains a five-point step
-even when the daily curve is active.
+Each player has a fixed automatic base, edited independently in the music
+settings (`autoBaseVolumes`). A player without a saved entry uses 30%. The
+configured base plus the daily/person offsets produces the automatic target,
+clamped by the configured automatic minimum and maximum. Player observations,
+manual adjustments, fades and service feedback never rewrite this base. Legacy
+settings load with the 30% fallback; old inferred/user baselines are not promoted
+to configured preferences.
 
-Explicit volume requests from a dashboard/user, physical remote or Home Assistant,
-and attributed external WiiM/HA volume changes claim **manual volume ownership**.
-While that ownership is valid, no automatic volume command or fade step may run,
-including minute ticks, person-count changes and evening/night offsets. Human
-volume commands and fades remain available even when automation is disabled,
-presence is unknown or HA reports away. Adapter rejection or missing confirmation
-does not cancel the human hold or prove that the requested volume was reached.
-The calculated automatic target remains inspectable as a counterfactual during
-the hold; it is not a command to the player.
+A dashboard/user volume request, human fade, physical remote or attributed
+external WiiM/HA volume change selects persistent **Manual** mode for that player.
+The latest human volume is kept separately as its manual reference. Manual mode
+survives person-count changes, unknown presence, home/away changes, long room
+absence and restart. Playback Pause and its room-session expiry remain separate.
+Human volume commands and fades remain usable while away or unknown, or with
+automatic volume disabled. Service acceptance does not prove that the player
+reached the requested level.
 
-Ownership transitions are deterministic:
+By default, `passiveMultiPersonReductionEnabled` is **false**. Manual mode then
+sends no automatic volume commands, including daily curve ticks and count changes.
+When enabled, Manual permits only the configured person offset: count greater
+than one reduces the manual reference; a known count of one restores it. Repeated
+counts do not compound the reduction. Changing volume while reduced updates the
+reference after removing the current person offset, so returning to one person
+preserves the latest human adjustment. The effective manual result is clamped to
+0–100%, independently of the automatic caps; its unclamped reference is retained
+so later reductions remain reversible. Manual mode never applies the daily curve.
+Changing the person offset recalculates from that same reference; disabling the
+passive feature restores it on the next eligible evaluation.
 
-| Event                                                                                 | Volume ownership behavior                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Human volume request or attributed external change                                    | Manual ownership begins; newer intent replaces the baseline.                                                                                                                                                 |
-| Human fade begins                                                                     | Manual ownership begins immediately; its destination is committed after successful settling, otherwise its actual terminal volume is used. Newer human intent takes precedence over a stale fade completion. |
-| First confirmed-empty event in an absence                                             | Start one absolute 20-minute continuity deadline.                                                                                                                                                            |
-| Repeated empty, empty → unknown → empty, or HA home/away                              | Preserve that deadline; do not extend it.                                                                                                                                                                    |
-| Occupied before the deadline                                                          | Preserve manual ownership and volume; cancel the absence countdown.                                                                                                                                          |
-| Exact deadline or later                                                               | Release the old manual hold. Send no volume command until room presence is occupied and HA is not away. Keep the baseline for the next eligible policy calculation.                                          |
-| Unknown without a preceding confirmed absence                                         | Suspend automatic adjustments without starting a countdown or clearing manual intent.                                                                                                                        |
-| Dedicated automatic-volume enable from disabled                                       | Deliberately hand volume back to automation; keep playback Pause independent.                                                                                                                                |
-| BILRESA long-press all-off mode restore                                               | Restore the prior enable setting without surrendering a valid manual hold.                                                                                                                                   |
-| New human intent after an absence deadline has expired, while still absent or unknown | Claim a fresh bounded 20-minute hold without renewing playback resume eligibility. Repeated empty observations do not extend the fresh hold.                                                                 |
+Passive commands require enabled automatic volume, occupied presence, non-away
+home status, a known person count and an available volume observation. Unknown
+count, unknown/empty presence and unavailable players suspend dispatch; recovery
+of known occupied context evaluates the reference again. Active human fades are
+never interrupted by passive correction. Their actual terminal volume, or their
+destination after successful settling, becomes the manual reference accounting
+for the person offset when that fade began. Newer human intent takes precedence over stale
+fade callbacks and feedback. Recovery retries recheck the exact current target
+and authority before dispatch. Passive commands remain attributed to Lugn while
+the selected mode and human manual reference remain Manual.
 
-Explicit Play, Pause and preset selection do not change volume ownership. The
-manual Pause hold does not expire with the volume continuity window. Disabling
-automation, confirmed empty/away, and room presence `unknown` cancel future
-automatic fade steps; intentional human fades are still allowed. A human fade
-crossing an absence deadline may finish intentionally, but its completion does
-not recreate the expired hold. An already dispatched HA service call cannot be
-recalled.
+### Per-player authority selector
 
-### Temporary Hub authority selector
+`music.setVolumeAuthority({ target, mode: "manual" | "auto" })` is a human-only
+per-player action. Manual captures the settled, available reported volume without
+sending a volume command and persists that selection. It neither rewrites the
+automatic base nor touches playback. Selecting Manual again cannot weaken an
+actual volume adjustment. Auto explicitly clears that player's manual reference
+and selection, then evaluates its configured automatic base and offsets. It
+leaves other players, playback/Pause and the global enable setting unchanged,
+and respects empty/away/unknown/availability guards.
 
-`music.setVolumeAuthority({ target, mode: "manual" | "auto" })` is a human-only,
-per-player runtime action. The authenticated Hub path supplies actor/source;
-body-supplied provenance is rejected. The response includes the resulting policy,
-not a claim of a physical volume change.
+A dedicated automatic-volume enable after disabling deliberately returns players
+to Auto; BILRESA temporary all-off restoration preserves manual selections.
+Saving settings preserves mode. Both selector choices reject unavailable or
+untrusted volume, outstanding volume dispatch/recovery, newer disagreeing
+readback and active/settling fades. Accepted selections invalidate older retries;
+an already dispatched service call cannot be recalled.
 
-Manual captures the settled, available reported volume without `volume_set`,
-changing the baseline, or persisting a new hold. This selector-only intent releases
-on a changed room presence, changed person count, changed home presence, or a
-changed global volume enable setting. A new visit therefore releases it too.
-Identical sensor reports, minute ticks and metadata repeats do not release it.
-A repeated Manual tap refreshes only this soft selection. An actual human volume
-request, fade or attributed physical change replaces it with the established
-manual ownership/continuity semantics above; selecting Manual cannot weaken that
-ownership.
-
-Auto clears this player's selector and manual volume hold, even when global volume
-policy was already enabled, then evaluates only this player's normal volume
-policy. It leaves the global enable setting and playback/Pause untouched. It
-cannot Play, bypass empty/away/unknown presence, or enable disabled automation.
-
-Both choices reject unavailable/unknown or stale-attributed volume, outstanding
-volume dispatch/recovery, newer disagreeing readback, and active/settling fades.
-The caller waits for settled feedback and retries. Accepted selections invalidate
-older retries for that player; delayed older command feedback cannot replace the
-new intent. An already dispatched physical service call cannot be recalled.
-
-Snapshots expose `selectorIntent`, `lastAuthorityIntent` (mode/time/provenance),
-and `authorityControlBlocked` (null or a typed reason). `manualHold` includes the
-effective soft hold while it applies, while the durable intent snapshot excludes
-it. Last physical volume-change attribution is unaffected. The Hub highlights
-only the backend's effective owner; neither option is selected while no controller
-is active. It explains blocked requests and never stores a local selected mode.
-
-The backend volume snapshot exposes `activeOwner`, `lastIntentActor`, `policyEnabled`,
-`policyActive`, a typed `activityReason`, and `manualHold` with provenance, creation
-time, exact requested volume and optional expiry. `lastIntentActor` records the
-latest authorized volume intent, not a claim that the player changed; acceptance
-and confirmation remain separate in the command ledger. `effectiveTarget` is the
-current owner's destination, while `target` remains the calculated automatic
-target. Activity is false for valid manual ownership, disabled
-policy, unknown/empty room presence, away status, active fades and unavailable
-volume observations. Reads do not mutate the baseline or ownership. Legacy
-`controller` and `automatic` fields remain for existing clients.
-
-Dedicated enable clears a temporary hold but preserves an already active human
-fade until its terminal state. Competing automatic volume requests are blocked
-for that fade's lifetime; its completion does not recreate the surrendered hold.
+The typed snapshot exposes `mode`, `configuredBaseline`, `manualReference`,
+`passiveReductionActive`, `activeOwner`, `lastIntentActor`, `policyEnabled`,
+`policyActive`, `activityReason`, `manualHold`, `selectorIntent`,
+`lastAuthorityIntent` and `authorityControlBlocked`. `baseline` aliases the fixed
+configured base (`baselineSource: "configured"`); `target` is the counterfactual
+automatic target. `effectiveTarget` is the current manual destination, including
+an optional passive person reduction, or the permitted automatic destination.
+A suspended manual mode retains its reference and selected mode without claiming
+an automatic command is active. The legacy `controller` and `automatic` fields
+remain available. Durable intent persists the mode, selector provenance and
+manual reference separately from observations, fades and command history.
 
 `state.music.volumeChanges[target]` separately records the last reported volume
 change, its observation time, provenance and attribution. Initial seeding,
@@ -323,7 +306,7 @@ command acceptance and exact same-volume metadata updates do not invent a change
 value/timing matches tracked intent without causal correlation; `external` means
 there is no such match. A matched report is not proof that Lugn caused the change.
 Delayed automatic feedback can remain the last reported changer while valid
-manual ownership still prevents every new automatic adjustment. Reported changes
+manual ownership still prevents unrelated automatic adjustments. Reported changes
 include small differences below the existing manual-ownership noise tolerance.
 
 The playback policy snapshot exposes typed `activityReason`, `entryEligible`,
@@ -356,18 +339,21 @@ person count remains unknown rather than reusing a stale value.
 ## Restart and durability
 
 The runtime saves logical music intent in the existing private state file
-alongside lighting intent. It retains baselines, exact manual volume destinations,
-human provenance and creation times, volume-policy enable state, absolute
-confirmed-absence deadlines, independent explicit Pause holds, and the prior
+alongside lighting intent. It retains per-player mode, selector intent, manual
+references and destinations, human provenance and creation times, volume-policy
+enable state, absolute playback confirmed-absence deadlines, independent explicit
+Pause holds, and the prior
 enable setting for BILRESA temporary all-off mode. Restoring that temporary mode
-on the next long press preserves a valid manual hold.
+on the next long press preserves Manual mode. Fixed automatic bases and passive
+reduction preferences are saved in the separate volume-settings document.
 
 Restoration happens before fresh Home Assistant observations. Startup presence,
 reported volume and playback remain unknown; requested commands, command history,
 positive Play requests and fades are never replayed. A saved manual destination
 does not mean that volume was reached, and restoration does not send it to the
 player. A fade interrupted by restart keeps its saved human destination and the
-last committed baseline; it does not continue fading or claim completion.
+manual reference; it does not continue fading or claim completion, and the
+configured automatic base remains unchanged.
 
 Short confirmed absences preserve absolute playback resume eligibility, including
 the existing Optical context. After fresh confirmed occupancy, a freshly available
@@ -375,9 +361,8 @@ player may resume within that original window; at its exact expiry a new eligibl
 entry may start the normal preset. Startup, HA seeding/recovery and unknown
 presence alone send no restored music commands. The first confirmed-empty
 heartbeat may pause playback for safety but does not renew saved deadlines or
-resume eligibility. Expired manual ownership is discarded without sending volume
-commands, including when its deadline passed during downtime. Repeated restarts
-cannot extend an absence.
+resume eligibility. Manual volume mode has no absence deadline and remains
+selected across downtime. Repeated restarts cannot extend playback continuity.
 
 Visit-scoped Pause persists a safe session boundary (`sessionBoundary`, with
 absolute `suspendedAt`/`expiresAt`; both null until confirmed empty). RoomSessions
@@ -398,7 +383,7 @@ timestamp an ambiguous physical Pause is conservatively treated as newer intent.
 After release, timestamp-less Paused snapshots cannot establish a new physical
 Pause; a newer HA `last_changed` or explicit human Pause is required. Reported
 playback remains visible. None of these release paths modifies volume holds,
-baselines or volume-policy enable state.
+manual references, configured automatic bases or volume-policy enable state.
 
 A retained Pause's original timestamp protects it from stale Playing transitions
 and metadata updates. The first Playing snapshot after startup or availability
@@ -467,12 +452,13 @@ After newer human intent, the first changed observation matching an older
 accepted or still in-flight **automatic** volume command is attributed to that command for up to
 30 seconds from both the older command's latest attempt and the human intent, including commands
 that have already confirmed or timed out. It updates reported volume but cannot
-replace the manual baseline or interrupt a newer human fade. Attribution is
+replace the manual reference or interrupt a newer human fade. Attribution is
 consumed once; metadata-only repeats keep ownership unchanged. Explicit command
 correlation is honored for retained commands regardless of delay. Once records
 are pruned, or outside the uncorrelated window, HA REST cannot distinguish delayed
 feedback from a genuinely newer physical change to the same value. Such a change
-can update the baseline but never releases a manual hold.
+can update the manual reference but never rewrites the automatic base or releases
+Manual mode.
 
 If older automatic feedback and a current human fade step have the same value,
 uncorrelated repeats can remain classified as stale. The current fade may then
@@ -492,22 +478,29 @@ coverage, reset policies and the unperformed physical-device protocol. Daily
 offsets and automatic-start gates use Stockholm wall time at minute resolution;
 the curve follows skipped/repeated local hours at DST. Confirmed-absence
 deadlines use absolute elapsed milliseconds and retain the same 20-minute
-boundary across DST. Manual ownership suppresses volume commands throughout.
+boundary across DST. Manual mode persists across those boundaries. Automatic
+volume commands remain suppressed unless passive person reduction is enabled;
+that feature uses its own occupied/known-count/available guards.
 
 - Music control depends on Home Assistant exposing and supporting the needed
   media-player service for the mapped device.
 - Preset request confirmation is unavailable from the current HA observations.
 - Direct WiiM transport is not implemented. Software fades use Home Assistant
   feedback, but their timing has not been measured against the connected WiiM.
-- Automatic behavior is configured for the room-level policy; the dashboard
-  does not provide a player/source selector or an automation settings editor.
+- The Hub music-settings editor controls fixed per-player automatic bases, daily
+  offsets, person offsets, caps and optional passive Manual reduction. The compact
+  room dashboard still targets its configured player without a source selector.
 - Abrupt termination can lose intent not yet durably written; a successful music
   request does not acknowledge persistence. Physical power-loss and exact WiiM
   feedback behavior remain unverified.
 - Physical WiiM timing, causal HA feedback attribution and fade trajectory
   tolerances remain unverified. On a test instance, change volume physically
   while occupied, cross 22:00/23:00/midnight/06:00, leave for less than 20 minutes,
-  then leave beyond the exact 20-minute boundary. Verify the HA command log has
-  no automatic volume commands during the hold, and that only eligible return
-  reactivates policy. Also interrupt fades, disconnect/reconnect HA and delay
+  then leave beyond the exact 20-minute boundary and restart. Verify Manual mode
+  persists and the automatic base stays unchanged. With passive reduction off,
+  verify no automatic volume commands occur in Manual; with it on, verify one
+  reversible reduction for multiple people, restoration for one person, and no
+  correction during unknown count, absence or unavailable feedback. Return volume
+  to Auto explicitly and check its fixed base plus offsets. Also interrupt fades,
+  disconnect/reconnect HA and delay
   service feedback; compare reported volume and command confirmation separately.

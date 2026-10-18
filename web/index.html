@@ -322,6 +322,20 @@
                 ><input id="settings-enabled" type="checkbox" /> Automatisk
                 volymkontroll</label
               >
+              <h3>Fast basvolym för Auto</h3>
+              <p class="field-help">
+                Sparas per spelare. Manuella volymjusteringar ändrar inte basen.
+                Auto använder basen plus dygnskurvan och persontillägget.
+              </p>
+              <div id="settings-auto-bases" class="settings-grid"></div>
+              <label class="settings-toggle"
+                ><input id="settings-passive-reduction" type="checkbox" /> Sänk
+                även manuell volym vid fler än en person</label
+              >
+              <p class="field-help">
+                Manuellt läge behålls tills du väljer Auto. Med personsänkning
+                återställs den manuella referensen när du är ensam igen.
+              </p>
               <h3>Dygnskurva</h3>
               <p class="field-help">
                 Volymtillägg i procentenheter, lokal tid i Stockholm. Mellan

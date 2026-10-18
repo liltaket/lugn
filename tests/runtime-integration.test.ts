@@ -498,7 +498,8 @@ describe('composed runtime integration', () => {
       ).toMatchObject({
         activeOwner: 'manual',
         effectiveTarget: 0.95,
-        baseline: 0.95,
+        baseline: 0.3,
+        manualReference: 0.95,
       });
       expect(
         runtime.engine.state.intent.holds.some(

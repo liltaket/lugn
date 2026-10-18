@@ -1,0 +1,16 @@
+{
+	admin off
+	auto_https disable_redirects
+	skip_install_trust
+}
+
+{$LUGN_PROXY_HOST}:{$LUGN_PROXY_PORT} {
+	bind {$LUGN_PROXY_BIND}
+	tls internal
+
+	@outside_lan not remote_ip {$LUGN_PROXY_LAN_CIDR}
+	route {
+		respond @outside_lan "Forbidden" 403
+		reverse_proxy 127.0.0.1:8787
+	}
+}

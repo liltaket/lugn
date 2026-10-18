@@ -76,6 +76,9 @@ loopback host. If Lugn is behind a TLS-terminating reverse proxy, add the exact
 origin (scheme and host, without a path) and keep `bearerTokenEnv` configured;
 the proxy must preserve the external `Host` header. Other host/origin pairs
 are rejected to protect the loopback API against DNS rebinding.
+See [LAN desktop access](OPERATIONS.md) for the TLS proxy installer, local DNS,
+certificate trust and LAN firewall setup. The API remains loopback-only and the
+separate Nest Hub listener retains its own configuration.
 
 ## BILRESA event entities
 
@@ -146,3 +149,18 @@ fall back to existing defaults with a warning and block writes to avoid data
 loss. A separate optional settings marker in music intent lets later BILRESA
 toggles survive restart when preferences match, while newly saved preferences
 win over older intent after a crash between the two writes.
+
+`autoBaseVolumes` maps each semantic music target to its fixed 0..1 Auto base
+(for example, `{ "music.room": 0.4 }`). Targets without an entry use 0.3.
+Only an explicit settings save changes that base; physical/HA/dashboard volume
+adjustments and fades change a separate manual reference. Auto uses configured
+base + daily offset + person offset, clamped to minimum/maximum.
+
+`passiveMultiPersonReductionEnabled` defaults to `false`, including when loading
+older settings documents. Enabling it applies the configured person offset to
+the manual reference while occupied, home and available; it does not apply the
+daily curve. Repeated count samples do not accumulate discounts. Unknown/empty
+presence, away and unavailable players suppress volume corrections while
+retaining Manual mode. Mode and manual reference persist separately from
+automatic preferences. Legacy inferred/user baselines are never promoted into
+the configured Auto settings during upgrade; review the fixed base in the editor.

@@ -186,6 +186,41 @@ it('Save sends the draft and expected original; successful save clears dirty sta
     'Sparat och tillämpat',
   );
 });
+it('edits a separate per-player Auto base and passive reduction without applying drafts', async () => {
+  const s = editor();
+  const input = s.get('settings-auto-bases').children[0]!.children[0]!;
+  expect(input.value).toBe(30);
+  input.value = '45';
+  await input.fire('input');
+  s.get('settings-passive-reduction').checked = true;
+  await s.get('settings-passive-reduction').fire('change');
+  expect(s.run('volumeSettingsDraft.autoBaseVolumes["music.room"]')).toBe(0.45);
+  expect(s.run('volumeSettingsDraft.passiveMultiPersonReductionEnabled')).toBe(
+    true,
+  );
+  expect(s.fetch).not.toHaveBeenCalled();
+  s.fetch.mockImplementation(
+    async () =>
+      new Response(
+        JSON.stringify({
+          settings: {
+            ...defaultMusicVolumeSettings,
+            autoBaseVolumes: { 'music.room': 0.45 },
+            passiveMultiPersonReductionEnabled: true,
+          },
+        }),
+        { status: 200 },
+      ),
+  );
+  await s.get('music-settings-form').fire('submit');
+  expect(
+    JSON.parse(s.fetch.mock.calls[0]![1]!.body as string).settings,
+  ).toMatchObject({
+    autoBaseVolumes: { 'music.room': 0.45 },
+    passiveMultiPersonReductionEnabled: true,
+  });
+  expect(s.run('volumeSettingsDirty()')).toBe(false);
+});
 it('preview uses the pure endpoint and ignores a response after the draft changes', async () => {
   const s = editor();
   let resolve!: (response: Response) => void;

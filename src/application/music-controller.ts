@@ -130,7 +130,8 @@ export class MusicController {
     | ((target: string, volume: number, provenance: Provenance) => void)
     | undefined;
   private volumeRequestGuard:
-    ((target: string, provenance: Provenance) => void) | undefined;
+    | ((target: string, provenance: Provenance, volume?: number) => void)
+    | undefined;
   private onExternalPlaybackChange:
     | ((
         target: string,
@@ -307,7 +308,7 @@ export class MusicController {
     this.onExternalVolumeChange = handler;
   }
   setVolumeRequestGuard(
-    handler: (target: string, provenance: Provenance) => void,
+    handler: (target: string, provenance: Provenance, volume?: number) => void,
   ): void {
     this.volumeRequestGuard = handler;
   }
@@ -383,7 +384,7 @@ export class MusicController {
   ): Promise<MusicCommandRecord> {
     const requested = MusicRequestSchema.parse(rawRequest);
     if (requested.property === 'volume')
-      this.volumeRequestGuard?.(target, provenance);
+      this.volumeRequestGuard?.(target, provenance, requested.value);
     if (requested.property === 'volume')
       this.stopFade(
         target,
@@ -508,7 +509,7 @@ export class MusicController {
     const requested = MusicRequestSchema.parse(rawRequest);
     const normalizedProvenance = ProvenanceSchema.parse(provenance);
     if (requested.property === 'volume')
-      this.volumeRequestGuard?.(target, normalizedProvenance);
+      this.volumeRequestGuard?.(target, normalizedProvenance, requested.value);
     if (
       requested.property === 'source' &&
       !device.allowedSources.includes(requested.value)
@@ -598,7 +599,11 @@ export class MusicController {
       if (this.disposed || (recover && command.status !== 'pending'))
         return structuredClone(command);
       if (requested.property === 'volume')
-        this.volumeRequestGuard?.(target, normalizedProvenance);
+        this.volumeRequestGuard?.(
+          target,
+          normalizedProvenance,
+          requested.value,
+        );
       this.dispatchingCommands.add(command.id);
       await this.adapter.dispatch({ id: command.id, target, requested });
       if (this.disposed) return structuredClone(command);

@@ -157,20 +157,30 @@ async function setup() {
     },
   });
   const base = `http://127.0.0.1:${httpPort}`;
+  // Keep real HTTP I/O independent of Node fetch's keep-alive timers, which
+  // share the fake reconnect timer clock in this fixture.
+  const localHeaders = { Connection: 'close' };
   const login = await fetch(`${base}/ui/api/session`, {
     method: 'POST',
-    headers: { Origin: base, 'Content-Type': 'application/json' },
+    headers: {
+      ...localHeaders,
+      Origin: base,
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({ token: '' }),
   });
   const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
   const overview = async () =>
     (
-      await fetch(`${base}/ui/api/overview`, { headers: { Cookie: cookie } })
+      await fetch(`${base}/ui/api/overview`, {
+        headers: { ...localHeaders, Cookie: cookie },
+      })
     ).json() as Promise<OverviewSnapshot>;
   const display = async () =>
     (
       await fetch(
         `http://127.0.0.1:${displayPort}/k/${token}/display-api/state`,
+        { headers: localHeaders },
       )
     ).json();
   const connect = () => {
@@ -209,7 +219,7 @@ async function setup() {
     openOverviewStream: async () => {
       const abort = new AbortController();
       const response = await fetch(`${base}/ui/api/events`, {
-        headers: { Cookie: cookie },
+        headers: { ...localHeaders, Cookie: cookie },
         signal: abort.signal,
       });
       const reader = response.body!.getReader();

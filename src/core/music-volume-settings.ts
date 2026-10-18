@@ -3,6 +3,13 @@ import { z } from 'zod';
 export const MusicVolumeSettingsSchema = z
   .object({
     enabled: z.boolean(),
+    autoBaseVolumes: z
+      .record(
+        z.string().regex(/^music\.[a-zA-Z0-9_.-]+$/),
+        z.number().finite().min(0).max(1),
+      )
+      .default({}),
+    passiveMultiPersonReductionEnabled: z.boolean().default(false),
     dailyCurve: z
       .array(
         z
@@ -53,6 +60,8 @@ export const MusicVolumeSettingsSchema = z
 export type MusicVolumeSettings = z.infer<typeof MusicVolumeSettingsSchema>;
 export const defaultMusicVolumeSettings: MusicVolumeSettings = {
   enabled: true,
+  autoBaseVolumes: {},
+  passiveMultiPersonReductionEnabled: false,
   dailyCurve: [
     { minute: 0, offset: -0.15 },
     { minute: 360, offset: 0 },

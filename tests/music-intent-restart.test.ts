@@ -49,7 +49,8 @@ it('restores manual intent before observations without replaying state, commands
     expect(r.policy()).toMatchObject({
       activeOwner: 'manual',
       effectiveTarget: 0.95,
-      baseline: 0.95,
+      baseline: 0.3,
+      manualReference: 0.95,
     });
     expect(r.engine.getMusicState('music.room')).toMatchObject({
       observed: { playback: 'unknown', volume: null },
@@ -71,7 +72,7 @@ it('restores manual intent before observations without replaying state, commands
 });
 
 it.each([-1, 0, 1])(
-  'honors saved absence expiry at boundary %+d without renewal or startup commands',
+  'retains manual authority at playback absence boundary %+d without startup commands',
   async (delta) => {
     const s = setup();
     let r: ReturnType<typeof setup> | undefined;
@@ -87,21 +88,17 @@ it.each([-1, 0, 1])(
       await s.presence('confirmed_empty');
       const expiry = start + continuity;
       r = setup(expiry + delta, s.engine.getMusicIntentSnapshot());
-      expect(r.policy().manualHold !== null).toBe(delta < 0);
+      expect(r.policy().manualHold).not.toBeNull();
       expect(r.adapter.dispatched).toEqual([]);
       await r.presence('unknown');
       await r.presence('confirmed_empty');
-      expect(r.policy().manualHold?.expiresAt ?? null).toBe(
-        delta < 0 ? expiry : null,
-      );
+      expect(r.policy().manualHold?.expiresAt ?? null).toBe(null);
       again = setup(expiry + delta, r.engine.getMusicIntentSnapshot());
       await again.presence('confirmed_empty');
-      expect(again.policy().manualHold?.expiresAt ?? null).toBe(
-        delta < 0 ? expiry : null,
-      );
+      expect(again.policy().manualHold?.expiresAt ?? null).toBe(null);
       if (delta < 0) {
         again.clock.advanceBy(1);
-        expect(again.policy().manualHold).toBeNull();
+        expect(again.policy().manualHold).not.toBeNull();
       }
     } finally {
       s.engine.dispose();
@@ -111,10 +108,9 @@ it.each([-1, 0, 1])(
   },
 );
 
-it('bounds restored distant deadlines to safe timer delays without extending expiry', async () => {
+it('migrates a legacy volume deadline to durable manual authority without expiry timers', async () => {
   const s = setup();
-  let r: LugnEngine | undefined;
-  const maxTimerDelay = 2 ** 31 - 1;
+  let restored: ReturnType<typeof setup> | undefined;
   try {
     await s.engine.requestMusic(
       'music.room',
@@ -123,37 +119,20 @@ it('bounds restored distant deadlines to safe timer delays without extending exp
     );
     await s.presence('confirmed_empty');
     const snapshot = s.engine.getMusicIntentSnapshot();
-    const expiry = start + maxTimerDelay + 1_000;
-    snapshot.absenceExpiresAt = expiry;
-    snapshot.targets['music.room']!.manualVolume!.expiresAt = expiry;
-    const clock = new FakeClock(start);
-    const schedule = vi.spyOn(clock, 'setTimeout');
-    r = new LugnEngine(clock, {
-      deviceIds: [],
-      scenes: [],
-      music: { targets: { 'music.room': [] } },
-      restoredMusicIntent: snapshot,
+    snapshot.targets['music.room']!.manualVolume!.expiresAt =
+      start + continuity;
+    delete snapshot.targets['music.room']!.volumeMode;
+    restored = setup(start + continuity + 1, snapshot);
+    expect(restored.policy()).toMatchObject({
+      mode: 'manual',
+      manualHold: { volume: 0.4, expiresAt: null },
+      baseline: 0.3,
     });
-    expect(schedule.mock.calls.map(([, delay]) => delay)).toEqual([
-      maxTimerDelay,
-    ]);
-    clock.advanceBy(maxTimerDelay);
-    expect(schedule.mock.calls.map(([, delay]) => delay)).toEqual([
-      maxTimerDelay,
-      1_000,
-    ]);
-    expect(
-      r.getMusicVolumePolicySnapshots()['music.room']!.manualHold?.expiresAt,
-    ).toBe(expiry);
-    clock.advanceBy(1_000);
-    expect(
-      r.getMusicVolumePolicySnapshots()['music.room']!.manualHold,
-    ).toBeNull();
-    expect(r.state.music.commands).toEqual([]);
+    expect(restored.clock.pendingTimers()).toBe(0);
+    expect(restored.adapter.dispatched).toEqual([]);
   } finally {
     s.engine.dispose();
-    r?.dispose();
-    vi.restoreAllMocks();
+    restored?.engine.dispose();
   }
 });
 

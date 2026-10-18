@@ -65,20 +65,26 @@ it('attributes a delayed superseded HA volume step without discarding or confirm
     expect(
       engine.state.music.commands.find((c) => c.id === newer.id)?.status,
     ).toBe('pending');
-    expect(engine.getMusicVolumePolicySnapshots()['music.room']?.baseline).toBe(
-      0.4,
-    );
+    expect(engine.getMusicVolumePolicySnapshots()['music.room']).toMatchObject({
+      mode: 'manual',
+      baseline: 0.3,
+      manualReference: 0.4,
+      effectiveTarget: 0.4,
+    });
     observe(0.4);
     expect(
       engine.state.music.commands.find((c) => c.id === newer.id)?.status,
     ).toBe('confirmed');
     expect(engine.getMusicState('music.room').requested.volume).toBeUndefined();
     // The old step's attribution was consumed. A later physical change to that
-    // same level must update the baseline normally.
+    // same level must update the manual reference normally.
     observe(0.35);
-    expect(engine.getMusicVolumePolicySnapshots()['music.room']?.baseline).toBe(
-      0.35,
-    );
+    expect(engine.getMusicVolumePolicySnapshots()['music.room']).toMatchObject({
+      mode: 'manual',
+      baseline: 0.3,
+      manualReference: 0.35,
+      effectiveTarget: 0.35,
+    });
   } finally {
     engine.dispose();
   }
@@ -105,9 +111,12 @@ it.each([
     const external = scenario === 'different value' ? 0.55 : 0.35;
     observe(external);
     expect(engine.getMusicState('music.room').requested.volume).toBeUndefined();
-    expect(engine.getMusicVolumePolicySnapshots()['music.room']?.baseline).toBe(
-      external,
-    );
+    expect(engine.getMusicVolumePolicySnapshots()['music.room']).toMatchObject({
+      mode: 'manual',
+      baseline: 0.3,
+      manualReference: external,
+      effectiveTarget: external,
+    });
   } finally {
     engine.dispose();
   }
