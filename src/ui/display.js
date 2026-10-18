@@ -9,6 +9,7 @@ const PRESENCE_COUNT_URL = `${BASE_PATH}display-api/presence-count-one`;
 const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
+const COMPUTER_MEDIA_PAUSE_GRACE_MS = 8_000;
 
 // Bolt optimization: Cache Intl instantiations to prevent O(N) object allocations during high-frequency render loops.
 const timeFormat = new Intl.DateTimeFormat('sv-SE', {
@@ -140,6 +141,8 @@ let reconnectDelay = 1000;
 let streamWatchdog;
 let latestDeliveryRevision = -1;
 let currentInstanceId;
+let computerMediaDisplay = null;
+let computerMediaPauseTimer;
 let instanceGeneration = 0;
 const retiredInstances = new Set();
 
@@ -591,6 +594,150 @@ function musicObservationTrusted(payload, target) {
   );
 }
 
+function clearComputerMediaDisplay() {
+  computerMediaDisplay = null;
+  window.clearTimeout(computerMediaPauseTimer);
+  computerMediaPauseTimer = undefined;
+}
+
+function compactMediaText(value, limit) {
+  const text =
+    typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  const characters = Array.from(text);
+  if (characters.length <= limit) return text;
+  const prefix = characters.slice(0, limit - 1).join('');
+  const space = prefix.lastIndexOf(' ');
+  return `${(space >= limit * 0.6 ? prefix.slice(0, space) : prefix).trimEnd()}…`;
+}
+
+function renderComputerMediaTitle(media, status) {
+  setText(refs.musicTitle, compactMediaText(media.title, 56));
+  setText(refs.musicSource, compactMediaText(media.artist, 42) || 'Optical');
+  setText(refs.musicPlayerStatus, status);
+}
+
+function renderComputerNowPlaying(
+  payload,
+  target,
+  device,
+  connected,
+  reportedOnly,
+  playbackLabel,
+) {
+  const projections = payload?.computerNowPlaying;
+  const projection = projections?.[target];
+  if (!projection || typeof projection !== 'object') {
+    clearComputerMediaDisplay();
+    return;
+  }
+
+  // The API only includes this projection when the configured Optical input is
+  // actually observed. Keep that source visible even while the HA report is
+  // stale, so the receiver's preset number never replaces the computer state.
+  const observed = device.observed ?? {};
+  const source =
+    typeof observed.source === 'string' && observed.source.trim()
+      ? observed.source.trim()
+      : 'Optical';
+  setText(refs.musicSource, 'Optical');
+  const status = projection.status;
+  const key = JSON.stringify([
+    target,
+    projection.deviceId,
+    source,
+    payload?.state?.computer?.devices?.[projection.deviceId]?.sessionId ?? null,
+    payload?.instanceId ?? null,
+  ]);
+  if (computerMediaDisplay?.key !== key) clearComputerMediaDisplay();
+  const freshPlaying =
+    !reportedOnly &&
+    connected &&
+    device.availability === 'available' &&
+    musicObservationTrusted(payload, target) &&
+    observed.playback === 'playing';
+
+  const computer = payload?.state?.computer?.devices?.[projection.deviceId];
+  const refreshingMedia =
+    status === 'unavailable' &&
+    computer?.availability === 'online' &&
+    computer?.freshness === 'fresh' &&
+    computer?.observed?.media === null;
+  const knownPause =
+    !reportedOnly &&
+    connected &&
+    device.availability === 'available' &&
+    musicObservationTrusted(payload, target) &&
+    ['playing', 'paused', 'idle'].includes(observed.playback) &&
+    (refreshingMedia ||
+      (observed.playback === 'playing' && status === 'idle') ||
+      (['paused', 'idle'].includes(observed.playback) &&
+        ['playing', 'idle'].includes(status)));
+  if (knownPause && computerMediaDisplay) {
+    computerMediaDisplay.pausedAt ??= monotonicNow();
+    const remaining =
+      COMPUTER_MEDIA_PAUSE_GRACE_MS -
+      (monotonicNow() - computerMediaDisplay.pausedAt);
+    if (remaining > 0) {
+      renderComputerMediaTitle(
+        computerMediaDisplay,
+        observed.playback === 'paused' ? 'Pausad' : 'Senast spelat',
+      );
+      // One deadline per pause: polling and heartbeats must not extend it.
+      computerMediaPauseTimer ??= window.setTimeout(() => {
+        computerMediaPauseTimer = undefined;
+        if (!stopped && latestPayload) renderMusic(latestPayload);
+      }, remaining);
+      return;
+    }
+  }
+  if (!freshPlaying || status !== 'playing') clearComputerMediaDisplay();
+
+  if (!freshPlaying) {
+    if (reportedOnly) {
+      setText(refs.musicTitle, 'Datorns media är okänt');
+      setText(refs.musicPlayerStatus, 'Senast rapporterat');
+    } else if (
+      device.availability !== 'available' ||
+      status === 'unavailable' ||
+      observed.playback === 'unknown'
+    ) {
+      setText(refs.musicTitle, 'Datorns media är okänt');
+      setText(refs.musicPlayerStatus, 'Okänt');
+    } else if (['paused', 'idle', 'off'].includes(observed.playback)) {
+      setText(refs.musicTitle, 'Ingen musik spelar');
+      setText(refs.musicPlayerStatus, playbackLabel);
+    } else {
+      setText(refs.musicTitle, 'Datorns media är okänt');
+      setText(refs.musicPlayerStatus, 'Okänt');
+    }
+    return;
+  }
+
+  if (status === 'playing') {
+    window.clearTimeout(computerMediaPauseTimer);
+    computerMediaPauseTimer = undefined;
+    computerMediaDisplay = {
+      key,
+      title:
+        typeof projection.title === 'string' && projection.title.trim()
+          ? projection.title.trim()
+          : 'Media från datorn',
+      artist: projection.artist,
+      pausedAt: null,
+    };
+    renderComputerMediaTitle(computerMediaDisplay, 'Spelar');
+  } else if (status === 'idle') {
+    setText(refs.musicTitle, 'Inget media spelas på datorn');
+    setText(refs.musicPlayerStatus, 'Inget media spelas');
+  } else if (status === 'ambiguous') {
+    setText(refs.musicTitle, 'Flera medier spelas på datorn');
+    setText(refs.musicPlayerStatus, 'Flera medier spelas');
+  } else {
+    setText(refs.musicTitle, 'Datorns media är okänt');
+    setText(refs.musicPlayerStatus, 'Okänt');
+  }
+}
+
 function renderMusicVolumePolicy(payload, target) {
   renderVolumeAuthority(payload, target);
   const stale =
@@ -773,6 +920,7 @@ function playbackReason(reason) {
       confirmed_empty: 'Autostart väntar · rummet tomt',
       player_unavailable: 'Autostart väntar · spelaren frånkopplad',
       already_playing: 'Spelaren spelar · ingen ny autostart',
+      computer_not_resumable: 'Ingen datorpaus att återuppta',
       awaiting_new_entry: 'Autostart först vid en ny entré',
     }[reason] ?? 'Autostartvillkor okända'
   );
@@ -842,6 +990,17 @@ function renderMusicExplanations(payload, target) {
   const commands = (payload?.state?.music?.commands ?? []).filter(
     (item) => item.target === target,
   );
+  const computerRoute = payload?.state?.music?.computerPlayback?.[target];
+  const computerCommand =
+    computerRoute?.active === true ? computerRoute.lastCommand : null;
+  if (computerCommand?.target === target) {
+    const existing = commands.findIndex(
+      (command) => command.id === computerCommand.id,
+    );
+    if (existing === -1) commands.push(computerCommand);
+    else commands[existing] = computerCommand;
+  }
+  commands.sort((left, right) => left.issuedAt - right.issuedAt);
   const outstanding = commands.filter((item) => item.status === 'pending');
   const command = outstanding.at(-1) ?? commands.at(-1);
   const pendingLabel =
@@ -979,6 +1138,7 @@ function setMusicDetailsOpen(open) {
 function renderMusic(payload) {
   const entries = musicDevices(payload);
   if (entries.length === 0) {
+    clearComputerMediaDisplay();
     musicTarget = '';
     setMusicDetailsOpen(false);
     refs.musicDetailsButton.disabled = true;
@@ -1012,7 +1172,11 @@ function renderMusic(payload) {
   refs.musicDetailsButton.disabled = false;
   const observed = device.observed ?? {};
   const availability = device.availability ?? 'unavailable';
-  const isPlaying = observed.playback === 'playing';
+  const desktop = payload?.state?.music?.computerPlayback?.[musicTarget];
+  const desktopControl = desktop?.active === true;
+  const isPlaying = desktopControl
+    ? desktop.playback === 'playing'
+    : observed.playback === 'playing';
   const playbackAction = musicPlaybackAction(payload, musicTarget);
   const isPending =
     pending.has(`music:${musicTarget}`) ||
@@ -1029,7 +1193,16 @@ function renderMusic(payload) {
   renderMusicVolumePolicy(payload, musicTarget);
   renderMusicExplanations(payload, musicTarget);
 
-  refs.musicPlayback.disabled = !canControl;
+  refs.musicPlayback.disabled =
+    !canControl ||
+    (desktopControl &&
+      (desktop.playback === 'unknown' ||
+        desktop.pending ||
+        !(playbackAction === 'paused' ? desktop.canPause : desktop.canResume)));
+  refs.musicPlayback.setAttribute(
+    'aria-busy',
+    String(desktopControl && desktop.pending),
+  );
   refs.musicPresetDj.disabled = !canControl;
   refs.musicPresetOptical.disabled = !canControl;
   refs.musicPresetDj.setAttribute('aria-busy', String(isPending));
@@ -1143,6 +1316,14 @@ function renderMusic(payload) {
   setText(
     refs.musicPlayerStatus,
     reportedOnly ? `Senast rapporterat: ${playbackLabel}` : playbackLabel,
+  );
+  renderComputerNowPlaying(
+    payload,
+    musicTarget,
+    device,
+    connected,
+    reportedOnly,
+    playbackLabel,
   );
   refs.musicVolumeValue.value = formatVolume(volume);
   setText(refs.musicVolumeValue, refs.musicVolumeValue.value);
@@ -1403,6 +1584,9 @@ refs.musicPlayback.addEventListener('click', () => {
 });
 
 function musicPlaybackAction(payload, target) {
+  const desktop = payload?.state?.music?.computerPlayback?.[target];
+  if (desktop?.active === true)
+    return desktop.playback === 'playing' ? 'paused' : 'playing';
   return payload?.musicPlaybackPolicies?.[target]?.manualPause
     ? 'playing'
     : payload?.state?.music?.devices?.[target]?.observed?.playback === 'playing'
@@ -1476,6 +1660,7 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('pagehide', () => {
   stopped = true;
+  clearComputerMediaDisplay();
   disconnectStream();
   window.clearTimeout(reconnectTimer);
   window.clearTimeout(timer);

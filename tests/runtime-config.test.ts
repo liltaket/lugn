@@ -29,6 +29,143 @@ describe('runtime configuration cross references', () => {
     },
     scenes: [],
   };
+  it('routes computer media only through an explicitly configured MQTT computer and input', () => {
+    const config = {
+      ...minimal,
+      homeAssistant: {
+        ...minimal.homeAssistant,
+        music: {
+          'music.room': {
+            entityId: 'media_player.room',
+            computerAudio: { deviceId: 'kuffe', source: 'Optical In' },
+          },
+        },
+      },
+      mqtt: {
+        url: 'mqtt://broker.test:1883',
+        computers: [{ deviceId: 'kuffe' }],
+      },
+    };
+    expect(
+      loadConfig(config).homeAssistant.music['music.room']?.computerAudio,
+    ).toEqual({ deviceId: 'kuffe', source: 'Optical In' });
+    expect(() => loadConfig({ ...config, mqtt: undefined })).toThrow(
+      'Computer audio device must be configured',
+    );
+    expect(() =>
+      loadConfig({
+        ...config,
+        mqtt: {
+          url: 'mqtt://broker.test:1883',
+          computers: [{ deviceId: 'other' }],
+        },
+      }),
+    ).toThrow('Computer audio device must be configured');
+    expect(() =>
+      loadConfig({
+        ...config,
+        homeAssistant: {
+          ...config.homeAssistant,
+          music: {
+            'music.room': {
+              entityId: 'media_player.room',
+              computerAudio: { deviceId: 'kuffe', source: ' ' },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('keeps computer playback opt-in and requires authenticated MQTT when enabled', () => {
+    const config = {
+      ...minimal,
+      homeAssistant: {
+        ...minimal.homeAssistant,
+        music: {
+          'music.room': {
+            entityId: 'media_player.room',
+            computerAudio: {
+              deviceId: 'kuffe',
+              source: 'Optical In',
+              playbackControl: true,
+            },
+          },
+        },
+      },
+      mqtt: {
+        url: 'mqtt://broker.test:1883',
+        computers: [{ deviceId: 'kuffe' }],
+      },
+    };
+    expect(() => loadConfig(config)).toThrow(
+      'Computer playback requires authenticated MQTT',
+    );
+    const authenticated = {
+      ...config,
+      mqtt: {
+        ...config.mqtt,
+        usernameEnv: 'MQTT_USER',
+        passwordEnv: 'MQTT_PASSWORD',
+      },
+    };
+    expect(
+      loadConfig(authenticated, {
+        HA_TOKEN: 'ha',
+        MQTT_USER: 'controller',
+        MQTT_PASSWORD: 'test-only',
+      }).homeAssistant.music['music.room']?.computerAudio?.playbackControl,
+    ).toBe(true);
+  });
+
+  it('defaults computer MQTT integrations and validates their topic and freshness settings', () => {
+    expect(
+      loadConfig({ ...minimal, mqtt: { url: 'mqtt://broker.test:1883' } }).mqtt
+        ?.computers,
+    ).toEqual([]);
+
+    const mqtt = {
+      url: 'mqtt://broker.test:1883',
+      computers: [
+        { deviceId: 'workstation' },
+        {
+          deviceId: 'media_pc',
+          baseTopic: 'custom/desktops///',
+          maxAgeMs: 120_000,
+        },
+      ],
+    };
+    expect(loadConfig({ ...minimal, mqtt }).mqtt?.computers).toEqual([
+      {
+        deviceId: 'workstation',
+        baseTopic: 'lugn/computers',
+        maxAgeMs: 90_000,
+      },
+      {
+        deviceId: 'media_pc',
+        baseTopic: 'custom/desktops',
+        maxAgeMs: 120_000,
+      },
+    ]);
+
+    for (const computers of [
+      [{ deviceId: 'same' }, { deviceId: 'same' }],
+      [{ deviceId: 'bad id' }],
+      [{ deviceId: 'one', baseTopic: 'desktop/+' }],
+      [{ deviceId: 'one', baseTopic: 'desktop/#' }],
+      [{ deviceId: 'one', baseTopic: 'desktop/\u0000state' }],
+      [{ deviceId: 'one', baseTopic: '///' }],
+      [{ deviceId: 'one', maxAgeMs: 999 }],
+      [{ deviceId: 'one', maxAgeMs: 300_001 }],
+    ]) {
+      expect(() =>
+        loadConfig({
+          ...minimal,
+          mqtt: { url: 'mqtt://broker.test:1883', computers },
+        }),
+      ).toThrow('Invalid configuration');
+    }
+  });
   it('defaults WLED CCT control off and validates its mapped targets and endpoints', () => {
     expect(loadConfig(minimal).homeAssistant.wledCct).toEqual({});
     const wledConfig = (wledCct: unknown) => ({
