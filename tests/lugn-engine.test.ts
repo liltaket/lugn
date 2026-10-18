@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   LightingDeliveryUnknownError,
   SimulatedLightingAdapter,
@@ -23,6 +23,82 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('Lugn deterministic lighting slice', () => {
+  it('publishes prelight without traversing unchanged music state', async () => {
+    const { engine } = setup({ defaultSceneId: 'scene.cozy' });
+    const music = engine.state.music;
+    const readMusic = vi.fn(() => music);
+    Object.defineProperty(engine.state, 'music', {
+      configurable: true,
+      get: readMusic,
+    });
+    try {
+      await engine.handlePrelight({ type: 'presence.prelight', active: true });
+      expect(readMusic).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(engine.state, 'music', {
+        configurable: true,
+        writable: true,
+        value: music,
+      });
+      engine.dispose();
+    }
+  });
+
+  it('rejects invalid initial state and invalid changed lighting before publication', () => {
+    const subscribe = vi.fn(() => () => {});
+    expect(
+      () =>
+        new LugnEngine(new FakeClock(-1), {
+          adapter: { dispatch: async () => {}, subscribe },
+        }),
+    ).toThrow();
+    expect(subscribe).not.toHaveBeenCalled();
+    const { adapter, engine } = setup();
+    const published = vi.fn();
+    const unsubscribe = engine.stream.subscribe(published);
+    expect(() =>
+      adapter.externalChange('lighting.desk', { brightness: 101 }),
+    ).toThrow();
+    expect(published).not.toHaveBeenCalled();
+    unsubscribe();
+    engine.dispose();
+  });
+
+  it('isolates published diagnostic details from later engine and subscriber mutations', async () => {
+    const { engine } = setup({ defaultSceneId: 'scene.cozy' });
+    const before = engine.state.revision;
+    const details = { nested: { values: [1, 2] }, bytes: new Uint8Array([3]) };
+    engine.state.diagnostics.push({
+      id: 10_000,
+      at: engine.state.updatedAt,
+      kind: 'test.details',
+      message: 'Mutable diagnostic payload',
+      details,
+    });
+    const unsubscribe = engine.stream.subscribe((update) => {
+      const diagnostic = update.patch.diagnostics?.find(
+        ({ kind }) => kind === 'test.details',
+      );
+      if (diagnostic)
+        (diagnostic.details['nested'] as typeof details.nested).values[0] = 99;
+    });
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    expect(details.nested.values).toEqual([1, 2]);
+    details.nested.values[0] = 42;
+    details.bytes[0] = 43;
+
+    const delivery = engine.stream.resume(before, engine.state);
+    expect(delivery.kind).toBe('updates');
+    if (delivery.kind !== 'updates') throw new Error('Expected replay');
+    const saved = delivery.updates
+      .flatMap(({ patch }) => patch.diagnostics ?? [])
+      .find(({ kind }) => kind === 'test.details');
+    expect(saved?.details['nested']).toEqual({ values: [1, 2] });
+    expect(saved?.details['bytes']).toEqual(new Uint8Array([3]));
+    unsubscribe();
+    engine.dispose();
+  });
+
   it('allows explicit user light-on while confirmed empty without treating it as occupancy', async () => {
     const { adapter, engine } = setup({
       deviceIds: ['lighting.desk'],
@@ -499,6 +575,131 @@ describe('Lugn deterministic lighting slice', () => {
           command.values.power === true,
       ),
     ).toBe(false);
+    engine.dispose();
+  });
+
+  it.each([0, 500])(
+    'starts every scene prelight request before publishing with %i ms feedback delay',
+    async (feedbackDelayMs) => {
+      const targets = Array.from(
+        { length: 7 },
+        (_, i) => `lighting.entry_${i}`,
+      );
+      const lighting = Object.fromEntries(
+        targets.map((target) => [
+          target,
+          { power: true, brightness: 42, colorTemperature: 2700 },
+        ]),
+      );
+      const { clock, adapter, engine } = setup({
+        deviceIds: [...targets, 'lighting.ceiling'],
+        scenes: [
+          {
+            id: 'scene.entry',
+            name: 'Entry',
+            lighting: { ...lighting, 'lighting.ceiling': { power: false } },
+          },
+        ],
+        defaultSceneId: 'scene.entry',
+        prelight: {
+          targets: { 'lighting.ceiling': { power: true, brightness: 100 } },
+        },
+      });
+      adapter.feedbackDelayMs = feedbackDelayMs;
+      let replayed = structuredClone(engine.state);
+      const dispatchCountsAtPublication: number[] = [];
+      const unsubscribe = engine.stream.subscribe((update) => {
+        dispatchCountsAtPublication.push(adapter.dispatched.length);
+        replayed = applyStateUpdate(replayed, update);
+      });
+
+      const work = engine.handlePrelight({
+        type: 'presence.prelight',
+        active: true,
+        source: 'stl27l',
+      });
+
+      expect(adapter.dispatched.map(({ target }) => target)).toEqual(targets);
+      expect(dispatchCountsAtPublication.length).toBeGreaterThan(0);
+      expect(dispatchCountsAtPublication.every((count) => count === 7)).toBe(
+        true,
+      );
+      expect(replayed).toEqual(engine.state);
+      expect(engine.state.presence.state).toBe('unknown');
+      expect(engine.state.presence.personCount).toBeNull();
+      clock.advanceBy(feedbackDelayMs);
+      await work;
+      expect(replayed).toEqual(engine.state);
+      expect(engine.state.commands).toHaveLength(7);
+      expect(adapter.dispatched.every(({ values }) => values.power)).toBe(true);
+      unsubscribe();
+      engine.dispose();
+    },
+  );
+
+  it('finishes prelight initialization before a subscriber confirms occupancy', async () => {
+    const scene = {
+      id: 'scene.entry',
+      name: 'Entry',
+      lighting: {
+        'lighting.desk': { power: true as const, brightness: 42 },
+        'lighting.ceiling': { power: false },
+      },
+    };
+    const { clock, adapter, engine } = setup({
+      deviceIds: Object.keys(scene.lighting),
+      scenes: [scene],
+      defaultSceneId: scene.id,
+      prelight: { targets: {}, maxDurationMs: 1_000 },
+    });
+    adapter.feedbackDelayMs = 100;
+    const timers = vi.spyOn(clock, 'setTimeout');
+    const cancellations = vi.spyOn(clock, 'clearTimeout');
+    let handoff: Promise<void> | undefined;
+    let confirmed = false;
+    const unsubscribe = engine.stream.subscribe((update) => {
+      if (
+        !confirmed &&
+        update.patch.diagnostics?.some(
+          ({ kind }) => kind === 'presence.prelight',
+        )
+      ) {
+        confirmed = true;
+        handoff = engine.handlePresence({
+          type: 'presence.changed',
+          presence: 'occupied',
+          personCount: 1,
+        });
+      }
+    });
+
+    const work = engine.handlePrelight({
+      type: 'presence.prelight',
+      active: true,
+    });
+    expect(confirmed).toBe(true);
+    clock.advanceBy(100);
+    await work;
+    await handoff;
+    await flushMicrotasks();
+
+    expect(engine.state.presence.state).toBe('occupied');
+    expect(adapter.observed.get('lighting.desk')).toMatchObject({
+      power: true,
+      brightness: 42,
+    });
+    const deadlineIndex = timers.mock.calls.findIndex(
+      ([, delayMs]) => delayMs === 1_000,
+    );
+    expect(deadlineIndex).toBeGreaterThanOrEqual(0);
+    expect(cancellations).toHaveBeenCalledWith(
+      timers.mock.results[deadlineIndex]!.value,
+    );
+    const afterHandoff = structuredClone(adapter.dispatched);
+    clock.advanceBy(1_000);
+    await flushMicrotasks();
+    expect(adapter.dispatched).toEqual(afterHandoff);
+    unsubscribe();
     engine.dispose();
   });
 

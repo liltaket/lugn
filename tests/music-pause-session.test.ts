@@ -152,8 +152,12 @@ it.each([5 * minute, 20 * minute - 1, 20 * minute, 20 * minute + 1])(
     expect(s.positives(before).map((c) => c.requested)).toEqual(
       retained ? [] : [{ property: 'preset', value: 'spotify_dj' }],
     );
-    expect(s.volume().baseline).toBe(0.4);
-    expect(s.volume().manualHold !== null).toBe(retained);
+    expect(s.volume()).toMatchObject({
+      mode: 'manual',
+      baseline: 0.3,
+      manualReference: 0.4,
+      manualHold: { expiresAt: null },
+    });
   },
 );
 
@@ -165,11 +169,16 @@ it.each([5 * minute, 25 * minute])(
     const enabled = s.volume().policyEnabled;
     s.time.advanceBy(20 * minute);
     expect(s.playback().manualPause !== null).toBe(sessionMs > 20 * minute);
-    expect(s.volume().manualHold).toBeNull();
-    expect(s.volume().baseline).toBe(0.4);
+    expect(s.volume()).toMatchObject({
+      mode: 'manual',
+      baseline: 0.3,
+      manualReference: 0.4,
+      manualHold: { expiresAt: null },
+    });
     expect(s.volume().policyEnabled).toBe(enabled);
     if (sessionMs > 20 * minute) s.time.advanceBy(5 * minute);
     expect(s.playback().manualPause).toBeNull();
+    expect(s.volume().manualHold?.expiresAt).toBeNull();
   },
 );
 

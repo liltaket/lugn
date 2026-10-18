@@ -282,7 +282,8 @@ it('preserves independent human volume and Pause through auth/subscription recon
     await settle();
     expect(s.policy()).toMatchObject({
       activeOwner: 'manual',
-      baseline: 0.4,
+      baseline: 0.3,
+      manualReference: 0.4,
       manualHold: { expiresAt: null },
     });
     expect(s.pauseHold()!.createdAt).toBe(pauseAt);
@@ -363,7 +364,8 @@ it('gates retired socket events before they can poison HA timestamps or replace 
     s.emit(active, activeId, 'paused', 0.45, start + 1);
     expect(s.policy()).toMatchObject({
       activeOwner: 'manual',
-      baseline: 0.45,
+      baseline: 0.3,
+      manualReference: 0.45,
       effectiveTarget: 0.45,
     });
     expect(s.engine.state.music.volumeChanges?.['music.room']).toMatchObject({
@@ -382,7 +384,7 @@ it('gates retired socket events before they can poison HA timestamps or replace 
 });
 
 it.each([false, true])(
-  'keeps original absence expiry across repeated reconnects with Pause=%s',
+  'keeps manual volume and the original playback deadline across reconnects with Pause=%s',
   async (pause) => {
     const s = setup();
     try {
@@ -410,37 +412,45 @@ it.each([false, true])(
         s.emit(socket, id, 'paused', 0.4, start + 2);
         await s.presence('confirmed_empty');
         await s.presence('confirmed_empty');
-        expect(s.policy().manualHold?.expiresAt).toBe(deadline);
+        expect(s.policy()).toMatchObject({
+          activeOwner: 'manual',
+          mode: 'manual',
+          baseline: 0.3,
+          manualReference: 0.4,
+          manualHold: { expiresAt: null },
+        });
         if (pause) expect(s.pauseHold()!.createdAt).toBe(pauseAt);
       }
       const commands = s.services.length;
       s.clock.advanceBy(deadline - s.clock.now() - 1);
-      expect(s.policy().activeOwner).toBe('manual');
+      expect(s.policy().manualHold?.expiresAt).toBeNull();
       s.clock.advanceBy(1);
       expect(s.policy()).toMatchObject({
-        activeOwner: 'none',
-        manualHold: null,
+        activeOwner: 'manual',
+        mode: 'manual',
+        manualHold: { expiresAt: null },
         activityReason: 'confirmed_empty',
       });
       expect(s.services).toHaveLength(commands);
       expect(s.positivePlayback()).toEqual([]);
+      const volumeRequests = s.services.filter((call) =>
+        call.url.endsWith('/volume_set'),
+      ).length;
       await s.presence('occupied', 2);
       await settle();
-      expect(s.services.slice(commands)).toContainEqual({
-        url: 'http://home-assistant.test/api/services/media_player/volume_set',
-        body: {
-          entity_id: 'media_player.room',
-          volume_level: expect.closeTo(0.3),
-        },
-      });
+      expect(
+        s.services.filter((call) => call.url.endsWith('/volume_set')),
+      ).toHaveLength(volumeRequests);
       expect(s.policy()).toMatchObject({
-        activeOwner: 'lugn',
-        policyActive: true,
-        baseline: 0.4,
+        activeOwner: 'manual',
+        mode: 'manual',
+        baseline: 0.3,
+        manualReference: 0.4,
+        effectiveTarget: 0.4,
       });
       // Service acceptance is not a new player observation.
       expect(s.engine.getMusicState('music.room').observed.volume).toBe(0.4);
-      expect(s.pauseHold()).toBeUndefined();
+      if (pause) expect(s.pauseHold()).toBeUndefined();
       expect(s.positivePlayback()).toHaveLength(1);
     } finally {
       s.stop();

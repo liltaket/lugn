@@ -216,6 +216,10 @@ export class LugnEngine {
   private readonly enforcedLightingTargets = new Set<string>();
   private lightingEnforcementTimer: TimerHandle | undefined;
   private disposed = false;
+  private publicationBatchDepth = 0;
+  private readonly pendingPublicationDomains = new Set<
+    StateUpdate['domains'][number]
+  >();
   private readonly intentByRevision = new Map<number, IntentProvenance>();
   private readonly fastPathEventByCommand = new Map<string, string>();
   private readonly acceptedLightingCommandIds = new Set<string>();
@@ -523,6 +527,7 @@ export class LugnEngine {
       () => {
         this.computerPlayback?.observe();
         this.musicAutomation?.reconcileComputerPlayback();
+        this.musicAutomation?.reconcilePassiveRestoration();
         this.publish(['music']);
       },
     );
@@ -568,8 +573,12 @@ export class LugnEngine {
         this.publish(['music', 'diagnostics']);
       },
     });
-    this.musicController.setVolumeRequestGuard((target, provenance) =>
-      this.musicAutomation.assertVolumeRequestAllowed(target, provenance),
+    this.musicController.setVolumeRequestGuard((target, provenance, volume) =>
+      this.musicAutomation.assertVolumeRequestAllowed(
+        target,
+        provenance,
+        volume,
+      ),
     );
     this.musicController.setRecoveryPolicyGuard((command) => {
       if (
@@ -643,6 +652,9 @@ export class LugnEngine {
     };
     if (options.computerPlayback?.state)
       this.state.music.computerPlayback = options.computerPlayback.state;
+    // Validate the initial snapshot once. Later publications validate each
+    // changed domain through the same schemas in StateUpdateSchema.
+    RoomStateSchema.parse(this.state);
     if (options.restoredMusicIntent) {
       const restoredMusic = MusicIntentSnapshotSchema.parse(
         options.restoredMusicIntent,
@@ -1048,7 +1060,11 @@ export class LugnEngine {
     )
       throw new Error('Automatic playback is held by explicit human pause');
     if (requested.property === 'volume')
-      this.musicAutomation.assertVolumeRequestAllowed(target, provenance);
+      this.musicAutomation.assertVolumeRequestAllowed(
+        target,
+        provenance,
+        requested.value,
+      );
     this.musicAutomation.noteExplicitRequest(target, requested, provenance);
     const command = this.dispatchMusicRequest(target, requested, provenance);
     this.publish(['intent']);
@@ -1853,37 +1869,43 @@ export class LugnEngine {
     );
     this.prelightSnapshot = new Map();
     this.prelightAppliedValues = new Map();
-    const dispatches: Promise<void>[] = [];
     for (const [target, values] of Object.entries(targetValues)) {
       const device = this.requireDevice(target);
       const snapshot = { ...device.effectiveDesired, ...device.observed };
       this.prelightSnapshot.set(target, snapshot);
       this.prelightAppliedValues.set(target, { ...values });
-      dispatches.push(
-        this.dispatch(
-          target,
-          values,
-          this.state.lighting.sceneRevision,
-          normalizedEvent.source ?? 'prelight',
-          prelightCommandReason,
-          systemActor,
-          undefined,
-          eventId,
-        ),
-      );
     }
-    this.addDiagnostic(
-      'presence.prelight',
-      'Possible entry; temporary prelight dispatched',
-      {
-        source: normalizedEvent.source,
-        targets: Object.keys(targetValues),
-      },
-    );
-    this.publish(['diagnostics', 'timings']);
+    // Initialize restoration and its deadline before adapters or subscribers
+    // can synchronously report feedback or confirm occupancy.
     this.prelightTimer = this.clock.setTimeout(() => {
       void this.finishPrelight(this.state.presence.state !== 'occupied');
     }, this.prelightMaxDurationMs);
+    const dispatches: Promise<void>[] = [];
+    this.batchPublications(() => {
+      for (const [target, values] of Object.entries(targetValues)) {
+        dispatches.push(
+          this.dispatch(
+            target,
+            values,
+            this.state.lighting.sceneRevision,
+            normalizedEvent.source ?? 'prelight',
+            prelightCommandReason,
+            systemActor,
+            undefined,
+            eventId,
+          ),
+        );
+      }
+      this.addDiagnostic(
+        'presence.prelight',
+        'Possible entry; temporary prelight dispatched',
+        {
+          source: normalizedEvent.source,
+          targets: Object.keys(targetValues),
+        },
+      );
+      this.publish(['diagnostics', 'timings']);
+    });
     await Promise.all(dispatches);
     this.tryCompletePrelightFastPath(eventId);
   }
@@ -3436,9 +3458,35 @@ export class LugnEngine {
       !domains.includes('music')
     )
       domains.push('music');
+    if (this.publicationBatchDepth > 0) {
+      for (const domain of domains) this.pendingPublicationDomains.add(domain);
+      return;
+    }
+    this.publishUpdate(domains);
+  }
+
+  /** Start every prelight transport before serializing history or notifying UI. */
+  private batchPublications(work: () => void): void {
+    this.publicationBatchDepth += 1;
+    try {
+      work();
+    } finally {
+      this.publicationBatchDepth -= 1;
+      if (
+        this.publicationBatchDepth === 0 &&
+        this.pendingPublicationDomains.size > 0
+      ) {
+        const domains = [...this.pendingPublicationDomains];
+        // A subscriber can synchronously publish again during the flush.
+        this.pendingPublicationDomains.clear();
+        this.publishUpdate(domains);
+      }
+    }
+  }
+
+  private publishUpdate(domains: StateUpdate['domains']): void {
     this.state.revision += 1;
     this.state.updatedAt = this.clock.now();
-    RoomStateSchema.parse(this.state);
     const patch: StateUpdate['patch'] = {};
     for (const domain of domains) {
       Object.assign(patch, {

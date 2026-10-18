@@ -400,7 +400,7 @@ describe('semantic music control', () => {
     expect(adapter.dispatched).toHaveLength(1);
     expect(adapter.dispatched[0]?.requested).toEqual({
       property: 'volume',
-      value: 0.4,
+      value: 0.175,
     });
     expect(controller.state.commands.map(({ status }) => status)).toEqual([
       'failed',
@@ -656,6 +656,11 @@ describe('music automation fade lifecycle', () => {
       playback: 'playing',
       volume: 0.5,
     });
+    setup.automation.noteExplicitRequest(
+      'music.room',
+      { property: 'volume', value: 0.5 },
+      actor,
+    );
     setup.automation.handlePresence('unknown', 'occupied', 1);
     return setup;
   }
@@ -715,7 +720,7 @@ describe('music automation fade lifecycle', () => {
     clock.advanceBy(2_000);
 
     expect(
-      engine.getMusicVolumePolicySnapshots()['music.room']?.target,
+      engine.getMusicVolumePolicySnapshots()['music.room']?.manualReference,
     ).toBeCloseTo(0.519);
     engine.dispose();
   });
@@ -748,8 +753,9 @@ describe('music automation fade lifecycle', () => {
     clock.advanceBy(1);
     const after = automation.getVolumePolicySnapshot('music.room');
     expect(controller.state.fades['music.room']?.status).toBe('completed');
-    expect(after.baselineSource).toBe('user');
-    expect(after.target).toBeCloseTo(0.519);
+    expect(after.baselineSource).toBe('configured');
+    expect(after.manualReference).toBeCloseTo(0.519);
+    expect(after.baseline).toBe(0.3);
     expect(after.controller).toBe('you');
 
     automation.dispose();
@@ -767,7 +773,8 @@ describe('music automation fade lifecycle', () => {
     cancelled.automation.noteExplicitFade(cancelledFade, actor);
     cancelled.controller.cancelFade('music.room');
     expect(
-      cancelled.automation.getVolumePolicySnapshot('music.room').target,
+      cancelled.automation.getVolumePolicySnapshot('music.room')
+        .manualReference,
     ).toBeCloseTo(0.5);
     cancelled.automation.handlePresence('occupied', 'occupied', 1);
     await flushMicrotasks();
@@ -796,7 +803,8 @@ describe('music automation fade lifecycle', () => {
       unconfirmed.controller.getState('music.room').requested.volume,
     ).toBeUndefined();
     expect(
-      unconfirmed.automation.getVolumePolicySnapshot('music.room').target,
+      unconfirmed.automation.getVolumePolicySnapshot('music.room')
+        .manualReference,
     ).toBeCloseTo(0.5);
     unconfirmed.automation.handlePresence('occupied', 'occupied', 1);
     await flushMicrotasks();
@@ -825,7 +833,8 @@ describe('music automation fade lifecycle', () => {
       'interrupted',
     );
     expect(
-      interrupted.automation.getVolumePolicySnapshot('music.room').target,
+      interrupted.automation.getVolumePolicySnapshot('music.room')
+        .manualReference,
     ).toBeCloseTo(0.6);
     interrupted.automation.dispose();
     interrupted.controller.dispose();
@@ -849,7 +858,7 @@ describe('music automation fade lifecycle', () => {
       failed.controller.getState('music.room').requested.volume,
     ).toBeUndefined();
     expect(
-      failed.automation.getVolumePolicySnapshot('music.room').target,
+      failed.automation.getVolumePolicySnapshot('music.room').manualReference,
     ).toBeCloseTo(0.5);
     failed.automation.dispose();
     failed.controller.dispose();

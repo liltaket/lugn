@@ -1763,7 +1763,7 @@ it.each(['bed', 'desk'] as const)(
       await microtasks();
       expect(manual.getAttribute('aria-pressed')).toBe('true');
       expect(ui.get('#music-authority-state').textContent).toContain(
-        'Tillfälligt',
+        'behålls tills du väljer Auto',
       );
       await ui.engine.handlePresence({
         type: 'presence.changed',
@@ -1784,7 +1784,7 @@ it.each(['bed', 'desk'] as const)(
         `render(${JSON.stringify({ ...ui.payload(), role })})`,
         ui.context,
       );
-      expect(manual.getAttribute('aria-pressed')).toBe('false');
+      expect(manual.getAttribute('aria-pressed')).toBe('true');
       expect(auto.getAttribute('aria-pressed')).toBe('false');
       expect(ui.get('#music-volume-target-state').textContent).toContain(
         'närvaro okänd',

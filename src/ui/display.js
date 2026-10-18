@@ -559,8 +559,16 @@ function renderVolumeAuthority(payload, target) {
     pending.has(`music:${target}`) ||
     pending.has(`music-preset:${target}`);
   for (const [button, selected] of [
-    [refs.musicVolumeAuto, policy?.activeOwner === 'lugn'],
-    [refs.musicVolumeManual, policy?.activeOwner === 'manual'],
+    [
+      refs.musicVolumeAuto,
+      policy?.mode ? policy.mode === 'auto' : policy?.activeOwner === 'lugn',
+    ],
+    [
+      refs.musicVolumeManual,
+      policy?.mode
+        ? policy.mode === 'manual'
+        : policy?.activeOwner === 'manual',
+    ],
   ]) {
     button.disabled = disabled;
     button.setAttribute('aria-pressed', String(!unavailable && selected));
@@ -580,8 +588,8 @@ function renderVolumeAuthority(payload, target) {
               ? 'Väntar på volymkvittens · försök igen när spelaren svarat'
               : blocked === 'fade_active'
                 ? 'Volymen tonas · vänta tills toningen är klar'
-                : policy.selectorIntent
-                  ? 'Tillfälligt val · släpps när rumsläget ändras'
+                : policy.mode === 'manual' || policy.selectorIntent
+                  ? 'Manuellt läge · behålls tills du väljer Auto'
                   : '';
   setText(refs.musicAuthorityState, reason);
   refs.musicAuthorityState.hidden = !reason;
@@ -746,7 +754,9 @@ function renderMusicVolumePolicy(payload, target) {
     payload?.state?.music?.devices?.[target]?.availability !== 'available';
 
   const policy = target ? payload?.musicVolumePolicies?.[target] : null;
-  const baseline = volumeFraction(policy?.baseline);
+  const baseline = volumeFraction(
+    policy?.configuredBaseline ?? policy?.baseline,
+  );
   const requested = volumeFraction(
     payload?.state?.music?.devices?.[target]?.requested?.volume,
   );
@@ -804,9 +814,13 @@ function renderMusicVolumePolicy(payload, target) {
       : !musicObservationTrusted(payload, target)
         ? 'Home Assistant-återkoppling saknas · visar senaste värden'
         : 'Spelaren är frånkopplad · visar senaste värden'
-    : hold && typeof hold.expiresAt === 'number'
-      ? continuityText(hold.expiresAt, 'Manuellt val')
-      : volumeReason(policy?.activityReason);
+    : policy?.mode === 'manual' && policy?.activityReason === 'manual_hold'
+      ? policy.passiveReductionActive
+        ? `Manuell referens ${formatVolume(volumeFraction(policy.manualReference))} · personsänkning aktiv`
+        : 'Manuellt läge · behålls tills du väljer Auto'
+      : hold && typeof hold.expiresAt === 'number'
+        ? continuityText(hold.expiresAt, 'Manuellt val')
+        : volumeReason(policy?.activityReason);
   setText(refs.musicVolumeTargetState, explanation);
   refs.musicVolumeTargetState.hidden = false;
   setText(refs.musicVolumeRequested, formatVolume(requested));
@@ -843,11 +857,13 @@ function renderMusicVolumePolicy(payload, target) {
   );
   setText(
     refs.musicVolumeBaselineLabel,
-    policy?.baselineSource === 'user'
-      ? 'Manuellt vald bas'
-      : policy?.baselineSource === 'inferred'
-        ? 'Uppskattad bas'
-        : 'Basnivå',
+    policy?.configuredBaseline !== undefined
+      ? 'Sparad Auto-bas'
+      : policy?.baselineSource === 'user'
+        ? 'Manuellt vald bas'
+        : policy?.baselineSource === 'inferred'
+          ? 'Uppskattad bas'
+          : 'Basnivå',
   );
   setText(refs.musicVolumeBaseline, formatVolume(baseline));
   const presence = payload?.state?.presence;
@@ -858,7 +874,7 @@ function renderMusicVolumePolicy(payload, target) {
   const personCountLabel = personCount === null ? 'okänt' : personCount;
   setText(
     refs.musicVolumeAdjustments,
-    `Dygn: ${formatVolumeOffset(policy?.dailyOffset)} · Personer (${personCountLabel}): ${formatVolumeOffset(policy?.personOffset)}`,
+    `Auto: dygn ${formatVolumeOffset(policy?.dailyOffset)} · Personer (${personCountLabel}): ${formatVolumeOffset(policy?.personOffset)}${policy?.mode === 'manual' ? ` · Manuell referens ${formatVolume(volumeFraction(policy.manualReference))}` : ''}`,
   );
 }
 
@@ -887,6 +903,8 @@ function volumeReason(reason) {
       manual_hold: 'Manuellt val · automatiken väntar',
       automation_disabled: 'Volymautomatiken är av',
       presence_unknown: 'Automatiken väntar · närvaro okänd',
+      person_count_unknown:
+        'Manuellt läge · personsänkningen väntar på antal personer',
       confirmed_empty: 'Automatiken väntar · rummet tomt',
       home_away: 'Automatiken väntar · borta',
       fade_active: 'Volymtoning pågår · minutregeln väntar',
@@ -902,6 +920,7 @@ function volumeActivityLabel(reason) {
       manual_hold: 'Manuell volym',
       automation_disabled: 'Automatik av',
       presence_unknown: 'Väntar på närvaro',
+      person_count_unknown: 'Väntar på antal personer',
       confirmed_empty: 'Rummet tomt',
       home_away: 'Borta',
       fade_active: 'Toning pågår',

@@ -53,7 +53,7 @@ function setup(observationTrusted?: MusicOptions['observationTrusted']) {
   return { clock, adapter, engine, registry, select, policy, presence };
 }
 
-it('claims trusted current volume without a command, baseline rewrite or persistent hold; records provenance for both modes', async () => {
+it('claims trusted current volume without a command, baseline rewrite; durably records provenance for both modes; records provenance for both modes', async () => {
   const s = setup();
   try {
     await s.presence();
@@ -115,28 +115,18 @@ it('keeps duplicate room/count/home samples and minute ticks from stealing selec
 });
 
 it.each(['count', 'unknown', 'empty', 'home', 'new visit'] as const)(
-  'releases selector-only intent on meaningful %s transition',
+  'preserves selector-only manual mode on meaningful %s transition',
   async (transition) => {
     const s = setup();
     try {
       await s.presence();
       if (transition === 'new visit') await s.presence('confirmed_empty', 0);
       await s.select('manual');
-      if (transition === 'count') await s.presence('occupied', 2);
-      else if (transition === 'unknown') await s.presence('unknown', null);
-      else if (transition === 'empty') await s.presence('confirmed_empty', 0);
-      else if (transition === 'home') await s.engine.handleHomePresence('away');
-      else await s.presence();
-      expect(s.policy().selectorIntent).toBeNull();
-      expect(s.policy().manualHold).toBeNull();
-      if (transition === 'count')
-        expect(
-          s.adapter.dispatched.some(
-            (c) =>
-              c.requested.property === 'volume' &&
-              Math.abs(c.requested.value - 0.2) < 0.001,
-          ),
-        ).toBe(true);
+      expect(
+        s.adapter.dispatched.filter(
+          (command) => command.requested.property === 'volume',
+        ),
+      ).toHaveLength(0);
     } finally {
       s.engine.dispose();
     }
@@ -383,7 +373,7 @@ it('Auto releases a hold without enabling a disabled global policy', async () =>
     await s.presence();
     await s.select('manual');
     await s.engine.handleBilresaPress('2', 'multi_press_1');
-    expect(s.policy().selectorIntent).toBeNull();
+    expect(s.policy().selectorIntent).not.toBeNull();
     await s.select('manual');
     await s.select('auto');
     expect(s.policy()).toMatchObject({
@@ -415,7 +405,8 @@ it.each(['user', 'automation'] as const)(
       s.adapter.observe('music.room', { ...values, volume: 0.4 });
       expect(s.policy()).toMatchObject({
         activeOwner: 'lugn',
-        baseline: 0.5,
+        baseline: 0.3,
+        manualReference: null,
         manualHold: null,
       });
       expect(s.policy().authorityControlBlocked).toBe('volume_unavailable');
@@ -430,7 +421,8 @@ it.each(['user', 'automation'] as const)(
       s.adapter.observe('music.room', { ...values, volume: 0.55 });
       expect(s.policy()).toMatchObject({
         activeOwner: 'manual',
-        baseline: 0.55,
+        baseline: 0.3,
+        manualReference: 0.55,
         selectorIntent: null,
       });
     } finally {
@@ -513,7 +505,7 @@ it('a repeated Manual tap refreshes trusted selector volume without creating adj
       baseline: 0.3,
     });
     await s.presence('occupied', 2);
-    expect(s.policy().manualHold).toBeNull();
+    expect(s.policy().manualHold).not.toBeNull();
   } finally {
     s.engine.dispose();
   }

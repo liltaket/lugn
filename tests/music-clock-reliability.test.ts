@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { SimulatedMusicAdapter } from '../src/adapters/simulated-music.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { FakeClock } from '../src/core/clock.js';
+import { defaultMusicVolumeSettings } from '../src/core/music-volume-settings.js';
 import type { Presence } from '../src/core/schemas.js';
 
 const target = 'music.room';
@@ -18,13 +19,25 @@ async function flush() {
   for (let i = 0; i < 16; i++) await Promise.resolve();
 }
 
-function setup(start: string, playback: 'playing' | 'idle' = 'playing') {
+function setup(
+  start: string,
+  playback: 'playing' | 'idle' = 'playing',
+  autoBaseVolume?: number,
+) {
   const clock = new FakeClock(Date.parse(start));
   const adapter = new SimulatedMusicAdapter(clock);
   const engine = new LugnEngine(clock, {
     deviceIds: [],
     scenes: [],
     music: { targets: { [target]: [] }, adapter },
+    ...(autoBaseVolume === undefined
+      ? {}
+      : {
+          musicVolumeSettings: {
+            ...defaultMusicVolumeSettings,
+            autoBaseVolumes: { [target]: autoBaseVolume },
+          },
+        }),
   });
   adapter.observe(target, { ...values, playback });
   const presence = (presence: Presence) =>
@@ -118,10 +131,10 @@ it('opens the 06:00 gate without starting an already occupied room, then permits
 it.each(clockCases)(
   'uses Stockholm wall time for fresh-entry gates and offsets at $time',
   async ({ time, quiet, offset }) => {
-    const s = setup(time, 'idle');
+    const s = setup(time, 'idle', 0.5);
     try {
-      // A manual destination is de-offset into its baseline. Choose the
-      // destination that establishes a 50% baseline at this wall-clock time.
+      // Use an explicit automatic base so this clock test isolates the
+      // configured curve from the new 0.3 default and persistent Manual mode.
       await s.manual(0.5 + offset);
       await s.engine.handleBilresaPress('2', 'multi_press_1');
       await s.engine.handleBilresaPress('2', 'multi_press_1');
@@ -219,7 +232,7 @@ it.each([
   ['spring', '2026-03-29T00:50:00Z'],
   ['autumn', '2026-10-25T00:50:00Z'],
 ] as const)(
-  'expires confirmed-absence ownership after exactly twenty elapsed minutes across %s DST',
+  'keeps manual volume authority after twenty minutes of confirmed absence across %s DST',
   async (_name, start) => {
     const s = setup(start);
     try {
@@ -233,17 +246,30 @@ it.each([
       await s.engine.handleHomePresence('away');
       await s.engine.handleHomePresence('home');
       await s.presence('confirmed_empty');
-      expect(s.policy().manualHold?.expiresAt).toBe(deadline);
+      expect(s.policy()).toMatchObject({
+        mode: 'manual',
+        baseline: 0.3,
+        manualReference: 0.4,
+        manualHold: { expiresAt: null },
+      });
       s.clock.advanceBy(10 * 60_000 - 1);
       expect(s.policy().activeOwner).toBe('manual');
       s.clock.advanceBy(1);
-      expect(s.policy().manualHold).toBeNull();
-      expect(s.policy().activeOwner).toBe('none');
+      expect(s.clock.now()).toBe(deadline);
+      expect(s.policy()).toMatchObject({
+        activeOwner: 'manual',
+        mode: 'manual',
+        manualHold: { expiresAt: null },
+      });
       expect(s.volumeCommands()).toHaveLength(count);
       await s.presence('occupied');
       await flush();
-      expect(s.policy().activeOwner).toBe('lugn');
-      expect(s.volumeCommands()).toHaveLength(count + 1);
+      expect(s.policy()).toMatchObject({
+        activeOwner: 'manual',
+        manualReference: 0.4,
+        effectiveTarget: 0.4,
+      });
+      expect(s.volumeCommands()).toHaveLength(count);
       // Volume may regain authority at night, but automatic positive playback may not.
       expect(
         s.adapter.dispatched.some(

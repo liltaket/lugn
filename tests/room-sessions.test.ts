@@ -252,8 +252,13 @@ describe('room session lifecycle', () => {
         engine.state.lighting.devices['lighting.desk']!.effectiveDesired,
       ).toEqual(retained ? { power: true, brightness: 47 } : {});
       expect(
-        engine.getMusicVolumePolicySnapshots()['music.room']!.baseline,
-      ).toBe(0.4);
+        engine.getMusicVolumePolicySnapshots()['music.room'],
+      ).toMatchObject({
+        mode: 'manual',
+        baseline: 0.3,
+        manualReference: 0.4,
+        manualHold: { expiresAt: null },
+      });
       const beforeReturn = music.dispatched.length;
       await engine.handlePresence({
         type: 'presence.changed',

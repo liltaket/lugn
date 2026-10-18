@@ -8,14 +8,20 @@ class Element {
   dataset: Record<string, string> = {};
   children: Element[] = [];
   disabled = false;
+  attributes = new Map<string, string>();
+  listeners = new Map<string, () => void>();
   append(...children: Element[]) {
     this.children.push(...children);
   }
   replaceChildren(...children: Element[]) {
     this.children = children;
   }
-  setAttribute() {}
-  addEventListener() {}
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value);
+  }
+  addEventListener(name: string, listener: () => void) {
+    this.listeners.set(name, listener);
+  }
 }
 
 function webPanel() {
@@ -77,6 +83,42 @@ function texts(element: Element): string[] {
     Boolean,
   );
 }
+
+it('keeps desktop Manual selected during suspension and sends explicit Auto hand-back', () => {
+  const ui = webPanel();
+  runInContext(
+    `overview = { musicVolumePolicies: { 'music.room': {
+    mode: 'manual', activityReason: 'presence_unknown', authorityControlBlocked: null,
+  } } }`,
+    ui.context,
+  );
+  const invoke = vi.fn();
+  Object.assign(ui.context, { invokeCapability: invoke });
+  const article = runInContext(
+    `renderMusicPlayer('music.room', ${JSON.stringify(device)}, [])`,
+    ui.context,
+  ) as Element;
+  const descendants = (item: Element): Element[] => [
+    item,
+    ...item.children.flatMap(descendants),
+  ];
+  const auto = descendants(article).find(
+    (item) => item.textContent === 'Auto',
+  )!;
+  const manual = descendants(article).find(
+    (item) => item.textContent === 'Manuellt',
+  )!;
+  expect(manual.attributes.get('aria-pressed')).toBe('true');
+  expect(auto.attributes.get('aria-pressed')).toBe('false');
+  expect(texts(article)).toContain('Volymstyrningen väntar på närvaro');
+  auto.listeners.get('click')!();
+  expect(invoke).toHaveBeenCalledWith(
+    'music.setVolumeAuthority',
+    { target: 'music.room', mode: 'auto' },
+    'volume-authority:music.room',
+  );
+  expect(manual.attributes.get('aria-pressed')).toBe('true');
+});
 
 const device = {
   availability: 'available',

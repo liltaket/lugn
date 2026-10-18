@@ -66,7 +66,7 @@ it.each(['user', 'physical_remote', 'home_assistant'] as const)(
         policyEnabled: true,
         policyActive: false,
         activityReason: 'manual_hold',
-        baselineSource: 'user',
+        baselineSource: 'configured',
         manualHold: { expiresAt: null },
       });
       expect(s.engine.getMusicState('music.room').observed.volume).toBe(0.4);
@@ -106,14 +106,13 @@ it('keeps ownership across a short confirmed absence and home/unknown transition
     await s.presence('occupied');
     await s.manual();
     await s.presence('confirmed_empty', 0);
-    const expiry = s.clock.now() + continuityMs;
-    expect(s.policy().manualHold?.expiresAt).toBe(expiry);
+    expect(s.policy().manualHold?.expiresAt).toBeNull();
     s.clock.advanceBy(5 * 60_000);
     await s.presence('unknown', null);
     await s.engine.handleHomePresence('away');
     await s.engine.handleHomePresence('home');
     await s.presence('confirmed_empty', 0);
-    expect(s.policy().manualHold?.expiresAt).toBe(expiry);
+    expect(s.policy().manualHold?.expiresAt).toBeNull();
     const count = s.volumeCommands().length;
     s.clock.advanceBy(continuityMs - 5 * 60_000 - 1);
     await s.presence('occupied', 2);
@@ -127,7 +126,7 @@ it('keeps ownership across a short confirmed absence and home/unknown transition
   }
 });
 
-it('releases at the exact confirmed absence boundary without sending until eligible entry', async () => {
+it('preserves manual mode past the absence boundary without sending until explicit handback', async () => {
   const s = setup();
   try {
     await s.presence('occupied');
@@ -138,7 +137,7 @@ it('releases at the exact confirmed absence boundary without sending until eligi
     s.clock.advanceBy(continuityMs - 1);
     expect(s.policy().activeOwner).toBe('manual');
     s.clock.advanceBy(1);
-    expect(s.policy().manualHold).toBeNull();
+    expect(s.policy().manualHold).not.toBeNull();
     expect(s.policy().policyActive).toBe(false);
     expect(s.volumeCommands()).toHaveLength(count);
     await s.engine.handleHomePresence('away');
@@ -146,8 +145,8 @@ it('releases at the exact confirmed absence boundary without sending until eligi
     expect(s.volumeCommands()).toHaveLength(count);
     await s.engine.handleHomePresence('unknown');
     await flush();
-    expect(s.volumeCommands()).toHaveLength(count + 1);
-    expect(s.policy().activeOwner).toBe('lugn');
+    expect(s.volumeCommands()).toHaveLength(count);
+    expect(s.policy().activeOwner).toBe('manual');
   } finally {
     s.engine.dispose();
   }
@@ -168,7 +167,7 @@ it('does not start an absence clock from unknown presence alone', async () => {
 });
 
 it.each(['confirmed_empty', 'unknown'] as const)(
-  'new human intent after expired absence gets a bounded hold while %s, without renewing playback',
+  'new human intent after absence stays manual while %s, without renewing playback',
   async (presence) => {
     const s = setup('2026-10-04T12:00:00+02:00');
     try {
@@ -183,13 +182,12 @@ it.each(['confirmed_empty', 'unknown'] as const)(
       });
       await s.presence(presence, null);
       await s.manual('user', 0.5);
-      const deadline = s.clock.now() + continuityMs;
-      expect(s.policy().manualHold?.expiresAt).toBe(deadline);
+      expect(s.policy().manualHold?.expiresAt).toBeNull();
       s.clock.advanceBy(60_000);
       await s.presence('confirmed_empty', 0);
-      expect(s.policy().manualHold?.expiresAt).toBe(deadline);
+      expect(s.policy().manualHold?.expiresAt).toBeNull();
       s.clock.advanceBy(continuityMs - 60_000);
-      expect(s.policy().manualHold).toBeNull();
+      expect(s.policy().manualHold).not.toBeNull();
       const before = s.adapter.dispatched.length;
       // Manual helper reported playing; reset playback before the long return.
       s.adapter.observe('music.room', {
@@ -222,7 +220,7 @@ it.each(['confirmed_empty', 'unknown'] as const)(
   },
 );
 
-it('human fade crossing an absence expiry finishes intentionally without recreating the expired hold', async () => {
+it('human fade crossing an absence deadline retains durable manual mode', async () => {
   const s = setup('2026-10-04T12:00:00+02:00');
   try {
     await s.presence('occupied');
@@ -237,7 +235,7 @@ it('human fade crossing an absence expiry finishes intentionally without recreat
     s.clock.advanceBy(1_000);
     expect(s.policy()).toMatchObject({
       activeOwner: 'manual',
-      manualHold: null,
+      manualHold: { expiresAt: null },
       policyActive: false,
     });
     s.clock.advanceBy(1_000);
@@ -250,9 +248,10 @@ it('human fade crossing an absence expiry finishes intentionally without recreat
     );
     s.clock.advanceBy(2_000);
     expect(s.policy()).toMatchObject({
-      activeOwner: 'none',
-      manualHold: null,
-      baseline: 0.419,
+      activeOwner: 'manual',
+      manualHold: { expiresAt: null },
+      baseline: 0.3,
+      manualReference: 0.419,
     });
   } finally {
     s.engine.dispose();
@@ -409,7 +408,11 @@ it('human direct volume supersedes an automatic fade and delayed terminal callba
     await flush();
     s.clock.advanceBy(20_000);
     await flush();
-    expect(s.policy()).toMatchObject({ activeOwner: 'manual', baseline: 0.5 });
+    expect(s.policy()).toMatchObject({
+      activeOwner: 'manual',
+      baseline: 0.3,
+      manualReference: 0.5,
+    });
     expect(s.volumeCommands()).toHaveLength(2);
   } finally {
     rejectDispatch?.(new Error('test cleanup'));
@@ -439,12 +442,13 @@ it('feedback arriving before an older automatic service response cannot replace 
     s.adapter.observe('music.room', { ...playing, volume: 0.6 });
     expect(s.policy()).toMatchObject({
       activeOwner: 'manual',
-      baseline: 0.5,
+      baseline: 0.3,
+      manualReference: 0.5,
       effectiveTarget: 0.5,
     });
     resolveDispatch?.();
     await older;
-    expect(s.policy().baseline).toBe(0.5);
+    expect(s.policy().manualReference).toBe(0.5);
   } finally {
     resolveDispatch?.();
     s.engine.dispose();
@@ -466,7 +470,11 @@ it('an external WiiM change interrupts a fade even within its segment tolerance'
     expect(s.engine.state.music.fades['music.room']?.status).toBe(
       'interrupted',
     );
-    expect(s.policy()).toMatchObject({ activeOwner: 'manual', baseline: 0.31 });
+    expect(s.policy()).toMatchObject({
+      activeOwner: 'manual',
+      baseline: 0.3,
+      manualReference: 0.31,
+    });
     const count = s.volumeCommands().length;
     s.clock.advanceBy(10_000);
     await flush();
@@ -506,7 +514,8 @@ it('older automatic feedback cannot interrupt a replacement human fade or commit
     expect(s.engine.state.music.fades['music.room']?.status).toBe('completed');
     expect(s.policy()).toMatchObject({
       activeOwner: 'manual',
-      baseline: 0.319,
+      baseline: 0.3,
+      manualReference: 0.319,
     });
   } finally {
     s.engine.dispose();
@@ -543,7 +552,8 @@ it.each(['pending', 'unconfirmed', 'confirmed', 'correlated'] as const)(
       expect(s.engine.getMusicState('music.room').observed.volume).toBe(0.35);
       expect(s.policy()).toMatchObject({
         activeOwner: 'manual',
-        baseline: 0.5,
+        baseline: 0.3,
+        manualReference: 0.5,
       });
       // A metadata-only repeat does not replace ownership or baseline either.
       s.adapter.observe('music.room', {
@@ -551,13 +561,13 @@ it.each(['pending', 'unconfirmed', 'confirmed', 'correlated'] as const)(
         volume: 0.35,
         title: 'Next track',
       });
-      expect(s.policy().baseline).toBe(0.5);
+      expect(s.policy().manualReference).toBe(0.5);
       s.adapter.observe('music.room', { ...playing, volume: 0.55 });
-      expect(s.policy().baseline).toBe(0.55);
+      expect(s.policy().manualReference).toBe(0.55);
       // Consumed attribution must not swallow another genuine physical visit
       // to the older level, including when that old command was superseded.
       s.adapter.observe('music.room', { ...playing, volume: 0.35 });
-      expect(s.policy().baseline).toBe(0.35);
+      expect(s.policy().manualReference).toBe(0.35);
     } finally {
       s.engine.dispose();
     }
@@ -791,7 +801,8 @@ it.each(['deferred response', 'metadata repeat'] as const)(
         'completed',
       );
       expect(s.policy()).toMatchObject({
-        baseline: 0.319,
+        baseline: 0.3,
+        manualReference: 0.319,
         effectiveTarget: 0.319,
       });
     } finally {
@@ -872,7 +883,8 @@ it('accepts current correlated fade feedback after older same-destination feedba
     s.clock.advanceBy(2_000);
     expect(s.engine.state.music.fades['music.room']?.status).toBe('completed');
     expect(s.policy()).toMatchObject({
-      baseline: 0.319,
+      baseline: 0.3,
+      manualReference: 0.319,
       effectiveTarget: 0.319,
     });
   } finally {
@@ -921,7 +933,8 @@ it('keeps repeated current correlated feedback as feedback while a fade settles'
     s.clock.advanceBy(2_000);
     expect(s.engine.state.music.fades['music.room']?.status).toBe('completed');
     expect(s.policy()).toMatchObject({
-      baseline: 0.319,
+      baseline: 0.3,
+      manualReference: 0.319,
       effectiveTarget: 0.319,
     });
   } finally {

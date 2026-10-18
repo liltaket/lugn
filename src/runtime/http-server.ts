@@ -504,7 +504,7 @@ export class LugnHttpServer {
         sendJson(response, 200, {
           ...calculateMusicVolume(
             settings,
-            policy.baseline,
+            settings.autoBaseVolumes[target] ?? 0.3,
             minute,
             personCount,
           ),

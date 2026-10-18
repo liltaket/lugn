@@ -47,6 +47,10 @@ async function fixture() {
       { id: 'scene.all_off', name: 'Off', lighting: {} },
     ],
     music: { targets: { 'music.room': [] }, adapter },
+    musicVolumeSettings: {
+      ...defaultMusicVolumeSettings,
+      autoBaseVolumes: { 'music.room': 0.4 },
+    },
   });
   engines.push(engine);
   const path = join(directory, 'volume.json');

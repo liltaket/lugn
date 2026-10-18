@@ -316,6 +316,17 @@ Entry/prelight should have the shortest possible code path:
 
 Persistence, dashboards, diagnostics, and complete scene reconciliation happen afterward.
 
+Prelight batches state-stream publication during its synchronous kickoff, so
+every selected scene light starts its adapter request before history validation
+and dashboard notification. Ledger updates, feedback attribution and policy
+checks remain synchronous. The batch is flushed before waiting for any adapter;
+later observations and user actions publish normally.
+
+The engine validates its initial full state once. Each published update then
+validates its changed domains with the same domain schemas, without rechecking
+unrelated room history. Published data is still cloned to isolate stream history
+and subscribers from later mutations.
+
 ## Prelight
 
 Prelight should prioritize "I can see where I am going" rather than perfect scene fidelity.
@@ -335,3 +346,8 @@ Instrumentation should distinguish:
 - full observed convergence
 
 This makes perceived delay diagnosable instead of anecdotal.
+
+After `npm run build`, `node scripts/benchmark-prelight.mjs` measures the first
+and last request starts for seven scene lights with populated runtime history.
+It uses an isolated in-memory adapter and does not contact devices. Its results
+measure engine dispatch overhead, not MQTT delay or visible lamp response.

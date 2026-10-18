@@ -202,14 +202,22 @@ receiver roles and diagnostics, using the typed Lugn capability layer.
 
 ### Music automation settings
 
-The web panel's **Musikautomatik** section edits the shared daily volume curve,
-additional reduction for multiple people, automatic volume limits and enable
+The web panel's **Musikautomatik** section edits a fixed Auto base for each player,
+the shared daily volume curve, additional reduction for multiple people, automatic volume limits and enable
 state. Time points use Stockholm local time; the endpoints are 00:00 and 24:00
 with matching offsets. Numeric inputs and sliders update the chart together.
 Advanced contains the occupancy offset and limits.
 
-The current explanation separates reported player volume, baseline, offsets,
-automatic target and active owner. **Förhandsvisa** uses the draft at the chosen
+The persistent **Auto / Manuellt** selector changes the actual per-player mode.
+Manual adjustments also select Manual. Count, room presence and home/away changes
+retain that choice until explicit Auto hand-back, including after restart.
+**Sänk även manuell volym vid fler än en person** is off by default. When enabled,
+Manual uses its own reference plus the person offset, without the daily curve;
+one → two → one people restores that reference without stacking discounts.
+
+The current explanation separates reported player volume, configured Auto base,
+manual reference, offsets, automatic/effective target and suspension reason.
+**Förhandsvisa** uses the draft's configured base at the chosen
 time/person count and never dispatches a device command. **Spara och tillämpa**
 persists before applying volume policy to eligible players. Manual volume holds
 and playback/Pause are retained. **Avbryt ändringar** reloads current settings;

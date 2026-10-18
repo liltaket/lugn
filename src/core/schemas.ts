@@ -261,6 +261,7 @@ export const MusicFadeStateSchema = z.object({
 });
 export type MusicFadeState = z.infer<typeof MusicFadeStateSchema>;
 export const MusicVolumeActivityReasonSchema = z.enum([
+  'person_count_unknown',
   'manual_hold',
   'automation_disabled',
   'presence_unknown',
@@ -397,7 +398,25 @@ export const MusicIntentSnapshotSchema = z
       z
         .object({
           baseline: z.number().finite().min(0).max(1).nullable(),
-          baselineSource: z.enum(['user', 'inferred', 'unknown']),
+          baselineSource: z.enum(['user', 'inferred', 'unknown', 'configured']),
+          volumeMode: z.enum(['auto', 'manual']).optional(),
+          manualReference: z
+            .number()
+            .finite()
+            .min(0)
+            .max(2)
+            .nullable()
+            .optional(),
+          passiveManaged: z.boolean().optional(),
+          selectorIntent: ManualVolumeHoldSchema.nullable().optional(),
+          lastAuthorityIntent: z
+            .object({
+              mode: z.enum(['auto', 'manual']),
+              at: z.number().finite().nonnegative(),
+              provenance: PersistedHumanMusicProvenanceSchema,
+            })
+            .nullable()
+            .optional(),
           lastIntentActor: z.enum(['manual', 'lugn', 'unknown']),
           manualVolume: ManualVolumeHoldSchema.nullable(),
           pause: MusicPauseIntentSchema.nullable(),

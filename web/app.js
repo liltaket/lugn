@@ -103,7 +103,7 @@ class SessionExpiredError extends Error {}
 class ClerkAuthorizationError extends Error {}
 
 tokenHelp.textContent =
-  'Öppna tunneln från din dator med ssh -N -L 8787:127.0.0.1:8787 <user>@<host> och besök http://127.0.0.1:8787/ui/. Hämta token på Lugn-värden enligt docs/OPERATIONS.md, i ett privat terminalfönster, och klistra in den bara här.';
+  'Använd installationens lokala HTTPS-adress eller en SSH-tunnel. Hämta åtkomsttoken på Lugn-värden enligt docs/OPERATIONS.md i ett privat terminalfönster och klistra in den bara här.';
 
 loginForm.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -2097,6 +2097,41 @@ function renderMusicPlayer(target, device, commands, fade) {
   controls.append(playbackControl);
 
   const volumeControl = node('div', 'music-control music-volume-control');
+  const policy = overview?.musicVolumePolicies?.[target];
+  if (policy) {
+    const authorityKey = `volume-authority:${target}`;
+    const authority = node('div', 'music-transport');
+    authority.setAttribute('role', 'group');
+    authority.setAttribute(
+      'aria-label',
+      `Volymläge för ${displayMusicTarget(target)}`,
+    );
+    for (const [mode, title] of [
+      ['auto', 'Auto'],
+      ['manual', 'Manuellt'],
+    ]) {
+      const button = node('button', 'button button-quiet', title);
+      button.type = 'button';
+      button.setAttribute('aria-pressed', String(policy.mode === mode));
+      button.disabled =
+        reportedOnly ||
+        !!policy.authorityControlBlocked ||
+        pendingActions.has(authorityKey);
+      button.dataset.focusKey = `${authorityKey}:${mode}`;
+      button.addEventListener('click', () => {
+        void invokeCapability(
+          'music.setVolumeAuthority',
+          { target, mode },
+          authorityKey,
+        );
+      });
+      authority.append(button);
+    }
+    volumeControl.append(authority);
+    volumeControl.append(
+      node('p', 'field-help', settingsVolumeReason(policy.activityReason)),
+    );
+  }
   const volumeLabel = document.createElement('label');
   volumeLabel.className = 'music-control-title';
   volumeLabel.textContent = 'Volym';
@@ -2862,7 +2897,7 @@ function renderMusicSettings() {
     (overview.health?.integrations?.home_assistant === undefined ||
       overview.health.integrations.home_assistant === 'connected');
   document.getElementById('music-settings-current').textContent = policy
-    ? `${current ? 'Nu' : 'Senast rapporterat'} · Rapporterad volym ${volumePercent(overview.state.music.devices[target].observed.volume)} · Baslinje ${volumePercent(policy.baseline)} (${policy.baselineSource === 'user' ? 'vald av dig' : 'beräknad'}) · Dygn ${volumeOffset(policy.dailyOffset)} · Personer ${volumeOffset(policy.personOffset)} · Automatiskt mål ${volumePercent(policy.target)} · Volymägare: ${volumeOwner(policy.activeOwner)}`
+    ? `${current ? 'Nu' : 'Senast rapporterat'} · Rapporterad volym ${volumePercent(overview.state.music.devices[target].observed.volume)} · Läge: ${policy.mode === 'manual' ? 'Manuellt' : 'Auto'} · Sparad Auto-bas ${volumePercent(policy.configuredBaseline ?? policy.baseline)} · Manuell referens ${volumePercent(policy.manualReference ?? null)} · Dygn ${volumeOffset(policy.dailyOffset)} · Personer ${volumeOffset(policy.personOffset)} · Automatiskt mål ${volumePercent(policy.target)} · Aktivt mål ${volumePercent(policy.effectiveTarget ?? null)} · ${settingsVolumeReason(policy.activityReason)}`
     : 'Väntar på volympolicy.';
   if (
     !volumeSettingsDraft ||
@@ -2878,6 +2913,35 @@ function renderMusicSettings() {
 }
 function fillMusicSettings() {
   settingsElement('enabled').checked = volumeSettingsDraft.enabled;
+  settingsElement('passive-reduction').checked =
+    volumeSettingsDraft.passiveMultiPersonReductionEnabled === true;
+  const bases = settingsElement('auto-bases');
+  bases.replaceChildren();
+  for (const target of Object.keys(overview.state.music.devices)) {
+    const label = document.createElement('label');
+    label.textContent = `${target} · Auto-bas (%)`;
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.max = '100';
+    input.step = '0.1';
+    input.required = true;
+    input.value =
+      Math.round(
+        (volumeSettingsDraft.autoBaseVolumes?.[target] ?? 0.3) * 1000,
+      ) / 10;
+    input.addEventListener('input', () => {
+      volumeSettingsDraft.autoBaseVolumes ??= {};
+      volumeSettingsDraft.autoBaseVolumes[target] = Number.isFinite(
+        input.valueAsNumber,
+      )
+        ? input.valueAsNumber / 100
+        : null;
+      updateVolumeSettingsStatus();
+    });
+    label.append(input);
+    bases.append(label);
+  }
   for (const [id, key] of [
     ['person', 'personOffset'],
     ['minimum', 'minimum'],
@@ -2887,6 +2951,23 @@ function fillMusicSettings() {
       Math.round(volumeSettingsDraft[key] * 1000) / 10;
   renderVolumePoints();
   updateVolumeSettingsStatus();
+}
+function settingsVolumeReason(reason) {
+  return (
+    {
+      active: 'Auto styr volymen',
+      manual_hold:
+        'Manuellt läge · välj Auto för att lämna tillbaka styrningen',
+      automation_disabled: 'Volymautomatiken är av',
+      presence_unknown: 'Volymstyrningen väntar på närvaro',
+      person_count_unknown:
+        'Manuellt läge · personsänkningen väntar på antal personer',
+      confirmed_empty: 'Volymstyrningen väntar · rummet tomt',
+      home_away: 'Volymstyrningen väntar · borta',
+      fade_active: 'Volymen tonas',
+      volume_unavailable: 'Inväntar tillförlitlig spelarvolym',
+    }[reason] ?? 'Inväntar volymstatus'
+  );
 }
 function renderVolumePoints() {
   const container = settingsElement('points');
@@ -3090,6 +3171,10 @@ for (const [id, key] of [
   });
 settingsElement('enabled').addEventListener('change', (event) => {
   volumeSettingsDraft.enabled = event.target.checked;
+  updateVolumeSettingsStatus();
+});
+settingsElement('passive-reduction').addEventListener('change', (event) => {
+  volumeSettingsDraft.passiveMultiPersonReductionEnabled = event.target.checked;
   updateVolumeSettingsStatus();
 });
 settingsElement('add-point').addEventListener('click', () => {

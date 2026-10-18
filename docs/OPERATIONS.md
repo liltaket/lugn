@@ -271,16 +271,106 @@ checkout or changing the Node.js executable path.
 
 ## Room control panel
 
-The loopback control panel is available at `/ui/`. From another computer,
-open an SSH tunnel to the Lugn host:
+Lugn's main API and control panel stay on `127.0.0.1:8787`. For LAN access,
+run the separate Caddy user service from `deploy/`; it terminates TLS on
+`8443`, forwards only to `127.0.0.1:8787`, and accepts connections only on the
+configured LAN address and CIDR. It does not change the Hub dashboard service
+on `8788` or the existing `lugn.service`.
+
+On BrunoCAM, the example URL is `https://brunocam.local:8443/ui/`. The
+installer takes the hostname, the host's LAN interface IPv4 address, and the
+trusted LAN CIDR as explicit arguments. Use a DHCP reservation for the bind
+address. If peer devices cannot resolve `brunocam.local` with mDNS, configure
+a local router DNS record such as `lugn.home.arpa` for that reserved address
+and use that hostname instead. Do not create a public DNS record or a router
+port forward.
+
+Install the official standard Caddy binary at `$HOME/.local/bin/caddy`. Select
+the binary for the host architecture on the [official Caddy install page](https://caddyserver.com/docs/install).
+Then install the generated Caddy configuration and separate user unit. For
+BrunoCAM's current LAN, the command is:
+
+```sh
+deploy/install-lan-proxy.sh brunocam.local 192.168.10.132 192.168.10.0/24
+systemctl --user enable --now lugn-lan-proxy.service
+systemctl --user status lugn-lan-proxy.service
+journalctl --user -u lugn-lan-proxy.service -f
+```
+
+The installer validates its DNS name and private IPv4 range, refuses wildcard
+or public-network binds, validates the Caddyfile, and writes only
+`lugn-lan-proxy.service` plus files under `$HOME/.config/lugn-lan-proxy` and
+`$HOME/.local/share/caddy`. It does not start or enable the service. The
+generated service runs as the account's systemd user, requires `lugn.service`,
+and uses Caddy's internal CA. With user lingering enabled it starts after
+reboot before login; check with `loginctl show-user "$USER" -p Linger`. If
+lingering is disabled, the host administrator can enable it with
+`sudo loginctl enable-linger "$USER"`.
+
+The Caddyfile binds the listener to the selected LAN IPv4 address, rejects
+source addresses outside the selected private CIDR, disables automatic HTTP
+redirect listeners, and turns off Caddy's admin API. If a host firewall is
+enabled, allow TCP `8443` only from the trusted LAN CIDR. Do not allow the
+public WAN or forward this port through the router. Caddy passes the request
+Host through to Lugn and sanitizes its forwarded headers; Lugn still checks
+Host and Origin against the one configured trusted origin.
+
+Add the exact external origin `https://brunocam.local:8443` to
+`http.trustedOrigins` in the protected Lugn configuration, and keep
+`bearerTokenEnv` configured. If the DNS name changes, update both the Caddy
+hostname and this origin together, then restart both services. Do not include
+`/ui/` in the origin. Lugn remains responsible for token-login or Clerk
+authentication, its API bearer-token requirement, session cookies, same-origin
+and CSRF checks. On HTTPS, the UI session cookie is marked `Secure`.
+
+Clients must trust Caddy's local root CA before browsers accept the HTTPS
+certificate. Start the proxy once so Caddy creates its CA, then copy only the
+public root certificate over the existing authenticated SSH connection:
+
+```sh
+scp bruno@brunocam.local:~/.local/share/caddy/pki/authorities/local/root.crt \
+  ./brunocam-caddy-root.crt
+```
+
+Never copy or share `root.key`; it stays in Caddy's private data directory.
+Install `brunocam-caddy-root.crt` into each client's trusted root store. For
+Debian or Ubuntu, for example:
+
+```sh
+sudo install -m 0644 brunocam-caddy-root.crt \
+  /usr/local/share/ca-certificates/brunocam-caddy-root.crt
+sudo update-ca-certificates
+```
+
+On macOS, add the certificate in Keychain Access and set it to Always Trust.
+On Windows, import it into the current user's Trusted Root Certification
+Authorities store. Firefox may need the root imported into its own certificate
+store. Transfer the certificate over SSH rather than downloading it from the
+proxy itself. Caddy documents [internal HTTPS and CA roots](https://caddyserver.com/docs/automatic-https#local-https),
+[reverse proxy header behavior](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults),
+and [interface binding](https://caddyserver.com/docs/caddyfile/directives/bind).
+
+Once DNS and certificate trust are set up, open
+`https://brunocam.local:8443/ui/` from another LAN device. Use the configured
+Clerk sign-in or token-login mode; keep the API bearer token for machine
+clients only. Presets, settings, state refresh, and live updates continue
+through the same-origin UI API. To stop the proxy without affecting Lugn:
+
+```sh
+systemctl --user disable --now lugn-lan-proxy.service
+```
+
+For local-only access, visit `http://127.0.0.1:8787/ui/`. An SSH tunnel
+remains available for administration when the LAN proxy is stopped:
 
 ```sh
 ssh -N -L 8787:127.0.0.1:8787 <user>@<host>
 ```
 
-Then visit `http://127.0.0.1:8787/ui/`. Once the Clerk settings below are
-configured, the panel shows Clerk sign-in. Without them, the panel retains its
-token-login mode. Keep the API bearer token for machine clients only.
+Then visit `http://127.0.0.1:8787/ui/`.
+
+Once the Clerk settings below are configured, the panel shows Clerk sign-in.
+Without them, the panel retains its token-login mode.
 
 Create a Clerk application and set its sign-up mode to **Open** if anyone who
 can reach the panel should be able to create an account. Add the exact panel
@@ -318,12 +408,9 @@ and applies its origin and CSRF checks. A reverse proxy or tunnel that makes
 the panel reachable also makes it available to anyone who can sign in through
 the open Clerk instance.
 
-For a TLS reverse proxy, add its exact origin to `http.trustedOrigins` (for
-example, `https://lugn.example.org`) and keep `bearerTokenEnv` configured. The
-proxy must preserve that host when forwarding to loopback. Lugn rejects
-unconfigured hosts and cross-origin browser requests to prevent DNS rebinding.
-The panel shows reported state and command feedback; a dispatch alone does not
-prove a physical light changed.
+Lugn rejects unconfigured hosts and cross-origin browser requests to prevent
+DNS rebinding. The panel shows reported state and command feedback; a dispatch
+alone does not prove a physical light changed.
 
 ## HTTP API
 

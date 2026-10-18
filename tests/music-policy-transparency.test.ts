@@ -3,6 +3,7 @@ import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { SimulatedMusicAdapter } from '../src/adapters/simulated-music.js';
 import { FakeClock } from '../src/core/clock.js';
+import { defaultMusicVolumeSettings } from '../src/core/music-volume-settings.js';
 
 const noon = Date.parse('2026-10-04T12:00:00+02:00');
 const user = { actor: { type: 'user' as const }, source: 'dashboard' };
@@ -13,13 +14,21 @@ const values = {
   title: null,
   source: 'Optical',
 };
-function setup(now = noon) {
+function setup(now = noon, autoBaseVolume?: number) {
   const clock = new FakeClock(now);
   const adapter = new SimulatedMusicAdapter(clock);
   const engine = new LugnEngine(clock, {
     deviceIds: [],
     scenes: [{ id: 'scene.test', name: 'Test', lighting: {} }],
     music: { targets: { 'music.room': [] }, adapter },
+    ...(autoBaseVolume === undefined
+      ? {}
+      : {
+          musicVolumeSettings: {
+            ...defaultMusicVolumeSettings,
+            autoBaseVolumes: { 'music.room': autoBaseVolume },
+          },
+        }),
   });
   const observe = (volume: number, commandId?: string) => {
     clock.advanceBy(1);
@@ -82,9 +91,9 @@ it('separates acceptance, reported changes and current manual ownership', async 
 it.each([true, false])(
   'reports old automatic feedback correlated=%s without surrendering newer manual intent',
   async (correlated) => {
-    const s = setup();
+    const s = setup(noon, 0.4);
     try {
-      s.observe(0.3);
+      s.observe(0.4);
       await s.presence('occupied');
       const older = await s.engine.requestMusic(
         'music.room',
@@ -106,7 +115,8 @@ it.each([true, false])(
         s.engine.getMusicVolumePolicySnapshots()['music.room'],
       ).toMatchObject({
         activeOwner: 'manual',
-        baseline: 0.6,
+        baseline: 0.4,
+        manualReference: 0.6,
         effectiveTarget: 0.6,
         lastIntentActor: 'manual',
       });
@@ -291,7 +301,7 @@ it('records clock reason changes on the existing policy tick without volume comm
   }
 });
 
-it('records exact ownership expiry and enable context without disabling playback', async () => {
+it('records persistent manual ownership and enable context without disabling playback', async () => {
   const s = setup();
   try {
     s.observe(0.3);
@@ -305,23 +315,25 @@ it('records exact ownership expiry and enable context without disabling playback
     const deadline = s.clock.now() + 20 * 60_000;
     await s.engine.handleBilresaPress('2', 'multi_press_1');
     expect(s.engine.state.music.decisions!.at(-1)).toMatchObject({
-      reason: { kind: 'volume', value: 'manual_hold' },
+      reason: { kind: 'volume', value: 'automation_disabled' },
       policyEnabled: false,
-      manualExpiresAt: deadline,
+      manualExpiresAt: null,
     });
     s.clock.advanceBy(20 * 60_000 - 1);
     expect(
       s.engine.getMusicVolumePolicySnapshots()['music.room']!.activeOwner,
     ).toBe('manual');
     s.clock.advanceBy(1);
-    expect(s.engine.state.music.decisions).toContainEqual(
-      expect.objectContaining({
-        at: deadline,
-        reason: { kind: 'volume', value: 'automation_disabled' },
-        owner: 'none',
-        manualExpiresAt: null,
-      }),
-    );
+    expect(s.clock.now()).toBe(deadline);
+    expect(
+      s.engine.getMusicVolumePolicySnapshots()['music.room'],
+    ).toMatchObject({
+      activeOwner: 'manual',
+      mode: 'manual',
+      manualReference: 0.6,
+      manualHold: { expiresAt: null },
+      policyEnabled: false,
+    });
     expect(s.playback().entryEligible).toBe(true);
     expect(
       s.engine.state.music
@@ -395,7 +407,10 @@ it('keeps typed decision history bounded, deduplicated and independent from quer
     );
     expect(result.volume).toMatchObject({
       activeOwner: 'manual',
-      manualHold: { expiresAt: noon + 20 * 60_000 + 1 },
+      mode: 'manual',
+      baseline: 0.3,
+      manualReference: 0.6,
+      manualHold: { expiresAt: null },
     });
     expect(result.playback).toMatchObject({
       activityReason: 'confirmed_empty',
@@ -411,7 +426,7 @@ it('keeps typed decision history bounded, deduplicated and independent from quer
         target: 'music.room',
         reason: { kind: 'volume', value: 'manual_hold' },
         owner: 'manual',
-        manualExpiresAt: noon + 20 * 60_000 + 1,
+        manualExpiresAt: null,
       }),
     );
     for (let i = 0; i < 150; i++) {
