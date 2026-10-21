@@ -1,3 +1,4 @@
+mod artwork;
 mod audio;
 mod config;
 mod control;
@@ -22,7 +23,7 @@ async fn main() -> Result<()> {
     let (latest, states) = watch::channel(state::Observations::default());
     idle::spawn(tx.clone(), config.idle_secs);
     tokio::spawn(audio::run(tx.clone()));
-    tokio::spawn(dbus::session(tx.clone()));
+    tokio::spawn(dbus::session(tx.clone(), config.collect_artwork));
     tokio::spawn(dbus::network(tx.clone()));
     tokio::spawn(kwin::run(tx));
     tokio::spawn(async move {

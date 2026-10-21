@@ -20,6 +20,8 @@ export const HomeAssistantMusicMappingSchema = z
       .object({
         deviceId: ComputerDeviceIdSchema,
         playbackControl: z.boolean().optional(),
+        /** Opt in to the selected computer player's artwork (Spotify CDN or local thumbnail). */
+        artwork: z.boolean().optional(),
         source: z.string().trim().min(1),
       })
       .strict()

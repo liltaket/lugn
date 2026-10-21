@@ -22,7 +22,10 @@ Lugn provides local-first room automation for lighting, presence, music and
 indoor conditions. The custom Nest Hub dashboard lets a resident see the room
 at a glance and quickly choose a lighting scene or music action.
 The web panel provides detailed lighting and music controls and persistent
-lighting preset management.
+lighting preset management. Its six sections also provide visual routine editing,
+safe timeline previews, Stockholm schedules and explicit automation preferences.
+New routines and computer suggestions default disabled; current computer audio
+evidence supports explicit Optical suggestions, without automatic source switching.
 
 ## Operating Context
 

@@ -1,8 +1,9 @@
 # Computer intelligence (Workstream D)
 
-This slice exports a standalone service. Runtime configuration, HTTP/Hub role
-authentication, state/SSE projection and composition remain the lead's work.
-No existing engine, capability, protocol, server or frontend is changed.
+The standalone policy service is composed by `computer-intelligence-runtime.ts`
+and `intelligence-api.ts`, with authenticated web/Hub actions and SSE projection.
+The existing computer protocol is unchanged. Settings are persisted in the
+private `.intelligence.json` sidecar beside the configured state path.
 
 ## Safety and policy
 

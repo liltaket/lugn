@@ -98,6 +98,7 @@ export type LugnDisplayServerOptions = {
   musicObservationTrustProvider?: () => Record<string, boolean>;
   stateStream?: StateEventStream;
   computerAudioMappings?: Readonly<Record<string, ComputerAudioRoute>>;
+  computerNowPlayingSelector?: ComputerNowPlayingSelector;
   musicVolumePoliciesProvider?: () => Record<string, MusicVolumePolicySnapshot>;
   musicPlaybackPoliciesProvider?: () => Record<
     string,
@@ -158,9 +159,9 @@ export class LugnDisplayServer {
   private unsubscribeComputerObservations: (() => void) | undefined;
 
   constructor(private readonly options: LugnDisplayServerOptions) {
-    this.computerNowPlaying = new ComputerNowPlayingSelector(
-      options.computerAudioMappings ?? {},
-    );
+    this.computerNowPlaying =
+      options.computerNowPlayingSelector ??
+      new ComputerNowPlayingSelector(options.computerAudioMappings ?? {});
     validateOptions(options);
     this.acceptedHosts = buildAcceptedHosts(options);
     if (this.acceptedHosts.size === 0)
@@ -207,7 +208,8 @@ export class LugnDisplayServer {
   async stop(): Promise<void> {
     this.unsubscribeComputerObservations?.();
     this.unsubscribeComputerObservations = undefined;
-    this.computerNowPlaying.reset();
+    if (!this.options.computerNowPlayingSelector)
+      this.computerNowPlaying.reset();
     const server = this.server;
     this.server = undefined;
     for (const response of this.eventStreams.keys()) response.destroy();

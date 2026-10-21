@@ -5,6 +5,27 @@ export const ComputerDeviceIdSchema = z
   .regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/);
 const TextSchema = z.string().max(512);
 
+/** No arbitrary URLs or desktop paths cross the computer artwork contract. */
+export const ComputerArtworkSchema = z.discriminatedUnion('provider', [
+  z
+    .object({
+      provider: z.literal('spotify'),
+      id: z.string().regex(/^[a-f0-9]{40}$/),
+    })
+    .strict(),
+  z
+    .object({
+      provider: z.literal('inline'),
+      data: z
+        .string()
+        .max(32768)
+        .regex(
+          /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+        ),
+    })
+    .strict(),
+]);
+
 export const ComputerMediaSchema = z.object({
   player: TextSchema,
   identity: TextSchema.nullable(),
@@ -14,6 +35,7 @@ export const ComputerMediaSchema = z.object({
   artists: z.array(TextSchema).max(64).nullable(),
   album: TextSchema.nullable(),
   contentType: TextSchema.nullable(),
+  artwork: ComputerArtworkSchema.nullable().optional(),
 });
 
 /** Readings describe the computer, never physical room occupancy or user intent. */

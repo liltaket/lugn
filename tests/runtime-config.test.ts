@@ -49,6 +49,15 @@ describe('runtime configuration cross references', () => {
     expect(
       loadConfig(config).homeAssistant.music['music.room']?.computerAudio,
     ).toEqual({ deviceId: 'kuffe', source: 'Optical In' });
+    const artworkConfig = structuredClone(config);
+    Object.assign(
+      artworkConfig.homeAssistant.music['music.room'].computerAudio,
+      { artwork: true },
+    );
+    expect(
+      loadConfig(artworkConfig).homeAssistant.music['music.room']?.computerAudio
+        ?.artwork,
+    ).toBe(true);
     expect(() => loadConfig({ ...config, mqtt: undefined })).toThrow(
       'Computer audio device must be configured',
     );

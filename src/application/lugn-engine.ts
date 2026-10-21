@@ -3080,7 +3080,13 @@ export class LugnEngine {
       : undefined;
     let effectiveIntentChanged = false;
     let attributedStaleCommand = false;
-    let activePrelightPowerFeedback = false;
+    // WLED/HA repeat state without a command ID after the initial command has
+    // already been confirmed. The preview owns these lamps until handoff or
+    // timeout; attribution to a still-pending command cannot define its lifetime.
+    const activePrelightPowerFeedback =
+      this.prelightActive &&
+      observation.values.power === true &&
+      this.prelightAppliedValues.get(observation.target)?.power === true;
     for (const property of LightingProperties) {
       const value = observation.values[property];
       if (value === undefined) continue;
@@ -3122,13 +3128,6 @@ export class LugnEngine {
         attributedStaleCommand = true;
       if (command && !fastPathEventId)
         fastPathEventId = this.fastPathEventByCommand.get(command.id);
-      if (
-        property === 'power' &&
-        value === true &&
-        this.prelightActive &&
-        command?.reason === prelightCommandReason
-      )
-        activePrelightPowerFeedback = true;
       if (
         !command &&
         !supersededCommand &&

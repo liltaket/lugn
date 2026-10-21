@@ -3,7 +3,7 @@ import type { RoomState } from './schemas.js';
 export type Artwork = {
   url: string | null;
   status: 'available' | 'missing' | 'unavailable';
-  source: 'home_assistant' | null;
+  source: 'home_assistant' | 'computer' | null;
 };
 export type ArtworkMap = Record<string, Artwork>;
 /** Server-only metadata: image tokens/content URLs must never enter RoomState. */

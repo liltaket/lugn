@@ -1,9 +1,11 @@
 # Routine orchestration (Workstream C)
 
-This service implements the routine wire shapes in `DELIVERY.md`. Runtime and
-HTTP/display integration belong to the lead. It does not start a listener or
-connect an adapter. All implementation evidence uses simulated adapters, mock
-computer playback and fake clocks. No deployed behavior is enabled.
+This service implements the routine wire shapes in `DELIVERY.md`. `routine-api.ts`
+composes it with authenticated web/Hub actions and SSE projection. Definitions
+live in the private `.routines.json` sidecar beside the configured state path;
+missing files seed disabled templates in memory. All implementation evidence uses
+simulated adapters, mock computer playback and fake clocks. No deployed behavior
+is enabled.
 
 ## Composition
 

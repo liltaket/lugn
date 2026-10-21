@@ -106,6 +106,26 @@ verified with the companion Linux agent before marking the Draft PR ready.
 
 ## Optical now playing on Nest dashboards
 
+### Optional album art and Firefox thumbnails
+
+Set `collect_artwork = true` in the Linux agent configuration and
+`computerAudio.artwork: true` on the desired receiver mapping below. Both options
+default off. This authorizes reading the selected players' artwork metadata;
+Spotify image IDs are fetched from `https://i.scdn.co/image/` by the room service.
+No titles, search queries, HA credentials or browser history go to that server.
+
+Firefox's local MPRIS PNG thumbnail is resized on the desktop to a JPEG of at most
+240 × 240 pixels / 24 KiB. Only Firefox's fixed, owned MPRIS cache directories
+are readable; symlinks, other files and oversized images are rejected. The small
+image travels over the existing private MQTT observation connection. Protect
+broker access as for titles/artists. There is no external YouTube lookup.
+
+The image follows the exact player selected for the Optical title, using the same
+freshness, ambiguity and receiver-trust checks. Missing or unsupported artwork
+uses the existing dashboard fallback. Other inputs retain their HA artwork.
+Older agents and configurations remain compatible, and neither option starts
+playback, switches input or changes room intent.
+
 Map the receiver's actual computer input to a configured MQTT computer in
 `homeAssistant.music`:
 

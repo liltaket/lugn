@@ -89,7 +89,9 @@ as desired. The observer script is transient and is replaced on agent restart.
   streams may count. Runtime requires `pw-dump` from `pipewire-bin`.
 - **Media:** MPRIS bus-name lifecycle and PropertiesChanged subscriptions;
   playback state, player identity, desktop entry, title, artists, album and explicit
-  content type. No playback-position polling, artwork or URL collection.
+  content type. No playback-position polling. Optional `collect_artwork = true`
+  adds Spotify image IDs or Firefox MPRIS thumbnails (see protocol privacy notes);
+  raw URLs and local paths never leave the agent.
 
 Missing APIs report `null`; loss clears previous observations. Source failures
 retry with bounded exponential backoff; a healthy idle subscription blocks on

@@ -8,6 +8,9 @@ license-file = "../../LICENSE"
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
+image = { version = "=0.25.8", default-features = false, features = ["png", "jpeg"] }
+libc = "0.2"
 futures-util = "0.3"
 rumqttc = { version = "0.25", default-features = false, features = ["use-rustls"] }
 serde = { version = "1", features = ["derive"] }

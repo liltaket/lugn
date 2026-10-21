@@ -9,9 +9,10 @@ It is designed to be understandable when an automation makes a decision and
 safe to use alongside physical controls and Home Assistant.
 
 > **Current scope:** a working local runtime, custom Hub dashboard and
-> operational control panel with optional Clerk sign-in. A general visual
-> configuration editor, editable routines and direct WiiM transport are not
-> part of the current runtime.
+> responsive control panel with optional Clerk sign-in, visual routine editing,
+> disabled Good Night/Good Morning templates, conservative computer suggestions
+> and local Home Assistant artwork. Direct WiiM transport remains outside the
+> current runtime. See [Lugn 2 delivery evidence](docs/lugn-2/VERIFICATION.md).
 
 ## What works
 

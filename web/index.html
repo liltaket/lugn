@@ -43,6 +43,7 @@
       </div>
     </header>
 
+    <a class="skip-link" href="#page-title">Hoppa till innehåll</a>
     <main class="page-shell">
       <section class="login-view" id="login-view" aria-labelledby="login-title">
         <div class="login-copy">
@@ -117,16 +118,44 @@
       >
         <header class="page-heading">
           <div>
-            <h1 id="page-title">Rumskontroll</h1>
-            <p>
-              Styr belysning och musik och jämför önskemål med enheternas
-              senaste rapporter.
-            </p>
+            <h1 id="page-title" tabindex="-1">Översikt</h1>
+            <p>Rummets läge, dina val och det som händer härnäst.</p>
           </div>
           <p class="updated-at" id="updated-at">Väntar på tillstånd</p>
         </header>
 
-        <section class="system-panel" aria-label="Rums- och systemstatus">
+        <nav class="section-nav" aria-label="Rumsnavigation">
+          <a href="#oversikt" data-page="oversikt" aria-current="page"
+            >Översikt</a
+          >
+          <a href="#belysning" data-page="belysning">Belysning</a>
+          <a href="#musik" data-page="musik">Musik</a>
+          <a href="#rutiner" data-page="rutiner">Rutiner</a>
+          <a href="#intelligens" data-page="intelligens">Intelligens</a>
+          <a href="#system" data-page="system">System</a>
+        </nav>
+        <p
+          id="snapshot-notice"
+          class="snapshot-notice"
+          role="status"
+          hidden
+        ></p>
+        <section
+          class="next-panel"
+          data-pages="oversikt"
+          aria-labelledby="next-title"
+        >
+          <div>
+            <h2 id="next-title">Härnäst i rummet</h2>
+            <p id="next-routine">Väntar på rutinstatus…</p>
+          </div>
+          <a class="button button-quiet" href="#rutiner">Hantera rutiner</a>
+        </section>
+        <section
+          class="system-panel"
+          data-pages="oversikt system"
+          aria-label="Rums- och systemstatus"
+        >
           <div
             class="room-presence"
             id="room-presence"
@@ -164,7 +193,11 @@
 
         <div class="system-alert" id="system-alert" role="status" hidden></div>
 
-        <section class="scene-section" aria-labelledby="scenes-title">
+        <section
+          class="scene-section"
+          data-pages="oversikt belysning"
+          aria-labelledby="scenes-title"
+        >
           <div class="section-heading">
             <div>
               <h2 id="scenes-title">Ljuspresets</h2>
@@ -287,7 +320,11 @@
           </section>
         </section>
 
-        <section class="music-section" aria-labelledby="music-title">
+        <section
+          class="music-section"
+          data-pages="oversikt musik"
+          aria-labelledby="music-title"
+        >
           <div class="section-heading">
             <div>
               <h2 id="music-title">Musik</h2>
@@ -302,6 +339,7 @@
 
         <section
           class="music-settings-section"
+          data-pages="musik"
           id="music-settings-section"
           aria-labelledby="music-settings-title"
           hidden
@@ -460,6 +498,7 @@
 
         <section
           class="computer-section"
+          data-pages="intelligens system"
           id="computer-section"
           aria-labelledby="computer-title"
           hidden
@@ -473,7 +512,11 @@
           <div class="computer-list" id="computer-list"></div>
         </section>
 
-        <section class="lights-section" aria-labelledby="lights-title">
+        <section
+          class="lights-section"
+          data-pages="belysning"
+          aria-labelledby="lights-title"
+        >
           <div class="section-heading light-section-heading">
             <div>
               <h2 id="lights-title">Lampor</h2>
@@ -484,6 +527,317 @@
             <p class="mapping-summary" id="mapping-summary"></p>
           </div>
           <div class="light-list" id="light-list"></div>
+        </section>
+
+        <section
+          class="routines-section"
+          data-pages="rutiner"
+          aria-labelledby="routines-title"
+        >
+          <div class="section-heading">
+            <div>
+              <h2 id="routines-title">Rutiner som får ta tid</h2>
+              <p>Välj ordningen. Förhandsvisa förloppet innan du sparar.</p>
+            </div>
+            <button
+              class="button button-primary"
+              id="routine-new"
+              type="button"
+              disabled
+            >
+              Ny rutin
+            </button>
+          </div>
+          <p id="routines-availability" role="status">Väntar på rutinstatus…</p>
+          <div
+            id="routine-runs"
+            class="routine-runs"
+            aria-label="Senaste körningar"
+          ></div>
+          <div id="routine-list" class="routine-list"></div>
+          <details class="routine-templates">
+            <summary>Börja med en avstängd mall</summary>
+            <p>
+              Mallen sparas först när du väljer Spara. Aktivera är alltid ett
+              separat val.
+            </p>
+            <div class="inline-actions">
+              <button
+                class="button button-quiet"
+                id="routine-night"
+                type="button"
+                disabled
+              >
+                God natt · mys till släckt</button
+              ><button
+                class="button button-quiet"
+                id="routine-morning"
+                type="button"
+                disabled
+              >
+                God morgon · mjuk start
+              </button>
+            </div>
+          </details>
+          <form id="routine-form" class="editor-surface" hidden>
+            <fieldset id="routine-fields">
+              <legend>Redigera rutin</legend>
+              <div class="form-grid">
+                <label
+                  >Namn<input
+                    id="routine-name"
+                    maxlength="80"
+                    required
+                    autocomplete="off" /></label
+                ><label
+                  >Typ<select id="routine-kind">
+                    <option value="custom">Egen rutin</option>
+                    <option value="good_night">God natt</option>
+                    <option value="good_morning">God morgon</option>
+                  </select></label
+                >
+              </div>
+              <label class="settings-toggle"
+                ><input id="routine-enabled" type="checkbox" /> Aktivera
+                rutinen</label
+              >
+              <p class="field-help">
+                Avstängd är standard. Start och schemaläggning blir tillgängliga
+                först när du uttryckligen aktiverar och sparar.
+              </p>
+              <label class="settings-toggle"
+                ><input id="routine-scheduled" type="checkbox" /> Kör på
+                bestämda dagar</label
+              >
+              <div id="routine-schedule" hidden>
+                <label
+                  >Tid i Stockholm<input
+                    id="routine-time"
+                    type="time"
+                    value="22:30"
+                /></label>
+                <fieldset class="weekdays" id="routine-weekdays">
+                  <legend>Dagar</legend>
+                </fieldset>
+                <p class="field-help">
+                  Schemat följer Europe/Stockholm, även vid sommar- och
+                  vintertid.
+                </p>
+              </div>
+              <h3>Steg i ordning</h3>
+              <p class="field-help">
+                Högst 32 steg och totalt 6 timmar. Ljus och väntan: högst 60
+                minuter per steg. Volym: direkt eller 1–120 sekunder; manuellt
+                ägd volym kan blockera steget.
+              </p>
+              <p class="field-help">
+                Ljusstyrka 0 % släcker. En dimning anger hur lång tid
+                förändringen tar. Ett villkor som inte uppfylls stoppar rutinen.
+              </p>
+              <ol id="routine-steps" class="routine-steps"></ol>
+              <div class="inline-actions">
+                <label
+                  >Lägg till steg<select id="routine-add-type">
+                    <option value="scene">Ljusscen</option>
+                    <option value="light">Dimma / släck lampor</option>
+                    <option value="delay">Vänta</option>
+                    <option value="volume">Ändra volym gradvis</option>
+                    <option value="playback">Spela / pausa</option>
+                    <option value="source">Välj musikkälla</option>
+                    <option value="preset">Musikpreset</option>
+                    <option value="condition">Kontrollera villkor</option>
+                  </select></label
+                ><button
+                  class="button button-quiet"
+                  id="routine-add"
+                  type="button"
+                >
+                  Lägg till
+                </button>
+              </div>
+              <div class="editor-actions">
+                <button
+                  class="button button-primary"
+                  type="submit"
+                  id="routine-save"
+                >
+                  Spara rutin</button
+                ><button
+                  class="button button-quiet"
+                  type="button"
+                  id="routine-preview"
+                >
+                  Förhandsvisa förlopp</button
+                ><button
+                  class="button button-quiet"
+                  type="button"
+                  id="routine-discard"
+                >
+                  Stäng / kasta utkast</button
+                ><button
+                  class="button button-danger"
+                  type="button"
+                  id="routine-delete"
+                >
+                  Radera rutin
+                </button>
+              </div>
+            </fieldset>
+            <p id="routine-status" role="status" aria-live="polite"></p>
+            <section class="timeline-preview" aria-labelledby="timeline-title">
+              <h3 id="timeline-title">Förlopp utan enhetskommandon</h3>
+              <p id="routine-preview-summary">
+                Förhandsvisa för att se tider och eventuella varningar.
+              </p>
+              <ol id="routine-timeline"></ol>
+            </section>
+          </form>
+        </section>
+        <section
+          class="intelligence-section"
+          data-pages="intelligens"
+          aria-labelledby="intelligence-title"
+        >
+          <div class="section-heading">
+            <div>
+              <h2 id="intelligence-title">Intelligens på dina villkor</h2>
+              <p>
+                Datorns rapporter är ledtrådar. De bevisar inte att ljud hörs i
+                rummet.
+              </p>
+            </div>
+          </div>
+          <p id="intelligence-availability" role="status">
+            Väntar på inställningar…
+          </p>
+          <div
+            id="intelligence-suggestions"
+            class="suggestion-list"
+            aria-label="Förslag"
+          ></div>
+          <details id="optical-evidence">
+            <summary>Vad grundar sig Optical på?</summary>
+            <div id="optical-decisions"></div>
+          </details>
+          <form id="intelligence-form" class="editor-surface" hidden>
+            <fieldset id="intelligence-fields">
+              <legend>Opt-in och förslag</legend>
+              <label class="settings-toggle"
+                ><input id="intelligence-optical-enabled" type="checkbox" />
+                Tillåt Optical från datoraktivitet</label
+              >
+              <p class="field-help">
+                Avstängt som standard. Servern bedömer färskhet, aktivitet och
+                manuella val innan något kan tillåtas.
+              </p>
+              <div class="form-grid">
+                <label
+                  >Läge<select id="intelligence-mode">
+                    <option value="suggest">Föreslå först</option>
+                    <option value="auto" disabled>
+                      Automatiskt · inte tillgängligt
+                    </option>
+                  </select></label
+                ><label>Dator<select id="intelligence-device"></select></label
+                ><label
+                  >Musikspelare<select id="intelligence-target"></select></label
+                ><label
+                  >Exakt källa<input
+                    id="intelligence-source"
+                    autocomplete="off"
+                    placeholder="Välj källa för din spelare"
+                    list="intelligence-sources" /></label
+                ><datalist id="intelligence-sources"></datalist
+                ><label
+                  >Stabil aktivitet (sekunder)<input
+                    id="intelligence-stability"
+                    type="number"
+                    min="1"
+                    max="300"
+                    step="any"
+                    required /></label
+                ><label
+                  >Optical-paus mellan beslut (minuter)<input
+                    id="intelligence-optical-cooldown"
+                    type="number"
+                    min="0.016666666666666666"
+                    max="1440"
+                    step="any"
+                    required
+                /></label>
+                <p class="field-help optical-limit">
+                  Automatisk växling är inte tillgänglig med nuvarande
+                  observationer. Ljud som spelas på datorn bevisar inte att det
+                  hörs. Optical kräver ett förslag och din uttryckliga
+                  bekräftelse.
+                </p>
+              </div>
+              <label
+                >Tillåtna aktiviteter (separerade med komma)<input
+                  id="intelligence-activities"
+                  placeholder="music, video"
+                  autocomplete="off"
+              /></label>
+              <p class="field-help">
+                Tillåtna namn: gaming, video, music, desktop, idle och unknown.
+                Manuella val respekteras alltid.
+              </p>
+              <hr />
+              <label class="settings-toggle"
+                ><input id="intelligence-suggestions-enabled" type="checkbox" />
+                Visa förslag från konfigurerade scenkopplingar</label
+              ><label
+                >Paus mellan förslag (minuter)<input
+                  id="intelligence-suggestions-cooldown"
+                  type="number"
+                  min="0.016666666666666666"
+                  max="1440"
+                  step="any"
+                  required
+              /></label>
+              <h3>Aktivitet till ljusscen</h3>
+              <p class="field-help">
+                Bara dessa kopplingar får ge scenförslag. Scener aktiveras
+                aldrig automatiskt.
+              </p>
+              <div id="intelligence-mappings"></div>
+              <button
+                id="intelligence-add-mapping"
+                class="button button-quiet"
+                type="button"
+              >
+                Lägg till koppling
+              </button>
+              <div class="editor-actions">
+                <button
+                  id="intelligence-save"
+                  class="button button-primary"
+                  type="submit"
+                >
+                  Spara inställningar</button
+                ><button
+                  id="intelligence-discard"
+                  class="button button-quiet"
+                  type="button"
+                >
+                  Hämta sparade inställningar
+                </button>
+              </div>
+            </fieldset>
+            <p id="intelligence-status" role="status" aria-live="polite"></p>
+          </form>
+        </section>
+        <section data-pages="system" class="system-explanation">
+          <h2>Rapporter, önskemål och bekräftelse</h2>
+          <p>
+            Ett mottaget kommando betyder att Lugn har tagit emot ditt val.
+            Enhetens senaste rapport visar om målet är bekräftat. Vid avbrott
+            visas senast kända värden.
+          </p>
+          <details>
+            <summary>Tekniska uppgifter</summary>
+            <p id="system-snapshot">Väntar på serverstatus.</p>
+          </details>
         </section>
 
         <p

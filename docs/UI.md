@@ -156,9 +156,9 @@ order. Desk puts Optical before Spotify DJ in actual button and keyboard order;
 Bed and unknown roles keep Spotify DJ first. Playback, volume, Details and the
 same backend reasons remain available on both roles. The role adds no separate
 room state, PC capability, or inferred confirmed occupancy.
-The target layout covers the five built-in scenes plus optional Sleep, with a
-paired fallback for seven/eight scenes. Larger custom scene sets need separate
-viewport validation or future pagination.
+The layout pages configured scenes to keep the primary interface within the Hub
+viewport, including larger custom scene sets. See
+[Hub design and simulated evidence](lugn-2/HUB-UI.md).
 
 Scene, light, music and preset commands identify the authenticated role as actor
 `nest-dashboard:bed` / `nest-dashboard:desk` and source
@@ -169,7 +169,7 @@ and headers cannot override it. This is action provenance, not presence evidence
 The custom Hub dashboard does not use Clerk; it uses a separate secret path
 for each receiver. The local operational control panel at `/ui/` supports
 optional Clerk sign-in. The machine API continues to use its bearer token, and
-the full visual configuration editor remains future work. See
+the web panel adds routine editing and explicit intelligence preferences. See
 [Running Lugn](OPERATIONS.md#control-panel-authentication) for Clerk setup.
 
 See [Running Lugn](OPERATIONS.md#lugn-nest-hub-dashboards) for configuration,
@@ -194,11 +194,13 @@ Hub's fresh displayed error/poll, the display listener's reachability from
 that Hub, and its status on Lugn's dashboard. Do not diagnose receiver
 rendering only from an HTTP response on the Lugn host.
 
-## Future configuration editor
+## Configuration sections
 
-A full visual settings editor is not part of the current delivery. Future
-settings can include scenes, home-presence mapping, music policy, routines,
-receiver roles and diagnostics, using the typed Lugn capability layer.
+The web panel now separates Overview, Lighting, Music, Routines, Intelligence and
+System. It includes visual scene/routine editors, music settings, diagnostics and
+disabled-by-default intelligence preferences. Integration topology, home-presence
+mapping and receiver roles still use runtime configuration. See
+[web behavior and contracts](lugn-2/WEB.md).
 
 ### Music automation settings
 

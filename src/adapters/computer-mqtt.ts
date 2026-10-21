@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { systemClock, type Clock, type TimerHandle } from '../core/clock.js';
 import {
   ComputerActivitySchema,
+  ComputerArtworkSchema,
   ComputerDeviceIdSchema,
   unknownComputerReadings,
   type ComputerObservation,
@@ -54,6 +55,8 @@ const StateMessageSchema = SequencedEnvelope.extend({
           artists: z.array(Text).max(64).nullable(),
           album: Text.nullable(),
           content_type: Text.nullable(),
+          // Optional presentation failure must not discard valid desktop state.
+          artwork: ComputerArtworkSchema.nullable().catch(null).optional(),
         }),
       )
       .max(64)
@@ -435,6 +438,7 @@ function normalize(message: StateMessage): ComputerReadings {
         artists: media.artists,
         album: media.album,
         contentType: media.content_type,
+        ...(media.artwork ? { artwork: media.artwork } : {}),
       })) ?? null,
   };
 }

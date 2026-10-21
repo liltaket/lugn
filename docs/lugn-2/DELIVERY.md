@@ -105,16 +105,16 @@ Visible focus, reduced motion, large touch targets, truthful pending/offline sta
 
 ## Integration acceptance checklist
 
-- [ ] Baseline check/build recorded (environment failures distinguished from code failures).
-- [ ] All five workstreams incorporated together and checked.
-- [ ] Manual intent cancels future routine work; cancellation/restart cannot replay actions.
-- [ ] Stockholm DST, clock jumps, duplicates and multiple triggers covered with fake clocks.
-- [ ] Automatic playback gates remain authoritative; no new automatic behavior defaults on.
-- [ ] Optical cannot interrupt Spotify, react to stale/retained data or loop on start/stop.
-- [ ] Suggestion accept revalidates; dismiss stays suppressed for the current context.
-- [ ] Artwork proxy uses a fixed trusted upstream; missing/failed artwork is harmless.
-- [ ] Web drafts survive live updates; persistence is atomic and rejects stale generations.
-- [ ] Simulated Hub (1024x600), desktop and mobile interaction/screenshots reviewed.
-- [ ] Existing presets/BILRESA/sessions/fades/volume modes regression suites pass.
-- [ ] Independent review findings resolved; draft PR bodies match actual evidence.
-- [ ] No physical tests, real device commands, production connections or deployment performed.
+- [x] Baseline check/build recorded (environment failures distinguished from code failures).
+- [x] All five workstreams incorporated together and checked.
+- [x] Manual intent cancels future routine work; cancellation/restart cannot replay actions.
+- [x] Stockholm DST, clock jumps, duplicates and multiple triggers covered with fake clocks.
+- [x] Automatic playback gates remain authoritative; no new automatic behavior defaults on.
+- [x] Optical cannot interrupt Spotify, react to stale/retained data or loop on start/stop.
+- [x] Suggestion accept revalidates; dismiss stays suppressed for the current context.
+- [x] Artwork proxy uses a fixed trusted upstream; missing/failed artwork is harmless.
+- [x] Web drafts survive live updates; persistence is atomic and rejects stale generations.
+- [x] Simulated Hub (1024x600), desktop and mobile interaction/screenshots reviewed.
+- [x] Existing presets/BILRESA/sessions/fades/volume modes regression suites pass.
+- [x] Independent review findings resolved; draft PR bodies match actual evidence.
+- [x] No physical tests, real device commands, production connections or deployment performed.

@@ -5,6 +5,20 @@ extension was validated 2026-10-17. The isolated software evidence and
 the subsequent live desktop installation are distinguished below. The PR remains
 Draft for the remaining interactive desktop acceptance checks.
 
+## Optional artwork extension (2026-10-21)
+
+Isolated software checks for `collect_artwork` passed on Kuffe: Rust stable 1.99.1
+unit suite (40 passed, 9 environment-gated tests ignored), rustfmt and Clippy with
+warnings denied; Rust 1.85.1 `cargo check --offline --locked` also passed. The
+private `dbus::tests::dbus_lifecycle` fixture passed separately, including omitted
+artwork with collection disabled and a Spotify reference when enabled. Added
+regressions cover exact Spotify IDs, native/Snap Firefox identities, unrelated
+player rejection, fixed cache paths, parent/file symlinks, file and decoded image
+bounds, corrupt PNGs, JPEG resizing/budget, and retaining all player metadata
+when artwork exceeds the aggregate wire budget. No real desktop player, broker,
+network image endpoint or playback control was exercised by these checks.
+Actual Spotify/Firefox thumbnail display remains an end-to-end deployment check.
+
 ## Automated evidence
 
 - Rust stable 1.99.1: release build, rustfmt, Clippy all targets with warnings

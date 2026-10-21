@@ -1,5 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type {
+  ComputerAudioRoute,
+  ComputerNowPlayingSelector,
+} from '../application/computer-now-playing.js';
+import { ComputerArtworkSchema } from '../core/computer.js';
+import type {
   ArtworkAsset,
   ArtworkMap,
   ArtworkProvider,
@@ -18,15 +23,28 @@ export type HomeAssistantArtworkOptions = {
   observationTrusted?: (target: string) => boolean;
   /** Suppress receiver artwork while a mapped computer input supplies playback. */
   excludedSources?: Readonly<Record<string, readonly string[]>>;
+  /** Explicit opt-in routes only; selection is shared with the dashboard. */
+  computer?: {
+    routes: Readonly<Record<string, ComputerAudioRoute>>;
+    selector: ComputerNowPlayingSelector;
+  };
   maxEntries?: number;
   maxBytes?: number;
   maxImageBytes?: number;
   maxConcurrent?: number;
   timeoutMs?: number;
+  /** External CDN connection setup can exceed the local HA deadline. */
+  computerTimeoutMs?: number;
   positiveTtlMs?: number;
   negativeTtlMs?: number;
 };
-type Descriptor = { key: string; target: string; path: string };
+type Descriptor = {
+  key: string;
+  target: string;
+  path: string;
+  source: 'home_assistant' | 'computer';
+  inlineAsset?: ArtworkAsset;
+};
 type Entry = Descriptor & {
   token: string;
   expiresAt: number;
@@ -76,6 +94,7 @@ export class HomeAssistantArtworkService implements ArtworkProvider {
       imageBytes: options.maxImageBytes ?? 2 * 1024 * 1024,
       concurrent: options.maxConcurrent ?? 2,
       timeout: options.timeoutMs ?? 3000,
+      computerTimeout: options.computerTimeoutMs ?? 8000,
       positiveTtl: options.positiveTtlMs ?? 300_000,
       negativeTtl: options.negativeTtlMs ?? 30_000,
     };
@@ -115,7 +134,7 @@ export class HomeAssistantArtworkService implements ArtworkProvider {
         result[target] = {
           url: null,
           status: 'unavailable',
-          source: 'home_assistant',
+          source: descriptor.source,
         };
         continue;
       }
@@ -143,7 +162,7 @@ export class HomeAssistantArtworkService implements ArtworkProvider {
       result[target] = {
         url: entry?.asset ? `${pathPrefix}${entry.token}` : null,
         status: entry?.asset ? 'available' : 'unavailable',
-        source: 'home_assistant',
+        source: descriptor.source,
       };
     }
     return result;
@@ -191,8 +210,68 @@ export class HomeAssistantArtworkService implements ArtworkProvider {
   }
 
   private descriptor(target: string, state: RoomState): Descriptor | null {
+    const route = this.options.computer?.routes[target];
+    if (route && state.music.devices[target]?.observed.source === route.source)
+      return this.computerDescriptor(target, route, state);
     if (!this.eligible(target, state)) return null;
     return this.metadataDescriptor(target);
+  }
+
+  private computerDescriptor(
+    target: string,
+    route: ComputerAudioRoute,
+    state: RoomState,
+  ): Descriptor | null {
+    const receiver = state.music.devices[target];
+    if (
+      !receiver ||
+      receiver.availability !== 'available' ||
+      !(this.options.observationTrusted?.(target) ?? true) ||
+      !['playing', 'paused'].includes(receiver.observed.playback)
+    )
+      return null;
+    const media = this.options.computer!.selector.selectedMedia(state, target);
+    const artwork = ComputerArtworkSchema.safeParse(media?.artwork);
+    if (!media || !artwork.success) return null;
+    const reference = artwork.data;
+    const path =
+      reference.provider === 'spotify'
+        ? `https://i.scdn.co/image/${reference.id}`
+        : '';
+    let inlineAsset: ArtworkAsset | undefined;
+    if (reference.provider === 'inline') {
+      const body = Buffer.from(reference.data, 'base64');
+      if (
+        !body.length ||
+        body.length >
+          Math.min(24576, this.limits.imageBytes, this.limits.bytes) ||
+        body.toString('base64') !== reference.data ||
+        !matchesImageType(body, 'image/jpeg')
+      )
+        return null;
+      inlineAsset = { body, contentType: 'image/jpeg' };
+    }
+    const key = createHash('sha256')
+      .update(
+        JSON.stringify([
+          target,
+          route.deviceId,
+          state.computer.devices[route.deviceId]?.sessionId,
+          media.player,
+          media.title,
+          media.artists,
+          media.album,
+          reference,
+        ]),
+      )
+      .digest('hex');
+    return {
+      key,
+      target,
+      path,
+      source: 'computer',
+      ...(inlineAsset ? { inlineAsset } : {}),
+    };
   }
 
   private metadataDescriptor(target: string): Descriptor | null {
@@ -219,7 +298,7 @@ export class HomeAssistantArtworkService implements ArtworkProvider {
         ]),
       )
       .digest('hex');
-    return { key, target, path };
+    return { key, target, path, source: 'home_assistant' };
   }
 
   private async load(entry: Entry): Promise<void> {
@@ -232,22 +311,31 @@ export class HomeAssistantArtworkService implements ArtworkProvider {
         entry.abort.signal.addEventListener('abort', cancel, { once: true });
       });
       const expired = new Promise<never>((_, reject) => {
-        timeout = this.clock.setTimeout(() => {
-          entry.abort.abort();
-          reject(new Error('Artwork timeout'));
-        }, this.limits.timeout);
+        timeout = this.clock.setTimeout(
+          () => {
+            entry.abort.abort();
+            reject(new Error('Artwork timeout'));
+          },
+          entry.source === 'computer'
+            ? this.limits.computerTimeout
+            : this.limits.timeout,
+        );
       });
-      const image = this.fetchImage(entry);
+      const image = entry.inlineAsset
+        ? Promise.resolve(entry.inlineAsset)
+        : this.fetchImage(entry);
       const asset = await Promise.race([image, expired, cancelled]);
       if (
         this.entries.get(entry.key) === entry &&
         !this.disposed &&
-        this.metadataDescriptor(entry.target)?.key === entry.key
+        (entry.source === 'computer' ||
+          this.metadataDescriptor(entry.target)?.key === entry.key)
       )
         entry.asset = asset;
     } catch {
       // Never log transport errors: they can contain HA URLs or credentials.
     } finally {
+      delete entry.inlineAsset;
       if (timeout !== undefined) this.clock.clearTimeout(timeout);
       if (cancel) entry.abort.signal.removeEventListener('abort', cancel);
       entry.abort.abort();
@@ -270,13 +358,17 @@ export class HomeAssistantArtworkService implements ArtworkProvider {
 
   private async fetchImage(entry: Entry): Promise<ArtworkAsset> {
     const response = await this.transport(
-      `${this.upstreamBaseUrl}${entry.path}`,
+      entry.source === 'computer'
+        ? entry.path
+        : `${this.upstreamBaseUrl}${entry.path}`,
       {
         method: 'GET',
         redirect: 'manual',
         signal: entry.abort.signal,
         headers: {
-          Authorization: `Bearer ${this.options.token}`,
+          ...(entry.source === 'home_assistant'
+            ? { Authorization: `Bearer ${this.options.token}` }
+            : {}),
           Accept: 'image/jpeg, image/png, image/webp, image/gif',
         },
       },
@@ -370,7 +462,7 @@ export function safeImagePath(
 ): string | null {
   if (!value || value.length > 2048) return null;
   const match =
-    /^(\/api\/media_player_proxy\/(media_player\.[a-z0-9_]+)|\/api\/image_proxy\/image\.[a-z0-9_]+)(\?token=[A-Za-z0-9_-]{1,256})?$/.exec(
+    /^(\/api\/media_player_proxy\/(media_player\.[a-z0-9_]+)|\/api\/image_proxy\/image\.[a-z0-9_]+)(\?token=[A-Za-z0-9_-]{1,256}(?:&cache=[A-Za-z0-9_-]{1,128})?)?$/.exec(
       value,
     );
   if (!match || (match[2] && match[2] !== entityId)) return null;

@@ -1,5 +1,19 @@
 # Hub display implementation (workstream A)
 
+## Refinements after physical-screen feedback
+
+The one-person correction is now a quiet outlined person icon with `1`, retaining
+the explicit accessible name, one-tap action, pending lock and sensor-confirmation
+semantics. Its 56 × 44 px touch target remains comfortable without competing with
+the clock. The visible music Details button is removed from both Hub roles;
+advanced music information remains available in the desktop panel.
+
+Bed reserves the top-right system-overlay area: its climate rail omits PM2.5 and
+leaves 128 px clear at the right edge of the 1024 × 600 viewport. Desk continues
+to show all four climate metrics. There is no main-page scrolling at 1024 × 600
+or 1280 × 800. The subsequent sections include historical implementation evidence
+from before these refinements.
+
 The display uses the shared mineral palette, local humanist system fonts, warm
 Bed and cool Desk accents. The fixed clock/climate rail sits above asymmetric
 scene and music areas. The target CSS viewports are 1024×600 and 1280×800.
