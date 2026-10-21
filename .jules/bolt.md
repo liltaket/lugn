@@ -7,3 +7,8 @@
 
 **Learning:** `Intl.DateTimeFormat` and `Intl.NumberFormat` instantiation is relatively expensive in JavaScript. If instantiated inline inside highly-frequent operations like render loops or timer callbacks (e.g. `setClock` running every second), it can become a performance bottleneck.
 **Action:** Always extract and cache `Intl.DateTimeFormat` and `Intl.NumberFormat` instances into module-level variables or class-level properties when used repeatedly or on hot paths.
+
+## 2026-10-21 - Optimize DOM Querying: Avoid querySelectorAll + Array.find
+
+**Learning:** Converting `querySelectorAll` NodeLists to arrays to use array methods like `.find()` causes unnecessary O(N) memory allocation and slow node traversal.
+**Action:** Use `document.querySelector` with a specific CSS selector (e.g., escaping dynamic variables with `CSS.escape()`) instead to find a single element by a data attribute.
