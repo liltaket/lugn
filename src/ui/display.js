@@ -64,6 +64,7 @@ const refs = {
   clockDate: document.querySelector('#clock-date'),
   roomPresence: document.querySelector('#room-presence'),
   presenceCountOne: document.querySelector('#presence-count-one'),
+  presenceCountLabel: document.querySelector('#presence-count-label'),
   clockTop: document.querySelector('.clock-top'),
   connection: document.querySelector('#connection-notice'),
   connectionMessage: document.querySelector('#connection-message'),
@@ -1691,7 +1692,7 @@ function renderPresenceCorrection(payload) {
   refs.presenceCountOne.disabled = busy || isUnavailable();
   refs.presenceCountOne.setAttribute('aria-busy', String(busy));
   refs.clockTop.dataset.correction = String(available);
-  setText(refs.presenceCountOne, busy ? 'Sparar …' : 'Sätt till 1 person');
+  setText(refs.presenceCountLabel, busy ? '…' : '1');
 }
 
 async function getState() {

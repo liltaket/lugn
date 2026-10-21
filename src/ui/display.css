@@ -97,9 +97,27 @@ button[aria-busy='true'] {
   font-variant-numeric: tabular-nums;
 }
 .presence-count-button {
-  max-width: 150px;
-  font-size: 14px;
-  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 56px;
+  min-height: 44px;
+  padding: 8px;
+  color: var(--muted);
+  font-size: 15px;
+  border-color: transparent;
+  border-radius: 22px;
+  background: transparent;
+}
+.presence-count-button:focus-visible,
+.presence-count-button:active:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-raised);
+}
+.presence-count-button[aria-busy='true'] {
+  color: var(--accent);
+  border-color: var(--line);
 }
 .clock-meta {
   display: flex;
@@ -148,6 +166,14 @@ button[aria-busy='true'] {
 }
 .environment-metric[data-state='missing'] .metric-value {
   color: var(--muted);
+}
+/* Keep the Bed Hub's top-right system overlay clear. */
+.screen[data-role='bed'] .environment-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-inline-end: 96px;
+}
+.screen[data-role='bed'] [data-metric='pm25'] {
+  display: none;
 }
 .control-layout {
   display: grid;
@@ -417,7 +443,7 @@ h2 {
 }
 .music-presets {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 .music-preset-button {
