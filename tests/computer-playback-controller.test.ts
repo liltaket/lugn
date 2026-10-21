@@ -797,3 +797,38 @@ it('never treats pending desktop Resume intent as proof for early receiver pass-
   await pending;
   expect(s.controller.needsInputOpen(target)).toBe(true);
 });
+
+it('allows a live guarded routine Pause while preserving the absence-only gate for unguarded callers', async () => {
+  const s = setup();
+  s.refs.pauseAllowed = false;
+  const routine = {
+    actor: { type: 'routine' as const, id: 'good-night' },
+    requestId: 'live-run',
+  };
+  await expect(s.controller.request(target, pause, routine)).rejects.toThrow(
+    'no longer allowed',
+  );
+  expect(s.sendCommand).not.toHaveBeenCalled();
+  const result = await s.controller.request(target, pause, routine, () => true);
+  expect(result.status).toBe('confirmed');
+  expect(s.sendCommand).toHaveBeenCalledOnce();
+  expect(s.sendCommand.mock.calls[0]![0].action).toBe('pause');
+  s.refs.resumeAllowed = false;
+  await expect(
+    s.controller.request(target, resume, routine, () => true),
+  ).rejects.toThrow('no longer allowed');
+  expect(s.sendCommand).toHaveBeenCalledOnce();
+});
+
+it('rejects an invalidated routine guard before sending computer playback commands', async () => {
+  const s = setup();
+  await expect(
+    s.controller.request(
+      target,
+      pause,
+      { actor: { type: 'routine', id: 'cancelled' } },
+      () => false,
+    ),
+  ).rejects.toThrow('superseded');
+  expect(s.sendCommand).not.toHaveBeenCalled();
+});
