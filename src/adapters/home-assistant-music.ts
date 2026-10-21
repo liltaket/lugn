@@ -1,3 +1,4 @@
+import type { HomeAssistantArtworkMetadata } from '../core/artwork.js';
 import { z } from 'zod';
 import { ComputerDeviceIdSchema } from '../core/computer.js';
 import type { Clock } from '../core/clock.js';
@@ -108,6 +109,11 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
   private readonly listeners = new Set<
     (observation: MusicObservation) => void
   >();
+  private nextArtworkGeneration = 0;
+  private readonly artworkByTarget = new Map<
+    string,
+    HomeAssistantArtworkMetadata
+  >();
   private readonly lastUpdatedByEntity = new Map<string, number>();
   constructor(
     config: HomeAssistantMusicConfig,
@@ -187,6 +193,11 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  /** Server-only; never include this object in public state or diagnostic logs. */
+  artworkMetadata(target: string): HomeAssistantArtworkMetadata | null {
+    const metadata = this.artworkByTarget.get(target);
+    return metadata ? { ...metadata } : null;
+  }
   async readStatus(
     rawTarget: string,
     signal?: AbortSignal,
@@ -247,6 +258,32 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
       result.data,
       'home_assistant.state_changed',
     );
+    const attributes = result.data.attributes ?? {};
+    const privateText = (key: string): string | null => {
+      const value = attributes[key];
+      return typeof value === 'string' && value.length <= 2048 ? value : null;
+    };
+    if (observation.available) {
+      const metadata = {
+        source: observation.values.source,
+        title: observation.values.title,
+        artist: observation.values.artist ?? null,
+        album: observation.values.album ?? null,
+        mediaContentId: privateText('media_content_id'),
+        entityPicture: privateText('entity_picture'),
+      };
+      const previous = this.artworkByTarget.get(target);
+      const { generation: previousGeneration, ...previousMetadata } =
+        previous ?? {};
+      this.artworkByTarget.set(target, {
+        ...metadata,
+        generation:
+          previousGeneration !== undefined &&
+          JSON.stringify(previousMetadata) === JSON.stringify(metadata)
+            ? previousGeneration
+            : ++this.nextArtworkGeneration,
+      });
+    } else this.artworkByTarget.delete(target);
     for (const listener of this.listeners)
       listener(structuredClone(observation));
     return true;
@@ -277,6 +314,12 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
     const volume = attributes['volume_level'];
     const text = (key: string): string | null =>
       typeof attributes[key] === 'string' ? attributes[key] : null;
+    const boundedText = (key: string, limit: number): string | null => {
+      const value = text(key);
+      return value && value.length <= limit ? value : null;
+    };
+    const artist = available ? boundedText('media_artist', 1024) : null;
+    const album = available ? boundedText('media_album_name', 1024) : null;
     const observation: MusicObservation = {
       target,
       available,
@@ -295,6 +338,8 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
             : null,
         source: available ? text('source') : null,
         title: available ? text('media_title') : null,
+        ...(artist === null ? {} : { artist }),
+        ...(album === null ? {} : { album }),
       },
       provenance: {
         actor: { type: 'home_assistant' },

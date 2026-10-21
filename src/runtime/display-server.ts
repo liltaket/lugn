@@ -32,6 +32,7 @@ import type {
   MusicPlaybackPolicySnapshot,
 } from '../application/music-automation.js';
 import type { StateEventStream } from '../core/event-stream.js';
+import type { ArtworkProvider } from '../core/artwork.js';
 
 const MAX_REQUEST_BYTES = 8 * 1024;
 const DisplaySceneRequestSchema = z
@@ -98,6 +99,7 @@ export type LugnDisplayServerOptions = {
     string,
     MusicPlaybackPolicySnapshot
   >;
+  artworkProvider?: ArtworkProvider;
   environmentProvider?: () => EnvironmentSnapshot;
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
 };
@@ -303,6 +305,40 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'GET' &&
+        hubRequest.route.startsWith('/display-api/artwork/')
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        const token = /^\/display-api\/artwork\/([A-Za-z0-9_-]{32})$/.exec(
+          hubRequest.route,
+        )?.[1];
+        const asset = token
+          ? await this.options.artworkProvider?.read(
+              token,
+              this.options.stateProvider(),
+            )
+          : null;
+        if (!asset) {
+          sendJson(response, 404, { error: 'artwork_unavailable' });
+          return;
+        }
+        response.writeHead(200, {
+          'cache-control': 'no-store',
+          'content-type': asset.contentType,
+          'content-length': asset.body.byteLength,
+          'x-content-type-options': 'nosniff',
+          'cross-origin-resource-policy': 'same-origin',
+        });
+        response.end(asset.body);
+        return;
+      }
+      if (
+        request.method === 'GET' &&
         hubRequest.route === '/display-api/state'
       ) {
         const sourceAddress = request.socket.remoteAddress ?? 'unknown';
@@ -413,6 +449,11 @@ export class LugnDisplayServer {
     return {
       state,
       computerNowPlaying: this.computerNowPlaying.snapshot(state),
+      artwork:
+        this.options.artworkProvider?.snapshot(
+          state,
+          `${this.pathForHub(hub.id)}display-api/artwork/`,
+        ) ?? {},
       deliveryRevision: ++this.nextDeliveryRevision,
       instanceId: this.instanceId,
       generatedAt: Date.now(),
@@ -477,16 +518,20 @@ export class LugnDisplayServer {
       }
     };
     let pendingUpdate: NodeJS.Immediate | undefined;
-    const unsubscribe = stream.subscribe(() => {
+    const scheduleSend = (): void => {
       if (pendingUpdate) return;
       pendingUpdate = setImmediate(() => {
         pendingUpdate = undefined;
         send();
       });
-    });
+    };
+    const unsubscribe = stream.subscribe(scheduleSend);
+    const unsubscribeArtwork =
+      this.options.artworkProvider?.subscribe?.(scheduleSend);
     const heartbeat = setInterval(send, 5_000);
     response.once('close', () => {
       unsubscribe();
+      unsubscribeArtwork?.();
       clearInterval(heartbeat);
       if (pendingUpdate) clearImmediate(pendingUpdate);
       this.eventStreams.delete(response);
