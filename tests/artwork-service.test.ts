@@ -295,6 +295,12 @@ describe('artwork upstream boundary', () => {
     '/api/media_player_proxy/media_player.room\\evil',
     '/api/media_player_proxy/media_player.room?url=http://evil.test',
     '/api/media_player_proxy/media_player.room?token=a&url=b',
+    '/api/media_player_proxy/media_player.room?token=a&cache=http://evil.test',
+    '/api/media_player_proxy/media_player.room?token=a&cache=abc&url=evil',
+    '/api/media_player_proxy/media_player.room?token=a&cache=abc&cache=def',
+    '/api/media_player_proxy/media_player.room?token=a&cache=%2F%2Fevil.test',
+    '/api/media_player_proxy/media_player.room?token=a&cache=',
+    `/api/media_player_proxy/media_player.room?token=a&cache=${'a'.repeat(129)}`,
     '/api/media_player_proxy/media_player.room#evil',
     '/local/art.svg',
     '/api/image_proxy/image.room%00',
@@ -318,6 +324,23 @@ describe('artwork upstream boundary', () => {
       ),
     ).toBe('/api/image_proxy/image.album?token=a-b_c');
     expect(safeImagePath(picture, 'media_player.room')).toBe(picture);
+  });
+  it('loads HA artwork with its standard token and cache-busting query without exposing either', async () => {
+    const s = setup();
+    const cachedPicture = `${picture}&cache=3c952aee3d482675`;
+    expect(safeImagePath(cachedPicture, 'media_player.room')).toBe(
+      cachedPicture,
+    );
+    s.metadata.entityPicture = cachedPicture;
+    url(s);
+    await settle();
+    const publicUrl = url(s)!;
+    expect(publicUrl).toMatch(/^\/ui\/api\/artwork\/[A-Za-z0-9_-]{32}$/);
+    expect(publicUrl).not.toContain('cache=');
+    expect(publicUrl).not.toContain('token=');
+    expect(s.fetch).toHaveBeenCalledOnce();
+    expect(s.fetch.mock.calls[0]![0]).toBe(`http://ha.test${cachedPicture}`);
+    expect(await s.service.read(token(publicUrl), s.state)).not.toBeNull();
   });
   it.each([
     'http://user:pw@ha.test',

@@ -370,7 +370,7 @@ export function safeImagePath(
 ): string | null {
   if (!value || value.length > 2048) return null;
   const match =
-    /^(\/api\/media_player_proxy\/(media_player\.[a-z0-9_]+)|\/api\/image_proxy\/image\.[a-z0-9_]+)(\?token=[A-Za-z0-9_-]{1,256})?$/.exec(
+    /^(\/api\/media_player_proxy\/(media_player\.[a-z0-9_]+)|\/api\/image_proxy\/image\.[a-z0-9_]+)(\?token=[A-Za-z0-9_-]{1,256}(?:&cache=[A-Za-z0-9_-]{1,128})?)?$/.exec(
       value,
     );
   if (!match || (match[2] && match[2] !== entityId)) return null;
