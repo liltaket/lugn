@@ -29,6 +29,47 @@ describe('runtime configuration cross references', () => {
     },
     scenes: [],
   };
+  it('accepts optional camera presentation config with validated local definitions and passive triggers', () => {
+    expect(loadConfig(minimal).cameraDashboard).toBeUndefined();
+    const cameraDashboard = {
+      cameras: [{ id: 'entry', name: 'Entré', entityId: 'camera.entry' }],
+      triggers: [
+        {
+          id: 'motion',
+          name: 'Rörelse',
+          cameraId: 'entry',
+          kind: 'state',
+          entityId: 'binary_sensor.entry_motion',
+          from: 'off',
+          to: 'on',
+        },
+      ],
+    };
+    expect(loadConfig({ ...minimal, cameraDashboard }).cameraDashboard).toEqual(
+      cameraDashboard,
+    );
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        cameraDashboard: {
+          ...cameraDashboard,
+          triggers: [{ ...cameraDashboard.triggers[0], cameraId: 'missing' }],
+        },
+      }),
+    ).toThrow('Unknown camera');
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        cameraDashboard: {
+          ...cameraDashboard,
+          cameras: [
+            { id: 'entry', name: 'Entré', entityId: 'https://camera.test/' },
+          ],
+        },
+      }),
+    ).toThrow('Invalid configuration');
+  });
+
   it('routes computer media only through an explicitly configured MQTT computer and input', () => {
     const config = {
       ...minimal,

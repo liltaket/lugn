@@ -152,6 +152,137 @@
           <a class="button button-quiet" href="#rutiner">Hantera rutiner</a>
         </section>
         <section
+          id="cameras-section"
+          class="cameras-section"
+          data-pages="oversikt intelligens"
+          aria-labelledby="cameras-title"
+          hidden
+        >
+          <div class="section-heading">
+            <div>
+              <h2 id="cameras-title">Utanför rummet</h2>
+              <p id="camera-web-summary">Kameravisning är avstängd.</p>
+            </div>
+            <div
+              id="camera-web-choices"
+              class="button-row"
+              role="group"
+              aria-label="Öppna kameravy"
+            ></div>
+          </div>
+          <section
+            id="camera-web-panel"
+            class="camera-web-panel"
+            aria-label="Kameravy"
+            hidden
+          >
+            <div class="camera-web-caption">
+              <div>
+                <strong id="camera-web-name"></strong
+                ><span id="camera-web-reason"></span>
+              </div>
+              <button
+                id="camera-web-close"
+                class="button button-quiet"
+                type="button"
+              >
+                Stäng <span id="camera-web-countdown" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div class="camera-web-frame">
+              <img id="camera-web-image" alt="" hidden /><span
+                id="camera-web-placeholder"
+                >Hämtar kamerabild …</span
+              >
+            </div>
+            <p
+              id="camera-web-media-status"
+              class="camera-web-media-status"
+              role="status"
+              aria-live="off"
+            ></p>
+          </section>
+          <details class="camera-preferences">
+            <summary>Kameror och händelser</summary>
+            <p>
+              Visa en tyst kamerabild vid en händelse. Rummets ljus- och
+              musikkontroller finns kvar. Befintliga ljud och automationer
+              ändras inte.
+            </p>
+            <form id="camera-form">
+              <fieldset id="camera-fields">
+                <legend>Visning</legend>
+                <label class="check-label"
+                  ><input id="camera-enabled" type="checkbox" />Tillåt
+                  kameravisning</label
+                >
+                <label class="check-label"
+                  ><input id="camera-automatic" type="checkbox" />Öppna
+                  automatiskt vid valda händelser</label
+                >
+                <label class="camera-duration"
+                  >Visa i
+                  <input
+                    id="camera-duration"
+                    type="number"
+                    min="5"
+                    max="120"
+                    step="1"
+                    required
+                    value="30"
+                  />
+                  sekunder</label
+                >
+                <div class="camera-preferences-grid">
+                  <fieldset>
+                    <legend>Kameror</legend>
+                    <div
+                      id="camera-camera-fields"
+                      class="camera-check-list"
+                    ></div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>Händelser</legend>
+                    <div
+                      id="camera-trigger-fields"
+                      class="camera-check-list"
+                    ></div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>Skärmar</legend>
+                    <div
+                      id="camera-viewer-fields"
+                      class="camera-check-list"
+                    ></div>
+                  </fieldset>
+                </div>
+                <div class="button-row">
+                  <button
+                    id="camera-save"
+                    class="button button-primary"
+                    type="submit"
+                    disabled
+                  >
+                    Spara kamerainställningar</button
+                  ><button
+                    id="camera-discard"
+                    class="button button-quiet"
+                    type="button"
+                    disabled
+                  >
+                    Kasta utkast
+                  </button>
+                </div>
+              </fieldset>
+              <p
+                id="camera-settings-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+            </form>
+          </details>
+        </section>
+        <section
           class="system-panel"
           data-pages="oversikt system"
           aria-label="Rums- och systemstatus"

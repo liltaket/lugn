@@ -1,3 +1,7 @@
+import {
+  CameraDashboardConfigSchema,
+  type CameraDashboardConfig,
+} from '../core/cameras.js';
 import { HomeAssistantMusicMappingsSchema } from '../adapters/home-assistant-music.js';
 import { HomeAssistantEnvironmentMappingsSchema } from '../adapters/home-assistant-environment.js';
 import { HomeAssistantHomePresenceConfigSchema } from '../adapters/home-assistant-home-presence.js';
@@ -294,6 +298,7 @@ const FileConfigSchema = z
     mqtt: MqttConfigSchema.optional(),
     presenceControl: PresenceControlConfigSchema.optional(),
     display: DisplayConfigSchema.optional(),
+    cameraDashboard: CameraDashboardConfigSchema.optional(),
     prelight: z
       .object({
         targets: z
@@ -466,6 +471,7 @@ export type RuntimeConfig = {
       token: string;
     }>;
   };
+  cameraDashboard?: CameraDashboardConfig;
   prelight: {
     targets: Record<string, LightingValues>;
     maxDurationMs: number;
@@ -613,6 +619,9 @@ export function loadRuntimeConfig(
       ? {}
       : { presenceControl: fileConfig.presenceControl }),
     ...(display === undefined ? {} : { display }),
+    ...(fileConfig.cameraDashboard === undefined
+      ? {}
+      : { cameraDashboard: fileConfig.cameraDashboard }),
     prelight: fileConfig.prelight,
     lightingControlModes: fileConfig.lightingControlModes,
     ...(fileConfig.scenes === undefined ? {} : { scenes: fileConfig.scenes }),

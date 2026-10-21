@@ -916,3 +916,103 @@ h2 {
 .music-command-state {
   -webkit-line-clamp: 1;
 }
+
+/* The camera shares the music column; lighting and music transport stay reachable. */
+.camera-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.camera-choices button {
+  flex: 1;
+  background: var(--surface);
+}
+.music-section[data-camera='true'] .music-feature,
+.music-section[data-camera='true'] .music-presets,
+.music-section[data-camera='true'] .music-volume-policy,
+.music-section[data-camera='true'] #music-player-status {
+  display: none;
+}
+.music-section[data-camera='true'] {
+  gap: 10px;
+}
+.camera-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.camera-caption {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.camera-caption > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.camera-caption strong {
+  font-size: 21px;
+  font-weight: 500;
+}
+.camera-caption span:not(#camera-countdown) {
+  font-size: 13px;
+  color: var(--quiet);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.camera-caption button {
+  min-height: 48px;
+  background: transparent;
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+#camera-countdown {
+  color: var(--muted);
+  font-size: 14px;
+}
+.camera-frame {
+  flex: 1;
+  position: relative;
+  min-height: 100px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #101715;
+  display: grid;
+  place-items: center;
+}
+.camera-frame img {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+#camera-placeholder {
+  color: var(--quiet);
+  font-size: 15px;
+  padding: 16px;
+  text-align: center;
+}
+.camera-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+  min-height: 16px;
+}
+.music-section[data-camera='true'] .music-transport {
+  margin-top: auto;
+}
+@media (max-height: 650px) {
+  .music-section[data-camera='true'] .music-heading {
+    min-height: 30px;
+  }
+  .camera-caption strong {
+    font-size: 19px;
+  }
+}
