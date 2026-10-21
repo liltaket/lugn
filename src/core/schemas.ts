@@ -160,6 +160,8 @@ export const MusicObservationValuesSchema = z
     volume: z.number().min(0).max(1).nullable(),
     source: z.string().nullable(),
     title: z.string().nullable(),
+    artist: z.string().max(1024).nullable().optional(),
+    album: z.string().max(1024).nullable().optional(),
   })
   .strict();
 export type MusicObservationValues = z.infer<

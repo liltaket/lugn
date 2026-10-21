@@ -1,4 +1,5 @@
 import { MusicVolumeSettingsStore } from './music-volume-settings-store.js';
+import { HomeAssistantArtworkService } from './artwork-service.js';
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
@@ -328,6 +329,32 @@ export async function startRuntime(
         isMusicObservationTrusted(target),
       ]),
     );
+  const artwork = homeAssistantMusic
+    ? new HomeAssistantArtworkService(
+        {
+          baseUrl: config.homeAssistant.baseUrl,
+          token: config.homeAssistant.token,
+          entities: Object.fromEntries(
+            Object.entries(config.homeAssistant.music).map(
+              ([target, mapping]) => [target, mapping.entityId],
+            ),
+          ),
+          metadataProvider: (target) =>
+            homeAssistantMusic.artworkMetadata(target),
+          observationTrusted: (target) => isMusicObservationTrusted(target),
+          excludedSources: Object.fromEntries(
+            Object.entries(config.homeAssistant.music).flatMap(
+              ([target, mapping]) =>
+                mapping.computerAudio
+                  ? [[target, [mapping.computerAudio.source]]]
+                  : [],
+            ),
+          ),
+        },
+        homeAssistantFetch,
+        systemClock,
+      )
+    : undefined;
   const bufferedHomeAssistantEvents: unknown[] = [];
   const forwardHomeAssistantEvent = (event: unknown): void => {
     homeAssistantLighting.acceptStateChangedEvent(event);
@@ -487,6 +514,7 @@ export async function startRuntime(
     scenePresetStore,
     volumeSettingsStore,
     capabilities,
+    ...(artwork ? { artworkProvider: artwork } : {}),
     musicObservationTrustProvider: musicObservationTrust,
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
     integrations: () => ({
@@ -510,6 +538,7 @@ export async function startRuntime(
           token,
         })),
         capabilities,
+        ...(artwork ? { artworkProvider: artwork } : {}),
         presenceCountCorrectionAvailable: config.presenceControl !== undefined,
         scenes: Array.from(engine.scenes.values()),
         scenesProvider: () => Array.from(engine.scenes.values()),
@@ -593,6 +622,7 @@ export async function startRuntime(
     await displayServer?.start();
     castManager?.start();
   } catch (error) {
+    artwork?.dispose();
     await castManager?.stop();
     await displayServer?.stop();
     await http.stop();
@@ -618,6 +648,7 @@ export async function startRuntime(
   return {
     engine,
     async stop() {
+      artwork?.dispose();
       await castManager?.stop();
       await displayServer?.stop();
       await http.stop();

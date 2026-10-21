@@ -37,6 +37,12 @@ import type {
   CapabilityRegistry,
 } from '../application/capabilities.js';
 import type { LugnEngine } from '../application/lugn-engine.js';
+import type { ArtworkMap, ArtworkProvider } from '../core/artwork.js';
+import {
+  ExperienceRequestError,
+  experienceRoutes,
+  type ExperienceApi,
+} from '../application/experience-api.js';
 import {
   clerkFrontendApiOrigin,
   verifyClerkSessionToken,
@@ -68,6 +74,8 @@ export type LugnHttpServerOptions = {
   bearerToken?: string;
   engine: LugnEngine;
   capabilities: CapabilityRegistry;
+  experience?: ExperienceApi;
+  artworkProvider?: ArtworkProvider;
   integrations: () => Record<string, string>;
   /** Trust in each player's observations, independent of subscription health. */
   musicObservationTrustProvider?: () => Record<string, boolean>;
@@ -433,6 +441,91 @@ export class LugnHttpServer {
       sendJson(response, 200, this.uiOverview());
       return true;
     }
+    const artworkMatch = /^\/ui\/api\/artwork\/([A-Za-z0-9_-]{32})$/.exec(
+      pathname,
+    );
+    if (request.method === 'GET' && artworkMatch) {
+      const asset = await this.options.artworkProvider?.read(
+        artworkMatch[1]!,
+        this.options.engine.state,
+      );
+      if (!asset) {
+        sendJson(response, 404, { error: 'artwork_unavailable' });
+        return true;
+      }
+      response.writeHead(200, {
+        'content-type': asset.contentType,
+        'content-length': asset.body.byteLength,
+        'cache-control': 'private, no-store',
+        'x-content-type-options': 'nosniff',
+        'cross-origin-resource-policy': 'same-origin',
+        'content-security-policy': "default-src 'none'; sandbox",
+      });
+      response.end(asset.body);
+      return true;
+    }
+    if (request.method === 'GET' && pathname === '/ui/api/routines') {
+      const routines = this.options.experience?.snapshot().routines;
+      sendJson(
+        response,
+        routines === undefined ? 503 : 200,
+        routines ?? { error: 'routines_unavailable' },
+      );
+      return true;
+    }
+    const experienceRoute = experienceRoutes.find(
+      (route) => pathname === `/ui/api/${route}`,
+    );
+    if (request.method === 'POST' && experienceRoute) {
+      if (!this.isSameOrigin(request)) {
+        sendJson(response, 403, { error: 'same_origin_required' });
+        return true;
+      }
+      const csrf = request.headers['x-lugn-csrf'];
+      if (
+        typeof csrf !== 'string' ||
+        !this.constantTimeEqual(csrf, session.csrfToken)
+      ) {
+        sendJson(response, 403, { error: 'csrf_failed' });
+        return true;
+      }
+      if (!isJsonRequest(request)) {
+        sendJson(response, 415, {
+          error: 'content_type_must_be_application_json',
+        });
+        return true;
+      }
+      if (!this.options.experience) {
+        sendJson(response, 503, { error: 'experience_unavailable' });
+        return true;
+      }
+      const body = await readJsonBody(request);
+      if (this.getUiSession(request)?.csrfToken !== session.csrfToken) {
+        sendJson(response, 401, { error: 'unauthorized' });
+        return true;
+      }
+      try {
+        const result = await this.options.experience.request(
+          experienceRoute,
+          body,
+          {
+            actor: { type: 'user', id: 'ui' },
+            source: 'lugn.ui',
+          },
+        );
+        sendJson(response, 200, result);
+      } catch (error) {
+        if (error instanceof ExperienceRequestError)
+          sendJson(response, error.status, { error: error.code });
+        else if (error instanceof ZodError)
+          sendJson(response, 400, {
+            error: 'invalid_request',
+            issues: safeIssues(error),
+          });
+        else sendJson(response, 502, { error: 'experience_request_failed' });
+      }
+      return true;
+    }
     if (request.method === 'GET' && pathname === '/ui/api/events') {
       const sessionId = this.getUiSessionId(request);
       if (!sessionId) {
@@ -725,11 +818,17 @@ export class LugnHttpServer {
       });
     };
     const unsubscribe = this.options.engine.stream.subscribe(scheduleSend);
+    const unsubscribeExperience =
+      this.options.experience?.subscribe(scheduleSend);
+    const unsubscribeArtwork =
+      this.options.artworkProvider?.subscribe?.(scheduleSend);
     const heartbeat = setInterval(send, 15_000);
     const cleanup = (): void => {
       clearInterval(heartbeat);
       if (pendingUpdate) clearImmediate(pendingUpdate);
       unsubscribe();
+      unsubscribeExperience?.();
+      unsubscribeArtwork?.();
       this.uiEventStreams.delete(response);
     };
     response.once('close', cleanup);
@@ -742,6 +841,7 @@ export class LugnHttpServer {
   }
 
   private uiOverview(): {
+    artwork: ArtworkMap;
     health: { status: 'ok' | 'degraded'; integrations: Record<string, string> };
     instanceId: string;
     deliveryRevision: number;
@@ -768,6 +868,12 @@ export class LugnHttpServer {
     );
     return {
       health: { status: connected ? 'ok' : 'degraded', integrations },
+      ...this.options.experience?.snapshot(),
+      artwork:
+        this.options.artworkProvider?.snapshot(
+          this.options.engine.state,
+          '/ui/api/artwork/',
+        ) ?? {},
       instanceId: this.instanceId,
       deliveryRevision: ++this.nextDeliveryRevision,
       musicObservationTrust:
