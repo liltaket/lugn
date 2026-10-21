@@ -1,9 +1,10 @@
 # Workstream E: local Home Assistant artwork
 
 This slice supplies a server-only HA metadata store, an optional artwork provider,
-and authenticated Hub image delivery. It introduces no automation, external
-metadata lookup, frontend changes, runtime composition, device commands or startup
-network contact. All development evidence uses fake HA, FakeClock and loopback HTTP.
+and authenticated Hub/web image delivery. Runtime composition shares the provider
+between both surfaces. It introduces no automation or external metadata lookup;
+construction performs no network contact. All development evidence uses fake HA,
+FakeClock and loopback HTTP.
 
 ## Integration API
 
