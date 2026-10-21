@@ -1920,7 +1920,8 @@ describe('Hub Optical computer media projection', () => {
         runInContext(`render(${JSON.stringify(payload)})`, ui.context);
 
         expect(ui.get('#music-title').textContent).toBe('Catch Me');
-        expect(ui.get('#music-source').textContent).toBe('WizTheMc');
+        expect(ui.get('#music-artist').textContent).toBe('WizTheMc');
+        expect(ui.get('#music-source').textContent).toBe('Optical');
         expect(ui.get('#music-player-status').textContent).toBe('Spelar');
         expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(
           'true',
@@ -2334,7 +2335,8 @@ describe('Hub Optical computer media projection', () => {
       ).toBeLessThanOrEqual(56);
       expect(ui.get('#music-title').textContent).toMatch(/^<img.*…$/);
       expect(ui.get('#music-title').children).toHaveLength(0);
-      expect(ui.get('#music-source').textContent).toBe('Artist');
+      expect(ui.get('#music-artist').textContent).toBe('Artist');
+      expect(ui.get('#music-source').textContent).toBe('Optical');
       expect(ui.get('#music-source').children).toHaveLength(0);
     } finally {
       ui.windowListeners.get('pagehide')?.();

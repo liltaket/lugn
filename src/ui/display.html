@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#111613" />
+    <meta name="theme-color" content="#18201f" />
     <title>Lugn · Rumskontroll</title>
     <link rel="stylesheet" href="./display.css" />
     <script src="./display.js" defer></script>
@@ -99,9 +99,53 @@
           id="scene-section"
           aria-labelledby="scene-heading"
         >
-          <h1 id="scene-heading">Ljuslägen</h1>
+          <div class="section-heading">
+            <h1 id="scene-heading">Ljuslägen</h1>
+            <button
+              id="context-details-button"
+              class="quiet-button"
+              type="button"
+              aria-expanded="false"
+              aria-controls="context-panel"
+              hidden
+            >
+              Rutiner &amp; förslag
+            </button>
+          </div>
+          <section
+            class="context-strip"
+            id="context-strip"
+            aria-label="Aktuellt"
+            hidden
+          >
+            <div class="context-copy" aria-live="polite" aria-atomic="true">
+              <strong id="context-title"></strong
+              ><span id="context-description"></span>
+            </div>
+            <div class="context-actions" id="context-actions"></div>
+          </section>
+          <section
+            class="context-panel"
+            id="context-panel"
+            aria-label="Rutiner och förslag"
+            tabindex="-1"
+            hidden
+          >
+            <div id="context-list" class="context-list"></div>
+          </section>
           <div class="scene-grid" id="scene-grid" aria-live="polite">
             <p class="section-empty">Hämtar ljuslägen …</p>
+          </div>
+          <div
+            id="scene-pagination"
+            class="scene-pagination"
+            role="group"
+            aria-label="Fler ljuslägen"
+            hidden
+          >
+            <button id="scene-previous" type="button">Föregående</button>
+            <span id="scene-page-label"></span>
+            <button id="scene-next" type="button">Nästa</button>
           </div>
         </section>
 
@@ -110,9 +154,18 @@
             <h2 id="music-heading">Musik</h2>
             <span id="music-player-status" role="status"></span>
           </div>
-          <div class="music-now-playing" id="music-now-playing">
-            <strong id="music-title">Ingen musik spelar</strong>
-            <span id="music-source">Välj Spotify DJ eller Optical</span>
+          <div class="music-feature">
+            <div class="music-artwork" id="music-artwork" data-state="missing">
+              <div class="artwork-fallback" aria-hidden="true">
+                <span>♪</span>
+              </div>
+              <img id="music-artwork-image" alt="" hidden />
+            </div>
+            <div class="music-now-playing" id="music-now-playing">
+              <strong id="music-title">Ingen musik spelar</strong>
+              <span id="music-artist" hidden></span>
+              <span id="music-source">Välj Spotify DJ eller Optical</span>
+            </div>
           </div>
           <div
             class="music-presets"
@@ -192,12 +245,7 @@
               id="music-authority-state"
               role="status"
             ></span>
-            <span class="volume-policy-state" id="music-volume-target-state"
-              >Väntar på volymregel</span
-            >
-            <span class="volume-policy-state" id="music-playback-policy"
-              >Autostartvillkor okända</span
-            >
+
             <span
               class="music-command-state"
               id="music-command-state"
@@ -252,8 +300,16 @@
           aria-labelledby="music-details-heading"
           hidden
         >
-          <h2 id="music-details-heading">Varför och vilka nivåer?</h2>
-          <div class="music-details-scroll">
+          <h2 id="music-details-heading">Musikens villkor</h2>
+          <div
+            class="music-details-scroll"
+            tabindex="0"
+            aria-label="Musikförklaringar"
+          >
+            <p id="music-authority-detail" hidden></p>
+            <p id="music-command-detail" hidden></p>
+            <p id="music-volume-target-state">Väntar på volymregel</p>
+            <p id="music-playback-policy">Autostartvillkor okända</p>
             <dl class="music-facts">
               <div>
                 <dt>Automatik aktiverad</dt>
