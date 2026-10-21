@@ -1,0 +1,203 @@
+{
+  "instanceId": "fixture-only",
+  "deliveryRevision": 1,
+  "generatedAt": 1792611720000,
+  "role": "bed",
+  "presenceCountCorrectionAvailable": true,
+  "scenes": [
+    {
+      "id": "scene.all_off",
+      "name": "Helt släckt"
+    },
+    {
+      "id": "scene.soft_light",
+      "name": "Mysljus"
+    },
+    {
+      "id": "scene.everyday_light",
+      "name": "Vardagsljus"
+    },
+    {
+      "id": "scene.movie_light",
+      "name": "Filmkväll"
+    },
+    {
+      "id": "scene.focus_light",
+      "name": "Fokus"
+    }
+  ],
+  "environment": {
+    "temperature": {
+      "value": 21.4,
+      "unit": "°C",
+      "observedAt": 1792611720000
+    },
+    "humidity": {
+      "value": 43,
+      "unit": "%",
+      "observedAt": 1792611720000
+    },
+    "co2": {
+      "value": 612,
+      "unit": "ppm",
+      "observedAt": 1792611720000
+    },
+    "pm25": {
+      "value": 2,
+      "unit": "µg/m³",
+      "observedAt": 1792611720000
+    }
+  },
+  "musicObservationConnected": true,
+  "state": {
+    "revision": 1,
+    "presence": {
+      "state": "occupied",
+      "personCount": 2
+    },
+    "homePresence": {
+      "state": "home"
+    },
+    "lighting": {
+      "currentScene": "scene.soft_light",
+      "devices": {}
+    },
+    "music": {
+      "devices": {
+        "music.room": {
+          "availability": "available",
+          "observed": {
+            "playback": "playing",
+            "title": "The Sea",
+            "artist": "Hania Rani",
+            "source": "Spotify",
+            "volume": 0.23
+          },
+          "requested": {},
+          "allowedSources": ["Spotify", "Optical In"]
+        }
+      },
+      "commands": [],
+      "volumeChanges": {}
+    },
+    "commands": []
+  },
+  "musicVolumePolicies": {
+    "music.room": {
+      "mode": "auto",
+      "authorityControlBlocked": null,
+      "policyEnabled": true,
+      "policyActive": true,
+      "activeOwner": "lugn",
+      "effectiveTarget": 0.23,
+      "target": 0.23,
+      "configuredBaseline": 0.35,
+      "baseline": 0.35,
+      "activityReason": "automatic",
+      "dailyOffset": -0.12,
+      "personOffset": 0
+    }
+  },
+  "musicPlaybackPolicies": {
+    "music.room": {
+      "activityReason": "eligible",
+      "entryEligible": true,
+      "quietHours": false,
+      "manualPause": null
+    }
+  },
+  "routines": {
+    "version": 1,
+    "generation": "fixture-1",
+    "definitions": [
+      {
+        "id": "night",
+        "kind": "good_night",
+        "name": "God natt",
+        "enabled": true,
+        "schedule": null,
+        "steps": [
+          {
+            "type": "scene",
+            "sceneId": "scene.soft_light"
+          },
+          {
+            "type": "delay",
+            "durationMs": 900000
+          },
+          {
+            "type": "scene",
+            "sceneId": "scene.all_off"
+          }
+        ]
+      },
+      {
+        "id": "morning",
+        "kind": "good_morning",
+        "name": "God morgon",
+        "enabled": true,
+        "schedule": {
+          "time": "07:15",
+          "weekdays": [1, 2, 3, 4, 5]
+        },
+        "steps": [
+          {
+            "type": "scene",
+            "sceneId": "scene.everyday_light"
+          }
+        ]
+      }
+    ],
+    "runs": [],
+    "next": [
+      {
+        "routineId": "morning",
+        "at": 1792646100000
+      }
+    ]
+  },
+  "intelligence": {
+    "generation": "fixture-1",
+    "settings": {
+      "version": 1,
+      "optical": {
+        "enabled": false,
+        "mode": "suggest",
+        "deviceId": "simulated-computer",
+        "target": "music.room",
+        "source": "Optical In",
+        "stabilityMs": 30000,
+        "cooldownMs": 300000,
+        "allowedActivities": ["work"],
+        "respectManual": true
+      },
+      "suggestions": {
+        "enabled": true,
+        "sceneMappings": {
+          "work": "scene.focus_light"
+        },
+        "cooldownMs": 300000
+      }
+    },
+    "suggestions": [
+      {
+        "id": "focus",
+        "kind": "scene",
+        "title": "Fokus för arbetsstunden",
+        "reason": "Datorn har varit aktiv i arbetsläge.",
+        "deviceId": "simulated-computer",
+        "sceneId": "scene.focus_light",
+        "createdAt": 1792611720000,
+        "expiresAt": 1792615320000
+      }
+    ],
+    "optical": []
+  },
+  "artwork": {
+    "music.room": {
+      "url": "/fixture-cover.svg",
+      "status": "available",
+      "source": "home_assistant"
+    }
+  }
+}
