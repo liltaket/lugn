@@ -25,8 +25,8 @@ means unknown/unavailable, never false. `media: []` means discovery succeeded an
 found no players; `media: null` means discovery failed. Unknown API state is
 cleared on connection loss; supported sources retain unchanged observations while
 their subscriptions remain healthy. `active_application: null` also covers no
-focused window (including desktop focus). No window captions, URLs or artwork
-are collected. Media titles/artists/albums are published; protect broker access.
+focused window (including desktop focus). No window captions or raw URLs are published. Artwork collection is disabled
+by default (`collect_artwork = false`). Media titles/artists/albums are published; protect broker access.
 
 ## Liveness, clocks, sessions and ordering
 
@@ -88,8 +88,22 @@ none/portal/limited=false, unknown=null. No active network probes are requested.
 `audio`: running PipeWire Stream/Output/Audio nodes, with reported application
 names and media roles. Running is stream state, not proof samples are audible;
 muted/zero-volume/silent streams may count. Capture and sink device nodes do not.
-`media`: MPRIS players sorted by bus name; metadata can be null. Playback status
-is Playing/Paused/Stopped or null. `content_type` is explicit xesam:contentType,
+`media`: MPRIS players sorted by bus name; metadata can be null. Optional `artwork`
+is either `{ "provider": "spotify", "id": "<40 lowercase hex characters>" }` or
+`{ "provider": "inline", "data": "<base64 JPEG>" }`. Old publishers omit it.
+When explicitly enabled, only `mpris:artUrl` is inspected: exact Spotify CDN image
+URLs become opaque IDs without fetching, while Firefox can provide a thumbnail
+from its own native or Snap MPRIS cache below `$HOME` (`.mozilla/firefox/firefox-mpris`
+or `snap/firefox/common/.mozilla/firefox/firefox-mpris`). Only direct numeric
+`<number>_<number>.png` files owned by the current user are accepted; symlinked
+files/directories, files over 2 MiB and images over 4096×4096 are rejected.
+PNG decoding is allocation-bounded and runs off the async runtime. Thumbnails
+are resized to at most 240×240 and re-encoded to a JPEG of at most 24 KiB
+(32768 base64 characters). No arbitrary file URL, external image fetch, local
+path, raw URL or browser history is emitted. Artwork can reveal viewed content;
+protect broker access. Collection does not enable targeted playback controls.
+Artwork is dropped before metadata if the 96 KiB media wire budget is reached.
+Playback status is Playing/Paused/Stopped or null. `content_type` is explicit xesam:contentType,
 not inferred from URL, title or browser identity.
 
 `inference` is advisory, separate from observations. Precedence:
@@ -99,7 +113,8 @@ playing MPRIS explicit video/audio content type → video/music; focused app →
 desktop; otherwise unknown. Fullscreen alone does not establish video/gaming.
 Rules match exact KWin app IDs, case sensitive. No process scans or title matching.
 
-Producer bounds: strings ≤512 UTF-8 bytes; media ≤64, artists per player ≤64,
+Producer bounds: metadata strings ≤512 UTF-8 bytes; artwork IDs ≤40 characters
+and inline JPEG base64 ≤32768 characters; media ≤64, artists per player ≤64,
 audio applications/roles ≤128 each; aggregate serialized media and audio each
 ≤96 KiB. Full
 snapshots remain below 256 KiB. Truncation limits telemetry, not desktop behavior.

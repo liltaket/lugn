@@ -38,12 +38,15 @@ const MAX_MEDIA_BYTES: usize = 96 * 1024;
 type Properties = HashMap<String, OwnedValue>;
 type PropertyChange = (String, Properties, Vec<String>);
 
-pub async fn session(tx: Sender<Event>) {
+pub async fn session(tx: Sender<Event>, collect_artwork: bool) {
     // Slow or broken media players must never delay screen-lock observations.
-    tokio::join!(lock_collector(tx.clone()), media_collector(tx));
+    tokio::join!(
+        lock_collector(tx.clone()),
+        media_collector(tx, collect_artwork)
+    );
 }
 
-async fn media_collector(tx: Sender<Event>) {
+async fn media_collector(tx: Sender<Event>, collect_artwork: bool) {
     let mut output = SessionOutput { tx, media: None };
     let mut retry = Duration::from_secs(1);
     loop {
@@ -51,7 +54,7 @@ async fn media_collector(tx: Sender<Event>) {
             return;
         }
         let started = Instant::now();
-        if let Err(error) = session_connected(&mut output).await {
+        if let Err(error) = session_connected(&mut output, collect_artwork).await {
             if output.tx.is_closed() {
                 return;
             }
@@ -297,6 +300,7 @@ impl SessionOutput {
 #[derive(Default)]
 struct SessionState {
     players: BTreeMap<String, PlayerState>,
+    collect_artwork: bool,
 }
 
 struct PlayerState {
@@ -330,9 +334,10 @@ impl SessionState {
     }
 
     async fn refresh_players(&mut self, connection: &Connection, names: Vec<String>) {
+        let collect_artwork = self.collect_artwork;
         let mut queries = stream::iter(names)
             .map(|name| async move {
-                let player = query_player(connection, &name).await;
+                let player = query_player(connection, &name, collect_artwork).await;
                 (name, player)
             })
             .buffer_unordered(8);
@@ -361,7 +366,11 @@ impl SessionState {
     }
 }
 
-async fn query_player(connection: &Connection, name: &str) -> Option<PlayerState> {
+async fn query_player(
+    connection: &Connection,
+    name: &str,
+    collect_artwork: bool,
+) -> Option<PlayerState> {
     let result = owner(connection, name).await;
     if matches!(result, Ok(None)) {
         return None;
@@ -373,7 +382,31 @@ async fn query_player(connection: &Connection, name: &str) -> Option<PlayerState
         let result = async {
             let root = get_all(connection, &player_owner, MPRIS).await?;
             let player = get_all(connection, &player_owner, PLAYER).await?;
-            let media = parse_media(name, root, player);
+            let art_url = if collect_artwork {
+                player
+                    .get("Metadata")
+                    .and_then(|v| v.try_clone().ok())
+                    .and_then(|v| Properties::try_from(v).ok())
+                    .and_then(|metadata| {
+                        metadata
+                            .get("mpris:artUrl")
+                            .and_then(|v| <&str>::try_from(v).ok())
+                            .filter(|v| v.len() <= 2048)
+                            .map(str::to_owned)
+                    })
+            } else {
+                None
+            };
+            let mut media = parse_media(name, root, player);
+            if collect_artwork {
+                media.artwork = crate::artwork::collect(
+                    name,
+                    media.identity.as_deref(),
+                    media.desktop_entry.as_deref(),
+                    art_url,
+                )
+                .await;
+            }
             // PlaybackStatus is required by MPRIS. Some services omit a
             // property whose getter failed while returning a successful GetAll.
             media
@@ -391,14 +424,17 @@ async fn query_player(connection: &Connection, name: &str) -> Option<PlayerState
     })
 }
 
-async fn session_connected(output: &mut SessionOutput) -> Result<()> {
+async fn session_connected(output: &mut SessionOutput, collect_artwork: bool) -> Result<()> {
     let connection = connect(false).await?;
     // Register every relevant signal before querying owners and initial state.
     let owners = owner_stream(&connection).await?;
     let properties =
         signal_stream(&connection, PROPERTIES, MPRIS_PATH, "PropertiesChanged").await?;
     let mut signals = select_all(vec![owners, properties]);
-    let mut state = SessionState::default();
+    let mut state = SessionState {
+        collect_artwork,
+        ..Default::default()
+    };
     state.discover_players(&connection, None).await?;
     state.publish(output).await?;
     let mut retry = Duration::from_secs(1);
@@ -506,10 +542,21 @@ fn parse_media(name: &str, root: Properties, mut player: Properties) -> Media {
         artists,
         album: string(&metadata, "xesam:album"),
         content_type: string(&metadata, "xesam:contentType"),
+        artwork: None,
     }
 }
 
 fn limit_media(media: Vec<Media>) -> Vec<Media> {
+    let mut artwork = BTreeMap::new();
+    let media = media
+        .into_iter()
+        .map(|mut player| {
+            if let Some(art) = player.artwork.take() {
+                artwork.insert(player.player.clone(), art);
+            }
+            player
+        })
+        .collect::<Vec<_>>();
     let mut result = Vec::new();
     let mut bytes = 2; // enclosing JSON array
     for mut player in media.into_iter().take(MAX_PLAYERS) {
@@ -533,6 +580,16 @@ fn limit_media(media: Vec<Media>) -> Vec<Media> {
         }
         bytes += added;
         result.push(player);
+    }
+    for player in &mut result {
+        let before = serde_json::to_vec(player).unwrap().len();
+        player.artwork = artwork.remove(&player.player);
+        let after = serde_json::to_vec(player).unwrap().len();
+        if bytes + after - before > MAX_MEDIA_BYTES {
+            player.artwork = None;
+        } else {
+            bytes += after - before;
+        }
     }
     result
 }
@@ -716,6 +773,42 @@ mod tests {
     }
 
     #[test]
+    fn artwork_budget_preserves_every_players_status_and_metadata() {
+        let players: Vec<_> = (0..MAX_PLAYERS)
+            .map(|index| Media {
+                player: format!("org.mpris.MediaPlayer2.fixture{index:02}"),
+                title: Some(format!("Track {index}")),
+                playback_status: Some("Playing".into()),
+                artwork: Some(crate::state::Artwork::Inline {
+                    data: "A".repeat(32768),
+                }),
+                ..Default::default()
+            })
+            .collect();
+        let without_art: Vec<_> = players
+            .iter()
+            .cloned()
+            .map(|mut player| {
+                player.artwork = None;
+                player
+            })
+            .collect();
+        let limited = limit_media(players);
+        assert_eq!(limited.len(), MAX_PLAYERS);
+        assert!(limited.iter().any(|player| player.artwork.is_some()));
+        assert!(limited.iter().any(|player| player.artwork.is_none()));
+        assert!(serde_json::to_vec(&limited).unwrap().len() <= MAX_MEDIA_BYTES);
+        let stripped: Vec<_> = limited
+            .into_iter()
+            .map(|mut player| {
+                player.artwork = None;
+                player
+            })
+            .collect();
+        assert_eq!(stripped, without_art);
+    }
+
+    #[test]
     fn ignores_position_and_refreshes_invalidated_metadata() {
         let properties: Properties = [("Position".into(), OwnedValue::from(100_i64))].into();
         assert!(!relevant_media_change(PLAYER, &properties, &[]));
@@ -782,6 +875,10 @@ mod tests {
         fn metadata(&self) -> Properties {
             [
                 ("xesam:title".into(), value("Fixture song")),
+                (
+                    "mpris:artUrl".into(),
+                    value("https://i.scdn.co/image/0123456789abcdef0123456789abcdef01234567"),
+                ),
                 ("xesam:contentType".into(), value("audio/flac")),
             ]
             .into()
@@ -879,7 +976,7 @@ mod tests {
             .await
             .unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-        let session_task = tokio::spawn(session(tx.clone()));
+        let session_task = tokio::spawn(session(tx.clone(), false));
         let network_task = tokio::spawn(network(tx));
         let mut observations = Observations::default();
         until(&mut rx, &mut observations, |state| {
@@ -895,6 +992,19 @@ mod tests {
                 .content_type
                 .as_deref(),
             Some("audio/flac")
+        );
+
+        assert!(observations.media.as_ref().unwrap()[0].artwork.is_none());
+        let enabled = query_player(&fixture, NAME, true)
+            .await
+            .unwrap()
+            .media
+            .unwrap();
+        assert_eq!(
+            enabled.artwork,
+            Some(crate::state::Artwork::Spotify {
+                id: "0123456789abcdef0123456789abcdef01234567".into(),
+            })
         );
 
         locked.store(true, Ordering::SeqCst);

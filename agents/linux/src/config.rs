@@ -26,6 +26,8 @@ pub struct Config {
     #[serde(default)]
     pub control_enabled: bool,
     #[serde(default)]
+    pub collect_artwork: bool,
+    #[serde(default)]
     pub video_app_ids: Vec<String>,
     #[serde(default)]
     pub music_app_ids: Vec<String>,
@@ -113,6 +115,7 @@ mod tests {
     fn control_is_opt_in_and_requires_credentials() {
         let mut c: Config = toml::from_str("device_id='desktop'\nmqtt_host='localhost'").unwrap();
         assert!(!c.control_enabled);
+        assert!(!c.collect_artwork);
         c.control_enabled = true;
         assert!(c.validate().is_err());
         c.mqtt_username = Some("synthetic-user".into());

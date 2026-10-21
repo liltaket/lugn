@@ -8,6 +8,8 @@ import { HomeAssistantArtworkService } from '../src/runtime/artwork-service.js';
 import { HomeAssistantMusicAdapter } from '../src/adapters/home-assistant-music.js';
 import { FakeClock } from '../src/core/clock.js';
 import type { ArtworkMap } from '../src/core/artwork.js';
+import { ComputerNowPlayingSelector } from '../src/application/computer-now-playing.js';
+import { unknownComputerReadings } from '../src/core/computer.js';
 
 const hubToken = 'a'.repeat(32);
 const png = Buffer.from(
@@ -18,7 +20,7 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
-async function setup() {
+async function setup(computerArtwork = false) {
   const finder = createServer();
   await new Promise<void>((resolve) => finder.listen(0, '127.0.0.1', resolve));
   const address = finder.address();
@@ -46,12 +48,18 @@ async function setup() {
         resolveImage = resolve;
       }),
   );
+  const routes = {
+    'music.room': { deviceId: 'desktop', source: 'Optical In' },
+  };
+  const selector = new ComputerNowPlayingSelector(routes);
   const artwork = new HomeAssistantArtworkService(
     {
       baseUrl: 'http://ha.test',
       token: 'private',
       entities: { 'music.room': 'media_player.room' },
       metadataProvider: (target) => adapter.artworkMetadata(target),
+      excludedSources: { 'music.room': ['Optical In'] },
+      computer: { routes: computerArtwork ? routes : {}, selector },
     },
     upstream,
     clock,
@@ -65,6 +73,8 @@ async function setup() {
     stateProvider: () => engine.state,
     stateStream: engine.stream,
     artworkProvider: artwork,
+    computerAudioMappings: routes,
+    computerNowPlayingSelector: selector,
   });
   const observe = (title: string) =>
     adapter.acceptState({
@@ -131,6 +141,65 @@ async function stream(base: string) {
 }
 
 describe('authenticated Hub artwork vertical slice (fake HA, loopback only)', () => {
+  it('delivers the selected Optical player title and Spotify artwork over SSE and the protected image route', async () => {
+    const s = await setup(true);
+    const receiver = s.engine.state.music.devices['music.room']!;
+    receiver.observed.source = 'Optical In';
+    s.engine.acceptComputerObservation({
+      deviceId: 'desktop',
+      availability: 'online',
+      freshness: 'fresh',
+      reason: 'live',
+      observedAt: 0,
+      receivedAt: 0,
+      sessionId: 'session-1',
+      sequence: 1,
+      observed: {
+        ...unknownComputerReadings(),
+        media: [
+          {
+            player: 'spotify',
+            identity: 'Spotify',
+            desktopEntry: 'spotify',
+            playback: 'playing',
+            title: 'Computer song',
+            artists: ['Artist'],
+            album: 'Album',
+            contentType: null,
+            artwork: { provider: 'spotify', id: 'a'.repeat(40) },
+          },
+        ],
+      },
+      activity: {
+        classification: 'music',
+        source: 'desktop-agent',
+        basis: null,
+      },
+      lastEvent: null,
+    });
+    const events = await stream(s.base);
+    const first = await events.next();
+    expect(first).toMatchObject({
+      computerNowPlaying: { 'music.room': { title: 'Computer song' } },
+    });
+    expect(s.upstream.mock.calls[0]![0]).toBe(
+      `https://i.scdn.co/image/${'a'.repeat(40)}`,
+    );
+    s.finish();
+    const ready = await events.next();
+    expect(ready.artwork['music.room']).toMatchObject({
+      source: 'computer',
+      status: 'available',
+    });
+    const image = await fetch(s.origin + ready.artwork['music.room']!.url);
+    expect(image.status).toBe(200);
+    expect(Buffer.from(await image.arrayBuffer())).toEqual(png);
+    s.engine.state.computer.devices['desktop']!.freshness = 'stale';
+    expect(
+      (await fetch(s.origin + ready.artwork['music.room']!.url)).status,
+    ).toBe(404);
+  });
+
   it('keeps polling, SSE and essential controls responsive during slow images and publishes artwork when ready', async () => {
     const s = await setup();
     const events = await stream(s.base);

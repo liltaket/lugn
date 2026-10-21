@@ -1,5 +1,6 @@
 import { MusicVolumeSettingsStore } from './music-volume-settings-store.js';
 import { HomeAssistantArtworkService } from './artwork-service.js';
+import { ComputerNowPlayingSelector } from '../application/computer-now-playing.js';
 import { RoutineService } from '../application/routines.js';
 import { createRoutineTemplates } from '../core/routines.js';
 import { RoutineStore } from './routine-store.js';
@@ -376,6 +377,19 @@ export async function startRuntime(
         isMusicObservationTrusted(target),
       ]),
     );
+  const computerAudioMappings = Object.fromEntries(
+    Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+      mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
+    ),
+  );
+  const computerNowPlaying = new ComputerNowPlayingSelector(
+    computerAudioMappings,
+  );
+  computerNowPlaying.observe(engine.state.computer.devices);
+  const unsubscribeComputerNowPlaying = engine.stream.subscribe((update) => {
+    if (update.patch.computer)
+      computerNowPlaying.observe(update.patch.computer.devices);
+  });
   const artwork = homeAssistantMusic
     ? new HomeAssistantArtworkService(
         {
@@ -389,6 +403,14 @@ export async function startRuntime(
           metadataProvider: (target) =>
             homeAssistantMusic.artworkMetadata(target),
           observationTrusted: (target) => isMusicObservationTrusted(target),
+          computer: {
+            selector: computerNowPlaying,
+            routes: Object.fromEntries(
+              Object.entries(computerAudioMappings).filter(
+                ([, mapping]) => mapping.artwork === true,
+              ),
+            ),
+          },
           excludedSources: Object.fromEntries(
             Object.entries(config.homeAssistant.music).flatMap(
               ([target, mapping]) =>
@@ -596,12 +618,8 @@ export async function startRuntime(
           homeAssistantSocket.status === 'connected',
         musicObservationTrustProvider: musicObservationTrust,
         stateStream: engine.stream,
-        computerAudioMappings: Object.fromEntries(
-          Object.entries(config.homeAssistant.music).flatMap(
-            ([target, mapping]) =>
-              mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
-          ),
-        ),
+        computerAudioMappings,
+        computerNowPlayingSelector: computerNowPlaying,
         musicVolumePoliciesProvider: () =>
           engine.getMusicVolumePolicySnapshots(),
         musicPlaybackPoliciesProvider: () =>
@@ -671,6 +689,7 @@ export async function startRuntime(
     await displayServer?.start();
     castManager?.start();
   } catch (error) {
+    unsubscribeComputerNowPlaying();
     routines.dispose();
     computerIntelligence.dispose();
     artwork?.dispose();
@@ -699,6 +718,7 @@ export async function startRuntime(
   return {
     engine,
     async stop() {
+      unsubscribeComputerNowPlaying();
       routines.dispose();
       computerIntelligence.dispose();
       artwork?.dispose();

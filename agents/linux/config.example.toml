@@ -19,5 +19,10 @@ video_app_ids = []
 music_app_ids = []
 
 # Optional targeted media Pause/owned Resume over authenticated MQTT.
-# Observation v1 remains unchanged. See protocol/CONTROL.md before enabling.
+# See protocol/CONTROL.md before enabling.
 control_enabled = false
+
+# Opt-in MPRIS artwork: publishes Spotify image IDs or small Firefox thumbnails.
+# No network fetches; only Firefox's fixed, user-owned MPRIS PNG caches are read.
+# Thumbnails/media metadata may be private. Use a trusted broker.
+collect_artwork = false

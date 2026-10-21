@@ -116,13 +116,27 @@ players exceed configured entry capacity, only the first capacity-sized set is
 admitted; others retain a fallback. In-flight buffers are additionally bounded
 by concurrency times the per-image limit. Read results defensively copy bytes.
 
+## Computer artwork follow-up
+
+The optional v1 `media.artwork` extension carries a strict Spotify image ID or a
+bounded inline JPEG, never an arbitrary URL/path. Both the Linux agent's
+`collect_artwork` and the receiver mapping's `computerAudio.artwork` must be
+explicitly enabled. Spotify CDN requests use a fixed HTTPS host/path, no bearer
+credentials, no redirects and the same cache/time/size limits as HA images.
+Firefox thumbnails come from a tightly restricted local cache and are resized
+by the agent. No external metadata search or YouTube API is used.
+
+The runtime shares one `ComputerNowPlayingSelector` between artwork and Hub
+presentation. Only the selected fresh online player on the observed mapped
+Optical input can supply an image; unavailable/ambiguous/stale observations and
+untrusted receiver reports revoke its token. Spotify IDs and inline bytes are
+immutable image identities, so old in-flight images cannot replace a newer
+track's image. Both providers share cache budgets and authenticated opaque image
+routes. See [computer opt-ins and privacy](../COMPUTER.md).
+
 ## Deliberate limitations
 
-The existing Rust MPRIS observation path (`agents/linux/src/dbus.rs`, `state.rs`,
-protocol state schema and `src/core/computer.ts`) publishes title, artists, album,
-content type and player identity, but no `mpris:artUrl`. Control metadata URLs stay
-private to the Rust control path. No protocol/Rust extension was made; computer
-artwork and all external providers remain deferred. HA integrations supplying
+HA integrations supplying
 absolute remote artwork, `/local/` files, camera proxies, unsupported MIME or
 non-allowlisted image paths receive a harmless fallback. No metadata lookup is
 performed to guess an image.
@@ -130,7 +144,7 @@ performed to guess an image.
 Correct matching is limited to HA's reported metadata: identical track metadata
 with no changing content ID/picture cannot reveal a track change. The provider
 cannot prove HA itself supplied the right image. Real HA/network/device behavior,
-physical displays and browser rendering are deliberately untested in this slice.
+physical displays and browser rendering require separate live validation.
 
 ## Validation
 
