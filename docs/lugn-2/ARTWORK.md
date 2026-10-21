@@ -122,7 +122,9 @@ The optional v1 `media.artwork` extension carries a strict Spotify image ID or a
 bounded inline JPEG, never an arbitrary URL/path. Both the Linux agent's
 `collect_artwork` and the receiver mapping's `computerAudio.artwork` must be
 explicitly enabled. Spotify CDN requests use a fixed HTTPS host/path, no bearer
-credentials, no redirects and the same cache/time/size limits as HA images.
+credentials, no redirects and the same cache/size limits as HA images. External
+images have an eight-second background deadline for CDN connection setup; the
+local HA deadline remains three seconds. Neither delays essential controls.
 Firefox thumbnails come from a tightly restricted local cache and are resized
 by the agent. No external metadata search or YouTube API is used.
 

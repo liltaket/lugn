@@ -234,12 +234,31 @@ describe('selected computer artwork on confirmed Optical route', () => {
     const slow = setup(true, () => new Promise(() => {}));
     slow.snapshot();
     await settle();
-    slow.clock.advanceBy(3_000);
+    slow.clock.advanceBy(8_000);
     await settle();
     slow.snapshot();
     await settle();
     expect(slow.fetch).toHaveBeenCalledTimes(1);
     expect(slow.snapshot().url).toBeNull();
     slow.dispose();
+  });
+
+  it('allows bounded CDN connection setup beyond the local HA deadline', async () => {
+    let finish!: (response: Response) => void;
+    const s = setup(
+      true,
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    s.snapshot();
+    await settle();
+    s.clock.advanceBy(5_500);
+    finish(new Response(jpeg, { headers: { 'content-type': 'image/jpeg' } }));
+    await settle();
+    expect(s.snapshot().status).toBe('available');
+    expect(s.fetch).toHaveBeenCalledTimes(1);
+    s.dispose();
   });
 });

@@ -33,6 +33,8 @@ export type HomeAssistantArtworkOptions = {
   maxImageBytes?: number;
   maxConcurrent?: number;
   timeoutMs?: number;
+  /** External CDN connection setup can exceed the local HA deadline. */
+  computerTimeoutMs?: number;
   positiveTtlMs?: number;
   negativeTtlMs?: number;
 };
@@ -92,6 +94,7 @@ export class HomeAssistantArtworkService implements ArtworkProvider {
       imageBytes: options.maxImageBytes ?? 2 * 1024 * 1024,
       concurrent: options.maxConcurrent ?? 2,
       timeout: options.timeoutMs ?? 3000,
+      computerTimeout: options.computerTimeoutMs ?? 8000,
       positiveTtl: options.positiveTtlMs ?? 300_000,
       negativeTtl: options.negativeTtlMs ?? 30_000,
     };
@@ -308,10 +311,15 @@ export class HomeAssistantArtworkService implements ArtworkProvider {
         entry.abort.signal.addEventListener('abort', cancel, { once: true });
       });
       const expired = new Promise<never>((_, reject) => {
-        timeout = this.clock.setTimeout(() => {
-          entry.abort.abort();
-          reject(new Error('Artwork timeout'));
-        }, this.limits.timeout);
+        timeout = this.clock.setTimeout(
+          () => {
+            entry.abort.abort();
+            reject(new Error('Artwork timeout'));
+          },
+          entry.source === 'computer'
+            ? this.limits.computerTimeout
+            : this.limits.timeout,
+        );
       });
       const image = entry.inlineAsset
         ? Promise.resolve(entry.inlineAsset)
