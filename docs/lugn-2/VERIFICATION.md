@@ -1,5 +1,9 @@
 # Lugn 2.0 integration evidence
 
+This document records the initial isolated overnight delivery. Subsequent checks
+after the user authorized real-room testing are recorded separately in
+[LIVE-TEST.md](LIVE-TEST.md); they do not change what was validated overnight.
+
 This delivery is developed against `fceced7` (#65, #66 and #73 included), with
 shared interfaces and ownership in [DELIVERY.md](DELIVERY.md).
 
