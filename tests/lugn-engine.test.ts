@@ -1364,6 +1364,85 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
+  it.each(['occupied', 'timeout'] as const)(
+    'keeps repeated commandless prelight feedback ON until %s',
+    async (ending) => {
+      const target = 'lighting.wled_cct';
+      const values = {
+        power: true as const,
+        brightness: 61,
+        colorTemperature: 2700,
+      };
+      const scene = {
+        id: 'scene.entry',
+        name: 'Entry',
+        lighting: { [target]: values, 'lighting.desk': { power: false } },
+      };
+      const { clock, adapter, engine } = setup({
+        deviceIds: [target, 'lighting.desk'],
+        scenes: [scene],
+        defaultSceneId: scene.id,
+        prelight: { targets: {}, maxDurationMs: 5_000 },
+      });
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'confirmed_empty',
+      });
+      adapter.dispatched.length = 0;
+      await engine.handlePrelight({ type: 'presence.prelight', active: true });
+      expect(engine.state.commands.at(-1)?.status).toBe('confirmed');
+      await engine.handlePrelight({ type: 'presence.prelight', active: false });
+
+      // WLED publishes a direct response, then HA events/polls without command IDs.
+      for (let second = 0; second < 3; second += 1) {
+        clock.advanceBy(1_000);
+        adapter.externalChange(target, values, {
+          actor: { type: 'home_assistant' },
+          source: 'wled.state',
+        });
+        await flushMicrotasks();
+      }
+      expect(
+        adapter.dispatched
+          .filter((command) => command.target === target)
+          .map(({ values }) => values),
+      ).toEqual([values]);
+
+      // The exemption belongs only to the lamps participating in this preview.
+      adapter.externalChange('lighting.desk', { power: true });
+      await flushMicrotasks();
+      expect(adapter.dispatched.at(-1)).toMatchObject({
+        target: 'lighting.desk',
+        values: { power: false },
+      });
+
+      if (ending === 'occupied') {
+        await engine.handlePresence({
+          type: 'presence.changed',
+          presence: 'occupied',
+          personCount: 1,
+        });
+        clock.advanceBy(3_000);
+      } else {
+        clock.advanceBy(2_000);
+      }
+      await flushMicrotasks();
+      expect(adapter.observed.get(target)?.power).toBe(ending === 'occupied');
+      expect(
+        adapter.dispatched
+          .filter((command) => command.target === target)
+          .map(({ values }) => values),
+      ).toEqual(ending === 'occupied' ? [values] : [values, { power: false }]);
+      if (ending === 'timeout') {
+        adapter.externalChange(target, values);
+        await flushMicrotasks();
+        expect(adapter.dispatched.at(-1)?.values).toEqual({ power: false });
+        expect(adapter.observed.get(target)?.power).toBe(false);
+      }
+      engine.dispose();
+    },
+  );
+
   it('uses the pending default scene during first-entry prelight handoff', async () => {
     const scene = {
       id: 'scene.custom_default',

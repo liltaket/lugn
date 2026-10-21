@@ -61,3 +61,20 @@ from the deterministic simulated tests and the live checks above.
 All five PRs remain drafts and unmerged. The candidate is left active for review;
 its temporary service override is not a permanent release promotion. Original
 rollback tooling and private backups remain on the service host.
+
+## Entry prelight repair
+
+Live command history confirmed repeated WLED entry flicker: a successful prelight
+ON was followed 0.5–1.2 seconds later by Lugn's physical-off enforcement, then ON
+again at confirmed occupancy. Repeated WLED/HA observations have no command ID;
+after initial confirmation they no longer matched a pending ledger command.
+Prelight protection incorrectly depended on that attribution.
+
+Protection now follows the active preview's target ownership through occupancy
+handoff or its existing deadline. Other lamps remain subject to empty-room
+enforcement, and expiry restores physical off. No timing or configuration changes
+are required. Two deterministic regressions reproduced erroneous OFF commands
+before the fix and passed afterward. Full checks passed 83 suites / 1,300 tests
+plus the installer fixture and build. Independent read-only review found no
+blockers and passed 102 focused engine, WLED and automation-hold tests. Physical
+walk-in verification of this repair remains separate from these software checks.
