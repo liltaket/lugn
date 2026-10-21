@@ -861,7 +861,7 @@ export class LugnHttpServer {
     musicVolumePolicies: ReturnType<
       LugnEngine['getMusicVolumePolicySnapshots']
     >;
-  } {
+  } & ReturnType<ExperienceApi['snapshot']> {
     const integrations = this.options.integrations();
     const connected = Object.values(integrations).every(
       (status) => status === 'connected' || status === 'not_configured',

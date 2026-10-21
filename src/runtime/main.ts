@@ -1,5 +1,9 @@
 import { MusicVolumeSettingsStore } from './music-volume-settings-store.js';
 import { HomeAssistantArtworkService } from './artwork-service.js';
+import { RoutineService } from '../application/routines.js';
+import { createRoutineTemplates } from '../core/routines.js';
+import { RoutineStore } from './routine-store.js';
+import { RoutineApi } from './routine-api.js';
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
@@ -305,6 +309,23 @@ export async function startRuntime(
       ? {}
       : { buttonAdapter: homeAssistantButton }),
   });
+  const routineStore = new RoutineStore(
+    `${lightingIntentPath}.routines.json`,
+    createRoutineTemplates({
+      lightTargets: deviceIds,
+      ...(Object.keys(config.homeAssistant.music)[0] === undefined
+        ? {}
+        : { musicTarget: Object.keys(config.homeAssistant.music)[0]! }),
+    }),
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  await routineStore.load();
+  const routines = new RoutineService(systemClock, {
+    engine,
+    capabilities,
+    store: routineStore,
+  });
+  const experience = new RoutineApi(routines, routineStore);
   let syncingHomeAssistantStates = false;
   let homeAssistantConnection: HomeAssistantConnection | undefined;
   const trustedMusicTargets = new Set<string>();
@@ -515,6 +536,7 @@ export async function startRuntime(
     volumeSettingsStore,
     capabilities,
     ...(artwork ? { artworkProvider: artwork } : {}),
+    experience,
     musicObservationTrustProvider: musicObservationTrust,
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
     integrations: () => ({
@@ -539,6 +561,7 @@ export async function startRuntime(
         })),
         capabilities,
         ...(artwork ? { artworkProvider: artwork } : {}),
+        experience,
         presenceCountCorrectionAvailable: config.presenceControl !== undefined,
         scenes: Array.from(engine.scenes.values()),
         scenesProvider: () => Array.from(engine.scenes.values()),
@@ -622,6 +645,7 @@ export async function startRuntime(
     await displayServer?.start();
     castManager?.start();
   } catch (error) {
+    routines.dispose();
     artwork?.dispose();
     await castManager?.stop();
     await displayServer?.stop();
@@ -648,6 +672,7 @@ export async function startRuntime(
   return {
     engine,
     async stop() {
+      routines.dispose();
       artwork?.dispose();
       await castManager?.stop();
       await displayServer?.stop();

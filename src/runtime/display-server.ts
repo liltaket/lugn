@@ -33,6 +33,10 @@ import type {
 } from '../application/music-automation.js';
 import type { StateEventStream } from '../core/event-stream.js';
 import type { ArtworkProvider } from '../core/artwork.js';
+import {
+  ExperienceRequestError,
+  type ExperienceApi,
+} from '../application/experience-api.js';
 
 const MAX_REQUEST_BYTES = 8 * 1024;
 const DisplaySceneRequestSchema = z
@@ -100,6 +104,7 @@ export type LugnDisplayServerOptions = {
     MusicPlaybackPolicySnapshot
   >;
   artworkProvider?: ArtworkProvider;
+  experience?: ExperienceApi;
   environmentProvider?: () => EnvironmentSnapshot;
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
 };
@@ -265,6 +270,39 @@ export class LugnDisplayServer {
 
       if (request.method === 'POST' && !this.validatedOrigin(request, host)) {
         sendJson(response, 403, { error: 'invalid_origin' });
+        return;
+      }
+      if (
+        request.method === 'POST' &&
+        (hubRequest.route === '/display-api/routine' ||
+          hubRequest.route === '/display-api/suggestion')
+      ) {
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        if (!this.options.experience) {
+          sendJson(response, 503, { error: 'experience_unavailable' });
+          return;
+        }
+        const body = await readJsonBody(request);
+        try {
+          const result = await this.options.experience.request(
+            hubRequest.route === '/display-api/routine'
+              ? 'routines/action'
+              : 'intelligence/suggestion',
+            body,
+            hubProvenance(hubRequest.hub),
+          );
+          sendJson(response, 200, result);
+        } catch (error) {
+          if (error instanceof ZodError) throw error;
+          if (error instanceof ExperienceRequestError)
+            sendJson(response, error.status, { error: error.code });
+          else sendJson(response, 502, { error: 'experience_request_failed' });
+        }
         return;
       }
 
@@ -448,6 +486,7 @@ export class LugnDisplayServer {
     const state = this.options.stateProvider();
     return {
       state,
+      ...this.options.experience?.snapshot(),
       computerNowPlaying: this.computerNowPlaying.snapshot(state),
       artwork:
         this.options.artworkProvider?.snapshot(
@@ -528,10 +567,13 @@ export class LugnDisplayServer {
     const unsubscribe = stream.subscribe(scheduleSend);
     const unsubscribeArtwork =
       this.options.artworkProvider?.subscribe?.(scheduleSend);
+    const unsubscribeExperience =
+      this.options.experience?.subscribe(scheduleSend);
     const heartbeat = setInterval(send, 5_000);
     response.once('close', () => {
       unsubscribe();
       unsubscribeArtwork?.();
+      unsubscribeExperience?.();
       clearInterval(heartbeat);
       if (pendingUpdate) clearImmediate(pendingUpdate);
       this.eventStreams.delete(response);
