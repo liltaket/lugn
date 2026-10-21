@@ -4,6 +4,9 @@ import { RoutineService } from '../application/routines.js';
 import { createRoutineTemplates } from '../core/routines.js';
 import { RoutineStore } from './routine-store.js';
 import { RoutineApi } from './routine-api.js';
+import { IntelligenceSettingsStore } from './intelligence-settings-store.js';
+import { IntelligenceApi } from './intelligence-api.js';
+import { createComputerIntelligenceRuntime } from './computer-intelligence-runtime.js';
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
@@ -325,7 +328,30 @@ export async function startRuntime(
     capabilities,
     store: routineStore,
   });
-  const experience = new RoutineApi(routines, routineStore);
+  const intelligenceStore = new IntelligenceSettingsStore(
+    `${lightingIntentPath}.intelligence.json`,
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  await intelligenceStore.load();
+  const computerIntelligence = createComputerIntelligenceRuntime({
+    clock: systemClock,
+    engine,
+    capabilities,
+    settingsStore: intelligenceStore,
+    computerDeviceIds: (config.mqtt?.computers ?? []).map(
+      ({ deviceId }) => deviceId,
+    ),
+    computerAudio: Object.fromEntries(
+      Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+        mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
+      ),
+    ),
+    observationTrusted: (target) => isMusicObservationTrusted(target),
+  });
+  const experience = new IntelligenceApi(
+    new RoutineApi(routines, routineStore),
+    computerIntelligence.service,
+  );
   let syncingHomeAssistantStates = false;
   let homeAssistantConnection: HomeAssistantConnection | undefined;
   const trustedMusicTargets = new Set<string>();
@@ -646,6 +672,7 @@ export async function startRuntime(
     castManager?.start();
   } catch (error) {
     routines.dispose();
+    computerIntelligence.dispose();
     artwork?.dispose();
     await castManager?.stop();
     await displayServer?.stop();
@@ -673,6 +700,7 @@ export async function startRuntime(
     engine,
     async stop() {
       routines.dispose();
+      computerIntelligence.dispose();
       artwork?.dispose();
       await castManager?.stop();
       await displayServer?.stop();
