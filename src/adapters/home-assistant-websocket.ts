@@ -30,13 +30,19 @@ const ServerMessageSchema = z.object({
   id: z.number().int().positive().optional(),
   success: z.boolean().optional(),
 });
-const StateChangedFrameSchema = z.object({
+const EventFrameSchema = z.object({
   type: z.literal('event'),
   id: z.number().int().positive(),
-  event: z.object({
-    event_type: z.literal('state_changed'),
-    data: z.record(z.string(), z.unknown()),
-  }),
+  event: z
+    .object({
+      event_type: z.enum([
+        'state_changed',
+        'automation_triggered',
+        'call_service',
+      ]),
+      data: z.record(z.string(), z.unknown()),
+    })
+    .passthrough(),
 });
 
 export type HomeAssistantSocketMessageEvent = { data: unknown };
@@ -71,12 +77,15 @@ export type HomeAssistantWebSocketOptions = {
   clock?: Clock;
   reconnectDelayMs?: number;
   maxReconnectDelayMs?: number;
+  additionalEventTypes?: Array<'automation_triggered' | 'call_service'>;
+  onDisconnected?: () => void;
   onConnected?: (connection: HomeAssistantConnection) => void | Promise<void>;
   onError?: (kind: 'socket' | 'event_handler' | 'malformed_message') => void;
 };
 
 /**
- * Owns Home Assistant WebSocket auth, state_changed subscription, and reconnects.
+ * Owns HA WebSocket auth, filtered event subscriptions, and reconnects.
+ * Additional passive event kinds use HA's all-events subscription, filtered here.
  * The host owns credentials and supplies an event callback; frame contents are
  * never logged or included in errors.
  */
@@ -89,6 +98,8 @@ export class HomeAssistantWebSocketTransport {
   private readonly maxReconnectDelayMs: number;
   private readonly onConnected?: HomeAssistantWebSocketOptions['onConnected'];
   private readonly onError?: HomeAssistantWebSocketOptions['onError'];
+  private readonly onDisconnected: (() => void) | undefined;
+  private readonly eventTypes: Set<string>;
   private nextCommandId = 1;
   private reconnectAttempt = 0;
   private active = false;
@@ -112,6 +123,11 @@ export class HomeAssistantWebSocketTransport {
     this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? 30_000;
     this.onConnected = options.onConnected;
     this.onError = options.onError;
+    this.onDisconnected = options.onDisconnected;
+    this.eventTypes = new Set([
+      'state_changed',
+      ...(options.additionalEventTypes ?? []),
+    ]);
     if (
       !Number.isFinite(this.reconnectDelayMs) ||
       this.reconnectDelayMs < 1 ||
@@ -141,6 +157,7 @@ export class HomeAssistantWebSocketTransport {
     this.socket = undefined;
     this.subscriptionId = undefined;
     this._status = 'stopped';
+    this.notifyDisconnected();
     if (socket) this.closeSocket(socket);
   }
 
@@ -203,7 +220,7 @@ export class HomeAssistantWebSocketTransport {
       this.send(socket, {
         id,
         type: 'subscribe_events',
-        event_type: 'state_changed',
+        ...(this.eventTypes.size === 1 ? { event_type: 'state_changed' } : {}),
       });
       return;
     }
@@ -240,8 +257,12 @@ export class HomeAssistantWebSocketTransport {
       message.id === this.subscriptionId &&
       this._status === 'connected'
     ) {
-      const stateChangedFrame = StateChangedFrameSchema.safeParse(raw);
-      if (!stateChangedFrame.success) return;
+      const stateChangedFrame = EventFrameSchema.safeParse(raw);
+      if (
+        !stateChangedFrame.success ||
+        !this.eventTypes.has(stateChangedFrame.data.event.event_type)
+      )
+        return;
       try {
         this.onEvent(stateChangedFrame.data);
       } catch {
@@ -265,6 +286,7 @@ export class HomeAssistantWebSocketTransport {
     this.subscriptionId = undefined;
     this.generation += 1;
     this._status = 'failed';
+    this.notifyDisconnected();
     this.closeSocket(socket);
   }
 
@@ -273,6 +295,7 @@ export class HomeAssistantWebSocketTransport {
     generation: number,
   ): void {
     if (!this.isCurrent(socket, generation)) return;
+    this.notifyDisconnected();
     this.reportError('socket');
     this.socket = undefined;
     this.subscriptionId = undefined;
@@ -311,6 +334,14 @@ export class HomeAssistantWebSocketTransport {
       socket.close();
     } catch {
       this.reportError('socket');
+    }
+  }
+
+  private notifyDisconnected(): void {
+    try {
+      this.onDisconnected?.();
+    } catch {
+      this.reportError('event_handler');
     }
   }
 

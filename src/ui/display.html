@@ -169,7 +169,54 @@
           <div class="music-heading">
             <h2 id="music-heading">Musik</h2>
             <span id="music-player-status" role="status"></span>
+            <button
+              id="camera-menu"
+              class="quiet-button"
+              type="button"
+              aria-expanded="false"
+              aria-controls="camera-choices"
+              hidden
+            >
+              Kameror
+            </button>
           </div>
+          <div
+            id="camera-choices"
+            class="camera-choices"
+            role="group"
+            aria-label="Välj kamera"
+            hidden
+          ></div>
+          <section
+            id="camera-panel"
+            class="camera-panel"
+            aria-label="Kameravy"
+            hidden
+          >
+            <div class="camera-caption">
+              <div>
+                <strong id="camera-name"></strong
+                ><span id="camera-reason"></span>
+              </div>
+              <button
+                id="camera-close"
+                type="button"
+                aria-label="Stäng kameravyn"
+              >
+                Stäng <span id="camera-countdown" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div class="camera-frame">
+              <img id="camera-image" alt="" hidden />
+              <span id="camera-placeholder">Ansluter till kameran …</span>
+            </div>
+            <p
+              id="camera-status"
+              class="camera-status"
+              role="status"
+              aria-live="off"
+            ></p>
+          </section>
           <div class="music-feature">
             <div class="music-artwork" id="music-artwork" data-state="missing">
               <div class="artwork-fallback" aria-hidden="true">

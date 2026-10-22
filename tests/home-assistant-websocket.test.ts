@@ -274,3 +274,78 @@ describe('Home Assistant WebSocket transport', () => {
     transport.stop();
   });
 });
+
+it('optionally observes passive automation/service events while filtering other HA events and preserving freshness metadata', () => {
+  const socket = new FakeSocket();
+  const events: unknown[] = [];
+  const transport = new HomeAssistantWebSocketTransport(
+    { baseUrl: 'http://ha.test', token: 'test-secret' },
+    (event) => events.push(event),
+    {
+      createSocket: () => socket,
+      additionalEventTypes: ['automation_triggered', 'call_service'],
+    },
+  );
+  transport.start();
+  socket.receive({ type: 'auth_required' });
+  socket.receive({ type: 'auth_ok' });
+  const subscription = JSON.parse(socket.sent[1]!) as {
+    id: number;
+    event_type?: string;
+  };
+  expect(subscription).toMatchObject({ type: 'subscribe_events' });
+  expect(subscription.event_type).toBeUndefined();
+  socket.receive({ type: 'result', id: subscription.id, success: true });
+  for (const event_type of [
+    'automation_triggered',
+    'call_service',
+    'state_changed',
+    'unrelated',
+  ]) {
+    socket.receive({
+      type: 'event',
+      id: subscription.id,
+      event: {
+        event_type,
+        data: {},
+        time_fired: '2026-10-21T12:00:00Z',
+        context: { id: 'opaque' },
+      },
+    });
+  }
+  expect(events).toHaveLength(3);
+  expect(events[0]).toMatchObject({
+    event: { time_fired: '2026-10-21T12:00:00Z', context: { id: 'opaque' } },
+  });
+  transport.stop();
+});
+it('notifies trust loss on socket failure, authentication rejection and stop', () => {
+  const sockets: FakeSocket[] = [];
+  let lost = 0;
+  const transport = new HomeAssistantWebSocketTransport(
+    { baseUrl: 'http://ha.test', token: 'test-secret' },
+    () => {},
+    {
+      createSocket: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      onDisconnected: () => {
+        lost++;
+      },
+    },
+  );
+  transport.start();
+  const socket = sockets[0]!;
+  const id = authenticate(socket);
+  socket.receive({ id, type: 'result', success: true });
+  socket.fail();
+  expect(lost).toBe(1);
+  transport.stop();
+  expect(lost).toBe(2);
+  transport.start();
+  sockets[1]!.receive({ type: 'auth_invalid' });
+  expect(lost).toBe(3);
+  transport.stop();
+});

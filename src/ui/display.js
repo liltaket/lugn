@@ -46,6 +46,18 @@ const environmentNumberFormatWithFractions = new Intl.NumberFormat('sv-SE', {
 
 const root = document.querySelector('#app-root');
 const refs = {
+  cameraMenu: document.querySelector('#camera-menu'),
+  cameraChoices: document.querySelector('#camera-choices'),
+  cameraPanel: document.querySelector('#camera-panel'),
+  cameraName: document.querySelector('#camera-name'),
+  cameraReason: document.querySelector('#camera-reason'),
+  cameraClose: document.querySelector('#camera-close'),
+  cameraCountdown: document.querySelector('#camera-countdown'),
+  cameraImage: document.querySelector('#camera-image'),
+  cameraPlaceholder: document.querySelector('#camera-placeholder'),
+  cameraStatus: document.querySelector('#camera-status'),
+  musicSection: document.querySelector('.music-section'),
+  musicHeading: document.querySelector('#music-heading'),
   contextStrip: document.querySelector('#context-strip'),
   contextTitle: document.querySelector('#context-title'),
   contextDescription: document.querySelector('#context-description'),
@@ -140,6 +152,21 @@ const metricRefs = new Map(
   ]),
 );
 
+let cameraActive = null;
+const cameraDismissedIds = new Set();
+let cameraCloseHoldUntil = 0;
+let cameraPendingShow = null;
+let cameraChoicesOpen = false;
+let cameraChoicesKey;
+let cameraActionPending = false;
+let cameraActionRequests = 0;
+let cameraActionEpoch = 0;
+let cameraMediaEpoch = 0;
+let cameraMediaKey = null;
+let cameraImageController;
+let cameraImageTimer;
+let cameraMediaTimeout;
+let cameraObjectUrl;
 let contextDetailsOpen = false;
 let contextRenderKey;
 let contextListKey;
@@ -310,6 +337,7 @@ function setConnection(state, message, retry = false) {
   renderPresenceCorrection(latestPayload);
   renderRoomPresence(latestPayload?.state);
   renderMusic(latestPayload);
+  renderCamera(latestPayload);
 }
 
 function setClock() {
@@ -332,6 +360,7 @@ function setClock() {
     renderScenes(latestPayload);
     renderMusicVolumePolicy(latestPayload, musicTarget);
     renderMusicExplanations(latestPayload, musicTarget);
+    renderCamera(latestPayload);
   }
 }
 
@@ -372,6 +401,40 @@ function getSceneList(payload) {
   });
 }
 
+// Only these established scene IDs have an unambiguous visual meaning. User
+// presets keep their names; user-controlled strings never enter SVG markup.
+function sceneIconFor(sceneId) {
+  const icons = {
+    'scene.all_off': {
+      name: 'power',
+      paths: '<path d="M12 3v9"/><path d="M6.3 5.7a8 8 0 1 0 11.4 0"/>',
+    },
+    'scene.soft_light': {
+      name: 'moon',
+      paths:
+        '<path d="M20.2 15.6A8.6 8.6 0 0 1 8.4 3.8 8.6 8.6 0 1 0 20.2 15.6Z"/>',
+    },
+    'scene.everyday_light': {
+      name: 'sun',
+      paths:
+        '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    },
+    'scene.focus_light': {
+      name: 'desk-lamp',
+      paths:
+        '<path d="M7 21h11M12.5 21v-4L7 11l4-5"/><circle cx="7" cy="11" r="1.5"/><path d="m11 6 4-3 6 6-3 4Z"/><path d="m15 10 2 2"/>',
+    },
+    'scene.movie_light': {
+      name: 'film',
+      paths:
+        '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/><path d="m10 8 5 2.5-5 2.5Z"/>',
+    },
+  };
+  return Object.prototype.hasOwnProperty.call(icons, sceneId)
+    ? icons[sceneId]
+    : null;
+}
+
 function sceneButtonFor(scene) {
   let button = sceneButtons.get(scene.id);
   if (button) return button;
@@ -380,6 +443,16 @@ function sceneButtonFor(scene) {
   button.className = 'scene-button';
   button.dataset.scene = scene.id;
   button.setAttribute('aria-pressed', 'false');
+  const icon = sceneIconFor(scene.id);
+  button.dataset.icon = String(!!icon);
+  if (icon) {
+    const symbol = document.createElement('span');
+    symbol.className = 'scene-icon';
+    symbol.dataset.symbol = icon.name;
+    symbol.setAttribute('aria-hidden', 'true');
+    symbol.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" focusable="false">${icon.paths}</svg>`;
+    button.append(symbol);
+  }
   const copy = document.createElement('span');
   copy.className = 'scene-copy';
   const name = document.createElement('span');
@@ -475,6 +548,30 @@ function renderScenes(payload) {
           : confirmed
             ? 'Bekräftat'
             : 'Valt';
+    const availability = isUnavailable()
+      ? selected
+        ? 'Frånkopplad. Senast valda ljusläge'
+        : 'Frånkopplad'
+      : status;
+    button.setAttribute(
+      'aria-label',
+      `${scene.name}${availability ? `. ${availability}` : ''}`,
+    );
+    button.setAttribute(
+      'title',
+      `${scene.name}${availability ? ` · ${availability}` : ''}`,
+    );
+    button.dataset.state = isUnavailable()
+      ? 'offline'
+      : isPending
+        ? 'pending'
+        : !selected
+          ? 'idle'
+          : awaitingDevices
+            ? 'awaiting'
+            : confirmed
+              ? 'confirmed'
+              : 'selected';
     setText(button.querySelector('.scene-status'), status);
     button.querySelector('.scene-status').hidden = !status;
     if (button.getAttribute('aria-pressed') !== String(selected))
@@ -1682,6 +1779,7 @@ function render(payload) {
   renderRoomPresence(payload?.state);
   renderPresenceCorrection(payload);
   renderMusic(payload);
+  renderCamera(payload);
   setClock();
 }
 
@@ -1909,6 +2007,284 @@ refs.sceneNext.addEventListener('click', () => {
   renderScenes(latestPayload);
 });
 
+// Camera media is scoped to one server-issued view. No HA credentials enter the browser.
+function cameraMediaUrl(value) {
+  if (typeof value !== 'string' || !/^(\/|\.\/)/.test(value)) return null;
+  try {
+    const url = new URL(value, location.href);
+    return url.origin === location.origin && !url.username && !url.password
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function stopCameraMedia() {
+  const hadMedia = cameraMediaKey || cameraImageController || cameraObjectUrl;
+  cameraMediaEpoch += 1;
+  window.clearTimeout(cameraImageTimer);
+  window.clearTimeout(cameraMediaTimeout);
+  cameraImageController?.abort();
+  cameraImageController = null;
+  if (!hadMedia) return;
+  refs.cameraImage.onload = null;
+  refs.cameraImage.onerror = null;
+  refs.cameraImage.removeAttribute('src');
+  refs.cameraImage.hidden = true;
+  if (cameraObjectUrl) URL.revokeObjectURL(cameraObjectUrl);
+  cameraObjectUrl = null;
+  cameraMediaKey = null;
+}
+
+function cameraCanRun(epoch) {
+  return (
+    epoch === cameraMediaEpoch &&
+    !stopped &&
+    !isUnavailable() &&
+    document.visibilityState !== 'hidden' &&
+    !refs.cameraPanel.hidden &&
+    cameraActive?.expiresAt > estimatedServerNow()
+  );
+}
+
+function startCameraImages(active, epoch) {
+  window.clearTimeout(cameraMediaTimeout);
+  const imageUrl = cameraMediaUrl(active.imageUrl);
+  if (!imageUrl) {
+    refs.cameraPlaceholder.textContent = 'Kamerabilden är inte tillgänglig.';
+    refs.cameraStatus.textContent =
+      'Ingen bild kunde hämtas. Rumskontrollerna fungerar som vanligt.';
+    return;
+  }
+  let failures = 0;
+  const frame = async () => {
+    if (!cameraCanRun(epoch)) return;
+    const controller = new AbortController();
+    cameraImageController = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+    cameraMediaTimeout = timeout;
+    try {
+      const response = await fetch(imageUrl, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: controller.signal,
+      });
+      if (
+        !response.ok ||
+        !response.headers.get('content-type')?.startsWith('image/')
+      )
+        throw new Error('image_unavailable');
+      const blob = await response.blob();
+      if (!cameraCanRun(epoch)) return;
+      if (blob.size > 8 * 1024 * 1024) throw new Error('image_too_large');
+      const nextUrl = URL.createObjectURL(blob);
+      if (cameraObjectUrl) URL.revokeObjectURL(cameraObjectUrl);
+      cameraObjectUrl = nextUrl;
+      refs.cameraImage.onload = () => {
+        if (!cameraCanRun(epoch)) return;
+        failures = 0;
+        refs.cameraImage.hidden = false;
+        refs.cameraPlaceholder.hidden = true;
+        refs.cameraStatus.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
+        cameraImageTimer = window.setTimeout(frame, 1000);
+      };
+      refs.cameraImage.onerror = () => {
+        if (!cameraCanRun(epoch)) return;
+        refs.cameraStatus.textContent = 'Kamerabilden kunde inte visas.';
+      };
+      refs.cameraImage.src = nextUrl;
+    } catch {
+      if (!cameraCanRun(epoch)) return;
+      failures += 1;
+      refs.cameraStatus.textContent =
+        failures < 3
+          ? 'Ingen ny bild. Försöker igen …'
+          : 'Kameran svarar inte. Stäng och öppna vyn för att försöka igen.';
+      if (!refs.cameraImage.hidden)
+        refs.cameraStatus.textContent += ' Bilden är inaktuell.';
+      if (failures < 3) cameraImageTimer = window.setTimeout(frame, 2000);
+    } finally {
+      window.clearTimeout(timeout);
+      if (cameraImageController === controller) cameraImageController = null;
+    }
+  };
+  void frame();
+}
+
+function startCameraMedia(active) {
+  stopCameraMedia();
+  cameraMediaKey = `${active.id}|${active.imageUrl ?? ''}`;
+  refs.cameraPlaceholder.hidden = false;
+  refs.cameraPlaceholder.textContent = 'Hämtar kamerabild …';
+  refs.cameraStatus.textContent = 'Tyst kameravy · uppdateras varje sekund';
+  startCameraImages(active, cameraMediaEpoch);
+}
+
+function renderCamera(payload) {
+  const camera = payload?.cameraDashboard;
+  const allowed = camera?.settings?.enabled === true;
+  const viewers = camera?.settings?.viewers;
+  const viewerAllowed =
+    !Array.isArray(viewers) || viewers.includes(roleName(payload?.role));
+  const definitions = Array.isArray(camera?.definitions)
+    ? camera.definitions.filter((item) => item.enabled && item.available)
+    : [];
+  refs.cameraMenu.hidden = !allowed || !viewerAllowed || !definitions.length;
+  refs.cameraMenu.disabled = isUnavailable() || cameraActionRequests > 0;
+  if (cameraChoicesKey !== JSON.stringify(definitions)) {
+    cameraChoicesKey = JSON.stringify(definitions);
+    refs.cameraChoices.replaceChildren(
+      ...definitions.map((item) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = item.name;
+        button.dataset.cameraId = item.id;
+        button.addEventListener('click', () => {
+          void cameraAction('show', item.id);
+        });
+        return button;
+      }),
+    );
+  }
+  for (const button of refs.cameraChoices.children)
+    button.disabled =
+      cameraActionPending || cameraActionRequests > 0 || isUnavailable();
+  if (camera?.active?.id && cameraCloseHoldUntil > estimatedServerNow()) {
+    cameraDismissedIds.add(camera.active.id);
+    if (cameraDismissedIds.size > 32)
+      cameraDismissedIds.delete(cameraDismissedIds.values().next().value);
+  }
+  const showingPending =
+    cameraActionPending &&
+    cameraPendingShow &&
+    cameraCloseHoldUntil <= estimatedServerNow() &&
+    allowed &&
+    viewerAllowed;
+  const active =
+    allowed &&
+    viewerAllowed &&
+    cameraCloseHoldUntil <= estimatedServerNow() &&
+    !cameraDismissedIds.has(camera?.active?.id) &&
+    camera?.active?.expiresAt > estimatedServerNow()
+      ? camera.active
+      : null;
+  cameraActive = active;
+  refs.cameraPanel.hidden = !active && !showingPending;
+  if (!allowed || !viewerAllowed) cameraChoicesOpen = false;
+  refs.cameraChoices.hidden = !cameraChoicesOpen;
+  refs.cameraMenu.setAttribute('aria-expanded', String(cameraChoicesOpen));
+  refs.cameraMenu.textContent =
+    cameraActionRequests > 0
+      ? cameraCloseHoldUntil > estimatedServerNow()
+        ? 'Stänger …'
+        : 'Öppnar …'
+      : active
+        ? 'Byt kamera'
+        : 'Kameror';
+  refs.musicSection.dataset.camera = String(
+    !!active || !!showingPending || cameraChoicesOpen,
+  );
+  setText(
+    refs.musicHeading,
+    active || showingPending ? 'Utanför rummet' : 'Musik',
+  );
+  if (!active || isUnavailable() || document.visibilityState === 'hidden') {
+    if (cameraMediaKey) stopCameraMedia();
+    if (showingPending && !active) {
+      setText(
+        refs.cameraName,
+        definitions.find((item) => item.id === cameraPendingShow)?.name ||
+          'Kamera',
+      );
+      setText(refs.cameraReason, 'Väntar på servern');
+      setText(refs.cameraCountdown, '');
+      refs.cameraPlaceholder.hidden = false;
+      refs.cameraPlaceholder.textContent = 'Öppnar kameravyn …';
+      refs.cameraStatus.textContent = 'Du kan stänga vyn medan den öppnas.';
+    }
+    if (active && isUnavailable())
+      refs.cameraStatus.textContent =
+        'Kontakten med Lugn bröts. Kameran har stoppats.';
+    return;
+  }
+  setText(refs.cameraName, active.name);
+  setText(refs.cameraReason, active.reason || 'Manuellt öppnad');
+  setText(
+    refs.cameraCountdown,
+    `${Math.max(0, Math.ceil((active.expiresAt - estimatedServerNow()) / 1000))} s`,
+  );
+  refs.cameraImage.alt = `${active.name}, senast hämtade kamerabild`;
+  const key = `${active.id}|${active.imageUrl ?? ''}`;
+  if (cameraMediaKey !== key) void startCameraMedia(active);
+}
+
+async function cameraAction(action, cameraId) {
+  if (
+    action === 'show' &&
+    (cameraActionPending || cameraActionRequests > 0 || isUnavailable())
+  )
+    return;
+  cameraActionRequests += 1;
+  const operation = ++cameraActionEpoch;
+  if (action === 'hide') {
+    cameraCloseHoldUntil = estimatedServerNow() + 60000;
+    if (cameraActive?.id) cameraDismissedIds.add(cameraActive.id);
+    cameraPendingShow = null;
+    cameraChoicesOpen = false;
+    stopCameraMedia();
+    refs.cameraPanel.hidden = true;
+    refs.musicSection.dataset.camera = 'false';
+    refs.cameraMenu.focus?.();
+  } else {
+    cameraCloseHoldUntil = 0;
+    cameraDismissedIds.clear();
+    cameraPendingShow = cameraId;
+    cameraChoicesOpen = false;
+  }
+  cameraActionPending = true;
+  renderCamera(latestPayload);
+  try {
+    const result = await postJson(`${BASE_PATH}display-api/camera`, {
+      action,
+      ...(cameraId ? { cameraId } : {}),
+    });
+    if (operation !== cameraActionEpoch) {
+      if (action === 'show' && cameraCloseHoldUntil > estimatedServerNow()) {
+        await postJson(`${BASE_PATH}display-api/camera`, { action: 'hide' });
+      }
+      return;
+    }
+    if (result.cameraDashboard && latestPayload) {
+      latestPayload.cameraDashboard = result.cameraDashboard;
+    }
+    renderCamera(latestPayload);
+  } catch {
+    if (operation === cameraActionEpoch)
+      showToast(
+        action === 'hide'
+          ? 'Vyn är stängd här. Servern kunde inte bekräfta stängningen.'
+          : 'Kameran kunde inte öppnas. Kontrollera anslutningen och kamerainställningarna.',
+        'error',
+      );
+  } finally {
+    cameraActionRequests -= 1;
+    if (operation === cameraActionEpoch) {
+      cameraActionPending = false;
+      cameraPendingShow = null;
+    }
+    renderCamera(latestPayload);
+  }
+}
+
+refs.cameraMenu.addEventListener('click', () => {
+  cameraChoicesOpen = !cameraChoicesOpen;
+  renderCamera(latestPayload);
+});
+refs.cameraClose.addEventListener('click', () => {
+  void cameraAction('hide');
+});
+
 refs.contextDetailsButton.addEventListener('click', () => {
   setContextDetailsOpen(!contextDetailsOpen);
 });
@@ -1923,7 +2299,10 @@ refs.musicArtworkImage.addEventListener('load', () => {
 });
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
-  if (contextDetailsOpen) {
+  if (cameraActive || cameraChoicesOpen || cameraPendingShow) {
+    void cameraAction('hide');
+    refs.cameraMenu.focus?.();
+  } else if (contextDetailsOpen) {
     setContextDetailsOpen(false);
     refs.contextDetailsButton.focus?.();
   } else if (musicDetailsOpen) {
@@ -2037,6 +2416,7 @@ document.addEventListener('visibilitychange', () => {
     connectStream();
     void refresh();
   } else {
+    stopCameraMedia();
     disconnectStream();
     window.clearTimeout(reconnectTimer);
   }
@@ -2044,6 +2424,7 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('pagehide', () => {
   stopped = true;
+  stopCameraMedia();
   clearComputerMediaDisplay();
   disconnectStream();
   window.clearTimeout(reconnectTimer);

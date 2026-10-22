@@ -1,3 +1,7 @@
+import { CameraDashboardService } from '../application/camera-dashboard.js';
+import { createCameraSettings } from '../core/cameras.js';
+import { CameraSettingsStore } from './camera-settings-store.js';
+import { CameraMediaProvider } from './camera-media.js';
 import { MusicVolumeSettingsStore } from './music-volume-settings-store.js';
 import { HomeAssistantArtworkService } from './artwork-service.js';
 import { ComputerNowPlayingSelector } from '../application/computer-now-playing.js';
@@ -424,8 +428,45 @@ export async function startRuntime(
         systemClock,
       )
     : undefined;
+  const cameraStore = config.cameraDashboard
+    ? new CameraSettingsStore(
+        `${lightingIntentPath}.cameras.json`,
+        createCameraSettings(config.cameraDashboard),
+        (message) => console.warn(`[lugn] ${message}`),
+      )
+    : undefined;
+  await cameraStore?.load();
+  const cameraService =
+    config.cameraDashboard && cameraStore
+      ? new CameraDashboardService(
+          config.cameraDashboard,
+          cameraStore,
+          systemClock,
+        )
+      : undefined;
+  const cameraMedia =
+    config.cameraDashboard && cameraService
+      ? new CameraMediaProvider(
+          cameraService,
+          config.cameraDashboard,
+          config.homeAssistant.baseUrl,
+          config.homeAssistant.token,
+          homeAssistantFetch,
+          systemClock,
+        )
+      : undefined;
   const bufferedHomeAssistantEvents: unknown[] = [];
-  const forwardHomeAssistantEvent = (event: unknown): void => {
+  const forwardHomeAssistantEvent = (
+    event: unknown,
+    allowCamera = true,
+  ): void => {
+    if (
+      allowCamera &&
+      typeof event === 'object' &&
+      event !== null &&
+      'event' in event
+    )
+      cameraService?.acceptEvent(event.event);
     homeAssistantLighting.acceptStateChangedEvent(event);
     homeAssistantSwitch?.acceptStateChangedEvent(event);
     homeAssistantMusic?.acceptStateChangedEvent(event);
@@ -437,11 +478,13 @@ export async function startRuntime(
     connection: HomeAssistantConnection,
   ): Promise<void> => {
     computerPlayback?.invalidate();
+    cameraService?.setConnected(false);
     homeAssistantConnection = connection;
     trustedMusicTargets.clear();
     reconciledMusicTargets.clear();
     syncingHomeAssistantStates = true;
     bufferedHomeAssistantEvents.length = 0;
+    let cameraSeed: unknown[] | undefined;
     const reconciled = await seedHomeAssistantObservations(
       config.homeAssistant.baseUrl,
       config.homeAssistant.token,
@@ -452,16 +495,23 @@ export async function startRuntime(
       homeAssistantHomePresence,
       homeAssistantFetch,
       () => connection.isCurrent(),
+      (states) => {
+        cameraSeed = states;
+      },
     );
     if (homeAssistantConnection !== connection || !connection.isCurrent())
       return;
+    if (reconciled && cameraSeed) {
+      cameraService?.setConnected(true);
+      cameraService?.seedStates(cameraSeed);
+    }
     if (reconciled)
       for (const target of reconciledMusicTargets)
         trustedMusicTargets.add(target);
     reconciledMusicTargets.clear();
     syncingHomeAssistantStates = false;
     for (const event of bufferedHomeAssistantEvents.splice(0))
-      forwardHomeAssistantEvent(event);
+      forwardHomeAssistantEvent(event, false);
     computerPlayback?.observe();
   };
   const homeAssistantSocket = new HomeAssistantWebSocketTransport(
@@ -480,7 +530,19 @@ export async function startRuntime(
       ...(dependencies.createHomeAssistantSocket === undefined
         ? {}
         : { createSocket: dependencies.createHomeAssistantSocket }),
+      additionalEventTypes: [
+        ...new Set(
+          (config.cameraDashboard?.triggers ?? []).flatMap((trigger) =>
+            trigger.kind === 'automation'
+              ? ['automation_triggered' as const]
+              : trigger.kind === 'service'
+                ? ['call_service' as const]
+                : [],
+          ),
+        ),
+      ],
       onConnected: refreshHomeAssistantStates,
+      onDisconnected: () => cameraService?.setConnected(false),
       onError: (kind) => {
         if (kind !== 'socket') return;
         trustedMusicTargets.clear();
@@ -584,6 +646,7 @@ export async function startRuntime(
     volumeSettingsStore,
     capabilities,
     ...(artwork ? { artworkProvider: artwork } : {}),
+    ...(cameraService && cameraMedia ? { cameraService, cameraMedia } : {}),
     experience,
     musicObservationTrustProvider: musicObservationTrust,
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
@@ -609,6 +672,7 @@ export async function startRuntime(
         })),
         capabilities,
         ...(artwork ? { artworkProvider: artwork } : {}),
+        ...(cameraService && cameraMedia ? { cameraService, cameraMedia } : {}),
         experience,
         presenceCountCorrectionAvailable: config.presenceControl !== undefined,
         scenes: Array.from(engine.scenes.values()),
@@ -692,6 +756,8 @@ export async function startRuntime(
     unsubscribeComputerNowPlaying();
     routines.dispose();
     computerIntelligence.dispose();
+    cameraMedia?.dispose();
+    cameraService?.dispose();
     artwork?.dispose();
     await castManager?.stop();
     await displayServer?.stop();
@@ -721,6 +787,8 @@ export async function startRuntime(
       unsubscribeComputerNowPlaying();
       routines.dispose();
       computerIntelligence.dispose();
+      cameraMedia?.dispose();
+      cameraService?.dispose();
       artwork?.dispose();
       await castManager?.stop();
       await displayServer?.stop();
@@ -753,6 +821,7 @@ async function seedHomeAssistantObservations(
   homePresenceAdapter?: HomeAssistantHomePresenceAdapter,
   fetcher: typeof fetch = fetch,
   shouldApply: () => boolean = () => true,
+  onStates?: (states: unknown[]) => void,
 ): Promise<boolean> {
   try {
     const response = await fetcher(`${baseUrl}/api/states`, {
@@ -776,6 +845,7 @@ async function seedHomeAssistantObservations(
       );
       return false;
     }
+    onStates?.(states);
     for (const state of states) {
       if (typeof state !== 'object' || state === null) continue;
       const candidate = state as Record<string, unknown>;

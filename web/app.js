@@ -102,6 +102,23 @@ let routineDraft = null;
 let routineOriginal = null;
 let routineGeneration = null;
 let routinePreviewRevision = 0;
+let cameraWebDraft = null;
+let cameraWebOriginal = null;
+let cameraWebGeneration;
+let cameraWebBusy = false;
+let cameraWebChoicesKey;
+const cameraWebDismissedIds = new Set();
+let cameraWebCloseHoldUntil = 0;
+let cameraWebPendingShow = null;
+let cameraWebActionEpoch = 0;
+let cameraWebActionPending = false;
+let cameraWebActionRequests = 0;
+let cameraWebMediaEpoch = 0;
+let cameraWebMediaKey = null;
+let cameraWebImageTimer;
+let cameraWebImageTimeout;
+let cameraWebController;
+let cameraWebObjectUrl;
 let intelligenceDraft = null;
 let intelligenceOriginal = null;
 let intelligenceGeneration = null;
@@ -177,6 +194,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 initializeLugn2();
+initializeCameraWeb();
 void restoreSessionOnStartup();
 
 function node(tag, className, text) {
@@ -251,6 +269,7 @@ function scheduleRenewalRetry() {
 }
 
 function showLogin(message = '') {
+  stopCameraWebMedia();
   clearSessionRenewal();
   stopLiveUpdates();
   csrfToken = null;
@@ -1196,6 +1215,7 @@ function render() {
   renderMusic(music.devices ?? {}, music.commands ?? [], music.fades ?? {});
   renderMusicSettings();
   renderLugn2();
+  renderCameraWeb();
   renderComputers(overview.state?.computer?.devices ?? {}, overviewStale);
   const devices = overview.state?.lighting?.devices ?? {};
   const presenceState = overview.state?.presence?.state ?? 'unknown';
@@ -2934,6 +2954,7 @@ function initializeLugn2() {
         !section.dataset.pages.split(' ').includes(page),
       );
     if (focus) l2('page-title').focus();
+    if (overview?.cameraDashboard) renderCameraWeb();
   };
   window.addEventListener('hashchange', () => navigate(true));
   navigate();
@@ -4610,3 +4631,466 @@ window.addEventListener('beforeunload', (event) => {
     event.returnValue = '';
   }
 });
+
+// Camera settings keep an independent local draft while live room state changes.
+function cameraWebDirty() {
+  return (
+    cameraWebDraft !== null &&
+    JSON.stringify(cameraWebDraft) !== JSON.stringify(cameraWebOriginal)
+  );
+}
+function cameraWebNow() {
+  return Number.isFinite(overview?.generatedAt)
+    ? overview.generatedAt + Date.now() - lastOverviewAt
+    : Date.now();
+}
+function cameraWebSafeUrl(value) {
+  if (typeof value !== 'string' || !/^(\/|\.\/)/.test(value)) return null;
+  try {
+    const url = new URL(value, location.href);
+    return url.origin === location.origin && !url.username && !url.password
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+function stopCameraWebMedia() {
+  cameraWebMediaEpoch += 1;
+  window.clearTimeout(cameraWebImageTimer);
+  window.clearTimeout(cameraWebImageTimeout);
+  cameraWebController?.abort();
+  cameraWebController = null;
+  const image = l2('camera-web-image');
+  image.onload = null;
+  image.onerror = null;
+  image.removeAttribute('src');
+  image.hidden = true;
+  if (cameraWebObjectUrl) URL.revokeObjectURL(cameraWebObjectUrl);
+  cameraWebObjectUrl = null;
+  cameraWebMediaKey = null;
+}
+function cameraWebCanRun(epoch) {
+  return (
+    epoch === cameraWebMediaEpoch &&
+    !overviewStale &&
+    csrfToken &&
+    !dashboardView.hidden &&
+    document.visibilityState !== 'hidden' &&
+    !l2('camera-web-panel').hidden &&
+    ['oversikt', 'intelligens'].includes(dashboardView.dataset.page) &&
+    overview?.cameraDashboard?.active?.expiresAt > cameraWebNow()
+  );
+}
+function startCameraWebMedia(active) {
+  stopCameraWebMedia();
+  const epoch = cameraWebMediaEpoch;
+  cameraWebMediaKey = `${active.id}|${active.imageUrl ?? ''}`;
+  const image = l2('camera-web-image');
+  const placeholder = l2('camera-web-placeholder');
+  const status = l2('camera-web-media-status');
+  placeholder.hidden = false;
+  placeholder.textContent = 'Hämtar kamerabild …';
+  status.textContent = 'Tyst kameravy · uppdateras varje sekund';
+  const imageUrl = cameraWebSafeUrl(active.imageUrl);
+  if (!imageUrl) {
+    placeholder.textContent = 'Kamerabilden är inte tillgänglig.';
+    return;
+  }
+  let failures = 0;
+  const frame = async () => {
+    if (!cameraWebCanRun(epoch)) return;
+    const controller = new AbortController();
+    cameraWebController = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+    cameraWebImageTimeout = timeout;
+    try {
+      const response = await fetch(imageUrl, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: controller.signal,
+      });
+      if (
+        !response.ok ||
+        !response.headers.get('content-type')?.startsWith('image/')
+      )
+        throw new Error('image_unavailable');
+      const blob = await response.blob();
+      if (!cameraWebCanRun(epoch)) return;
+      if (blob.size > 8 * 1024 * 1024) throw new Error('image_too_large');
+      const nextUrl = URL.createObjectURL(blob);
+      if (cameraWebObjectUrl) URL.revokeObjectURL(cameraWebObjectUrl);
+      cameraWebObjectUrl = nextUrl;
+      image.onload = () => {
+        if (!cameraWebCanRun(epoch)) return;
+        failures = 0;
+        image.hidden = false;
+        placeholder.hidden = true;
+        status.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
+        cameraWebImageTimer = window.setTimeout(frame, 1000);
+      };
+      image.onerror = () => {
+        if (!cameraWebCanRun(epoch)) return;
+        status.textContent = 'Kamerabilden kunde inte visas.';
+      };
+      image.src = nextUrl;
+    } catch {
+      if (!cameraWebCanRun(epoch)) return;
+      failures += 1;
+      status.textContent =
+        failures < 3
+          ? 'Ingen ny bild. Försöker igen …'
+          : 'Kameran svarar inte. Stäng och öppna vyn för att försöka igen.';
+      if (!image.hidden) status.textContent += ' Bilden är inaktuell.';
+      if (failures < 3) cameraWebImageTimer = window.setTimeout(frame, 2000);
+    } finally {
+      window.clearTimeout(timeout);
+      if (cameraWebController === controller) cameraWebController = null;
+    }
+  };
+  void frame();
+}
+function cameraWebCheckbox(container, label, value, checked, onChange) {
+  const row = node('label', 'check-label');
+  const input = node('input');
+  input.type = 'checkbox';
+  input.value = value;
+  input.checked = checked;
+  input.addEventListener('change', () => {
+    onChange(input.checked);
+    updateCameraWebControls();
+  });
+  row.append(input, node('span', '', label));
+  container.append(row);
+  return row;
+}
+function fillCameraWebSettings(data) {
+  cameraWebOriginal = structuredClone(data.settings);
+  cameraWebDraft = structuredClone(data.settings);
+  cameraWebGeneration = data.generation;
+  l2('camera-enabled').checked = cameraWebDraft.enabled;
+  l2('camera-automatic').checked = cameraWebDraft.automaticEnabled;
+  l2('camera-duration').value = String(cameraWebDraft.durationSeconds);
+  const cameras = l2('camera-camera-fields');
+  cameras.replaceChildren();
+  for (const camera of data.definitions) {
+    const row = cameraWebCheckbox(
+      cameras,
+      `${camera.name}${camera.available ? '' : ' (otillgänglig)'}`,
+      camera.id,
+      cameraWebDraft.cameras[camera.id] === true,
+      (checked) => {
+        cameraWebDraft.cameras[camera.id] = checked;
+      },
+    );
+    row.dataset.cameraId = camera.id;
+  }
+  const triggers = l2('camera-trigger-fields');
+  triggers.replaceChildren();
+  for (const trigger of data.triggers)
+    cameraWebCheckbox(
+      triggers,
+      trigger.name,
+      trigger.id,
+      cameraWebDraft.triggers[trigger.id] === true,
+      (checked) => {
+        cameraWebDraft.triggers[trigger.id] = checked;
+      },
+    );
+  if (!data.triggers.length)
+    triggers.append(node('p', '', 'Inga kamerahändelser är konfigurerade.'));
+  const viewers = l2('camera-viewer-fields');
+  viewers.replaceChildren();
+  for (const [id, label] of [
+    ['bed', 'Bed'],
+    ['desk', 'Desk'],
+    ['web', 'Webb'],
+  ])
+    cameraWebCheckbox(
+      viewers,
+      label,
+      id,
+      cameraWebDraft.viewers.includes(id),
+      (checked) => {
+        cameraWebDraft.viewers = checked
+          ? [...cameraWebDraft.viewers, id]
+          : cameraWebDraft.viewers.filter((item) => item !== id);
+      },
+    );
+}
+function updateCameraWebControls() {
+  const dirty = cameraWebDirty();
+  l2('camera-save').disabled = !dirty || cameraWebBusy || overviewStale;
+  l2('camera-discard').disabled = !dirty || cameraWebBusy;
+  l2('camera-fields').disabled = cameraWebBusy;
+  l2('camera-save').textContent = cameraWebBusy
+    ? 'Sparar …'
+    : 'Spara kamerainställningar';
+}
+function renderCameraWeb() {
+  const data = overview?.cameraDashboard;
+  l2('cameras-section').hidden = !data;
+  if (!data) {
+    if (cameraWebMediaKey) stopCameraWebMedia();
+    return;
+  }
+  if (
+    !cameraWebDraft ||
+    (!cameraWebDirty() &&
+      !cameraWebBusy &&
+      cameraWebGeneration !== data.generation)
+  )
+    fillCameraWebSettings(data);
+  for (const row of l2('camera-camera-fields').children) {
+    const camera = data.definitions.find(
+      (item) => item.id === row.dataset.cameraId,
+    );
+    if (camera && row.children[1])
+      row.children[1].textContent = `${camera.name}${camera.available ? '' : ' (otillgänglig)'}`;
+  }
+  l2('camera-web-summary').textContent = !data.settings.enabled
+    ? 'Kameravisning är avstängd.'
+    : data.settings.automaticEnabled
+      ? `Händelsestyrd kameravy är på · ${data.settings.durationSeconds} sekunder`
+      : 'Manuell kameravisning är på. Automatisk visning är avstängd.';
+  const choices = l2('camera-web-choices');
+  const definitions = data.definitions.filter(
+    (item) => item.enabled && item.available,
+  );
+  const key = JSON.stringify(definitions);
+  if (cameraWebChoicesKey !== key) {
+    cameraWebChoicesKey = key;
+    choices.replaceChildren(
+      ...definitions.map((camera) => {
+        const button = node(
+          'button',
+          'button button-quiet',
+          `Visa ${camera.name}`,
+        );
+        button.type = 'button';
+        button.addEventListener('click', () => {
+          void cameraWebAction('show', camera.id);
+        });
+        return button;
+      }),
+    );
+  }
+  choices.hidden =
+    !data.settings.enabled || !data.settings.viewers.includes('web');
+  for (const button of choices.children)
+    button.disabled =
+      cameraWebActionPending || cameraWebActionRequests > 0 || overviewStale;
+  if (data.active?.id && cameraWebCloseHoldUntil > cameraWebNow()) {
+    cameraWebDismissedIds.add(data.active.id);
+    if (cameraWebDismissedIds.size > 32)
+      cameraWebDismissedIds.delete(cameraWebDismissedIds.values().next().value);
+  }
+  const showingPending =
+    cameraWebActionPending &&
+    cameraWebPendingShow &&
+    cameraWebCloseHoldUntil <= cameraWebNow() &&
+    data.settings.enabled &&
+    data.settings.viewers.includes('web');
+  const active =
+    data.settings.enabled &&
+    data.settings.viewers.includes('web') &&
+    cameraWebCloseHoldUntil <= cameraWebNow() &&
+    !cameraWebDismissedIds.has(data.active?.id) &&
+    data.active?.expiresAt > cameraWebNow()
+      ? data.active
+      : null;
+  l2('camera-web-panel').hidden = !active && !showingPending;
+  if (active) {
+    l2('camera-web-name').textContent = active.name;
+    l2('camera-web-reason').textContent = active.reason || 'Manuellt öppnad';
+    l2('camera-web-countdown').textContent =
+      `${Math.max(0, Math.ceil((active.expiresAt - cameraWebNow()) / 1000))} s`;
+    l2('camera-web-image').alt = `${active.name}, senast hämtade kamerabild`;
+  }
+  const keyActive = active ? `${active.id}|${active.imageUrl ?? ''}` : null;
+  if (!active || !cameraWebCanRun(cameraWebMediaEpoch)) {
+    if (cameraWebMediaKey) stopCameraWebMedia();
+    if (showingPending && !active) {
+      l2('camera-web-name').textContent =
+        definitions.find((item) => item.id === cameraWebPendingShow)?.name ||
+        'Kamera';
+      l2('camera-web-reason').textContent = 'Väntar på servern';
+      l2('camera-web-countdown').textContent = '';
+      l2('camera-web-placeholder').hidden = false;
+      l2('camera-web-placeholder').textContent = 'Öppnar kameravyn …';
+      l2('camera-web-media-status').textContent =
+        'Du kan stänga vyn medan den öppnas.';
+    }
+    if (active && overviewStale)
+      l2('camera-web-media-status').textContent =
+        'Kontakten med Lugn bröts. Kameran har stoppats.';
+  } else if (cameraWebMediaKey !== keyActive) startCameraWebMedia(active);
+  updateCameraWebControls();
+}
+async function cameraWebRequest(path, method, body) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(`${API_ROOT}/cameras/${path}`, {
+      method,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json', 'X-Lugn-CSRF': csrfToken },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 409)
+        throw new Error(
+          'Ändrat på annat håll eller inte tillgängligt. Ditt utkast finns kvar. Kasta utkastet för att hämta de sparade inställningarna.',
+        );
+      if (response.status === 401 || response.status === 403)
+        throw new Error(
+          'Sessionen saknar åtkomst. Logga in igen. Ditt utkast finns kvar.',
+        );
+      throw new Error(
+        'Kameran eller servern är inte tillgänglig. Försök igen.',
+      );
+    }
+    return result;
+  } catch (error) {
+    if (error.name === 'AbortError' || error instanceof TypeError)
+      throw new Error(
+        'Servern svarar inte. Utfallet är okänt; kontrollera anslutningen innan du försöker igen.',
+      );
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+async function cameraWebAction(action, cameraId) {
+  if (
+    !csrfToken ||
+    (action === 'show' &&
+      (cameraWebActionPending || cameraWebActionRequests > 0 || overviewStale))
+  )
+    return;
+  cameraWebActionRequests += 1;
+  const operation = ++cameraWebActionEpoch;
+  if (action === 'hide') {
+    cameraWebCloseHoldUntil = cameraWebNow() + 60000;
+    if (overview?.cameraDashboard?.active?.id)
+      cameraWebDismissedIds.add(overview.cameraDashboard.active.id);
+    cameraWebPendingShow = null;
+    stopCameraWebMedia();
+    l2('camera-web-panel').hidden = true;
+    l2('camera-web-choices').children[0]?.focus?.();
+  } else {
+    cameraWebCloseHoldUntil = 0;
+    cameraWebDismissedIds.clear();
+    cameraWebPendingShow = cameraId;
+  }
+  cameraWebActionPending = true;
+  renderCameraWeb();
+  try {
+    const result = await cameraWebRequest('action', 'POST', {
+      action,
+      ...(cameraId ? { cameraId } : {}),
+    });
+    if (operation !== cameraWebActionEpoch) {
+      if (action === 'show' && cameraWebCloseHoldUntil > cameraWebNow()) {
+        await cameraWebRequest('action', 'POST', { action: 'hide' });
+      }
+      return;
+    }
+    if (result.cameraDashboard && overview)
+      overview.cameraDashboard = result.cameraDashboard;
+  } catch (error) {
+    if (operation === cameraWebActionEpoch)
+      setActionMessage(error.message, 'bad');
+  } finally {
+    cameraWebActionRequests -= 1;
+    if (operation === cameraWebActionEpoch) {
+      cameraWebActionPending = false;
+      cameraWebPendingShow = null;
+    }
+    renderCameraWeb();
+  }
+}
+function initializeCameraWeb() {
+  if (!l2('camera-form')) return;
+  l2('camera-enabled').addEventListener('change', () => {
+    if (cameraWebDraft) cameraWebDraft.enabled = l2('camera-enabled').checked;
+    updateCameraWebControls();
+  });
+  l2('camera-automatic').addEventListener('change', () => {
+    if (cameraWebDraft)
+      cameraWebDraft.automaticEnabled = l2('camera-automatic').checked;
+    updateCameraWebControls();
+  });
+  l2('camera-duration').addEventListener('input', () => {
+    if (cameraWebDraft)
+      cameraWebDraft.durationSeconds = Number(l2('camera-duration').value);
+    updateCameraWebControls();
+  });
+  l2('camera-discard').addEventListener('click', async () => {
+    try {
+      await fetchOverview();
+      fillCameraWebSettings(overview.cameraDashboard);
+      l2('camera-settings-status').textContent = 'Utkastet är borttaget.';
+      renderCameraWeb();
+    } catch {
+      l2('camera-settings-status').textContent =
+        'De sparade inställningarna kunde inte hämtas. Utkastet finns kvar.';
+    }
+  });
+  l2('camera-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (
+      !cameraWebDirty() ||
+      cameraWebBusy ||
+      !l2('camera-form').checkValidity()
+    )
+      return;
+    cameraWebBusy = true;
+    updateCameraWebControls();
+    const status = l2('camera-settings-status');
+    status.textContent = 'Sparar kamerainställningar …';
+    status.dataset.tone = 'neutral';
+    try {
+      const result = await cameraWebRequest('settings', 'PUT', {
+        generation: cameraWebGeneration,
+        settings: structuredClone(cameraWebDraft),
+      });
+      if (
+        !result.cameraDashboard?.settings ||
+        typeof result.cameraDashboard.generation !== 'string'
+      )
+        throw new Error(
+          'Servern kunde inte bekräfta inställningarna. Utkastet finns kvar.',
+        );
+      overview.cameraDashboard = result.cameraDashboard;
+      fillCameraWebSettings(result.cameraDashboard);
+      status.textContent = 'Kamerainställningarna är sparade.';
+    } catch (error) {
+      status.textContent = error.message;
+      status.dataset.tone = 'bad';
+    } finally {
+      cameraWebBusy = false;
+      renderCameraWeb();
+    }
+  });
+  l2('camera-web-close').addEventListener('click', () => {
+    void cameraWebAction('hide');
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') stopCameraWebMedia();
+    else renderCameraWeb();
+  });
+  window.addEventListener('pagehide', stopCameraWebMedia);
+  window.addEventListener('beforeunload', (event) => {
+    if (cameraWebDirty() || cameraWebBusy) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
+  window.setInterval(() => {
+    if (overview?.cameraDashboard?.active) renderCameraWeb();
+  }, 1000);
+}

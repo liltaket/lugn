@@ -916,3 +916,174 @@ h2 {
 .music-command-state {
   -webkit-line-clamp: 1;
 }
+
+/* The camera shares the music column; lighting and music transport stay reachable. */
+.camera-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.camera-choices button {
+  flex: 1;
+  background: var(--surface);
+}
+.music-section[data-camera='true'] .music-feature,
+.music-section[data-camera='true'] .music-presets,
+.music-section[data-camera='true'] .music-volume-policy,
+.music-section[data-camera='true'] #music-player-status {
+  display: none;
+}
+.music-section[data-camera='true'] {
+  gap: 10px;
+}
+.camera-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.camera-caption {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.camera-caption > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.camera-caption strong {
+  font-size: 21px;
+  font-weight: 500;
+}
+.camera-caption span:not(#camera-countdown) {
+  font-size: 13px;
+  color: var(--quiet);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.camera-caption button {
+  min-height: 48px;
+  background: transparent;
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+#camera-countdown {
+  color: var(--muted);
+  font-size: 14px;
+}
+.camera-frame {
+  flex: 1;
+  position: relative;
+  min-height: 100px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #101715;
+  display: grid;
+  place-items: center;
+}
+.camera-frame img {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+#camera-placeholder {
+  color: var(--quiet);
+  font-size: 15px;
+  padding: 16px;
+  text-align: center;
+}
+.camera-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+  min-height: 16px;
+}
+.music-section[data-camera='true'] .music-transport {
+  margin-top: auto;
+}
+@media (max-height: 650px) {
+  .music-section[data-camera='true'] .music-heading {
+    min-height: 30px;
+  }
+  .camera-caption strong {
+    font-size: 19px;
+  }
+}
+
+/* Familiar room actions become generous, quiet pictograms; custom presets keep text. */
+.scene-button[data-icon='true'] {
+  position: relative;
+  justify-content: center;
+}
+.scene-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  pointer-events: none;
+}
+.scene-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  stroke-width: 1.65;
+}
+.scene-button[data-icon='true'] .scene-copy {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.scene-button[data-icon='true'] .scene-current-mark {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  background: transparent;
+}
+.scene-button[data-icon='true'][data-state='confirmed'] .scene-current-mark {
+  background: currentColor;
+}
+.scene-button[data-icon='true'][data-state='awaiting'] .scene-current-mark {
+  border-style: dashed;
+}
+.scene-button[data-icon='true'][data-state='pending'] .scene-current-mark {
+  visibility: visible;
+  width: 14px;
+  height: 14px;
+  border-style: dashed;
+  animation: scene-request 1.4s linear infinite;
+}
+.scene-button[data-icon='true'][data-state='offline'] .scene-current-mark {
+  background: transparent;
+}
+@keyframes scene-request {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (min-height: 720px) and (min-width: 1100px) {
+  .scene-icon {
+    width: 56px;
+    height: 56px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scene-button[data-icon='true'][data-state='pending'] .scene-current-mark {
+    animation: none;
+  }
+}
