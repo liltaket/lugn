@@ -536,3 +536,36 @@ async function findAvailablePort(): Promise<number> {
   await new Promise<void>((resolve) => probe.close(() => resolve()));
   return port;
 }
+
+it('round-trips RGB presets and detects concurrent color-only edits', async () => {
+  const { store, engine, path } = await fixture();
+  await store.load(baseScenes);
+  const created = await store.create(engine, {
+    name: 'Party',
+    lighting: {
+      'lighting.ceiling': { power: true, brightness: 50, rgb: [150, 20, 255] },
+    },
+  });
+  expect(
+    created.lighting['lighting.ceiling']?.colorTemperature,
+  ).toBeUndefined();
+  const edited = await store.update(engine, created.id, {
+    name: 'Party',
+    lighting: {
+      'lighting.ceiling': { power: true, brightness: 50, rgb: [20, 150, 255] },
+    },
+    expectedScene: structuredClone(created),
+  });
+  await expect(
+    store.update(engine, created.id, {
+      name: 'Stale color',
+      lighting: created.lighting,
+      expectedScene: structuredClone(created),
+    }),
+  ).rejects.toMatchObject({ status: 409 });
+  const restarted = new ScenePresetStore({ filePath: path, deviceIds });
+  const loaded = (await restarted.load(baseScenes)).find(
+    (scene) => scene.id === created.id,
+  );
+  expect(loaded).toEqual(edited);
+});

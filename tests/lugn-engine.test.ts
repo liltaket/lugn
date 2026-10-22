@@ -185,12 +185,12 @@ describe('Lugn deterministic lighting slice', () => {
     expect(adapter.dispatched.slice(beforeManualOn)).toEqual([
       expect.objectContaining({
         target: 'lighting.desk',
-        values: { power: true },
+        values: { power: true, colorTemperature: 2200 },
       }),
     ]);
     expect(
       engine.state.lighting.devices['lighting.desk']?.effectiveDesired,
-    ).toEqual({ power: true });
+    ).toEqual({ power: true, colorTemperature: 2200 });
     expect(adapter.observed.get('lighting.desk')?.power).toBe(true);
 
     await engine.setLighting(
@@ -277,7 +277,7 @@ describe('Lugn deterministic lighting slice', () => {
     expect(adapter.dispatched.slice(afterManualOn)).toEqual([
       expect.objectContaining({
         target: 'lighting.desk',
-        values: { brightness: 65 },
+        values: { brightness: 65, colorTemperature: 3500 },
       }),
       expect.objectContaining({
         target: 'lighting.desk',

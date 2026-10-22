@@ -109,6 +109,8 @@ export class WledCctController {
   }
 
   async dispatch(command: LightingCommand): Promise<void> {
+    if (command.values.rgb !== undefined)
+      throw new Error('Dedicated WLED CCT strips do not support RGB');
     const target = command.target;
     const generation = this.nextGeneration(target);
     const previous = this.writes.get(target) ?? Promise.resolve();

@@ -38,7 +38,12 @@ import {
   type SwitchObservation,
 } from '../adapters/simulated-switch.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
-import { lightingFeedbackMatches } from '../core/lighting-feedback.js';
+import {
+  lightingFeedbackMatches,
+  lightingIntentMatches,
+  mergeLightingValues,
+  withLightingColor,
+} from '../core/lighting-feedback.js';
 import { StateEventStream } from '../core/event-stream.js';
 import { RoomSessions } from './room-sessions.js';
 import {
@@ -504,20 +509,49 @@ export class LugnEngine {
         )) {
           const device = devices[target];
           if (!device) continue;
-          for (const property of LightingProperties) {
-            const sceneValue = values[property];
-            const ownsSceneValue = device.ownership[property]?.kind === 'scene';
+          // Scene edits may change color mode. Baseline follows the saved scene;
+          // an explicit override in the other color mode remains human intent.
+          if (
+            values.rgb !== undefined ||
+            values.colorTemperature !== undefined
+          ) {
+            const color =
+              values.rgb !== undefined
+                ? { rgb: values.rgb }
+                : { colorTemperature: values.colorTemperature! };
+            device.baselineDesired = mergeLightingValues(
+              device.baselineDesired,
+              color,
+            );
+            const property =
+              values.rgb !== undefined ? 'rgb' : 'colorTemperature';
+            const opposite = property === 'rgb' ? 'colorTemperature' : 'rgb';
+            const manualOpposite =
+              device.ownership[opposite]?.kind === 'override';
+            const ownsColor =
+              device.ownership[property]?.kind === 'scene' ||
+              device.ownership[opposite]?.kind === 'scene';
             const synchronizeCct =
-              property === 'colorTemperature' &&
-              values.power !== false &&
-              sceneValue !== undefined;
+              property === 'colorTemperature' && values.power !== false;
+            if (!manualOpposite && (ownsColor || synchronizeCct)) {
+              device.effectiveDesired = mergeLightingValues(
+                device.effectiveDesired,
+                color,
+              );
+              delete device.ownership[opposite];
+              device.ownership[property] = {
+                kind: 'scene',
+                revision: restoredIntent.sceneRevision,
+              };
+            }
+          }
+          for (const property of ['power', 'brightness'] as const) {
+            const sceneValue = values[property];
             if (
               sceneValue === undefined ||
-              (!ownsSceneValue && !synchronizeCct)
+              device.ownership[property]?.kind !== 'scene'
             )
               continue;
-            // Migrate stale scene values after preset changes. CCT is stricter:
-            // older per-light overrides cannot split an active room scene.
             Object.assign(device.baselineDesired, { [property]: sceneValue });
             Object.assign(device.effectiveDesired, { [property]: sceneValue });
             device.ownership[property] = {
@@ -849,11 +883,15 @@ export class LugnEngine {
         if (!device || values.power === false) continue;
         const cct = values.colorTemperature;
         if (cct === undefined) continue;
-        if (device.baselineDesired.colorTemperature === undefined)
+        if (
+          device.baselineDesired.colorTemperature === undefined &&
+          device.baselineDesired.rgb === undefined
+        )
           device.baselineDesired.colorTemperature = cct;
         if (
           device.effectiveDesired.power !== false &&
-          device.effectiveDesired.colorTemperature === undefined
+          device.effectiveDesired.colorTemperature === undefined &&
+          device.effectiveDesired.rgb === undefined
         ) {
           device.effectiveDesired.colorTemperature = cct;
           device.ownership.colorTemperature = {
@@ -862,7 +900,10 @@ export class LugnEngine {
           };
         }
         const original = this.activeSceneDefinition.lighting[target]!;
-        if (original.colorTemperature === undefined)
+        if (
+          original.colorTemperature === undefined &&
+          original.rgb === undefined
+        )
           original.colorTemperature = cct;
       }
     }
@@ -1576,6 +1617,7 @@ export class LugnEngine {
     isCurrent?: ExecutionGuard,
   ): Promise<void> {
     this.assertExecution(isCurrent);
+    values = LightingValuesSchema.parse(values);
     this.requireDevice(target);
     if (isHumanActor(provenance.actor) && !isCurrent)
       this.noteIntervention({ domain: 'lighting', target });
@@ -1644,11 +1686,27 @@ export class LugnEngine {
     const now = this.clock.now();
     const deviceBeforeUpdate = this.requireDevice(target);
     if (
+      values.power === true &&
+      values.rgb === undefined &&
+      values.colorTemperature === undefined &&
+      deviceBeforeUpdate.effectiveDesired.rgb === undefined &&
+      deviceBeforeUpdate.effectiveDesired.colorTemperature === undefined &&
+      this.hasExplicitAllLightsOffScene()
+    ) {
+      const white =
+        this.scenes.get('scene.everyday_light')?.lighting[target]
+          ?.colorTemperature ??
+        [...this.scenes.values()]
+          .map((scene) => scene.lighting[target]?.colorTemperature)
+          .find((temperature) => temperature !== undefined);
+      if (white !== undefined) updates.get(target)!.colorTemperature = white;
+    }
+    if (
       isHumanActor(provenance.actor) &&
       values.power === true &&
       deviceBeforeUpdate.effectiveDesired.power === false
     ) {
-      for (const property of ['brightness', 'colorTemperature'] as const) {
+      for (const property of ['brightness'] as const) {
         if (
           values[property] === undefined &&
           deviceBeforeUpdate.ownership[property]?.kind === 'scene'
@@ -1680,6 +1738,14 @@ export class LugnEngine {
           this.explicitPowerWhileAwaitingOccupancy.add(lightingTarget);
       }
       const device = this.requireDevice(lightingTarget);
+      if (targetValues.rgb !== undefined) {
+        delete device.effectiveDesired.colorTemperature;
+        delete device.ownership.colorTemperature;
+      }
+      if (targetValues.colorTemperature !== undefined) {
+        delete device.effectiveDesired.rgb;
+        delete device.ownership.rgb;
+      }
       for (const property of LightingProperties) {
         const value = targetValues[property];
         if (value === undefined) continue;
@@ -1718,7 +1784,10 @@ export class LugnEngine {
               this.manualLightingWhileEmpty.has(lightingTarget))))
           ? this.dispatch(
               lightingTarget,
-              targetValues,
+              withLightingColor(
+                targetValues,
+                this.requireDevice(lightingTarget).effectiveDesired,
+              ),
               revision,
               source,
               reason,
@@ -2145,7 +2214,10 @@ export class LugnEngine {
     this.prelightAppliedValues = new Map();
     for (const [target, values] of Object.entries(targetValues)) {
       const device = this.requireDevice(target);
-      const snapshot = { ...device.effectiveDesired, ...device.observed };
+      const snapshot = mergeLightingValues(
+        device.effectiveDesired,
+        device.observed,
+      );
       this.prelightSnapshot.set(target, snapshot);
       this.prelightAppliedValues.set(target, { ...values });
     }
@@ -2309,6 +2381,11 @@ export class LugnEngine {
         device.effectiveDesired.colorTemperature !== undefined
       )
         desired.colorTemperature = device.effectiveDesired.colorTemperature;
+      if (
+        device.effectiveDesired.power !== false &&
+        device.effectiveDesired.rgb !== undefined
+      )
+        desired.rgb = device.effectiveDesired.rgb;
       if (device.availability === 'degraded') continue;
       if (now - targetStartedAt >= this.convergenceTimeoutMs) {
         device.availability = 'degraded';
@@ -2599,6 +2676,11 @@ export class LugnEngine {
       for (const property of LightingProperties) {
         if (
           excluded.has(property) ||
+          (property === 'rgb' &&
+            (sceneValues.colorTemperature !== undefined ||
+              excluded.has('colorTemperature'))) ||
+          (property === 'colorTemperature' &&
+            (sceneValues.rgb !== undefined || excluded.has('rgb'))) ||
           sceneValues[property] !== undefined ||
           previousValues[property] === undefined
         )
@@ -2676,7 +2758,11 @@ export class LugnEngine {
           LightingProperties.every(
             (property) =>
               command.desired[property] === undefined ||
-              command.desired[property] === sceneValues[property],
+              lightingIntentMatches(
+                property,
+                command.desired[property],
+                sceneValues[property],
+              ),
           )
         );
       },
@@ -3087,10 +3173,29 @@ export class LugnEngine {
       this.prelightActive &&
       observation.values.power === true &&
       this.prelightAppliedValues.get(observation.target)?.power === true;
+    const priorRgb = device.observed.rgb;
+    const priorTemperature = device.observed.colorTemperature;
+    if (observation.values.rgb !== undefined || observation.colorMode === 'rgb')
+      delete device.observed.colorTemperature;
+    if (
+      observation.values.colorTemperature !== undefined ||
+      observation.colorMode === 'color_temp'
+    )
+      delete device.observed.rgb;
+    if (observation.colorMode === 'unknown') {
+      delete device.observed.rgb;
+      delete device.observed.colorTemperature;
+    }
     for (const property of LightingProperties) {
       const value = observation.values[property];
       if (value === undefined) continue;
-      const previouslyObserved = device.observed[property];
+      const previouslyObserved =
+        device.observed[property] ??
+        (property === 'rgb'
+          ? priorTemperature
+          : property === 'colorTemperature'
+            ? priorRgb
+            : undefined);
       Object.assign(device.observed, { [property]: value });
       const command = this.ledger.attributeObservation(
         observation.target,
@@ -3145,7 +3250,7 @@ export class LugnEngine {
           this.ledger.isKnownCommandId(observation.commandId)
         ) &&
         previouslyObserved !== undefined &&
-        previouslyObserved !== value
+        !lightingFeedbackMatches(property, previouslyObserved, value)
       ) {
         this.noteIntervention({
           domain: 'lighting',
@@ -3169,6 +3274,8 @@ export class LugnEngine {
           // A room scene owns Kelvin as a shared value. Keep the external
           // observation visible, but do not turn a single lamp's drift into a
           // permanent per-light override.
+          delete device.effectiveDesired.rgb;
+          delete device.ownership.rgb;
           device.effectiveDesired.colorTemperature = synchronizedTemperature;
           if (device.ownership.colorTemperature?.kind !== 'override')
             device.ownership.colorTemperature = {
@@ -3186,7 +3293,12 @@ export class LugnEngine {
             },
           );
         } else {
-          Object.assign(device.effectiveDesired, { [property]: value });
+          device.effectiveDesired = mergeLightingValues(
+            device.effectiveDesired,
+            { [property]: value },
+          );
+          if (property === 'rgb') delete device.ownership.colorTemperature;
+          if (property === 'colorTemperature') delete device.ownership.rgb;
           effectiveIntentChanged = true;
           device.ownership[property] = {
             kind: 'override',
@@ -4250,7 +4362,14 @@ export class LugnEngine {
     if (!this.canReconcileLightingTarget(command.target)) return false;
     const stillDesired = LightingProperties.every((property) => {
       const value = command.desired[property];
-      return value === undefined || device.effectiveDesired[property] === value;
+      return (
+        value === undefined ||
+        lightingIntentMatches(
+          property,
+          device.effectiveDesired[property],
+          value,
+        )
+      );
     });
     if (!stillDesired) return false;
     return LightingProperties.some((property) => {

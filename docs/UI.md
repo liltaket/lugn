@@ -246,9 +246,10 @@ music transport while showing a selected camera for a bounded interval. Camera
 and event choices, screens, duration and independent automatic/manual switches
 are available in the web Intelligence section. New installations start disabled.
 
-The five built-in Hub lighting scenes use centered SVG pictograms: power for
+The Hub lighting scenes use centered SVG pictograms with small name captions: power for
 all off, crescent for cozy lighting, sun for everyday lighting, desk lamp for
-focus and screen/play for movie lighting. Touch areas and actions are unchanged.
+focus and screen/play for movie lighting. A configured Party scene uses a disco-ball
+pictogram. Touch areas and actions are unchanged.
 Accessible names and native tooltips retain scene names and live confirmation
-state. User-created presets keep their text labels, since their meaning cannot
+state. Small 13–14px names beneath the icons help users learn their meaning. User-created presets keep their text labels, since their meaning cannot
 be safely inferred from an arbitrary name.

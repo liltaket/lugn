@@ -30,8 +30,19 @@ export class CameraDashboardService {
   private readonly available = new Set<string>();
   private readonly baselines = new Map<string, string>();
   private readonly observedAt = new Map<string, number>();
+  private readonly stateSince = new Map<string, number>();
   private readonly active = new Map<CameraViewer, CameraActiveView>();
   private readonly timers = new Map<CameraViewer, TimerHandle>();
+  private readonly lifetimes = new Map<
+    CameraViewer,
+    {
+      minimumDeadline: number;
+      maximumDeadline: number;
+      minimumExpiresAt: number;
+      maximumExpiresAt: number;
+      extended: boolean;
+    }
+  >();
   private readonly blockedUntil = new Map<CameraViewer, number>();
   private readonly seen = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
@@ -113,6 +124,7 @@ export class CameraDashboardService {
     this.available.clear();
     this.baselines.clear();
     this.observedAt.clear();
+    this.stateSince.clear();
     this.seen.clear();
     this.clearViews();
     this.notify();
@@ -121,6 +133,7 @@ export class CameraDashboardService {
     if (!this.connected || this.disposed) return;
     this.baselines.clear();
     this.observedAt.clear();
+    this.stateSince.clear();
     this.available.clear();
     for (const raw of states) {
       const state = object(raw);
@@ -129,6 +142,7 @@ export class CameraDashboardService {
     }
     for (const [viewer, view] of this.active)
       if (!this.available.has(view.cameraId)) this.clearView(viewer);
+    this.refreshViews();
     this.notify();
   }
   acceptEvent(raw: unknown): void {
@@ -156,10 +170,22 @@ export class CameraDashboardService {
       );
       const wasAvailable =
         camera !== undefined && this.available.has(camera.id);
+      // Resolve an overdue boundary with the state accepted before this event.
+      // Event-loop delay must not make OFF-after-minimum revoke an earned cap.
+      const boundaryChanged = this.refreshViews();
       this.observeState(entityId, newState?.['state'], time);
       for (const [viewer, view] of this.active)
         if (!this.available.has(view.cameraId)) this.clearView(viewer);
-      if (camera && wasAvailable !== this.available.has(camera.id))
+      const durationChanged =
+        this.config.triggers.some(
+          (trigger) =>
+            trigger.kind === 'state' && trigger.entityId === entityId,
+        ) && this.refreshViews();
+      if (
+        boundaryChanged ||
+        durationChanged ||
+        (camera && wasAvailable !== this.available.has(camera.id))
+      )
         this.notify();
     }
     const settings = this.settings();
@@ -251,8 +277,14 @@ export class CameraDashboardService {
     )
       return;
     this.observedAt.set(entityId, time);
-    if (known(value)) this.baselines.set(entityId, value);
-    else this.baselines.delete(entityId);
+    if (known(value)) {
+      if (this.baselines.get(entityId) !== value)
+        this.stateSince.set(entityId, this.clock.monotonicNow());
+      this.baselines.set(entityId, value);
+    } else {
+      this.baselines.delete(entityId);
+      this.stateSince.delete(entityId);
+    }
     const camera = this.config.cameras.find(
       (item) => item.entityId === entityId,
     );
@@ -294,20 +326,86 @@ export class CameraDashboardService {
       manual,
     };
     this.active.set(viewer, view);
+    const now = this.clock.monotonicNow();
+    this.lifetimes.set(viewer, {
+      minimumDeadline: now + durationMs,
+      maximumDeadline: now + durationMs * 2,
+      minimumExpiresAt: view.expiresAt,
+      maximumExpiresAt: view.expiresAt + durationMs,
+      extended: false,
+    });
+    this.refreshView(viewer);
+  }
+  private hasActivity(cameraId: string, at = Infinity): boolean {
+    const settings = this.settings();
+    // Only explicit enabled state-trigger mappings participate. Never discover a
+    // generic motion sensor, or substitute it for a missing object detector.
+    return (
+      this.connected &&
+      this.config.triggers.some(
+        (trigger) =>
+          trigger.kind === 'state' &&
+          trigger.cameraId === cameraId &&
+          settings.triggers[trigger.id] === true &&
+          this.baselines.get(trigger.entityId) === trigger.to &&
+          (this.stateSince.get(trigger.entityId) ?? Infinity) <= at,
+      )
+    );
+  }
+  private refreshViews(): boolean {
+    let changed = false;
+    for (const viewer of [...this.active.keys()])
+      changed = this.refreshView(viewer) || changed;
+    return changed;
+  }
+  private refreshView(viewer: CameraViewer): boolean {
+    const view = this.active.get(viewer);
+    const lifetime = this.lifetimes.get(viewer);
+    if (!view || !lifetime) return false;
+    const now = this.clock.monotonicNow();
+    const activity = this.hasActivity(
+      view.cameraId,
+      now >= lifetime.minimumDeadline ? lifetime.minimumDeadline : Infinity,
+    );
+    if (
+      now >= lifetime.maximumDeadline ||
+      (now >= lifetime.minimumDeadline && !lifetime.extended && !activity)
+    ) {
+      this.clearView(viewer);
+      return true;
+    }
+    // At the minimum boundary, current activity earns one fixed extension. A
+    // later detector OFF cannot make the view disappear midway through it.
+    if (now >= lifetime.minimumDeadline && activity) lifetime.extended = true;
+    const expiresAt =
+      lifetime.extended || activity
+        ? lifetime.maximumExpiresAt
+        : lifetime.minimumExpiresAt;
+    const changed = view.expiresAt !== expiresAt;
+    view.expiresAt = expiresAt;
+    const deadline = lifetime.extended
+      ? lifetime.maximumDeadline
+      : lifetime.minimumDeadline;
+    const timer = this.timers.get(viewer);
+    if (timer !== undefined) this.clock.clearTimeout(timer);
     this.timers.set(
       viewer,
-      this.clock.setTimeout(() => {
-        if (this.active.get(viewer)?.id !== view.id) return;
-        this.clearView(viewer);
-        this.notify();
-      }, durationMs),
+      this.clock.setTimeout(
+        () => {
+          if (this.active.get(viewer)?.id !== view.id) return;
+          if (this.refreshView(viewer)) this.notify();
+        },
+        Math.max(0, deadline - now),
+      ),
     );
+    return changed;
   }
   private clearView(viewer: CameraViewer): void {
     const timer = this.timers.get(viewer);
     if (timer !== undefined) this.clock.clearTimeout(timer);
     this.timers.delete(viewer);
     this.active.delete(viewer);
+    this.lifetimes.delete(viewer);
   }
   private clearViews(): void {
     for (const viewer of viewers) this.clearView(viewer);

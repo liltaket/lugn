@@ -383,6 +383,7 @@ function getSceneList(payload) {
     'scene.everyday_light',
     'scene.movie_light',
     'scene.focus_light',
+    'scene.party',
   ];
   const role = roleName(payload?.role);
   const sceneOrder =
@@ -423,6 +424,11 @@ function sceneIconFor(sceneId) {
       name: 'desk-lamp',
       paths:
         '<path d="M7 21h11M12.5 21v-4L7 11l4-5"/><circle cx="7" cy="11" r="1.5"/><path d="m11 6 4-3 6 6-3 4Z"/><path d="m15 10 2 2"/>',
+    },
+    'scene.party': {
+      name: 'disco-ball',
+      paths:
+        '<path d="M12 1.5V4"/><circle cx="12" cy="11" r="7"/><path d="M5.5 8.5h13m-13 5h13M12 4c-4 4-4 10 0 14m0-14c4 4 4 10 0 14M3 20l1-1m16 0 1 1m-9 0v2"/>',
     },
     'scene.movie_light': {
       name: 'film',

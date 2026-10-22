@@ -1,3 +1,4 @@
+import { mergeLightingValues } from '../core/lighting-feedback.js';
 import type { Clock } from '../core/clock.js';
 import type { Actor, LightingValues } from '../core/schemas.js';
 
@@ -5,6 +6,8 @@ export type LightingObservation = {
   target: string;
   values: LightingValues;
   availability?: 'available' | 'unavailable';
+  /** Active device mode invalidates cached metadata from the other mode. */
+  colorMode?: 'rgb' | 'color_temp' | 'unknown';
   commandId?: string;
   observedAt: number;
   provenance?: { actor: Actor; source?: string };
@@ -66,7 +69,10 @@ export class SimulatedLightingAdapter implements LightingAdapter {
     const delayMs =
       this.feedbackDelayByCommandId.get(command.id) ?? this.feedbackDelayMs;
     if (delayMs > 0) await delay(this.clock, delayMs);
-    const next = { ...this.observed.get(command.target), ...command.values };
+    const next = mergeLightingValues(
+      this.observed.get(command.target) ?? {},
+      command.values,
+    );
     this.observed.set(command.target, next);
     this.emit({
       target: command.target,
@@ -90,7 +96,7 @@ export class SimulatedLightingAdapter implements LightingAdapter {
     values: LightingValues,
     provenance: { actor: Actor; source?: string } = { actor: { type: 'user' } },
   ): void {
-    const next = { ...this.observed.get(target), ...values };
+    const next = mergeLightingValues(this.observed.get(target) ?? {}, values);
     this.observed.set(target, next);
     this.emit({ target, values, observedAt: this.clock.now(), provenance });
   }

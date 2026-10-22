@@ -34,7 +34,16 @@ Add an allowlist to the protected runtime configuration:
 Everything starts disabled. In `/ui/` → Intelligence → camera settings, enable
 previews, select cameras/screens and save. Automatic previews have a separate
 switch and individual trigger selections. Duration defaults to 30 seconds
-(configurable from 5 to 120). Manual camera buttons work independently of the
+(configurable from 5 to 120). An active, enabled state detector for the same
+camera can extend the view to twice that duration: **30 seconds normally, at most
+60 seconds with continuing activity** with the defaults. If all relevant
+detectors turn off before 30 seconds, the view closes at 30. If activity is still
+present at 30, the extension is fixed through 60, even if the detector turns off
+at 35. No event can push the maximum deadline further. Manual views use the same
+rule. Only the configured detector categories participate; generic motion is
+never inferred. Close always cancels immediately.
+
+Manual camera buttons work independently of the
 automatic switch. Preferences use atomic, mode-600 persistence in
 `<statePath>.cameras.json`, with generation checks to avoid overwriting another
 editor. Disabling previews or changing settings closes existing previews.

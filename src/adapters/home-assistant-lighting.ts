@@ -3,6 +3,7 @@ import type { Clock } from '../core/clock.js';
 import { WledCctController, WledCctMappingsSchema } from './wled-cct.js';
 import {
   SemanticLightingIdSchema,
+  LightingValuesSchema,
   type LightingValues,
 } from '../core/schemas.js';
 import {
@@ -109,6 +110,7 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
   private readonly listeners = new Set<
     (observation: LightingObservation) => void
   >();
+  private readonly colorModesByTarget = new Map<string, Set<string>>();
   private readonly lastUpdatedByTarget = new Map<string, number>();
   private readonly wledCct: WledCctController;
   private wledPollTimer: ReturnType<Clock['setTimeout']> | undefined;
@@ -137,6 +139,7 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
   }
 
   async dispatch(command: LightingCommand): Promise<void> {
+    LightingValuesSchema.parse(command.values);
     const entityId = this.entityBySemanticId.get(command.target);
     if (!entityId) {
       throw new Error(
@@ -149,12 +152,23 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
       return;
     }
 
+    if (
+      command.values.rgb !== undefined &&
+      ![...(this.colorModesByTarget.get(command.target) ?? [])].some((mode) =>
+        ['rgb', 'rgbw', 'rgbww', 'hs', 'xy'].includes(mode),
+      )
+    )
+      throw new Error(`RGB capability is not confirmed for ${command.target}`);
     const service = command.values.power === false ? 'turn_off' : 'turn_on';
-    const data: Record<string, string | number> = { entity_id: entityId };
+    const data: Record<string, string | number | number[]> = {
+      entity_id: entityId,
+    };
 
     if (service === 'turn_on') {
       if (command.values.brightness !== undefined)
         data['brightness_pct'] = command.values.brightness;
+      if (command.values.rgb !== undefined)
+        data['rgb_color'] = command.values.rgb;
       if (command.values.colorTemperature !== undefined)
         data['color_temp_kelvin'] = command.values.colorTemperature;
     }
@@ -288,6 +302,13 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
     if (Number.isFinite(lastUpdated))
       this.lastUpdatedByTarget.set(target, lastUpdated);
 
+    const supportedModes = newState.attributes?.['supported_color_modes'];
+    if (
+      Array.isArray(supportedModes) &&
+      supportedModes.every((mode) => typeof mode === 'string')
+    )
+      this.colorModesByTarget.set(target, new Set(supportedModes));
+
     // HA does not expose the white channel on a pure CCT entity. Its apparent
     // brightness must not confirm a strip whose white channel is still zero.
     if (this.wledCct.has(target)) {
@@ -318,6 +339,19 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
     this.emit({
       target,
       values,
+      ...(newState.state === 'on' &&
+      typeof newState.attributes?.['color_mode'] === 'string'
+        ? {
+            colorMode:
+              newState.attributes['color_mode'] === 'color_temp'
+                ? ('color_temp' as const)
+                : ['rgb', 'rgbw', 'rgbww', 'hs', 'xy'].includes(
+                      newState.attributes['color_mode'],
+                    )
+                  ? ('rgb' as const)
+                  : ('unknown' as const),
+          }
+        : {}),
       observedAt: this.clock.now(),
       provenance: {
         actor: { type: 'home_assistant' },
@@ -347,6 +381,24 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
       values.brightness = Math.round((brightness / 255) * 100);
     }
 
+    const mode = attributes['color_mode'];
+    const rgb = attributes['rgb_color'];
+    if (
+      typeof mode === 'string' &&
+      ['rgb', 'rgbw', 'rgbww', 'hs', 'xy'].includes(mode)
+    ) {
+      if (
+        Array.isArray(rgb) &&
+        rgb.length === 3 &&
+        rgb.every(
+          (channel) =>
+            Number.isInteger(channel) && channel >= 0 && channel <= 255,
+        )
+      )
+        values.rgb = [rgb[0], rgb[1], rgb[2]];
+      return values;
+    }
+    if (mode !== undefined && mode !== 'color_temp') return values;
     const colorTemperature = attributes['color_temp_kelvin'];
     if (
       typeof colorTemperature === 'number' &&
