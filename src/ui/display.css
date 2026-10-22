@@ -1020,13 +1020,17 @@ h2 {
 /* Familiar room actions become generous, quiet pictograms; custom presets keep text. */
 .scene-button[data-icon='true'] {
   position: relative;
+  flex-direction: column;
   justify-content: center;
+  gap: 3px;
+  padding-block: 6px;
 }
 .scene-icon {
   display: grid;
   place-items: center;
   width: 48px;
   height: 48px;
+  flex-shrink: 0;
   pointer-events: none;
 }
 .scene-icon svg {
@@ -1036,6 +1040,20 @@ h2 {
   stroke-width: 1.65;
 }
 .scene-button[data-icon='true'] .scene-copy {
+  width: 100%;
+  align-items: center;
+}
+.scene-button[data-icon='true'] .scene-name {
+  display: block;
+  max-width: 100%;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scene-button[data-icon='true'] .scene-status {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -1080,6 +1098,9 @@ h2 {
   .scene-icon {
     width: 56px;
     height: 56px;
+  }
+  .scene-button[data-icon='true'] .scene-name {
+    font-size: 14px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

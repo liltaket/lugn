@@ -377,6 +377,15 @@ const FileConfigSchema = z
     }
     scenes.forEach((scene, sceneIndex) => {
       for (const target of Object.keys(scene.lighting)) {
+        if (
+          scene.lighting[target]?.rgb !== undefined &&
+          target in config.homeAssistant.wledCct
+        )
+          context.addIssue({
+            code: 'custom',
+            path: ['scenes', sceneIndex, 'lighting', target, 'rgb'],
+            message: 'Dedicated WLED CCT targets cannot use RGB',
+          });
         if (configuredLights.has(target)) continue;
         context.addIssue({
           code: 'custom',

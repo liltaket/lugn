@@ -321,7 +321,11 @@ function sameLighting(
         b !== undefined &&
         a.power === b.power &&
         a.brightness === b.brightness &&
-        a.colorTemperature === b.colorTemperature
+        a.colorTemperature === b.colorTemperature &&
+        (a.rgb === undefined
+          ? b.rgb === undefined
+          : b.rgb !== undefined &&
+            a.rgb.every((channel, index) => channel === b.rgb![index]))
       );
     })
   );

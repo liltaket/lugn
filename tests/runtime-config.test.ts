@@ -29,6 +29,26 @@ describe('runtime configuration cross references', () => {
     },
     scenes: [],
   };
+  it('rejects RGB in a dedicated WLED CCT scene before runtime startup', () => {
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        homeAssistant: {
+          ...minimal.homeAssistant,
+          wledCct: { 'lighting.ceiling': { baseUrl: 'http://wled.test' } },
+        },
+        scenes: [
+          {
+            id: 'scene.party',
+            name: 'Party',
+            lighting: {
+              'lighting.ceiling': { power: true, rgb: [255, 10, 100] },
+            },
+          },
+        ],
+      }),
+    ).toThrow('Dedicated WLED CCT targets cannot use RGB');
+  });
   it('accepts optional camera presentation config with validated local definitions and passive triggers', () => {
     expect(loadConfig(minimal).cameraDashboard).toBeUndefined();
     const cameraDashboard = {

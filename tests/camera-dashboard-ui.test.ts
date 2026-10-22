@@ -582,3 +582,55 @@ it.each(['hub', 'web'] as const)(
     expect(ui.post).toHaveBeenCalledTimes(4);
   },
 );
+
+it.each(['hub', 'web'] as const)(
+  '%s follows same-view activity deadline changes without restarting media or dismissing an extended view',
+  async (surface) => {
+    const ui = setup(surface);
+    ui.setActive();
+    ui.render();
+    await vi.waitFor(() => expect(typeof ui.image.onload).toBe('function'));
+    ui.image.onload!();
+    const imageUrl = ui.image.src;
+    // The authoritative detector extends this exact view from 30 to 60 seconds.
+    ui.run('testCamera.active.expiresAt=61000');
+    ui.render();
+    const countdown =
+      surface === 'hub'
+        ? ui.refs['cameraCountdown']!
+        : ui.get('camera-web-countdown');
+    expect(countdown.textContent).toBe('60 s');
+    vi.setSystemTime(32000);
+    ui.render();
+    expect(countdown.textContent).toBe('29 s');
+    expect(ui.image.src).toBe(imageUrl);
+    expect(ui.fetch).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(62000);
+    ui.render();
+    expect(ui.image.hidden).toBe(true);
+  },
+);
+
+it.each(['hub', 'web'] as const)(
+  '%s honors a shorter server deadline when classified activity ends before the normal limit',
+  async (surface) => {
+    const ui = setup(surface);
+    ui.setActive();
+    ui.run('testCamera.active.expiresAt=61000');
+    ui.render();
+    await vi.waitFor(() => expect(typeof ui.image.onload).toBe('function'));
+    ui.image.onload!();
+    vi.setSystemTime(20000);
+    ui.run('testCamera.active.expiresAt=31000');
+    ui.render();
+    const countdown =
+      surface === 'hub'
+        ? ui.refs['cameraCountdown']!
+        : ui.get('camera-web-countdown');
+    expect(countdown.textContent).toBe('11 s');
+    expect(ui.image.hidden).toBe(false);
+    vi.setSystemTime(32000);
+    ui.render();
+    expect(ui.image.hidden).toBe(true);
+  },
+);

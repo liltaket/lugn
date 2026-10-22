@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Clock } from '../core/clock.js';
-import { lightingFeedbackMatches } from '../core/lighting-feedback.js';
+import {
+  lightingFeedbackMatches,
+  lightingIntentMatches,
+} from '../core/lighting-feedback.js';
 import type {
   CommandRecord,
   LightingProperty,
@@ -237,7 +240,7 @@ export class CommandLedger {
       if (
         command.status === 'pending' &&
         command.target === target &&
-        command.desired[property] === value
+        lightingIntentMatches(property, command.desired[property], value)
       ) {
         return command;
       }

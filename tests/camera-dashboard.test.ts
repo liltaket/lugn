@@ -8,7 +8,7 @@ import {
   createCameraSettings,
   type CameraDashboardConfig,
 } from '../src/core/cameras.js';
-import { FakeClock } from '../src/core/clock.js';
+import { FakeClock, type TimerHandle } from '../src/core/clock.js';
 import { CameraSettingsStore } from '../src/runtime/camera-settings-store.js';
 const config: CameraDashboardConfig = {
   cameras: [
@@ -54,10 +54,10 @@ afterEach(async () => {
 async function setup(
   enabled = true,
   definitions: CameraDashboardConfig = config,
+  clock = new FakeClock(Date.parse('2026-10-21T12:00:00Z')),
 ) {
   const directory = await mkdtemp(join(tmpdir(), 'camera-dashboard-'));
   directories.push(directory);
-  const clock = new FakeClock(Date.parse('2026-10-21T12:00:00Z'));
   const store = new CameraSettingsStore(
     join(directory, 'cameras.json'),
     createCameraSettings(definitions),
@@ -123,6 +123,7 @@ it('defaults to disabled, with camera selection available but all triggers opted
 it('shows a fresh edge for 30 seconds without extending for another event or stealing the current view', async () => {
   const { service, motion, gate, clock } = await setup();
   motion();
+  motion('on', 'off');
   const active = service.snapshot('desk').active;
   expect(active).toMatchObject({
     cameraId: 'entry',
@@ -336,8 +337,9 @@ it.each(['person', 'animal', 'vehicle'])(
       cameraId: 'entry',
       reason: `Detected ${kind}`,
       manual: false,
-      expiresAt: clock.now() + 30_000,
+      expiresAt: clock.now() + 60_000,
     });
+    edge(`binary_sensor.entry_${kind}`, 'on', 'off');
     clock.advanceBy(30_000);
     expect(service.snapshot('bed').active).toBeNull();
     edge('binary_sensor.front_motion');
@@ -362,4 +364,238 @@ it('never falls back to raw motion when an object detector is unavailable', asyn
   edge('binary_sensor.entry_motion', 'off', 'on');
   edge('binary_sensor.entry_person', 'unavailable', 'on');
   expect(service.snapshot('desk').active).toBeNull();
+});
+
+function classifiedEdge(
+  s: Awaited<ReturnType<typeof setup>>,
+  kind: string,
+  from = 'off',
+  to = 'on',
+  time = s.clock.now(),
+) {
+  s.service.acceptEvent(
+    s.event(
+      'state_changed',
+      {
+        entity_id: `binary_sensor.entry_${kind}`,
+        old_state: { state: from },
+        new_state: { state: to },
+      },
+      time,
+    ),
+  );
+}
+it('advertises sustained activity extension before the minimum and locks only one fixed extension at 30 seconds', async () => {
+  const s = await setup(true, classifiedConfig);
+  classifiedEdge(s, 'person');
+  const initial = s.service.snapshot('bed').active!;
+  expect(initial.expiresAt).toBe(s.clock.now() + 60_000);
+  s.clock.advanceBy(30_000);
+  expect(s.service.snapshot('bed').active).toEqual(initial);
+  s.clock.advanceBy(5_000);
+  classifiedEdge(s, 'person', 'on', 'off');
+  expect(s.service.snapshot('bed').active).toEqual(initial);
+  s.clock.advanceBy(24_999);
+  expect(s.service.snapshot('bed').active).not.toBeNull();
+  s.clock.advanceBy(1);
+  expect(s.service.snapshot('bed').active).toBeNull();
+  expect(s.clock.pendingTimers()).toBe(0);
+});
+it('returns to the original minimum when activity ends before 30 seconds', async () => {
+  const s = await setup(true, classifiedConfig);
+  classifiedEdge(s, 'person');
+  const id = s.service.snapshot('bed').active!.id;
+  s.clock.advanceBy(10_000);
+  classifiedEdge(s, 'person', 'on', 'off');
+  expect(s.service.snapshot('bed').active).toMatchObject({
+    id,
+    expiresAt: s.clock.now() + 20_000,
+  });
+  s.clock.advanceBy(20_000);
+  expect(s.service.snapshot('bed').active).toBeNull();
+});
+it('counts only enabled categories for the same camera and permits a different category to sustain the view', async () => {
+  const s = await setup(true, classifiedConfig);
+  await s.service.updateSettings(
+    {
+      ...s.store.snapshot().settings,
+      triggers: { person: true, animal: true, vehicle: false },
+    },
+    s.store.snapshot().generation,
+  );
+  const start = s.clock.now();
+  s.service.show('bed', 'entry');
+  classifiedEdge(s, 'vehicle');
+  expect(s.service.snapshot('bed').active!.expiresAt).toBe(start + 30_000);
+  classifiedEdge(s, 'person');
+  classifiedEdge(s, 'animal');
+  s.clock.advanceBy(10_000);
+  classifiedEdge(s, 'person', 'on', 'off');
+  expect(s.service.snapshot('bed').active!.expiresAt).toBe(start + 60_000);
+  classifiedEdge(s, 'animal', 'on', 'off');
+  expect(s.service.snapshot('bed').active!.expiresAt).toBe(start + 30_000);
+  s.service.show('desk', 'front');
+  classifiedEdge(s, 'person');
+  expect(s.service.snapshot('desk').active!.expiresAt).toBe(
+    s.clock.now() + 30_000,
+  );
+});
+it('uses trusted seeded activity for a manually opened view without replaying an automatic event', async () => {
+  const s = await setup(true, classifiedConfig);
+  s.service.seedStates([
+    { entity_id: 'camera.entry', state: 'idle' },
+    { entity_id: 'binary_sensor.entry_person', state: 'on' },
+  ]);
+  expect(s.service.snapshot('bed').active).toBeNull();
+  const view = s.service.show('bed', 'entry').active!;
+  expect(view).toMatchObject({
+    manual: true,
+    expiresAt: s.clock.now() + 60_000,
+  });
+  s.clock.advanceBy(60_000);
+  expect(s.service.snapshot('bed').active).toBeNull();
+});
+it('never extends from stale reports, unavailable detectors, or unrelated raw motion', async () => {
+  const s = await setup(true, classifiedConfig);
+  s.service.show('bed', 'entry');
+  classifiedEdge(s, 'person', 'off', 'on', s.clock.now() - 10_001);
+  s.service.acceptEvent(
+    s.event('state_changed', {
+      entity_id: 'binary_sensor.entry_motion',
+      old_state: { state: 'off' },
+      new_state: { state: 'on' },
+    }),
+  );
+  expect(s.service.snapshot('bed').active!.expiresAt).toBe(
+    s.clock.now() + 30_000,
+  );
+  classifiedEdge(s, 'animal');
+  expect(s.service.snapshot('bed').active!.expiresAt).toBe(
+    s.clock.now() + 60_000,
+  );
+  classifiedEdge(s, 'animal', 'on', 'unavailable');
+  expect(s.service.snapshot('bed').active!.expiresAt).toBe(
+    s.clock.now() + 30_000,
+  );
+  s.clock.advanceBy(30_000);
+  expect(s.service.snapshot('bed').active).toBeNull();
+});
+it('duplicates and repeated activity cannot slide the hard deadline or reopen an explicitly dismissed view', async () => {
+  const s = await setup(true, classifiedConfig);
+  classifiedEdge(s, 'person');
+  const initial = s.service.snapshot('bed').active!;
+  for (let i = 0; i < 11; i++) {
+    s.clock.advanceBy(5_000);
+    classifiedEdge(s, 'person', 'on', 'on');
+    expect(s.service.snapshot('bed').active).toEqual(initial);
+  }
+  s.service.dismiss('bed');
+  classifiedEdge(s, 'animal');
+  expect(s.service.snapshot('bed').active).toBeNull();
+  s.clock.advanceBy(5_000);
+  expect(s.service.snapshot('desk').active).toBeNull();
+  expect(s.service.snapshot('bed').active).toBeNull();
+});
+it('disconnection, unavailable cameras and settings opt-out immediately cancel extended views', async () => {
+  const s = await setup(true, classifiedConfig);
+  classifiedEdge(s, 'person');
+  s.clock.advanceBy(30_000);
+  s.service.setConnected(false);
+  expect(s.service.snapshot('bed').active).toBeNull();
+  expect(s.clock.pendingTimers()).toBe(0);
+  s.service.setConnected(true);
+  s.service.seedStates([
+    { entity_id: 'camera.entry', state: 'idle' },
+    { entity_id: 'binary_sensor.entry_person', state: 'on' },
+  ]);
+  expect(s.service.snapshot('bed').active).toBeNull();
+  s.service.show('bed', 'entry');
+  s.service.acceptEvent(
+    s.event('state_changed', {
+      entity_id: 'camera.entry',
+      old_state: { state: 'idle' },
+      new_state: { state: 'unavailable' },
+    }),
+  );
+  expect(s.service.snapshot('bed').active).toBeNull();
+});
+it('scales both anchored bounds with the configured minimum and never persists the extension', async () => {
+  const s = await setup(true, classifiedConfig);
+  await s.service.updateSettings(
+    { ...s.store.snapshot().settings, durationSeconds: 5 },
+    s.store.snapshot().generation,
+  );
+  classifiedEdge(s, 'person');
+  expect(s.service.snapshot('bed').active!.expiresAt).toBe(
+    s.clock.now() + 10_000,
+  );
+  s.clock.advanceBy(5_000);
+  classifiedEdge(s, 'person', 'on', 'off');
+  expect(s.service.snapshot('bed').active).not.toBeNull();
+  const restarted = new CameraDashboardService(
+    classifiedConfig,
+    s.store,
+    s.clock,
+  );
+  services.push(restarted);
+  expect(restarted.snapshot('bed').active).toBeNull();
+  expect(s.store.snapshot()).not.toHaveProperty('active');
+  s.clock.advanceBy(5_000);
+  expect(s.service.snapshot('bed').active).toBeNull();
+});
+
+it('extends at the minimum with an admitted future HA timestamp because activity age uses monotonic receipt time', async () => {
+  const s = await setup(true, classifiedConfig);
+  const startedAt = s.clock.now();
+  s.service.show('bed', 'entry');
+  s.clock.advanceBy(29_000);
+  classifiedEdge(s, 'person', 'off', 'on', s.clock.now() + 2_000);
+  expect(s.service.snapshot('bed').active!.expiresAt).toBe(startedAt + 60_000);
+  s.clock.advanceBy(1_000);
+  expect(s.service.snapshot('bed').active!.expiresAt).toBe(startedAt + 60_000);
+  s.clock.advanceBy(30_000);
+  expect(s.service.snapshot('bed').active).toBeNull();
+});
+
+it('locks earned activity extension before applying an OFF received after a delayed minimum timer', async () => {
+  class DeferredClock extends FakeClock {
+    private id = 0;
+    private readonly deferred = new Map<
+      TimerHandle,
+      { at: number; callback: () => void }
+    >();
+    override setTimeout(callback: () => void, delayMs: number): TimerHandle {
+      const id = ++this.id as unknown as TimerHandle;
+      this.deferred.set(id, { at: this.monotonicNow() + delayMs, callback });
+      return id;
+    }
+    override clearTimeout(id: TimerHandle): void {
+      this.deferred.delete(id);
+    }
+    override pendingTimers(): number {
+      return this.deferred.size;
+    }
+    flush(): void {
+      for (const [id, timer] of [...this.deferred]) {
+        if (timer.at <= this.monotonicNow()) {
+          this.deferred.delete(id);
+          timer.callback();
+        }
+      }
+    }
+  }
+  const clock = new DeferredClock(Date.parse('2026-10-21T12:00:00Z'));
+  const s = await setup(true, classifiedConfig, clock);
+  classifiedEdge(s, 'person');
+  const initial = s.service.snapshot('bed').active!;
+  clock.advanceBy(35_000); // Host event loop has not delivered the 30s callback.
+  classifiedEdge(s, 'person', 'on', 'off');
+  expect(s.service.snapshot('bed').active).toEqual(initial);
+  clock.advanceBy(24_999);
+  clock.flush();
+  expect(s.service.snapshot('bed').active).toEqual(initial);
+  clock.advanceBy(1);
+  clock.flush();
+  expect(s.service.snapshot('bed').active).toBeNull();
+  expect(clock.pendingTimers()).toBe(0);
 });

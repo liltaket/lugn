@@ -525,9 +525,14 @@ describe('Hub optional Lugn 2 presentation', () => {
 });
 
 describe('Hub lighting pictograms', () => {
-  it('uses distinct built-in icons with retained names and keeps unknown presets readable', () => {
+  it('uses distinct built-in icons with learnable name captions and keeps unknown presets readable', () => {
     const data = ui.payload();
-    data.scenes.push({ id: 'scene.custom_evening', name: 'Min sena kväll' });
+    data.scenes.push(
+      { id: 'scene.party', name: 'Party' },
+      { id: 'scene.custom_evening', name: 'Min sena kväll' },
+    );
+    delete data.routines;
+    delete data.intelligence;
     ui.render(data);
     const expected = {
       'scene.all_off': 'power',
@@ -535,6 +540,7 @@ describe('Hub lighting pictograms', () => {
       'scene.everyday_light': 'sun',
       'scene.focus_light': 'desk-lamp',
       'scene.movie_light': 'film',
+      'scene.party': 'disco-ball',
     };
     for (const button of ui.get('#scene-grid').children) {
       const scene = data.scenes.find(
@@ -542,6 +548,7 @@ describe('Hub lighting pictograms', () => {
       );
       expect(button.getAttribute('aria-label')).toContain(scene.name);
       expect(button.getAttribute('title')).toContain(scene.name);
+      expect(button.querySelector('.scene-name')?.textContent).toBe(scene.name);
       const symbol = button.querySelector('.scene-icon');
       if (button.dataset['scene'] === 'scene.custom_evening') {
         expect(button.dataset['icon']).toBe('false');
@@ -558,7 +565,7 @@ describe('Hub lighting pictograms', () => {
         expect(symbol?.innerHTML).toContain('<svg viewBox="0 0 24 24"');
       }
     }
-    expect(new Set(Object.values(expected)).size).toBe(5);
+    expect(new Set(Object.values(expected)).size).toBe(6);
     expect(ui.calls).toEqual([]);
   });
 

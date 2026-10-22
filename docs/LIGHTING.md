@@ -351,3 +351,44 @@ After `npm run build`, `node scripts/benchmark-prelight.mjs` measures the first
 and last request starts for seven scene lights with populated runtime history.
 It uses an isolated in-memory adapter and does not contact devices. Its results
 measure engine dispatch overhead, not MQTT delay or visible lamp response.
+
+## Explicit RGB and return to white
+
+`LightingValues` accepts either `rgb: [red, green, blue]` (integer channels
+0–255) or `colorTemperature` in Kelvin. Requesting both is invalid. RGB presets
+are explicit configuration for known color-capable targets; a dedicated WLED
+CCT mapping rejects RGB. HA lights with RGB, RGBW, RGBWW, HS or XY capability
+use HA's existing `rgb_color` conversion. There is no custom device protocol or
+lighting effect loop.
+
+A Party preset can mix RGB accent lights with dim white-only lamps. It is never
+selected automatically on installation. Selecting a white scene clears RGB
+intent and sends its Kelvin mode explicitly, even if a cached Kelvin attribute
+happened to have the desired number while the lamp was in RGB. White presets also
+remember Kelvin for their off lamps, so a later manual ON restores white rather
+than a lamp's old Party color. Explicit all-off followed by manual ON uses the
+configured/default white intent, not stale Party RGB. Observed color modes,
+ownership, command confirmation and restart persistence retain this distinction.
+RGB feedback allows at most two units of device quantization per channel;
+persistent intent and concurrent-edit comparisons remain exact.
+
+Example color entry in a manually selected configured scene:
+
+```json
+{
+  "id": "scene.party",
+  "name": "Party",
+  "lighting": {
+    "lighting.color_accent": {
+      "power": true,
+      "brightness": 45,
+      "rgb": [170, 40, 255]
+    },
+    "lighting.white_strip": {
+      "power": true,
+      "brightness": 15,
+      "colorTemperature": 2700
+    }
+  }
+}
+```
