@@ -245,3 +245,10 @@ Optional [event camera previews](CAMERAS.md) preserve the Hub scene controls and
 music transport while showing a selected camera for a bounded interval. Camera
 and event choices, screens, duration and independent automatic/manual switches
 are available in the web Intelligence section. New installations start disabled.
+
+The five built-in Hub lighting scenes use centered SVG pictograms: power for
+all off, crescent for cozy lighting, sun for everyday lighting, desk lamp for
+focus and screen/play for movie lighting. Touch areas and actions are unchanged.
+Accessible names and native tooltips retain scene names and live confirmation
+state. User-created presets keep their text labels, since their meaning cannot
+be safely inferred from an arbitrary name.

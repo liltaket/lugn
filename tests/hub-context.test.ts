@@ -6,6 +6,7 @@ import { lightingFeedbackBrowserScript } from '../src/runtime/lighting-feedback-
 type Listener = (event?: { target?: Element; key?: string }) => void;
 class Element {
   textContent = '';
+  innerHTML = '';
   className = '';
   dataset: Record<string, string> = {};
   hidden = false;
@@ -520,5 +521,121 @@ describe('Hub optional Lugn 2 presentation', () => {
     expect(ui.get('#toast').textContent).toContain('Försök igen');
     expect(ui.get('#context-description').textContent).not.toContain('Pågår');
     expect(actions(ui.get('#context-actions'))[0]!.disabled).toBe(false);
+  });
+});
+
+describe('Hub lighting pictograms', () => {
+  it('uses distinct built-in icons with retained names and keeps unknown presets readable', () => {
+    const data = ui.payload();
+    data.scenes.push({ id: 'scene.custom_evening', name: 'Min sena kväll' });
+    ui.render(data);
+    const expected = {
+      'scene.all_off': 'power',
+      'scene.soft_light': 'moon',
+      'scene.everyday_light': 'sun',
+      'scene.focus_light': 'desk-lamp',
+      'scene.movie_light': 'film',
+    };
+    for (const button of ui.get('#scene-grid').children) {
+      const scene = data.scenes.find(
+        (item: { id: string }) => item.id === button.dataset['scene'],
+      );
+      expect(button.getAttribute('aria-label')).toContain(scene.name);
+      expect(button.getAttribute('title')).toContain(scene.name);
+      const symbol = button.querySelector('.scene-icon');
+      if (button.dataset['scene'] === 'scene.custom_evening') {
+        expect(button.dataset['icon']).toBe('false');
+        expect(symbol).toBeUndefined();
+        expect(button.querySelector('.scene-name')?.textContent).toBe(
+          'Min sena kväll',
+        );
+      } else {
+        expect(button.dataset['icon']).toBe('true');
+        expect(symbol?.dataset['symbol']).toBe(
+          expected[button.dataset['scene'] as keyof typeof expected],
+        );
+        expect(symbol?.getAttribute('aria-hidden')).toBe('true');
+        expect(symbol?.innerHTML).toContain('<svg viewBox="0 0 24 24"');
+      }
+    }
+    expect(new Set(Object.values(expected)).size).toBe(5);
+    expect(ui.calls).toEqual([]);
+  });
+
+  it('keeps icon button and focus stable when a preset is renamed without inserting the name in SVG', () => {
+    const button = ui
+      .get('#scene-grid')
+      .children.find((item) => item.dataset['scene'] === 'scene.soft_light')!;
+    const symbol = button.querySelector('.scene-icon')!;
+    const data = ui.payload();
+    data.scenes.find(
+      (item: { id: string }) => item.id === 'scene.soft_light',
+    ).name = '<script>kväll</script>';
+    ui.render(data);
+    expect(ui.get('#scene-grid').children).toContain(button);
+    expect(button.querySelector('.scene-icon')).toBe(symbol);
+    expect(button.getAttribute('aria-label')).toContain(
+      '<script>kväll</script>',
+    );
+    expect(symbol.innerHTML).not.toContain('script');
+  });
+
+  it('accepts taps on the SVG wrapper, reflects pending state, and never claims a request is confirmed', async () => {
+    const button = ui
+      .get('#scene-grid')
+      .children.find(
+        (item) => item.dataset['scene'] === 'scene.everyday_light',
+      )!;
+    const release = ui.holdPost();
+    button.querySelector('.scene-icon')!.click();
+    await settle();
+    expect(ui.calls).toEqual([
+      {
+        url: '/k/mock-only/display-api/scene',
+        body: { sceneId: 'scene.everyday_light' },
+      },
+    ]);
+    expect(button.dataset['state']).toBe('pending');
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.getAttribute('aria-label')).toContain('Skickar');
+    expect(button.disabled).toBe(true);
+    button.querySelector('.scene-icon')!.click();
+    await settle();
+    expect(ui.calls).toHaveLength(1);
+    release();
+    await settle();
+    expect(button.dataset['state']).toBe('idle');
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('distinguishes selected intent, device confirmation, waiting and offline states accessibly', async () => {
+    const data = ui.payload();
+    const button = ui
+      .get('#scene-grid')
+      .children.find((item) => item.dataset['scene'] === 'scene.soft_light')!;
+    expect(button.dataset['state']).toBe('selected');
+    data.state.lighting.sceneRevision = 2;
+    data.state.commands = [{ revision: 2, status: 'pending' }];
+    ui.render(data);
+    expect(button.dataset['state']).toBe('awaiting');
+    expect(button.getAttribute('aria-label')).toContain('väntar på lampor');
+    data.state.commands = [];
+    data.state.lighting.devices = {
+      lamp: {
+        availability: 'available',
+        effectiveDesired: { power: true },
+        observed: { power: true },
+      },
+    };
+    ui.render(data);
+    expect(button.dataset['state']).toBe('confirmed');
+    expect(button.getAttribute('aria-label')).toContain('Bekräftat');
+    ui.setOffline(true);
+    ui.streams[0]!.onerror?.();
+    await settle();
+    expect(button.dataset['state']).toBe('offline');
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-label')).toContain('Frånkopplad');
+    expect(button.getAttribute('aria-label')).not.toContain('Bekräftat');
   });
 });

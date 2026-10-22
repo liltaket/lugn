@@ -401,6 +401,40 @@ function getSceneList(payload) {
   });
 }
 
+// Only these established scene IDs have an unambiguous visual meaning. User
+// presets keep their names; user-controlled strings never enter SVG markup.
+function sceneIconFor(sceneId) {
+  const icons = {
+    'scene.all_off': {
+      name: 'power',
+      paths: '<path d="M12 3v9"/><path d="M6.3 5.7a8 8 0 1 0 11.4 0"/>',
+    },
+    'scene.soft_light': {
+      name: 'moon',
+      paths:
+        '<path d="M20.2 15.6A8.6 8.6 0 0 1 8.4 3.8 8.6 8.6 0 1 0 20.2 15.6Z"/>',
+    },
+    'scene.everyday_light': {
+      name: 'sun',
+      paths:
+        '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    },
+    'scene.focus_light': {
+      name: 'desk-lamp',
+      paths:
+        '<path d="M7 21h11M12.5 21v-4L7 11l4-5"/><circle cx="7" cy="11" r="1.5"/><path d="m11 6 4-3 6 6-3 4Z"/><path d="m15 10 2 2"/>',
+    },
+    'scene.movie_light': {
+      name: 'film',
+      paths:
+        '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/><path d="m10 8 5 2.5-5 2.5Z"/>',
+    },
+  };
+  return Object.prototype.hasOwnProperty.call(icons, sceneId)
+    ? icons[sceneId]
+    : null;
+}
+
 function sceneButtonFor(scene) {
   let button = sceneButtons.get(scene.id);
   if (button) return button;
@@ -409,6 +443,16 @@ function sceneButtonFor(scene) {
   button.className = 'scene-button';
   button.dataset.scene = scene.id;
   button.setAttribute('aria-pressed', 'false');
+  const icon = sceneIconFor(scene.id);
+  button.dataset.icon = String(!!icon);
+  if (icon) {
+    const symbol = document.createElement('span');
+    symbol.className = 'scene-icon';
+    symbol.dataset.symbol = icon.name;
+    symbol.setAttribute('aria-hidden', 'true');
+    symbol.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" focusable="false">${icon.paths}</svg>`;
+    button.append(symbol);
+  }
   const copy = document.createElement('span');
   copy.className = 'scene-copy';
   const name = document.createElement('span');
@@ -504,6 +548,30 @@ function renderScenes(payload) {
           : confirmed
             ? 'Bekräftat'
             : 'Valt';
+    const availability = isUnavailable()
+      ? selected
+        ? 'Frånkopplad. Senast valda ljusläge'
+        : 'Frånkopplad'
+      : status;
+    button.setAttribute(
+      'aria-label',
+      `${scene.name}${availability ? `. ${availability}` : ''}`,
+    );
+    button.setAttribute(
+      'title',
+      `${scene.name}${availability ? ` · ${availability}` : ''}`,
+    );
+    button.dataset.state = isUnavailable()
+      ? 'offline'
+      : isPending
+        ? 'pending'
+        : !selected
+          ? 'idle'
+          : awaitingDevices
+            ? 'awaiting'
+            : confirmed
+              ? 'confirmed'
+              : 'selected';
     setText(button.querySelector('.scene-status'), status);
     button.querySelector('.scene-status').hidden = !status;
     if (button.getAttribute('aria-pressed') !== String(selected))

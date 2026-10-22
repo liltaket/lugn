@@ -18,11 +18,11 @@ Add an allowlist to the protected runtime configuration:
     ],
     "triggers": [
       {
-        "id": "entrance-motion",
-        "name": "Rörelse vid entrén",
+        "id": "entrance-person",
+        "name": "Person vid entrén",
         "cameraId": "entrance",
         "kind": "state",
-        "entityId": "binary_sensor.entrance_motion",
+        "entityId": "binary_sensor.entrance_person",
         "from": "off",
         "to": "on"
       }
@@ -44,6 +44,25 @@ Triggers can also observe a configured `automation_triggered` event, or an exact
 observe existing activity and never invoke or modify that automation/service.
 Do not guess a speaker or match all speaker activity when the existing signal
 is unknown: use an explicitly configured motion edge instead.
+
+## Prefer existing object detection
+
+Use the camera's existing HA **person, animal or vehicle binary sensors** as
+individual state triggers. Each enabled trigger is an independent alternative:
+any fresh `off` → `on` edge may open its mapped camera. Enable only the categories
+wanted in `/ui/`. Lugn does not classify images or require generic motion as a
+second condition.
+
+Generic motion also responds to foliage and lighting changes. Do not configure
+it as a fallback for missing/unavailable object sensors: a missing classification
+must not silently turn into all-motion triggering. A camera without supported
+object sensors can remain available for manual viewing with no automatic trigger.
+
+The [HA Reolink integration](https://www.home-assistant.io/integrations/reolink/)
+exposes the camera's supported detection types. Support depends on the camera and
+hardware; see [Reolink's smart detection support](https://support.reolink.com/articles/5114827897497-Which-Camera-Supports-Smart-Detection/).
+Existing detector accuracy and sensitivity remain those of the camera/HA setup.
+This setting does not change camera detection, recording, chimes or automations.
 
 ## Privacy and lifecycle
 

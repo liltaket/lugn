@@ -51,16 +51,19 @@ afterEach(async () => {
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true });
 });
-async function setup(enabled = true) {
+async function setup(
+  enabled = true,
+  definitions: CameraDashboardConfig = config,
+) {
   const directory = await mkdtemp(join(tmpdir(), 'camera-dashboard-'));
   directories.push(directory);
   const clock = new FakeClock(Date.parse('2026-10-21T12:00:00Z'));
   const store = new CameraSettingsStore(
     join(directory, 'cameras.json'),
-    createCameraSettings(config),
+    createCameraSettings(definitions),
   );
   await store.load();
-  const service = new CameraDashboardService(config, store, clock);
+  const service = new CameraDashboardService(definitions, store, clock);
   services.push(service);
   if (enabled)
     await service.updateSettings(
@@ -68,7 +71,9 @@ async function setup(enabled = true) {
         ...store.snapshot().settings,
         enabled: true,
         automaticEnabled: true,
-        triggers: { motion: true, gate: true, cue: true },
+        triggers: Object.fromEntries(
+          definitions.triggers.map((trigger) => [trigger.id, true]),
+        ),
       },
       store.snapshot().generation,
     );
@@ -76,7 +81,9 @@ async function setup(enabled = true) {
   service.seedStates([
     { entity_id: 'camera.entry', state: 'idle' },
     { entity_id: 'camera.front', state: 'streaming' },
-    { entity_id: 'binary_sensor.motion', state: 'off' },
+    ...definitions.triggers
+      .filter((trigger) => trigger.kind === 'state')
+      .map((trigger) => ({ entity_id: trigger.entityId, state: 'off' })),
   ]);
   const event = (event_type: string, data: unknown, time = clock.now()) => ({
     event_type,
@@ -287,4 +294,72 @@ it('subscriber failures cannot interrupt dismissal or future observations', asyn
   });
   motion();
   expect(service.dismiss('desk').active).toBeNull();
+});
+
+const classifiedConfig: CameraDashboardConfig = {
+  cameras: config.cameras,
+  triggers: ['person', 'animal', 'vehicle'].map((kind) => ({
+    id: kind,
+    name: `Detected ${kind}`,
+    cameraId: 'entry',
+    kind: 'state' as const,
+    entityId: `binary_sensor.entry_${kind}`,
+    from: 'off' as const,
+    to: 'on' as const,
+  })),
+};
+it.each(['person', 'animal', 'vehicle'])(
+  'uses the configured native %s detector and ignores generic motion on either camera',
+  async (kind) => {
+    const { service, event, clock } = await setup(true, classifiedConfig);
+    const edge = (entity: string, from = 'off', to = 'on') =>
+      service.acceptEvent(
+        event('state_changed', {
+          entity_id: entity,
+          old_state: { state: from },
+          new_state: { state: to },
+        }),
+      );
+    for (let n = 0; n < 20; n++) {
+      for (const entity of [
+        'binary_sensor.entry_motion',
+        'binary_sensor.front_motion',
+      ]) {
+        edge(entity);
+        edge(entity, 'on', 'off');
+      }
+      clock.advanceBy(100);
+    }
+    expect(service.snapshot('bed').active).toBeNull();
+    edge(`binary_sensor.entry_${kind}`);
+    expect(service.snapshot('bed').active).toMatchObject({
+      cameraId: 'entry',
+      reason: `Detected ${kind}`,
+      manual: false,
+      expiresAt: clock.now() + 30_000,
+    });
+    clock.advanceBy(30_000);
+    expect(service.snapshot('bed').active).toBeNull();
+    edge('binary_sensor.front_motion');
+    expect(service.snapshot('bed').active).toBeNull();
+    expect(service.show('bed', 'front').active).toMatchObject({
+      cameraId: 'front',
+      manual: true,
+    });
+  },
+);
+it('never falls back to raw motion when an object detector is unavailable', async () => {
+  const { service, event } = await setup(true, classifiedConfig);
+  const edge = (entity: string, from: string, to: string) =>
+    service.acceptEvent(
+      event('state_changed', {
+        entity_id: entity,
+        old_state: { state: from },
+        new_state: { state: to },
+      }),
+    );
+  edge('binary_sensor.entry_person', 'off', 'unavailable');
+  edge('binary_sensor.entry_motion', 'off', 'on');
+  edge('binary_sensor.entry_person', 'unavailable', 'on');
+  expect(service.snapshot('desk').active).toBeNull();
 });
