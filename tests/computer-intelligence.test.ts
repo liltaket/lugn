@@ -173,6 +173,100 @@ function setup(
     clock.advanceBy(1000);
     sample(true);
   }
+  type VideoSampleOptions = {
+    application?: string;
+    player?: string;
+    spotifyMpris?: 'player' | 'identity' | 'desktopEntry';
+    spotifyPipewire?: boolean;
+    concurrentSpotify?: boolean;
+    noMedia?: boolean;
+    locked?: boolean | null;
+    idle?: boolean | null;
+    sessionId?: string;
+    contentType?: string;
+  };
+  function videoSample(
+    playing: boolean,
+    options: VideoSampleOptions = {},
+    patch: Partial<ComputerObservation> = {},
+  ) {
+    const application = options.application ?? 'org.test.Player';
+    const media: NonNullable<ComputerObservation['observed']['media']> = [
+      {
+        player:
+          options.spotifyMpris === 'player'
+            ? 'org.mpris.MediaPlayer2.SpOtIfY'
+            : (options.player ?? 'org.mpris.MediaPlayer2.test'),
+        identity:
+          options.spotifyMpris === 'identity' ? 'sPoTiFy' : 'Test Player',
+        desktopEntry:
+          options.spotifyMpris === 'desktopEntry'
+            ? 'SpOtIfY.desktop'
+            : application,
+        playback: playing ? 'playing' : 'paused',
+        title: 'Test video',
+        artists: null,
+        album: null,
+        contentType: options.contentType ?? 'video/mp4',
+      },
+    ];
+    if (options.concurrentSpotify)
+      media.push({
+        player: 'org.mpris.MediaPlayer2.SpOtIfY',
+        identity: 'sPoTiFy',
+        desktopEntry: 'spotify.desktop',
+        playback: 'playing',
+        title: 'Spotify track',
+        artists: null,
+        album: null,
+        contentType: 'audio/mpeg',
+      });
+    const observed = {
+      ...unknownComputerReadings(),
+      locked: options.locked === undefined ? false : options.locked,
+      idle: options.idle === undefined ? false : options.idle,
+      activeApplication: { id: application, resourceClass: null },
+      audio: {
+        playing,
+        applications: [
+          application,
+          ...(options.spotifyPipewire ? ['SpOtIfY'] : []),
+        ],
+        roles: ['Video'],
+      },
+      media: options.noMedia ? null : media,
+      ...patch.observed,
+    };
+    return sample(playing, {
+      ...patch,
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+      activity: {
+        classification: 'video',
+        source: 'desktop-agent',
+        basis: 'test video playback',
+        ...patch.activity,
+      },
+      observed,
+    });
+  }
+  function startVideo(options: VideoSampleOptions = {}) {
+    sample(false);
+    clock.advanceBy(1000);
+    videoSample(true, options);
+  }
+  function advanceVideo(
+    durationMs: number,
+    options: VideoSampleOptions = {},
+    intervalMs = 30_000,
+  ) {
+    let elapsed = 0;
+    while (elapsed < durationMs) {
+      const step = Math.min(intervalMs, durationMs - elapsed);
+      clock.advanceBy(step);
+      videoSample(true, options);
+      elapsed += step;
+    }
+  }
   function optical() {
     return service.snapshot().suggestions.find((s) => s.kind === 'optical');
   }
@@ -185,6 +279,9 @@ function setup(
     invoke,
     sample,
     start,
+    videoSample,
+    startVideo,
+    advanceVideo,
     optical,
     changed,
     save,
@@ -621,6 +718,371 @@ describe('scene suggestions, settings and subscriptions', () => {
       { sceneId: 'scene.music' },
       user,
     );
+  });
+  it('does not offer a video scene after the existing five-second activity window', () => {
+    const s = setup();
+    s.startVideo();
+    s.clock.advanceBy(5000);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter((suggestion) => suggestion.kind === 'scene'),
+    ).toEqual([]);
+    expect(s.invoke).not.toHaveBeenCalled();
+  });
+  it('offers a video scene only at five minutes of fresh playing audio and waits for acceptance', async () => {
+    const s = setup();
+    s.startVideo();
+    s.advanceVideo(5 * 60_000 - 1);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter((suggestion) => suggestion.kind === 'scene'),
+    ).toEqual([]);
+    s.clock.advanceBy(1);
+    s.videoSample(true);
+    const suggestion = s.service
+      .snapshot()
+      .suggestions.find(
+        (candidate) =>
+          candidate.kind === 'scene' && candidate.sceneId === 'scene.film',
+      );
+    expect(suggestion).toBeDefined();
+    expect(s.invoke).not.toHaveBeenCalled();
+    await s.service.respondSuggestion(suggestion!.id, 'accept', user);
+    expect(s.invoke).toHaveBeenCalledExactlyOnceWith(
+      'lighting.activateScene',
+      { sceneId: 'scene.film' },
+      user,
+    );
+  });
+  it.each([
+    ['MPRIS player', { spotifyMpris: 'player' }],
+    ['MPRIS identity', { spotifyMpris: 'identity' }],
+    ['MPRIS desktop entry', { spotifyMpris: 'desktopEntry' }],
+    ['PipeWire application', { spotifyPipewire: true }],
+    ['concurrent MPRIS player', { concurrentSpotify: true }],
+  ] as const)(
+    'suppresses video scene suggestions while Spotify is active through %s',
+    (_source, options) => {
+      const s = setup();
+      s.startVideo(options);
+      s.advanceVideo(5 * 60_000, options);
+      expect(
+        s.service
+          .snapshot()
+          .suggestions.filter((suggestion) => suggestion.kind === 'scene'),
+      ).toEqual([]);
+      expect(s.invoke).not.toHaveBeenCalled();
+    },
+  );
+  it('starts a fresh five-minute window after Spotify stops', () => {
+    const s = setup();
+    s.startVideo({ spotifyPipewire: true });
+    s.advanceVideo(5 * 60_000, { spotifyPipewire: true });
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter((suggestion) => suggestion.kind === 'scene'),
+    ).toEqual([]);
+    s.clock.advanceBy(1000);
+    s.videoSample(true);
+    s.advanceVideo(5 * 60_000 - 1);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter((suggestion) => suggestion.kind === 'scene'),
+    ).toEqual([]);
+    s.clock.advanceBy(1);
+    s.videoSample(true);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.some(
+          (suggestion) =>
+            suggestion.kind === 'scene' && suggestion.sceneId === 'scene.film',
+        ),
+    ).toBe(true);
+    expect(s.invoke).not.toHaveBeenCalled();
+  });
+  it('allows a revoked pending film prompt to return only after five fresh minutes', () => {
+    const s = setup({ ttl: 300_000 });
+    s.startVideo();
+    s.advanceVideo(5 * 60_000);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.some(
+          (suggestion) =>
+            suggestion.kind === 'scene' && suggestion.sceneId === 'scene.film',
+        ),
+    ).toBe(true);
+    s.clock.advanceBy(1000);
+    s.videoSample(true, { spotifyPipewire: true });
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter(
+          (suggestion) =>
+            suggestion.kind === 'scene' && suggestion.sceneId === 'scene.film',
+        ),
+    ).toEqual([]);
+    s.clock.advanceBy(1000);
+    s.videoSample(true);
+    s.advanceVideo(5 * 60_000 - 1);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter(
+          (suggestion) =>
+            suggestion.kind === 'scene' && suggestion.sceneId === 'scene.film',
+        ),
+    ).toEqual([]);
+    s.clock.advanceBy(1);
+    s.videoSample(true);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.some(
+          (suggestion) =>
+            suggestion.kind === 'scene' && suggestion.sceneId === 'scene.film',
+        ),
+    ).toBe(true);
+    expect(s.invoke).not.toHaveBeenCalled();
+  });
+  it('resets on a pause and requires a new uninterrupted five-minute audio window', () => {
+    const s = setup();
+    s.startVideo();
+    s.advanceVideo(2 * 60_000);
+    s.clock.advanceBy(1000);
+    s.videoSample(false);
+    s.clock.advanceBy(11_000);
+    s.videoSample(true);
+    s.advanceVideo(5 * 60_000 - 1);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter((suggestion) => suggestion.kind === 'scene'),
+    ).toEqual([]);
+    s.clock.advanceBy(1);
+    s.videoSample(true);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.some(
+          (suggestion) =>
+            suggestion.kind === 'scene' && suggestion.sceneId === 'scene.film',
+        ),
+    ).toBe(true);
+  });
+  it('resets the audio window on an MPRIS player change', () => {
+    const s = setup();
+    s.startVideo();
+    s.advanceVideo(4 * 60_000 + 50_000);
+    s.clock.advanceBy(1000);
+    s.videoSample(true, {
+      application: 'org.other.Player',
+      player: 'org.mpris.MediaPlayer2.other',
+    });
+    s.advanceVideo(5 * 60_000 - 1, {
+      application: 'org.other.Player',
+      player: 'org.mpris.MediaPlayer2.other',
+    });
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter((suggestion) => suggestion.kind === 'scene'),
+    ).toEqual([]);
+    s.clock.advanceBy(1);
+    s.videoSample(true, {
+      application: 'org.other.Player',
+      player: 'org.mpris.MediaPlayer2.other',
+    });
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.some(
+          (suggestion) =>
+            suggestion.kind === 'scene' && suggestion.sceneId === 'scene.film',
+        ),
+    ).toBe(true);
+  });
+  it.each(['retained', 'restart'] as const)(
+    'does not carry video stability through a %s observation boundary',
+    (boundary) => {
+      const s = setup();
+      s.startVideo();
+      s.advanceVideo(4 * 60_000 + 50_000);
+      s.clock.advanceBy(1000);
+      if (boundary === 'retained')
+        s.videoSample(true, {}, { reason: 'retained' });
+      else s.videoSample(true, { sessionId: 'session-2' });
+      s.clock.advanceBy(9000);
+      s.videoSample(
+        true,
+        boundary === 'restart' ? { sessionId: 'session-2' } : {},
+      );
+      expect(
+        s.service
+          .snapshot()
+          .suggestions.filter(
+            (suggestion) =>
+              suggestion.kind === 'scene' &&
+              suggestion.sceneId === 'scene.film',
+          ),
+      ).toEqual([]);
+      expect(s.invoke).not.toHaveBeenCalled();
+    },
+  );
+  it('revokes a pending video scene on pause, staleness, Spotify or player handoff', async () => {
+    for (const reason of ['pause', 'stale', 'spotify', 'player'] as const) {
+      const s = setup({ ttl: 300_000 });
+      s.startVideo();
+      s.advanceVideo(5 * 60_000);
+      const id = s.service
+        .snapshot()
+        .suggestions.find(
+          (candidate) =>
+            candidate.kind === 'scene' && candidate.sceneId === 'scene.film',
+        )?.id;
+      expect(id).toBeDefined();
+      if (reason === 'pause') {
+        s.clock.advanceBy(1000);
+        s.videoSample(false);
+      } else if (reason === 'stale') s.clock.advanceBy(90_001);
+      else {
+        s.clock.advanceBy(1000);
+        if (reason === 'spotify')
+          s.videoSample(true, { spotifyPipewire: true });
+        else
+          s.videoSample(true, {
+            application: 'org.other.Player',
+            player: 'org.mpris.MediaPlayer2.other',
+          });
+      }
+      expect(
+        s.service
+          .snapshot()
+          .suggestions.filter(
+            (suggestion) =>
+              suggestion.kind === 'scene' &&
+              suggestion.sceneId === 'scene.film',
+          ),
+      ).toEqual([]);
+      await expect(
+        s.service.respondSuggestion(id!, 'accept', user),
+      ).rejects.toMatchObject({ code: 'suggestion_unavailable' });
+      expect(s.invoke).not.toHaveBeenCalled();
+    }
+  });
+  it('does not count audio when the desktop is locked or idle, or when only an app is open', () => {
+    for (const options of [{ locked: true }, { idle: null }]) {
+      const s = setup();
+      s.startVideo({ ...options, noMedia: true });
+      s.advanceVideo(5 * 60_000, { ...options, noMedia: true });
+      expect(
+        s.service
+          .snapshot()
+          .suggestions.filter((suggestion) => suggestion.kind === 'scene'),
+      ).toEqual([]);
+    }
+    const silent = setup();
+    silent.startVideo({ noMedia: true });
+    silent.clock.advanceBy(1000);
+    silent.videoSample(false, { noMedia: true });
+    for (let elapsed = 0; elapsed < 5 * 60_000; elapsed += 30_000) {
+      silent.clock.advanceBy(30_000);
+      silent.videoSample(false, { noMedia: true });
+    }
+    expect(
+      silent.service
+        .snapshot()
+        .suggestions.filter((suggestion) => suggestion.kind === 'scene'),
+    ).toEqual([]);
+  });
+  it('allows audio evidence without MPRIS only when audio is actively playing', () => {
+    const s = setup();
+    s.startVideo({ noMedia: true });
+    s.advanceVideo(5 * 60_000, { noMedia: true });
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.some(
+          (suggestion) =>
+            suggestion.kind === 'scene' && suggestion.sceneId === 'scene.film',
+        ),
+    ).toBe(true);
+    expect(s.invoke).not.toHaveBeenCalled();
+  });
+  it('requires corroborated MPRIS video evidence when a media observation exists', () => {
+    const s = setup();
+    const options = { contentType: 'audio/mpeg' };
+    s.startVideo(options);
+    s.advanceVideo(5 * 60_000, options);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter((suggestion) => suggestion.kind === 'scene'),
+    ).toEqual([]);
+  });
+  it('keeps dismissal priority and never dispatches a scene until accepted', async () => {
+    const s = setup({ ttl: 300_000 });
+    s.startVideo();
+    s.advanceVideo(5 * 60_000);
+    const scene = s.service
+      .snapshot()
+      .suggestions.find(
+        (candidate) =>
+          candidate.kind === 'scene' && candidate.sceneId === 'scene.film',
+      )!;
+    await s.service.respondSuggestion(scene.id, 'dismiss');
+    s.advanceVideo(5 * 60_000);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter(
+          (suggestion) =>
+            suggestion.kind === 'scene' && suggestion.sceneId === 'scene.film',
+        ),
+    ).toEqual([]);
+    expect(s.invoke).not.toHaveBeenCalled();
+  });
+  it('uses the five-minute guard if scene.movie_light is mapped to another activity', async () => {
+    const s = setup();
+    s.setScenes([
+      'scene.music',
+      'scene.film',
+      'scene.focus',
+      'scene.movie_light',
+    ]);
+    const document = s.service.snapshot();
+    document.settings.suggestions.sceneMappings['music'] = 'scene.movie_light';
+    await s.service.updateSettings(document.settings, document.generation);
+    s.start();
+    s.clock.advanceBy(5000);
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.filter(
+          (suggestion) =>
+            suggestion.kind === 'scene' &&
+            suggestion.sceneId === 'scene.movie_light',
+        ),
+    ).toEqual([]);
+    for (let elapsed = 0; elapsed < 5 * 60_000; elapsed += 30_000) {
+      s.clock.advanceBy(30_000);
+      s.sample(true);
+    }
+    expect(
+      s.service
+        .snapshot()
+        .suggestions.some(
+          (suggestion) =>
+            suggestion.kind === 'scene' &&
+            suggestion.sceneId === 'scene.movie_light',
+        ),
+    ).toBe(true);
+    expect(s.invoke).not.toHaveBeenCalled();
   });
   it('revalidates availability and scene mappings before accept', async () => {
     const s = setup();

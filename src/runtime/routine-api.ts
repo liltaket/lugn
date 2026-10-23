@@ -47,13 +47,27 @@ export class RoutineApi implements ExperienceApi {
   ): Promise<unknown> {
     try {
       switch (route) {
+        case 'routines/bedtime':
+          return await this.routines.bedtimeAction(body, invocation);
         case 'routines/save': {
           const input = SaveRoutineSchema.parse(body);
+          if (
+            input.definition.bedtime ||
+            this.store
+              .snapshot()
+              .definitions.find((d) => d.id === input.definition.id)?.bedtime
+          )
+            throw new RoutineError(409, 'bedtime_definition_owned');
           await this.store.save(input.definition, input.expectedGeneration);
           return this.routines.snapshot();
         }
         case 'routines/delete': {
           const input = DeleteRoutineSchema.parse(body);
+          if (
+            this.store.snapshot().definitions.find((d) => d.id === input.id)
+              ?.bedtime
+          )
+            throw new RoutineError(409, 'bedtime_definition_owned');
           await this.store.delete(input.id, input.expectedGeneration);
           return this.routines.snapshot();
         }

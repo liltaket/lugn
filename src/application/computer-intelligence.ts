@@ -87,6 +87,11 @@ type History = {
   invalid: OpticalReason | null;
   activity: string;
   scene: Context | null;
+  videoAudio: {
+    sceneContextId: string;
+    player: string | null;
+    since: number;
+  } | null;
   audio: Context | null;
   player: string | null;
   stoppedSince: number | null;
@@ -99,6 +104,7 @@ type LiveSuggestion = {
 };
 const HYSTERESIS_MS = 5000;
 const SCENE_STABILITY_MS = 5000;
+const VIDEO_AUDIO_STABILITY_MS = 5 * 60_000;
 
 /** Deterministic advisory service. Optical v1 is always suggestion-first, including auto mode. */
 export class ComputerIntelligence implements ComputerIntelligenceService {
@@ -232,7 +238,11 @@ export class ComputerIntelligence implements ComputerIntelligenceService {
     const state = this.options.getState();
     const now = this.options.clock.monotonicNow();
     for (const deviceId of this.deviceIds)
-      this.ingest(deviceId, state.computer.devices[deviceId]);
+      this.ingest(
+        deviceId,
+        state.computer.devices[deviceId],
+        settings.suggestions.sceneMappings,
+      );
     // Any source change away from Optical cancels that context, including changes while paused.
     const target = settings.optical.target;
     if (target) {
@@ -255,6 +265,7 @@ export class ComputerIntelligence implements ComputerIntelligenceService {
           : settings.suggestions.enabled &&
             this.sceneEligible(state, entry.suggestion.deviceId) &&
             h?.scene?.id === entry.contextId &&
+            this.sceneReady(h, entry.suggestion.sceneId!, now) &&
             settings.suggestions.sceneMappings[
               h.activity as keyof typeof settings.suggestions.sceneMappings
             ] === entry.suggestion.sceneId &&
@@ -266,8 +277,25 @@ export class ComputerIntelligence implements ComputerIntelligenceService {
         !valid ||
         now >= entry.expiresMono ||
         this.options.clock.now() >= entry.suggestion.expiresAt
-      )
+      ) {
+        const sceneId = entry.suggestion.sceneId;
+        if (
+          entry.suggestion.kind === 'scene' &&
+          sceneId &&
+          h?.scene?.id === entry.contextId &&
+          settings.suggestions.sceneMappings[
+            h.activity as keyof typeof settings.suggestions.sceneMappings
+          ] === sceneId &&
+          this.requiresVideoAudioGuard(h.activity, sceneId) &&
+          !this.sceneReady(h, sceneId, now) &&
+          now < entry.expiresMono &&
+          this.options.clock.now() < entry.suggestion.expiresAt
+        )
+          // A revoked pending film prompt may return after a new full window.
+          // Explicit dismiss/reject consumes the entry before this pruning path.
+          h.scene.emitted = false;
         this.suggestions.delete(id);
+      }
     }
     const optical = this.decisions[0]!;
     const audio = settings.optical.deviceId
@@ -303,7 +331,7 @@ export class ComputerIntelligence implements ComputerIntelligenceService {
           context &&
           !context.emitted &&
           sceneId &&
-          now - context.since >= SCENE_STABILITY_MS &&
+          this.sceneReady(history, sceneId, now) &&
           this.sceneEligible(state, deviceId) &&
           this.options.availableSceneIds().includes(sceneId) &&
           state.lighting.currentScene !== sceneId &&
@@ -360,6 +388,7 @@ export class ComputerIntelligence implements ComputerIntelligenceService {
   private ingest(
     deviceId: string,
     computer: ComputerObservation | undefined,
+    sceneMappings: IntelligenceSettings['suggestions']['sceneMappings'],
   ): void {
     const now = this.options.clock.monotonicNow();
     let h = this.histories.get(deviceId);
@@ -399,6 +428,7 @@ export class ComputerIntelligence implements ComputerIntelligenceService {
         invalid: 'restart_baseline',
         activity: computer.activity.classification,
         scene: null,
+        videoAudio: null,
         audio: null,
         player: null,
         stoppedSince: this.knownStopped(computer) ? now : null,
@@ -455,6 +485,7 @@ export class ComputerIntelligence implements ComputerIntelligenceService {
           : null;
       h.activity = computer.activity.classification;
     }
+    this.updateVideoAudio(h, computer, sceneMappings);
     const media = corroboratedMedia(computer);
     if (!media.player) {
       h.audio = null;
@@ -603,6 +634,75 @@ export class ComputerIntelligence implements ComputerIntelligenceService {
       !state.intent.holds.some((hold) => hold.scope.startsWith('lighting.')),
     );
   }
+  private sceneReady(history: History, sceneId: string, now: number): boolean {
+    const context = history.scene;
+    if (!context) return false;
+    if (this.requiresVideoAudioGuard(history.activity, sceneId)) {
+      const videoAudio = history.videoAudio;
+      return Boolean(
+        videoAudio &&
+        videoAudio.sceneContextId === context.id &&
+        now - videoAudio.since >= VIDEO_AUDIO_STABILITY_MS,
+      );
+    }
+    return now - context.since >= SCENE_STABILITY_MS;
+  }
+  private requiresVideoAudioGuard(activity: string, sceneId: string): boolean {
+    return activity === 'video' || sceneId === 'scene.movie_light';
+  }
+  private updateVideoAudio(
+    history: History,
+    computer: ComputerObservation,
+    sceneMappings: IntelligenceSettings['suggestions']['sceneMappings'],
+  ): void {
+    const context = history.scene;
+    const sceneId =
+      sceneMappings[history.activity as keyof typeof sceneMappings];
+    if (
+      !context ||
+      !sceneId ||
+      !this.requiresVideoAudioGuard(history.activity, sceneId)
+    ) {
+      history.videoAudio = null;
+      return;
+    }
+    const observed = computer.observed;
+    const media = corroboratedMedia(computer);
+    const hasMediaObservation = observed.media !== null;
+    const mediaIsCorroborated = !hasMediaObservation || media.player !== null;
+    const spotifyActive =
+      (observed.media ?? []).some(
+        (player) =>
+          player.playback === 'playing' &&
+          [player.player, player.identity, player.desktopEntry].some((value) =>
+            value?.toLowerCase().includes('spotify'),
+          ),
+      ) ||
+      (observed.audio?.applications ?? []).some((application) =>
+        application.toLowerCase().includes('spotify'),
+      );
+    if (
+      observed.audio?.playing !== true ||
+      observed.locked !== false ||
+      observed.idle !== false ||
+      spotifyActive ||
+      !mediaIsCorroborated
+    ) {
+      history.videoAudio = null;
+      return;
+    }
+    const player = hasMediaObservation ? media.player : null;
+    const current = history.videoAudio;
+    if (current?.sceneContextId === context.id && current.player === player)
+      return;
+    // Any pause, loss of corroboration, Spotify activity, or player handoff
+    // starts a fresh uninterrupted window from this live observation.
+    history.videoAudio = {
+      sceneContextId: context.id,
+      player,
+      since: this.options.clock.monotonicNow(),
+    };
+  }
   private mappingMatches(
     deviceId: string,
     target: string,
@@ -627,6 +727,7 @@ export class ComputerIntelligence implements ComputerIntelligenceService {
     history.invalid = reason;
     history.audio = null;
     history.scene = null;
+    history.videoAudio = null;
     history.player = null;
     history.armed = false;
     history.stoppedSince = null;

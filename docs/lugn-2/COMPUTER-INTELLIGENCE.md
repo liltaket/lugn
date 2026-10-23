@@ -56,10 +56,19 @@ by heartbeats. No automatic commands are possible even if a provider is wrong.
 
 Scene suggestions use only configured activity → available scene mappings after
 a fresh activity transition stable for five seconds, with occupied/home,
-non-quiet, trusted context and no lighting hold. They never activate on startup,
-never activate automatically and revalidate mapping, scene availability, context,
-policy and expiry on accept. Rate limiting applies globally per suggestion kind
-across configured computers; no preferences or suppression survive restart.
+non-quiet, trusted context and no lighting hold. Video activity and any mapping
+to `scene.movie_light` instead require five minutes of fresh live observations
+with audio playing, an unlocked/non-idle desktop and corroborated media when
+MPRIS is available. Spotify in a playing MPRIS player or active PipeWire
+application blocks the suggestion. Any observed pause or loss of evidence resets the full
+five-minute interval and revokes a pending film suggestion; there is no pause
+tolerance. An evidence-revoked prompt can return only after a new full window;
+explicit dismiss/reject remains consumed. It does not establish physical
+audibility, and pauses between live samples cannot be observed. Video scenes
+never activate on startup or automatically and revalidate mapping, scene
+availability, context, policy and expiry on accept. Rate limiting applies
+globally per suggestion kind across configured computers; no preferences or
+suppression survive restart.
 
 ## Integration API
 
