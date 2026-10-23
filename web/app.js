@@ -1229,8 +1229,9 @@ function render() {
 
 function restoreFocus(focusedKey, focusedValue) {
   if (!focusedKey) return;
-  const element = [...document.querySelectorAll('[data-focus-key]')].find(
-    (candidate) => candidate.dataset.focusKey === focusedKey,
+  // PERFORMANCE: Replaced `[...document.querySelectorAll()].find(...)` with `document.querySelector()` to avoid unnecessary O(N) array allocation and DOM node traversal.
+  const element = document.querySelector(
+    `[data-focus-key="${CSS.escape(focusedKey)}"]`,
   );
   if (!element) return;
   element.focus({ preventScroll: true });
