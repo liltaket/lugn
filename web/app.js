@@ -731,6 +731,7 @@ async function restoreSessionOnStartup() {
   loginSubmit.disabled = true;
   tokenInput.disabled = true;
   loginSubmit.textContent = 'Kontrollerar session…';
+  loginSubmit.setAttribute('aria-busy', 'true');
   setLiveStatus('Kontrollerar session', 'warn');
   try {
     const authConfig = await fetchAuthConfiguration();
@@ -836,6 +837,7 @@ async function restoreSessionOnStartup() {
     tokenInput.disabled = false;
     loginSubmit.disabled = false;
     loginSubmit.textContent = 'Anslut';
+    loginSubmit.removeAttribute('aria-busy');
     setLiveStatus('Inloggning krävs');
   } catch (error) {
     if (!authConfigLoaded) {
@@ -865,6 +867,7 @@ async function restoreSessionOnStartup() {
     tokenInput.disabled = authProvider === 'clerk';
     loginSubmit.disabled = authProvider === 'clerk';
     loginSubmit.textContent = 'Anslut';
+    loginSubmit.removeAttribute('aria-busy');
     setLoginError(
       error instanceof Error
         ? error.message
