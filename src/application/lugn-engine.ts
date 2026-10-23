@@ -1622,12 +1622,11 @@ export class LugnEngine {
       requestId?: string;
     },
     isCurrent?: ExecutionGuard,
+    temperatureScope: 'target' | 'scene' = 'scene',
   ): Promise<void> {
     this.assertExecution(isCurrent);
     values = LightingValuesSchema.parse(values);
     this.requireDevice(target);
-    if (isHumanActor(provenance.actor) && !isCurrent)
-      this.noteIntervention({ domain: 'lighting', target });
     if (
       !isHumanActor(provenance.actor) &&
       Object.keys(values).length > 0 &&
@@ -1640,7 +1639,7 @@ export class LugnEngine {
     const scene = this.activeSceneDefinition;
     const physicallyEmpty = this.shouldRemainPhysicallyEmpty();
     const synchronizedTemperatureTargets =
-      values.colorTemperature === undefined
+      values.colorTemperature === undefined || temperatureScope === 'target'
         ? []
         : Object.entries(scene?.lighting ?? {})
             .filter(
@@ -1654,6 +1653,11 @@ export class LugnEngine {
     const targets = synchronizedTemperatureTargets.includes(target)
       ? synchronizedTemperatureTargets
       : [target];
+    // Attribute every affected target before yielding, so pending and running routines
+    // cannot overwrite a human temperature adjustment expanded through the scene.
+    if (isHumanActor(provenance.actor) && !isCurrent)
+      for (const lightingTarget of targets)
+        this.noteIntervention({ domain: 'lighting', target: lightingTarget });
     const updates = new Map<string, LightingValues>(
       targets.map((lightingTarget) => [
         lightingTarget,

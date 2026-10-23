@@ -33,6 +33,7 @@ export const RoutineStepSchema = z.discriminatedUnion('type', [
         .refine((v) => new Set(v).size === v.length),
       brightness: z.number().int().min(0).max(100),
       durationMs: Duration,
+      colorTemperature: z.number().int().min(1000).max(10000).optional(),
     })
     .strict(),
   z
@@ -98,6 +99,23 @@ export const RoutineDefinitionSchema = z
       .strict()
       .nullable(),
     steps: z.array(RoutineStepSchema).min(1).max(MAX_ROUTINE_STEPS),
+    bedtime: z
+      .object({
+        owner: z.literal('bedtime'),
+        role: z.enum(['night', 'morning']),
+        plan: z
+          .object({
+            at: z.number().int().positive(),
+            time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+            mode: z.enum(['auto', 'button']),
+            music: z.boolean(),
+            consumedAt: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine(
@@ -113,6 +131,17 @@ export const RoutineDocumentSchema = z
   .object({
     version: z.literal(1),
     generation: z.uuid(),
+    bedtimeReceipts: z
+      .array(
+        z
+          .object({
+            requestId: z.string().min(1).max(128),
+            fingerprint: z.string().max(2048),
+          })
+          .strict(),
+      )
+      .max(1024)
+      .optional(),
     definitions: z
       .array(RoutineDefinitionSchema)
       .max(MAX_ROUTINES)
@@ -128,11 +157,23 @@ export type RoutineRun = {
   startedAt: number;
   updatedAt: number;
   reason: string | null;
+  warnings?: string[];
 };
 export type RoutineOccurrence = { routineId: string; at: number };
+export type BedtimeProjection = {
+  nightRoutineId: string;
+  morningRoutineId: string;
+  nightAvailable: boolean;
+  morningAvailable: boolean;
+  musicAvailable: boolean;
+  plan: NonNullable<NonNullable<RoutineDefinition['bedtime']>['plan']> | null;
+  ready: { until: number; music: boolean } | null;
+  skippedTargets: string[];
+};
 export type RoutineSnapshot = RoutineDocument & {
   runs: RoutineRun[];
   next: RoutineOccurrence[];
+  bedtime?: BedtimeProjection;
 };
 export const RoutineActionSchema = z
   .object({
@@ -166,7 +207,14 @@ export function nextRoutineOccurrence(
   definition: RoutineDefinition,
   after: number,
 ): RoutineOccurrence | null {
-  if (!definition.enabled || !definition.schedule) return null;
+  if (!definition.enabled) return null;
+  if (definition.bedtime) {
+    const plan = definition.bedtime.plan;
+    return plan && plan.consumedAt === undefined && plan.at > after
+      ? { routineId: definition.id, at: plan.at }
+      : null;
+  }
+  if (!definition.schedule) return null;
   const p = localParts(after);
   const [hour, minute] = definition.schedule.time.split(':').map(Number) as [
     number,
@@ -310,4 +358,37 @@ export function createRoutineTemplates(
       ],
     },
   ].map((definition) => RoutineDefinitionSchema.parse(definition));
+}
+
+/** Coming morning before 06:00, otherwise the next civil date. Gaps reject; folds use the first instant. */
+export function tomorrowStockholm(time: string, now: number): number {
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time))
+    throw new RoutineError(400, 'bedtime_time_invalid');
+  const p = localParts(now);
+  const [hour, minute] = time.split(':').map(Number);
+  const comingMorning =
+    p['hour']! < 6 && hour! * 60 + minute! > p['hour']! * 60 + p['minute']!;
+  const tomorrow = new Date(
+    Date.UTC(p['year']!, p['month']! - 1, p['day']! + (comingMorning ? 0 : 1)),
+  );
+  const civil = Date.UTC(
+    tomorrow.getUTCFullYear(),
+    tomorrow.getUTCMonth(),
+    tomorrow.getUTCDate(),
+    hour,
+    minute,
+  );
+  const at = [civil - 7_200_000, civil - 3_600_000].find((at) => {
+    const local = localParts(at);
+    return (
+      local['year'] === tomorrow.getUTCFullYear() &&
+      local['month'] === tomorrow.getUTCMonth() + 1 &&
+      local['day'] === tomorrow.getUTCDate() &&
+      local['hour'] === hour &&
+      local['minute'] === minute
+    );
+  });
+  if (at === undefined || at <= now)
+    throw new RoutineError(400, 'bedtime_time_missing');
+  return at;
 }

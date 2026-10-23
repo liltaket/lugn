@@ -4,6 +4,7 @@ export const experienceRoutes = [
   'routines/save',
   'routines/delete',
   'routines/action',
+  'routines/bedtime',
   'routines/preview',
   'intelligence/settings',
   'intelligence/suggestion',

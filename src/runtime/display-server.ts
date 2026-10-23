@@ -291,6 +291,7 @@ export class LugnDisplayServer {
       if (
         request.method === 'POST' &&
         (hubRequest.route === '/display-api/routine' ||
+          hubRequest.route === '/display-api/bedtime' ||
           hubRequest.route === '/display-api/suggestion')
       ) {
         if (!isJsonRequest(request)) {
@@ -308,7 +309,9 @@ export class LugnDisplayServer {
           const result = await this.options.experience.request(
             hubRequest.route === '/display-api/routine'
               ? 'routines/action'
-              : 'intelligence/suggestion',
+              : hubRequest.route === '/display-api/bedtime'
+                ? 'routines/bedtime'
+                : 'intelligence/suggestion',
             body,
             hubProvenance(hubRequest.hub),
           );
