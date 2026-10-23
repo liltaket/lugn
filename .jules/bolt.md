@@ -7,3 +7,8 @@
 
 **Learning:** `Intl.DateTimeFormat` and `Intl.NumberFormat` instantiation is relatively expensive in JavaScript. If instantiated inline inside highly-frequent operations like render loops or timer callbacks (e.g. `setClock` running every second), it can become a performance bottleneck.
 **Action:** Always extract and cache `Intl.DateTimeFormat` and `Intl.NumberFormat` instances into module-level variables or class-level properties when used repeatedly or on hot paths.
+
+## 2024-05-19 - Optimize querySelectorAll to querySelector
+
+**Learning:** Using `[...document.querySelectorAll('[data-focus-key]')].find((el) => el.dataset.focusKey === key)` creates unnecessary O(N) memory allocations (creating an array from a NodeList) and iterates in JavaScript, which is slow for frequent UI updates.
+**Action:** Replace this pattern with `document.querySelector('[data-focus-key="' + CSS.escape(key) + '"]')` for direct, O(1)-like native DOM querying, avoiding array allocations and JS-level iterations. Ensure dynamic values are escaped using `CSS.escape()`.
