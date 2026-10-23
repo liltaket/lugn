@@ -209,9 +209,14 @@ function setLiveStatus(label, tone = 'neutral') {
   liveStatus.dataset.tone = tone;
 }
 
-function setLoginError(message) {
+function setLoginError(message, isInvalidToken = false) {
   loginError.textContent = message;
   loginError.hidden = !message;
+  if (isInvalidToken) {
+    tokenInput.setAttribute('aria-invalid', 'true');
+  } else {
+    tokenInput.removeAttribute('aria-invalid');
+  }
 }
 
 function updateLoginPresentation() {
@@ -387,7 +392,11 @@ async function startSession(credential, automatic) {
     if (error instanceof SessionExpiredError) {
       setLoginError('Sessionen kunde inte verifieras. Logga in igen.');
     } else if (error instanceof Error) {
-      setLoginError(error.message);
+      setLoginError(
+        error.message,
+        error.message === 'Kontrollera token och försök igen.' ||
+          error.message === 'Det här Clerk-kontot har inte åtkomst till Lugn.',
+      );
     } else {
       setLoginError('Sessionen kunde inte skapas. Försök igen.');
     }
