@@ -646,6 +646,52 @@ it.each(['rename', 'cleanup', 'directory-sync', 'directory-close'] as const)(
   },
 );
 
+it.each(['preparation', 'rename'] as const)(
+  'retains explicit Auto during settings %s and after restart',
+  async (boundary) => {
+    const { engine, store, path, clock } = await fixture();
+    const original = engine.getMusicVolumeSettings();
+    const changed = { ...original, enabled: false, minimum: 0.1 };
+    const selectAuto = () =>
+      engine.setMusicVolumeAuthority(
+        { target: 'music.room', mode: 'auto' },
+        { actor: { type: 'user' }, source: 'dashboard' },
+      );
+    await store.save(engine, original, original);
+    if (boundary === 'preparation') {
+      const mkdir = filesystem.mkdir;
+      vi.spyOn(filesystem, 'mkdir').mockImplementationOnce(async (...args) => {
+        selectAuto();
+        return mkdir(...args);
+      });
+      await expect(store.save(engine, changed, original)).rejects.toMatchObject(
+        { status: 409 },
+      );
+    } else {
+      const rename = filesystem.rename;
+      vi.spyOn(filesystem, 'rename').mockImplementationOnce(async (...args) => {
+        await rename(...args);
+        selectAuto();
+      });
+      await expect(
+        store.save(engine, changed, original),
+      ).resolves.toMatchObject({ enabled: true });
+    }
+    expect(engine.getMusicVolumeSettings().enabled).toBe(true);
+    const durable = JSON.parse(await readFile(path, 'utf8'));
+    const restored = new LugnEngine(clock, {
+      deviceIds: [],
+      scenes: [],
+      music: { targets: { 'music.room': [] } },
+      musicVolumeSettings: durable.settings,
+      musicVolumeSettingsGeneration: durable.generation,
+      restoredMusicIntent: engine.getMusicIntentSnapshot(),
+    });
+    engines.push(restored);
+    expect(restored.getMusicVolumeSettings().enabled).toBe(true);
+  },
+);
+
 it('retains newer temporary BILRESA suspension and its restore state during rename', async () => {
   const { engine, store, clock, path } = await fixture();
   const original = engine.getMusicVolumeSettings();

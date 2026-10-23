@@ -571,10 +571,8 @@ export class MusicAutomation {
     };
   }
 
-  setVolumeAutomationEnabled(
-    enabled: boolean,
-    intent: 'explicit' | 'restore' = 'explicit',
-  ): void {
+  /** Enabling policy preserves each player's independently selected mode. */
+  setVolumeAutomationEnabled(enabled: boolean): void {
     if (this.disposed || this.volumeAutomationEnabled === enabled) return;
     this.recoveryRevision.volume++;
     this.volumeAutomationEnabled = enabled;
@@ -582,12 +580,6 @@ export class MusicAutomation {
       this.cancelTimer();
       this.cancelAutomaticFades();
       return;
-    }
-    if (intent === 'explicit') {
-      this.manualVolumeHolds.clear();
-      this.selectorIntents.clear();
-      this.manualReferences.clear();
-      this.passiveManaged.clear();
     }
     if (this.presence === 'occupied' && this.homePresence !== 'away') {
       this.applyVolumePolicy();

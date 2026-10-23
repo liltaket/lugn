@@ -7,7 +7,9 @@ const user = { actor: { type: 'user' as const }, source: 'dashboard' };
 
 function setup() {
   const clock = new FakeClock(Date.parse('2026-10-04T12:00:00+02:00'));
-  const transport = vi.fn(async () => new Response(null, { status: 200 }));
+  const transport = vi.fn<typeof fetch>(
+    async () => new Response(null, { status: 200 }),
+  );
   const adapter = new HomeAssistantMusicAdapter(
     {
       baseUrl: 'http://home-assistant.test:8123',
@@ -49,6 +51,73 @@ function setup() {
   observe(0.3);
   return { clock, engine, transport, observe, request };
 }
+
+it.each([
+  [0.11, false],
+  [0.14, false],
+  [0.11, true],
+  [0.14, true],
+] as const)(
+  'Auto returns manual %s to the configured curve through HA (feedback before acceptance: %s)',
+  async (volume, feedbackFirst) => {
+    const { engine, transport, observe, request } = setup();
+    let accept = () => {};
+    try {
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+        personCount: 1,
+      });
+      await engine.handleBilresaPress('2', 'multi_press_1');
+      await request(volume);
+      observe(volume);
+      transport.mockClear();
+      if (feedbackFirst)
+        transport.mockImplementationOnce(
+          () =>
+            new Promise<Response>((resolve) => {
+              accept = () => resolve(new Response(null, { status: 200 }));
+            }),
+        );
+
+      engine.setMusicVolumeAuthority(
+        { target: 'music.room', mode: 'auto' },
+        user,
+      );
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(
+        engine.getMusicVolumePolicySnapshots()['music.room'],
+      ).toMatchObject({
+        mode: 'auto',
+        policyEnabled: true,
+        policyActive: true,
+        configuredBaseline: 0.3,
+        manualReference: null,
+        effectiveTarget: 0.3,
+      });
+      expect(transport).toHaveBeenCalledTimes(1);
+      const [url, options] = transport.mock.calls[0]!;
+      expect(String(url)).toContain('/services/media_player/volume_set');
+      expect(JSON.parse(String(options?.body))).toEqual({
+        entity_id: 'media_player.room',
+        volume_level: 0.3,
+      });
+      observe(0.3);
+      accept();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(engine.state.music.commands.at(-1)).toMatchObject({
+        requested: { property: 'volume', value: 0.3 },
+        status: 'confirmed',
+      });
+      expect(engine.getMusicVolumePolicySnapshots()['music.room']?.mode).toBe(
+        'auto',
+      );
+    } finally {
+      accept();
+      engine.dispose();
+    }
+  },
+);
 
 it('attributes a delayed superseded HA volume step without discarding or confirming the newer target', async () => {
   const { clock, engine, observe, request } = setup();
