@@ -1402,6 +1402,9 @@ function updatePresetDirtyState() {
   closePresetButton.textContent = presetIsDirty()
     ? 'Avbryt ändringar'
     : 'Stäng';
+  closePresetButton.title = presetIsDirty()
+    ? 'Avbryt ändringar (Esc)'
+    : 'Stäng (Esc)';
 }
 
 function setPresetStatus(message, tone = 'neutral') {
