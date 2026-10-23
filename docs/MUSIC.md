@@ -276,12 +276,16 @@ per-player action. Manual captures the settled, available reported volume withou
 sending a volume command and persists that selection. It neither rewrites the
 automatic base nor touches playback. Selecting Manual again cannot weaken an
 actual volume adjustment. Auto explicitly clears that player's manual reference
-and selection, then evaluates its configured automatic base and offsets. It
-leaves other players, playback/Pause and the global enable setting unchanged,
-and respects empty/away/unknown/availability guards.
+and selection, enables the global volume policy if suspended, then evaluates its
+configured automatic base and offsets. Enabling also resumes eligible Auto players;
+other players' Manual selections and playback/Pause remain unchanged. Auto still
+respects empty/away/unknown/availability guards.
 
-A dedicated automatic-volume enable after disabling deliberately returns players
-to Auto; BILRESA temporary all-off restoration preserves manual selections.
+Enabling automatic volume, including BILRESA single-press toggles and temporary
+all-off restoration, preserves each player's Manual selection. Only explicit Auto
+handback releases that selection. Selecting Auto during temporary all-off also
+supersedes its saved volume suspension, so the later lighting restore cannot undo
+the newer Auto choice.
 Saving settings preserves mode. Both selector choices reject unavailable or
 untrusted volume, outstanding volume dispatch/recovery, newer disagreeing
 readback and active/settling fades. Accepted selections invalidate older retries;

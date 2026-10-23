@@ -574,7 +574,7 @@ it.each(['pending', 'unconfirmed', 'confirmed', 'correlated'] as const)(
   },
 );
 
-it('keeps Pause through independent volume expiry and hand-back while the visit remains open', async () => {
+it('keeps Pause through absence and explicit volume hand-back while the visit remains open', async () => {
   const s = setup('2026-10-04T12:00:00+02:00', 25 * 60_000);
   try {
     await s.presence('occupied');
@@ -595,6 +595,10 @@ it('keeps Pause through independent volume expiry and hand-back while the visit 
     await s.presence('occupied');
     await s.engine.handleBilresaPress('2', 'multi_press_1');
     await s.engine.handleBilresaPress('2', 'multi_press_1');
+    s.engine.setMusicVolumeAuthority(
+      { target: 'music.room', mode: 'auto' },
+      user,
+    );
     expect(s.policy().manualHold).toBeNull();
     expect(() =>
       s.engine.requestMusic(
@@ -611,7 +615,7 @@ it('keeps Pause through independent volume expiry and hand-back while the visit 
   }
 });
 
-it('dedicated enable gives automation volume back while temporary BILRESA restore preserves ownership', async () => {
+it('BILRESA enable and temporary all-off restore preserve manual ownership', async () => {
   const clock = new FakeClock(Date.parse('2026-10-04T12:00:00+02:00'));
   const adapter = new SimulatedMusicAdapter(clock);
   const engine = new LugnEngine(clock, {
@@ -644,17 +648,17 @@ it('dedicated enable gives automation volume back while temporary BILRESA restor
     await engine.handleBilresaPress('2', 'multi_press_1');
     await engine.handleBilresaPress('2', 'multi_press_1');
     expect(policy()).toMatchObject({
-      activeOwner: 'lugn',
-      manualHold: null,
+      activeOwner: 'manual',
+      manualHold: { volume: 0.4 },
       policyEnabled: true,
     });
-    await expect(
+    expect(() =>
       engine.requestMusic(
         'music.room',
         { property: 'volume', value: 0.35 },
         auto,
       ),
-    ).resolves.toHaveProperty('acceptedAt');
+    ).toThrow('held');
   } finally {
     engine.dispose();
   }
@@ -672,7 +676,7 @@ it('deliberate enable preserves an active human fade authority until its termina
     await s.engine.handleBilresaPress('2', 'multi_press_1');
     expect(s.policy()).toMatchObject({
       activeOwner: 'manual',
-      manualHold: null,
+      manualHold: { volume: 0.319 },
       policyActive: false,
     });
     expect(() =>
@@ -698,17 +702,17 @@ it('deliberate enable preserves an active human fade authority until its termina
     );
     s.clock.advanceBy(2_000);
     expect(s.policy()).toMatchObject({
-      activeOwner: 'lugn',
-      manualHold: null,
-      policyActive: true,
+      activeOwner: 'manual',
+      manualHold: { volume: 0.319 },
+      policyActive: false,
     });
-    await expect(
+    expect(() =>
       s.engine.requestMusic(
         'music.room',
         { property: 'volume', value: 0.5 },
         auto,
       ),
-    ).resolves.toHaveProperty('acceptedAt');
+    ).toThrow('held');
   } finally {
     s.engine.dispose();
   }
@@ -731,7 +735,7 @@ it('unavailable sensor/device feedback keeps human ownership and reports actual 
     expect(s.policy()).toMatchObject({
       policyActive: false,
       activityReason: 'volume_unavailable',
-      activeOwner: 'none',
+      activeOwner: 'manual',
     });
   } finally {
     s.engine.dispose();

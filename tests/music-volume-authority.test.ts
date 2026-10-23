@@ -367,7 +367,7 @@ it('validates typed input, configured targets and human actor before changing au
   }
 });
 
-it('Auto releases a hold without enabling a disabled global policy', async () => {
+it('Auto releases a hold and enables a disabled global policy', async () => {
   const s = setup();
   try {
     await s.presence();
@@ -378,9 +378,9 @@ it('Auto releases a hold without enabling a disabled global policy', async () =>
     await s.select('auto');
     expect(s.policy()).toMatchObject({
       manualHold: null,
-      activeOwner: 'none',
-      policyEnabled: false,
-      activityReason: 'automation_disabled',
+      activeOwner: 'lugn',
+      policyEnabled: true,
+      activityReason: 'active',
     });
     expect(s.adapter.dispatched).toHaveLength(0);
   } finally {

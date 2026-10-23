@@ -1166,7 +1166,6 @@ export class LugnEngine {
         this.bilresaPriorVolumeAutomation = null;
         this.musicAutomation.setVolumeAutomationEnabled(
           restoreVolumeAutomation,
-          'restore',
         );
         await this.activateScene(
           this.lastNonOffSceneId ?? this.fallbackRemoteSceneId(),
@@ -1261,7 +1260,15 @@ export class LugnEngine {
     if (blocked) throw new VolumeAuthorityError(blocked);
     this.noteIntervention({ domain: 'music', target: request.target });
     this.musicController.noteVolumeAuthorityIntent(request.target);
+    if (request.mode === 'auto') {
+      this.musicVolumeEnableIntentRevision++;
+      // An explicit Auto choice also supersedes a temporary volume suspension.
+      if (this.bilresaPriorVolumeAutomation !== null)
+        this.bilresaPriorVolumeAutomation = true;
+    }
     this.musicAutomation.setVolumeAuthority(request, provenance);
+    if (request.mode === 'auto')
+      this.musicAutomation.setVolumeAutomationEnabled(true);
     this.publish(['music', 'intent']);
     return this.musicAutomation.getVolumePolicySnapshot(request.target);
   }

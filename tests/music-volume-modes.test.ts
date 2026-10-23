@@ -29,7 +29,10 @@ function setup(
   const adapter = new SimulatedMusicAdapter(clock);
   const engine = new LugnEngine(clock, {
     deviceIds: [],
-    scenes: [],
+    scenes: [
+      { id: 'scene.all_off', name: 'Off', lighting: {} },
+      { id: 'scene.everyday_light', name: 'Day', lighting: {} },
+    ],
     musicVolumeSettings: settings,
     music: { targets: { 'music.room': [], 'music.other': [] }, adapter },
     ...(restoredMusicIntent ? { restoredMusicIntent } : {}),
@@ -86,6 +89,70 @@ const passive = () => ({
   ...structuredClone(defaultMusicVolumeSettings),
   passiveMultiPersonReductionEnabled: true,
 });
+
+it.each(['selector', 'adjustment'] as const)(
+  'retains manual %s through BILRESA disable/enable and another player selecting Auto',
+  async (intent) => {
+    const s = setup();
+    await s.presence(1);
+    if (intent === 'selector')
+      s.engine.setMusicVolumeAuthority(
+        { target: 'music.room', mode: 'manual' },
+        human,
+      );
+    else await s.manual(0.45);
+    const reference = s.policy().manualReference;
+    const before = s.commands().length;
+    await s.engine.handleBilresaPress('2', 'multi_press_1');
+    await s.engine.handleBilresaPress('2', 'multi_press_1');
+    expect(s.policy()).toMatchObject({
+      mode: 'manual',
+      manualReference: reference,
+    });
+    expect(s.commands()).toHaveLength(before);
+    await s.engine.handleBilresaPress('2', 'multi_press_1');
+    s.engine.setMusicVolumeAuthority(
+      { target: 'music.other', mode: 'auto' },
+      human,
+    );
+    await s.settle();
+    expect(s.policy()).toMatchObject({
+      mode: 'manual',
+      manualReference: reference,
+    });
+    expect(s.policy('music.other')).toMatchObject({
+      mode: 'auto',
+      policyEnabled: true,
+    });
+    expect(s.commands()).toHaveLength(before);
+  },
+);
+
+it.each([false, true])(
+  'explicit Auto supersedes temporary BILRESA restore=%s across restart',
+  async (priorEnabled) => {
+    const s = setup();
+    await s.presence(1);
+    await s.manual(0.11);
+    if (!priorEnabled) await s.engine.handleBilresaPress('2', 'multi_press_1');
+    // Only simulated empty scenes are touched by long presses in this test.
+    await s.engine.handleBilresaPress('2', 'long_press');
+    s.engine.setMusicVolumeAuthority(
+      { target: 'music.room', mode: 'auto' },
+      human,
+    );
+    await s.settle();
+    const intent = s.engine.getMusicIntentSnapshot();
+    expect(intent.temporaryVolumeAutomationRestore).toBe(true);
+    const r = setup(s.engine.getMusicVolumeSettings(), intent);
+    await r.engine.handleBilresaPress('2', 'long_press');
+    expect(r.policy()).toMatchObject({
+      mode: 'auto',
+      policyEnabled: true,
+      configuredBaseline: 0.3,
+    });
+  },
+);
 
 it('keeps independently configured automatic bases separate from human adjustments, fades and restart', async () => {
   const settings = {
