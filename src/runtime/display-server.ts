@@ -5,7 +5,7 @@ import {
   ComputerNowPlayingSelector,
   type ComputerAudioRoute,
 } from '../application/computer-now-playing.js';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import {
@@ -1075,12 +1075,13 @@ function isWildcardHost(host: string): boolean {
 }
 
 function secretsEqual(supplied: string, configured: string): boolean {
-  const providedBytes = Buffer.from(supplied, 'utf8');
-  const configuredBytes = Buffer.from(configured, 'utf8');
-  return (
-    providedBytes.byteLength === configuredBytes.byteLength &&
-    timingSafeEqual(providedBytes, configuredBytes)
-  );
+  // Hash inputs prior to comparison to prevent timing attack vulnerabilities
+  // by avoiding short-circuiting length checks on raw inputs.
+  const providedBytes = createHash('sha256').update(supplied, 'utf8').digest();
+  const configuredBytes = createHash('sha256')
+    .update(configured, 'utf8')
+    .digest();
+  return timingSafeEqual(providedBytes, configuredBytes);
 }
 
 function findUiAsset(
