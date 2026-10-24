@@ -1584,6 +1584,18 @@ a:focus-visible {
   color: var(--ink-muted);
   font-size: 14px;
 }
+.optical-offset-row .settings-toggle {
+  display: flex;
+  align-items: center;
+  align-self: end;
+  min-height: 44px;
+}
+.optical-offset-row .settings-toggle input[type='checkbox'] {
+  width: 20px;
+  min-height: 20px;
+  padding: 0;
+  flex: 0 0 20px;
+}
 .settings-point input,
 .settings-grid input,
 .settings-grid select {

@@ -429,10 +429,12 @@ export const MusicIntentSnapshotSchema = z
           manualReference: z
             .number()
             .finite()
-            .min(0)
+            .min(-1)
             .max(2)
             .nullable()
             .optional(),
+          sourceReference: z.number().finite().min(-2).max(2).optional(),
+          sourceTrimManaged: z.boolean().optional(),
           passiveManaged: z.boolean().optional(),
           selectorIntent: ManualVolumeHoldSchema.nullable().optional(),
           lastAuthorityIntent: z

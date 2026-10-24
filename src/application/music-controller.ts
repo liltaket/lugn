@@ -33,6 +33,10 @@ const MUSIC_FADE_MAX_EXTENSION_MS = 30_000;
 // HA REST does not expose a causal command context for exact correlation.
 const LATE_PAUSE_ATTRIBUTION_MS = 30_000;
 const LATE_VOLUME_ATTRIBUTION_MS = 30_000;
+// HA exposes no causal volume context. Collect split native source restores
+// before correcting; explicit human commands keep their independently held intent.
+const SOURCE_VOLUME_SETTLING_MS = 2_000;
+const KNOWN_SOURCE_RESTORE_MS = 4_000;
 
 export type MusicOptions = {
   targets?: Record<string, string[]>;
@@ -87,6 +91,14 @@ export class MusicController {
   private readonly observationTrusted: (target: string) => boolean;
   private readonly recovery: MusicCommandRecovery;
   private disposed = false;
+  private sourceTrimConfigured: (target: string) => boolean = () => false;
+  private readonly trustedTrimSources = new Map<string, string>();
+  private readonly sourceSettling = new Map<string, TimerHandle>();
+  private readonly latestSourceUpdatedAt = new Map<string, number>();
+  private readonly commandSources = new Map<string, string | null>();
+  private readonly sourceVolumes = new Map<string, Map<string, number>>();
+  private readonly sourceRestoreUntil = new Map<string, number>();
+
   private readonly intentGenerations = new Map<
     string,
     { volume: number; playback: number }
@@ -206,6 +218,13 @@ export class MusicController {
         if (observation) this.confirm(command, observation);
       },
       validateRead: (command, observation) => {
+        const sourceAtIssue = this.commandSources.get(command.id);
+        if (
+          this.sourceTrimConfigured(command.target) &&
+          sourceAtIssue != null &&
+          observation.values.source !== sourceAtIssue
+        )
+          return 'newer_report';
         const latest = this.lastObservations.get(command.target)?.observation
           .sourceUpdatedAt;
         if (
@@ -261,6 +280,27 @@ export class MusicController {
   getState(target: string): DeviceMusicState {
     return structuredClone(this.requireTarget(target));
   }
+  setSourceTrimConfigured(handler: (target: string) => boolean): void {
+    this.sourceTrimConfigured = handler;
+  }
+
+  /** A source trim requires fresh, trusted feedback and a settled explicit alias. */
+  sourceForVolumeTrim(target: string, allowSettling = false): string | null {
+    const device = this.requireTarget(target);
+    return this.observationTrusted(target) &&
+      device.availability === 'available' &&
+      device.observed.volume !== null &&
+      device.observedAt !== null &&
+      this.clock.now() - device.observedAt <= 30_000 &&
+      (allowSettling || !this.sourceSettling.has(target)) &&
+      device.requested.source === undefined &&
+      device.observed.source !== null &&
+      this.trustedTrimSources.get(target) === device.observed.source &&
+      device.allowedSources.includes(device.observed.source)
+      ? device.observed.source
+      : null;
+  }
+
   /** A selector needs settled feedback, never an in-flight or stale destination. */
   volumeAuthorityBlocked(
     target: string,
@@ -542,6 +582,8 @@ export class MusicController {
       },
     };
     this.commandSequences.set(command.id, this.nextCommandId);
+    if (requested.property === 'volume' && this.sourceTrimConfigured(target))
+      this.commandSources.set(command.id, device.observed.source);
     if (
       requested.property === 'volume' &&
       isHumanActor(normalizedProvenance.actor)
@@ -636,6 +678,9 @@ export class MusicController {
   }
   dispose(): void {
     this.disposed = true;
+    for (const timer of this.sourceSettling.values())
+      this.clock.clearTimeout(timer);
+    this.sourceSettling.clear();
     this.recovery.dispose();
     this.unsubscribe();
     this.attributedSupersededVolumeCommands.clear();
@@ -932,6 +977,7 @@ export class MusicController {
         !this.recovery.has(command.id) &&
         !protectedIds.has(command.id)
       ) {
+        this.commandSources.delete(command.id);
         this.state.commands.splice(index, 1);
         this.commandSequences.delete(command.id);
         this.attributedOlderAutomaticVolumeCommands.delete(command.id);
@@ -972,6 +1018,42 @@ export class MusicController {
       (device.observedAt !== null && observation.observedAt < device.observedAt)
     )
       return;
+    const trimConfigured = this.sourceTrimConfigured(observation.target);
+    const commandSource =
+      observation.commandId === undefined
+        ? undefined
+        : this.commandSources.get(observation.commandId);
+    if (
+      trimConfigured &&
+      commandSource != null &&
+      commandSource !== device.observed.source &&
+      observation.values.source === commandSource
+    )
+      return;
+    const sourceUpdatedAt = observation.sourceUpdatedAt;
+    const previousUpdatedAt = this.latestSourceUpdatedAt.get(
+      observation.target,
+    );
+    if (
+      trimConfigured &&
+      sourceUpdatedAt !== undefined &&
+      (!Number.isFinite(sourceUpdatedAt) ||
+        sourceUpdatedAt < 0 ||
+        sourceUpdatedAt > this.clock.now() ||
+        (previousUpdatedAt !== undefined &&
+          sourceUpdatedAt < previousUpdatedAt))
+    )
+      return;
+    if (
+      sourceUpdatedAt !== undefined &&
+      Number.isFinite(sourceUpdatedAt) &&
+      sourceUpdatedAt >= 0 &&
+      sourceUpdatedAt <= this.clock.now()
+    )
+      this.latestSourceUpdatedAt.set(
+        observation.target,
+        Math.max(previousUpdatedAt ?? 0, sourceUpdatedAt),
+      );
     const previousVolume = device.observed.volume;
     const previousPlayback = device.observed.playback;
     const sourceChanged =
@@ -982,6 +1064,85 @@ export class MusicController {
       observation.values.source !== null &&
       observation.values.source.length > 0 &&
       device.observed.source !== observation.values.source;
+    const sourceInitialized =
+      device.observed.source !== observation.values.source;
+    const knownRestore = this.sourceVolumes
+      .get(observation.target)
+      ?.get(observation.values.source ?? '');
+    const sourceTrusted =
+      observation.available &&
+      this.observationTrusted(observation.target) &&
+      this.clock.now() - observation.observedAt <= 30_000 &&
+      observation.values.source !== null &&
+      device.allowedSources.includes(observation.values.source);
+    const sourceResolved =
+      sourceTrusted &&
+      (sourceInitialized ||
+        device.availability !== 'available' ||
+        this.trustedTrimSources.get(observation.target) !==
+          observation.values.source);
+    if (sourceTrusted)
+      this.trustedTrimSources.set(
+        observation.target,
+        observation.values.source!,
+      );
+    else this.trustedTrimSources.delete(observation.target);
+    // Register resolution before classifying this snapshot's volume: a null or
+    // unavailable gap may outlast the previous source's entire settling window.
+    if (
+      trimConfigured &&
+      (sourceInitialized || sourceResolved) &&
+      observation.available
+    ) {
+      if (device.observed.source !== null && previousVolume !== null) {
+        let volumes = this.sourceVolumes.get(observation.target);
+        if (!volumes)
+          this.sourceVolumes.set(observation.target, (volumes = new Map()));
+        volumes.set(device.observed.source, previousVolume);
+      }
+      const oldTimer = this.sourceSettling.get(observation.target);
+      if (oldTimer !== undefined) this.clock.clearTimeout(oldTimer);
+      this.sourceRestoreUntil.set(
+        observation.target,
+        this.clock.now() + KNOWN_SOURCE_RESTORE_MS,
+      );
+      this.sourceSettling.set(
+        observation.target,
+        this.clock.setTimeout(() => {
+          this.sourceSettling.delete(observation.target);
+          if (!this.disposed) this.publish();
+        }, SOURCE_VOLUME_SETTLING_MS),
+      );
+      this.bumpIntent(observation.target, 'volume');
+      for (const command of this.state.commands) {
+        if (
+          command.target === observation.target &&
+          command.requested.property === 'volume' &&
+          command.status === 'pending'
+        ) {
+          command.status = 'superseded';
+          this.releaseTracking(command.id);
+        }
+      }
+      delete device.requested.volume;
+    }
+    const nativeSourceVolume =
+      trimConfigured &&
+      observation.available &&
+      this.observationTrusted(observation.target) &&
+      device.allowedSources.includes(observation.values.source ?? '') &&
+      (!observation.provenance ||
+        !['user', 'physical_remote'].includes(
+          observation.provenance.actor.type,
+        )) &&
+      (sourceResolved ||
+        (this.sourceSettling.has(observation.target) &&
+          observation.commandId === undefined) ||
+        (this.clock.now() <=
+          (this.sourceRestoreUntil.get(observation.target) ?? -1) &&
+          knownRestore !== undefined &&
+          observation.values.volume !== null &&
+          Math.abs(knownRestore - observation.values.volume) < 0.005));
     const observedVolume = observation.values.volume;
     const observedPlayback = observation.values.playback;
     const newPlaybackTransition = this.isNewPlaybackTransition(
@@ -1054,6 +1215,7 @@ export class MusicController {
           Boolean(olderVolumeCommand || supersededVolumeCommand)));
     const externalVolumeChange =
       volumeChanged &&
+      !nativeSourceVolume &&
       !staleVolumeFeedback &&
       !currentCorrelatedVolumeFeedback &&
       !pendingVolumeCommand;
@@ -1073,7 +1235,12 @@ export class MusicController {
         source: 'external_observation',
       },
     );
-    if (reportedVolumeChanged) {
+    if (
+      reportedVolumeChanged &&
+      (!nativeSourceVolume ||
+        currentCorrelatedVolumeFeedback ||
+        pendingVolumeCommand)
+    ) {
       const correlated =
         observation.commandId === undefined
           ? undefined
@@ -1127,6 +1294,8 @@ export class MusicController {
     // request. Preserve ordinary feedback matching, then cancel old recovery
     // without manufacturing or releasing a Pause hold.
     if (sourceChanged) this.bumpIntent(observation.target, 'playback');
+    if ((sourceChanged || sourceResolved) && trimConfigured)
+      this.stopFade(observation.target, 'Source changed', 'interrupted');
     if (externalVolumeChange && observedVolume !== null) {
       this.bumpIntent(observation.target, 'volume');
       this.latestHumanVolumeIntent.set(observation.target, {

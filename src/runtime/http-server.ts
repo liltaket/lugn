@@ -691,6 +691,12 @@ export class LugnHttpServer {
         sendJson(response, 401, { error: 'unauthorized' });
         return true;
       }
+      try {
+        this.options.engine.validateMusicVolumeSettings(parsed.data.settings);
+      } catch {
+        sendJson(response, 400, { error: 'invalid_optical_offset_source' });
+        return true;
+      }
       if ('target' in parsed.data) {
         const { target, settings, minute, personCount } = parsed.data;
         if (!Object.hasOwn(this.options.engine.state.music.devices, target)) {
@@ -705,6 +711,7 @@ export class LugnHttpServer {
             settings.autoBaseVolumes[target] ?? 0.3,
             minute,
             personCount,
+            this.options.engine.getMusicSourceOffset(target, settings),
           ),
           activeOwner: policy.activeOwner,
           baselineSource: policy.baselineSource,
