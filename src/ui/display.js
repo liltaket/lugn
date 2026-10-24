@@ -930,6 +930,10 @@ function contextData(payload) {
     : [];
   const runs = Array.isArray(routines?.runs) ? routines.runs : [];
   const now = estimatedServerNow();
+  const bedtime = bedtimeData(payload);
+  const bedtimeOwnedIds = new Set(
+    bedtime ? [bedtime.nightRoutineId, bedtime.morningRoutineId] : [],
+  );
   const next = (Array.isArray(routines?.next) ? routines.next : [])
     .filter(
       (item) =>
@@ -938,8 +942,8 @@ function contextData(payload) {
         definitions.some(
           (definition) =>
             definition.id === item.routineId &&
-            definition.enabled === true &&
-            definition.schedule,
+            (bedtimeOwnedIds.has(definition.id) ||
+              (definition.enabled === true && definition.schedule)),
         ),
     )
     .sort((a, b) => a.at - b.at);
@@ -1121,7 +1125,7 @@ function renderContext(payload) {
   refs.contextStrip.hidden = contextDetailsOpen || !title;
   syncContextButtons(refs.contextActions);
   renderBedtime(payload);
-  const listKey = JSON.stringify([data, bedtimeProjection]);
+  const listKey = JSON.stringify([data, bedtimeProjection, isUnavailable()]);
   if (listKey === contextListKey) {
     syncContextButtons(refs.contextList);
     return;
@@ -1129,6 +1133,106 @@ function renderContext(payload) {
   contextListKey = listKey;
   const items = [];
   if (bedtimeProjection) {
+    const projectedPlan = Object.hasOwn(bedtimeProjection, 'plan')
+      ? bedtimeProjection.plan
+      : bedtimeOwnedPlan(payload);
+    const ready =
+      Number.isFinite(bedtimeProjection.ready?.until) &&
+      bedtimeProjection.ready.until > estimatedServerNow()
+        ? bedtimeProjection.ready
+        : null;
+    const morningRun = runs.find(
+      (item) =>
+        item?.routineId === bedtimeProjection.morningRoutineId &&
+        item.status === 'running',
+    );
+    const nightRun = runs.find(
+      (item) =>
+        item?.routineId === bedtimeProjection.nightRoutineId &&
+        item.status === 'running',
+    );
+    const snoozed = next.find(
+      (item) => item.routineId === bedtimeProjection.morningRoutineId,
+    );
+    const plan =
+      projectedPlan ?? (ready || snoozed ? bedtimeOwnedPlan(payload) : null);
+    const wakeChoice = plan
+      ? `${plan.time} · ${plan.mode === 'auto' ? 'Ljus' : 'Knapp'}${plan.music ? ' + musik' : ''}`
+      : '';
+    const planStatus = morningRun
+      ? `Pågår · steg ${morningRun.stepIndex + 1}.`
+      : ready
+        ? `Redo · knapp kl. ${plan?.time ?? timeFormat.format(new Date(ready.until - 3600000))}${ready.music ? ' + musik' : ''}, till ${timeFormat.format(new Date(ready.until))}.`
+        : projectedPlan
+          ? `Planerad ${occurrenceLabel(plan.at)} · ${wakeChoice}.`
+          : snoozed
+            ? `Uppskjuten till ${occurrenceLabel(snoozed.at)}${wakeChoice ? ` · ${wakeChoice}` : ''}.`
+            : 'Ingen morgon planerad.';
+    const lastMorningRun = runs
+      .filter((item) => item?.routineId === bedtimeProjection.morningRoutineId)
+      .at(-1);
+    const history =
+      lastMorningRun && lastMorningRun.status !== 'running'
+        ? [
+            {
+              failed: 'Senast misslyckades',
+              cancelled: 'Senast avbröts',
+              completed: 'Senast avslutades',
+            }[lastMorningRun.status] ?? '',
+            lastMorningRun.reason ?? '',
+            ...(Array.isArray(lastMorningRun.warnings)
+              ? lastMorningRun.warnings
+              : []),
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : '';
+    const planActions = morningRun
+      ? [
+          contextAction(
+            'routine',
+            bedtimeProjection.morningRoutineId,
+            'cancel',
+            'Avbryt',
+          ),
+          contextAction(
+            'routine',
+            bedtimeProjection.morningRoutineId,
+            'snooze',
+            'Skjut upp 10 min',
+            10,
+          ),
+        ]
+      : ready
+        ? routineActions(
+            definitions.find(
+              (item) => item.id === bedtimeProjection.morningRoutineId,
+            ) ?? { id: bedtimeProjection.morningRoutineId, enabled: true },
+            null,
+            {
+              routineId: bedtimeProjection.morningRoutineId,
+              at: ready.until - 3600000,
+            },
+          )
+        : [];
+    items.push(
+      contextItem(
+        'Morgonplan',
+        `${isUnavailable() ? 'Frånkopplad · ' : ''}${planStatus}${history ? ` Senaste körning: ${history}.` : ''}`,
+        planActions,
+      ),
+    );
+    if (nightRun)
+      items.push(
+        contextItem('Kvällsrutin', `Pågår · steg ${nightRun.stepIndex + 1}.`, [
+          contextAction(
+            'routine',
+            bedtimeProjection.nightRoutineId,
+            'cancel',
+            'Avbryt',
+          ),
+        ]),
+      );
     items.push(
       contextItem(
         'Kväll och morgon',
@@ -1154,6 +1258,13 @@ function renderContext(payload) {
     );
   }
   for (const definition of definitions) {
+    if (
+      bedtimeProjection &&
+      definition.enabled !== true &&
+      ['good-night', 'good-morning'].includes(definition.id) &&
+      ['good_night', 'good_morning'].includes(definition.kind)
+    )
+      continue;
     const run = runs.find(
       (item) => item?.routineId === definition.id && item.status === 'running',
     );
@@ -1178,7 +1289,6 @@ function renderContext(payload) {
         : '';
     if (
       bedtimeProjection &&
-      !run &&
       [
         bedtimeProjection.nightRoutineId,
         bedtimeProjection.morningRoutineId,

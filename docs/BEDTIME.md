@@ -36,6 +36,16 @@ after restart. The plan badge edits or removes the one-off morning. Manual scene
 changes cancel active fades and snoozed continuations; a separately confirmed
 next-morning plan remains until explicitly removed.
 
+A confirmed automatic morning supersedes overnight Släck/OFF activation holds
+only on that plan's saved light targets. This authority belongs to the durably
+consumed scheduled occurrence (or its current snooze continuation), expires with
+the run, and keeps routine provenance. New human lighting intent during the
+consumption write or fade cancels it; cancel/skip during consumption prevents
+lighting entirely. Unrelated held lights and generic scheduled routines retain
+their OFF holds. The selected OFF scene's background reconciliation follows the
+morning's target intent without restoring the overnight OFF state. Presence and
+home/away still gate automatic lighting; music keeps its independent policy.
+
 ## Persistence and scheduling
 
 The existing atomic `.routines.json` sidecar stores two owned definitions,

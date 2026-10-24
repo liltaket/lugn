@@ -690,6 +690,172 @@ function selectMode(mode: 'auto' | 'button' | 'none') {
 }
 
 describe('Hub bedtime and morning flow (simulated DOM and network)', () => {
+  it('shows the owned one-off morning state instead of disabled generic templates', () => {
+    const data = withBedtime();
+    const [templateNight, templateMorning] = data.routines.definitions;
+    const morning = {
+      ...templateMorning,
+      id: 'bedtime-morning',
+      enabled: true,
+      schedule: null,
+      bedtime: {
+        owner: 'bedtime',
+        role: 'morning',
+        plan: {
+          at: data.generatedAt + 8 * 3600000,
+          time: '07:45',
+          mode: 'button',
+          music: true,
+        },
+      },
+    };
+    const savedPlan = structuredClone(morning.bedtime.plan);
+    const night = {
+      ...templateNight,
+      id: 'bedtime-night',
+      enabled: true,
+      schedule: null,
+      bedtime: { owner: 'bedtime', role: 'night', plan: null },
+    };
+    data.routines.definitions = [
+      { ...templateNight, id: 'good-night', enabled: false, schedule: null },
+      {
+        ...templateMorning,
+        id: 'good-morning',
+        enabled: false,
+        schedule: null,
+      },
+      night,
+      morning,
+    ];
+    data.routines.bedtime.nightRoutineId = 'bedtime-night';
+    data.routines.bedtime.morningRoutineId = 'bedtime-morning';
+    data.routines.definitions.push({
+      id: 'stretch',
+      name: 'Stretch',
+      kind: 'custom',
+      enabled: true,
+      schedule: null,
+      steps: [{ type: 'scene', sceneId: 'scene.soft_light' }],
+    });
+    data.routines.bedtime.plan = { ...savedPlan };
+    ui.render(data);
+    ui.get('#context-details-button').click();
+
+    const summaries = () =>
+      ui.get('#context-list').children.map((item) => ({
+        title: item.children[0]?.textContent,
+        description: item.children[1]?.textContent,
+      }));
+    expect(summaries()).toContainEqual({
+      title: 'Morgonplan',
+      description: expect.stringContaining('Planerad'),
+    });
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('07:45 · Knapp + musik');
+    expect(
+      summaries().filter((item) => item.title === 'God morgon'),
+    ).toHaveLength(0);
+    expect(
+      summaries().filter((item) => item.title === 'God natt'),
+    ).toHaveLength(0);
+    expect(summaries().some((item) => item.title === 'Stretch')).toBe(true);
+
+    data.routines.bedtime.plan = {
+      ...data.routines.bedtime.plan,
+      mode: 'auto',
+      music: false,
+    };
+    ui.render(data);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('07:45 · Ljus');
+    data.routines.bedtime.plan = { ...morning.bedtime.plan };
+
+    const readyAt = data.generatedAt + 10 * 3600000;
+    data.routines.bedtime.plan = null;
+    data.routines.bedtime.ready = { until: readyAt, music: true };
+    morning.bedtime.plan.at = data.generatedAt - 30 * 60000;
+    ui.render(data);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('Redo · knapp');
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('07:45 + musik');
+    expect(
+      actions(ui.get('#context-list')).some(
+        (button) => button.dataset['action'] === 'snooze',
+      ),
+    ).toBe(true);
+
+    data.routines.bedtime.ready = null;
+    data.routines.next = [
+      { routineId: 'bedtime-morning', at: data.generatedAt + 20 * 60000 },
+    ];
+    ui.render(data);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('Uppskjuten till');
+
+    data.routines.next = [];
+    morning.bedtime.plan = null;
+    ui.render(data);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('Ingen morgon planerad');
+
+    data.routines.runs = [
+      {
+        routineId: 'bedtime-morning',
+        status: 'failed',
+        stepIndex: 1,
+        reason: 'bedtime_lights_unavailable',
+        warnings: ['light.hall skipped'],
+      },
+    ];
+    ui.render(data);
+    const historyDescription = summaries().find(
+      (item) => item.title === 'Morgonplan',
+    )?.description;
+    expect(historyDescription).toContain('Ingen morgon planerad');
+    expect(historyDescription).toContain('Senast misslyckades');
+    expect(historyDescription).toContain('bedtime_lights_unavailable');
+    expect(historyDescription).toContain('light.hall skipped');
+
+    morning.bedtime.plan = { ...savedPlan };
+    data.routines.bedtime.plan = {
+      ...savedPlan,
+      at: data.generatedAt + 8 * 3600000,
+    };
+    ui.render(data);
+    const plannedDescription = summaries().find(
+      (item) => item.title === 'Morgonplan',
+    )?.description;
+    expect(plannedDescription?.indexOf('Planerad')).toBeLessThan(
+      plannedDescription?.indexOf('Senast misslyckades'),
+    );
+
+    data.routines.runs = [
+      { routineId: 'bedtime-morning', status: 'running', stepIndex: 0 },
+    ];
+    ui.render(data);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('Pågår');
+    runInContext("setConnection('offline', 'test offline')", ui.context);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('Frånkopplad');
+    runInContext("setConnection('connected', 'test connected')", ui.context);
+    data.routines.runs = [
+      { routineId: 'bedtime-night', status: 'running', stepIndex: 1 },
+    ];
+    ui.render(data);
+    expect(summaries().some((item) => item.title === 'Kvällsrutin')).toBe(true);
+  });
+
   it('opens one purposeful popup with silent defaults and cancels without writes', () => {
     withBedtime();
     expect(ui.calls).toEqual([]);

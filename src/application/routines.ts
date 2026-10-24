@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { BedtimeController, type BedtimeOptions } from './bedtime.js';
+import {
+  BEDTIME_MORNING_ID,
+  BedtimeController,
+  type BedtimeOptions,
+} from './bedtime.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
 import { isHumanActor } from '../core/automation-holds.js';
 import {
@@ -43,6 +47,7 @@ type Work = {
   cancelWaits: Set<(error: Error) => void>;
   fades: Map<string, string>;
   skippedTargets: Set<string>;
+  releaseMorningLighting?: () => void;
 };
 export type RoutineServiceOptions = {
   engine: LugnEngine;
@@ -76,7 +81,7 @@ export class RoutineService {
   private readonly startInvalidations = new Map<string, number>();
   private readonly pendingOccurrences = new Map<
     string,
-    { valid: boolean; resources: Set<string> }
+    { valid: boolean; resources: Set<string>; occurrence: RoutineOccurrence }
   >();
 
   constructor(
@@ -237,6 +242,9 @@ export class RoutineService {
         const occurrence =
           running?.occurrence ??
           this.next.get(definition.id) ??
+          (action.action === 'skip'
+            ? this.pendingOccurrences.get(definition.id)?.occurrence
+            : null) ??
           (definition.bedtime?.plan?.mode === 'button'
             ? this.bedtime?.readyOccurrence()
             : null);
@@ -247,6 +255,8 @@ export class RoutineService {
           definition.bedtime.plan.at > this.clock.now()
         )
           throw new RoutineError(409, 'routine_occurrence_not_due');
+        const pending = this.pendingOccurrences.get(definition.id);
+        if (pending) pending.valid = false;
         if (running)
           this.finish(
             running,
@@ -401,6 +411,7 @@ export class RoutineService {
     const plan = definition.bedtime!.plan!;
     const pending = {
       valid: true,
+      occurrence,
       // Capture scopes without validating live configuration in the timer callback.
       // Removed persisted targets are filtered or reported inside the guarded async path.
       resources: new Set(
@@ -462,6 +473,14 @@ export class RoutineService {
           consumed,
           { actor: { type: 'routine', id: definition.id } },
           occurrence,
+          definition.id === BEDTIME_MORNING_ID &&
+            definition.kind === 'good_morning' &&
+            definition.bedtime?.owner === 'bedtime' &&
+            definition.bedtime.role === 'morning' &&
+            consumed.bedtime?.plan?.consumedAt !== undefined &&
+            plan.mode === 'auto' &&
+            (occurrence.at === plan.at ||
+              (continuation && occurrence.at > plan.at)),
         );
     })()
       .catch((error) => {
@@ -528,6 +547,7 @@ export class RoutineService {
     input: RoutineDefinition,
     provenance: Provenance,
     occurrence: RoutineOccurrence | null,
+    confirmedMorning = false,
   ): void {
     let definition = RoutineDefinitionSchema.parse(input);
     // Persisted explicit targets are authoritative; never discover or replace devices.
@@ -599,6 +619,26 @@ export class RoutineService {
       skippedTargets: new Set(),
     };
     this.active.set(run.id, work);
+    if (confirmedMorning) {
+      work.releaseMorningLighting =
+        this.options.engine.authorizeBedtimeMorningLighting(
+          work.run.id,
+          definition.id,
+          new Set(
+            definition.steps.flatMap((step) =>
+              step.type === 'light' ? step.targets : [],
+            ),
+          ),
+          () => {
+            try {
+              this.assert(work);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        );
+    }
     this.history.push(run);
     while (this.history.length > 100) {
       const index = this.history.findIndex((r) => r.status !== 'running');
@@ -695,6 +735,7 @@ export class RoutineService {
     work.run.status = status;
     work.run.reason = reason;
     work.run.updatedAt = this.clock.now();
+    work.releaseMorningLighting?.();
     if (status !== 'completed') {
       work.valid = false;
       this.options.engine.cancelExecution(work.run.id);
@@ -1041,6 +1082,7 @@ export class RoutineService {
             Math.min(change, Math.ceil(step.durationMs / this.fadeIntervalMs)),
           );
     const origin = this.clock.now();
+    const failures = new Map<string, string>();
     for (let index = 1; index <= count; index++) {
       const due = origin + (step.durationMs * index) / count;
       const remaining = due - this.clock.now();
@@ -1086,12 +1128,21 @@ export class RoutineService {
           this.assert(work);
           if (!work.definition.bedtime) throw error;
           work.skippedTargets.add(start.target);
+          failures.set(
+            start.target,
+            error instanceof Error ? error.message : 'Light command failed',
+          );
           (work.run.warnings ??= []).push(
-            `Light skipped after command failure: ${start.target}`,
+            `Light skipped after command failure: ${start.target}: ${failures.get(start.target)}`,
           );
         }
       }
-      if (!available) throw new Error('No available lights');
+      if (!available)
+        throw new Error(
+          failures.size
+            ? `Light commands rejected: ${[...failures].map(([target, reason]) => `${target}: ${reason}`).join('; ')}`
+            : 'No available lights',
+        );
     }
   }
 }

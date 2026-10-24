@@ -373,6 +373,341 @@ describe('bedtime atomic API and ownership', () => {
 });
 
 describe('one-off lifecycle and light fades', () => {
+  it('honors the confirmed 09:30 morning after Släck at 00:57, with routine provenance and target-only intent', async () => {
+    const f = await fixture('2026-10-20T00:50:00+02:00');
+    await f.request({ action: 'start', wakeTime: '09:30', mode: 'auto' });
+    await flush();
+    await f.advance(7 * 60_000);
+    f.engine.saveSceneDefinition({
+      ...f.engine.scenes.get('scene.all_off')!,
+      lighting: {
+        ...f.engine.scenes.get('scene.all_off')!.lighting,
+        'lighting.ceiling': { power: false },
+      },
+    });
+    await f.capabilities.invoke(
+      'lighting.activateScene',
+      { sceneId: 'scene.all_off' },
+      human,
+    );
+    expect(
+      f.engine.state.intent.holds.filter(
+        (h) => h.scope === 'lighting.activation',
+      ),
+    ).toHaveLength(3);
+    const invoke = vi.spyOn(f.capabilities, 'invoke');
+    f.lighting.dispatched.length = 0;
+    await f.advance((8 * 60 + 33) * 60_000, 60_000);
+    await f.advance(30_000);
+    expect(f.lighting.dispatched.map((c) => [c.target, c.values])).toEqual([
+      [
+        'lighting.accent',
+        { power: true, brightness: 1, colorTemperature: 3000 },
+      ],
+      [
+        'lighting.second',
+        { power: true, brightness: 1, colorTemperature: 3000 },
+      ],
+    ]);
+    expect(
+      invoke.mock.calls
+        .filter(([name]) => name === 'lighting.set')
+        .every(
+          ([, input, provenance]) =>
+            (input as { temperatureScope: string }).temperatureScope ===
+              'target' && provenance?.actor.type === 'routine',
+        ),
+    ).toBe(true);
+    await f.engine.reconcileScene();
+    await f.advance(1_170_000);
+    expect(f.service.snapshot().runs.at(-1)).toMatchObject({
+      status: 'completed',
+    });
+    expect(
+      f.engine.state.lighting.devices['lighting.accent']!.observed,
+    ).toMatchObject({ power: true, brightness: 40, colorTemperature: 3000 });
+    expect(
+      f.lighting.dispatched.every(
+        (c) =>
+          c.values.power === true &&
+          ['lighting.accent', 'lighting.second'].includes(c.target),
+      ),
+    ).toBe(true);
+    expect(
+      f.engine.state.intent.holds
+        .filter((h) => h.scope === 'lighting.activation')
+        .map((h) => h.target),
+    ).toEqual(['lighting.ceiling']);
+    await expect(
+      f.capabilities.invoke(
+        'lighting.set',
+        { target: 'lighting.ceiling', values: { power: true } },
+        { actor: { type: 'routine', id: 'other' } },
+      ),
+    ).rejects.toThrow('held by explicit human off intent');
+    expect(f.music.dispatched).toEqual([]);
+  });
+  it.each(['cancel', 'skip', 'off'] as const)(
+    '%s wins during an authorized morning fade',
+    async (action) => {
+      const f = await fixture();
+      await f.request(plan);
+      await f.capabilities.invoke(
+        'lighting.activateScene',
+        { sceneId: 'scene.all_off' },
+        human,
+      );
+      f.lighting.dispatched.length = 0;
+      await f.advance(90_000);
+      expect(f.lighting.dispatched.length).toBeGreaterThan(0);
+      if (action === 'off')
+        await f.capabilities.invoke(
+          'lighting.activateScene',
+          { sceneId: 'scene.all_off' },
+          human,
+        );
+      else f.service.action({ id: 'bedtime-morning', action }, human);
+      const count = f.lighting.dispatched.length;
+      await f.advance(90_000);
+      await f.engine.reconcileScene();
+      expect(f.lighting.dispatched).toHaveLength(count);
+      expect(f.service.snapshot().runs.at(-1)).toMatchObject({
+        status: 'cancelled',
+      });
+      if (action === 'off') {
+        expect(
+          f.engine.state.lighting.devices['lighting.accent']!.observed.power,
+        ).toBe(false);
+        expect(
+          f.engine.state.intent.holds.filter(
+            (h) => h.scope === 'lighting.activation',
+          ),
+        ).toHaveLength(2);
+      }
+    },
+  );
+  it('a snoozed consumed morning retains only its selected light authority', async () => {
+    const f = await fixture();
+    await f.request(plan);
+    await f.capabilities.invoke(
+      'lighting.activateScene',
+      { sceneId: 'scene.all_off' },
+      human,
+    );
+    await f.advance(60_000);
+    f.service.action(
+      { id: 'bedtime-morning', action: 'snooze', minutes: 1 },
+      human,
+    );
+    expect(f.lighting.dispatched.every((c) => c.values.power === false)).toBe(
+      true,
+    );
+    f.lighting.dispatched.length = 0;
+    await f.advance(90_000);
+    expect(f.lighting.dispatched.map((c) => c.target)).toEqual([
+      'lighting.accent',
+      'lighting.second',
+    ]);
+    expect(f.service.snapshot().runs.map((r) => r.status)).toEqual([
+      'cancelled',
+      'running',
+    ]);
+  });
+  it('Släck while the engine yields before replacing a held target invalidates the morning grant', async () => {
+    const f = await fixture();
+    await f.request(plan);
+    await f.capabilities.invoke(
+      'lighting.activateScene',
+      { sceneId: 'scene.all_off' },
+      human,
+    );
+    f.lighting.dispatched.length = 0;
+    const setLighting = f.engine.setLighting.bind(f.engine);
+    let manualOff: Promise<unknown> | undefined;
+    vi.spyOn(f.engine, 'setLighting').mockImplementationOnce((...args) => {
+      const pending = setLighting(...args);
+      manualOff = f.capabilities.invoke(
+        'lighting.activateScene',
+        { sceneId: 'scene.all_off' },
+        human,
+      );
+      return pending;
+    });
+    await f.advance(90_000);
+    expect(manualOff).toBeDefined();
+    await manualOff;
+    await f.advance(60_000);
+    expect(f.lighting.dispatched.every((c) => c.values.power === false)).toBe(
+      true,
+    );
+    expect(f.service.snapshot().runs.at(-1)).toMatchObject({
+      status: 'cancelled',
+    });
+    expect(
+      f.engine.state.intent.holds.filter(
+        (h) => h.scope === 'lighting.activation',
+      ),
+    ).toHaveLength(2);
+  });
+  it.each(['away', 'empty'] as const)(
+    'an authorized morning still yields to %s before its first increment',
+    async (context) => {
+      const f = await fixture();
+      await f.request(plan);
+      await f.capabilities.invoke(
+        'lighting.activateScene',
+        { sceneId: 'scene.all_off' },
+        human,
+      );
+      await f.advance(60_000);
+      expect(f.service.snapshot().runs.at(-1)).toMatchObject({
+        status: 'running',
+      });
+      if (context === 'away') await f.engine.handleHomePresence('away');
+      else
+        await f.engine.handlePresence({
+          type: 'presence.changed',
+          presence: 'confirmed_empty',
+        });
+      f.lighting.dispatched.length = 0;
+      await f.advance(60_000);
+      expect(f.lighting.dispatched).toEqual([]);
+      expect(f.service.snapshot().runs.at(-1)).toMatchObject({
+        status: 'cancelled',
+      });
+      expect(
+        f.engine.state.intent.holds.filter(
+          (h) => h.scope === 'lighting.activation',
+        ),
+      ).toHaveLength(2);
+    },
+  );
+  it('automatic morning light authority gives no authority over explicit Pause or quiet hours', async () => {
+    const f = await fixture();
+    await f.capabilities.invoke('music.pause', { target: 'music.room' }, human);
+    await f.request({ ...plan, music: true });
+    await f.capabilities.invoke(
+      'lighting.activateScene',
+      { sceneId: 'scene.all_off' },
+      human,
+    );
+    const settings = f.engine.getMusicVolumeSettings();
+    f.lighting.dispatched.length = 0;
+    f.music.dispatched.length = 0;
+    await f.advance(90_000);
+    expect(f.lighting.dispatched.length).toBeGreaterThan(0);
+    expect(f.music.dispatched).toEqual([]);
+    expect(f.engine.getMusicVolumeSettings()).toEqual(settings);
+    expect(f.engine.automaticMusicPlaybackAllowed('music.room')).toBe(false);
+    expect(f.engine.state.intent.holds).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: 'music.playback',
+          target: 'music.room',
+        }),
+      ]),
+    );
+    expect(f.service.snapshot().runs.at(-1)).toMatchObject({
+      status: 'running',
+      warnings: [expect.stringContaining('blocked')],
+    });
+  });
+  it.each([
+    'custom',
+    'unowned-morning',
+    'wrong-owned-id',
+    'owned-night',
+  ] as const)(
+    '%s scheduled lighting cannot supersede human OFF holds',
+    async (variant) => {
+      const f = await fixture();
+      await f.store.save(
+        {
+          id: variant === 'unowned-morning' ? 'bedtime-morning' : variant,
+          name: 'Scheduled lighting',
+          kind: variant === 'custom' ? 'custom' : 'good_morning',
+          enabled: true,
+          schedule: { time: '00:00', weekdays: [1, 2, 3, 4, 5, 6, 7] },
+          ...(['wrong-owned-id', 'owned-night'].includes(variant)
+            ? {
+                bedtime: {
+                  owner: 'bedtime',
+                  role: variant === 'owned-night' ? 'night' : 'morning',
+                  plan: {
+                    at: f.clock.now() + 60_000,
+                    time: '00:00',
+                    mode: 'auto',
+                    music: false,
+                  },
+                },
+              }
+            : {}),
+          steps: [
+            {
+              type: 'light',
+              targets: ['lighting.accent'],
+              brightness: 40,
+              durationMs: 0,
+              colorTemperature: 3000,
+            },
+          ],
+        },
+        f.store.snapshot().generation,
+      );
+      await f.capabilities.invoke(
+        'lighting.activateScene',
+        { sceneId: 'scene.all_off' },
+        human,
+      );
+      f.lighting.dispatched.length = 0;
+      await f.advance(60_000);
+      expect(f.lighting.dispatched).toEqual([]);
+      expect(f.service.snapshot().runs.at(-1)).toMatchObject({
+        status: 'failed',
+        reason: expect.stringContaining(
+          'Automatic lighting is held by explicit human off intent',
+        ),
+      });
+      expect(
+        f.engine.state.intent.holds.filter(
+          (h) => h.scope === 'lighting.activation',
+        ),
+      ).toHaveLength(2);
+      if (variant === 'wrong-owned-id')
+        expect(f.service.snapshot().runs.at(-1)!.warnings).toEqual([
+          expect.stringContaining(
+            'lighting.accent: Automatic lighting is held',
+          ),
+        ]);
+    },
+  );
+  it('future confirmed morning survives restart over OFF holds, consumed morning never replays', async () => {
+    const f = await fixture();
+    const body = {
+      ...plan,
+      expectedGeneration: f.store.snapshot().generation,
+      requestId: 'one-morning',
+    };
+    await f.request(body);
+    await f.capabilities.invoke(
+      'lighting.activateScene',
+      { sceneId: 'scene.all_off' },
+      human,
+    );
+    await f.restart();
+    f.lighting.dispatched.length = 0;
+    await f.advance(90_000);
+    expect(f.lighting.dispatched.length).toBeGreaterThan(0);
+    const count = f.lighting.dispatched.length;
+    await f.request(body);
+    expect(f.service.snapshot().runs).toHaveLength(1);
+    f.jump(-60_000);
+    await f.restart();
+    await f.advance(120_000);
+    expect(f.service.snapshot().runs).toEqual([]);
+    expect(f.service.snapshot().next).toEqual([]);
+    expect(f.lighting.dispatched).toHaveLength(count);
+  });
   it('restores only future plans and auto executes exactly once without catchup or next-day repetition', async () => {
     const f = await fixture();
     await f.request(plan);
@@ -468,6 +803,12 @@ describe('one-off lifecycle and light fades', () => {
   it('manual lighting intent during the durable consumption write prevents any later routine commands', async () => {
     const f = await fixture();
     await f.request(plan);
+    await f.capabilities.invoke(
+      'lighting.activateScene',
+      { sceneId: 'scene.all_off' },
+      human,
+    );
+    f.lighting.dispatched.length = 0;
     const update = f.store.update.bind(f.store);
     let release!: () => void;
     const paused = new Promise<void>((resolve) => {
@@ -498,11 +839,17 @@ describe('one-off lifecycle and light fades', () => {
         .bedtime!.plan!.consumedAt,
     ).toBeDefined();
   });
-  it.each(['service', 'api'] as const)(
-    'cancel through %s during consumption suppresses the start and retains its durable receipt',
+  it.each(['service', 'api', 'skip'] as const)(
+    'cancel/skip through %s during consumption suppresses the start and retains its durable receipt',
     async (path) => {
       const f = await fixture();
       await f.request(plan);
+      await f.capabilities.invoke(
+        'lighting.activateScene',
+        { sceneId: 'scene.all_off' },
+        human,
+      );
+      f.lighting.dispatched.length = 0;
       const update = f.store.update.bind(f.store);
       let release!: () => void;
       const paused = new Promise<void>((resolve) => {
@@ -518,7 +865,7 @@ describe('one-off lifecycle and light fades', () => {
       expect(writing).toBeDefined();
       const cancel = {
         id: 'bedtime-morning',
-        action: 'cancel',
+        action: path === 'skip' ? 'skip' : 'cancel',
         requestId: 'cancel-writing',
       };
       if (path === 'service') f.service.action(cancel, human);
@@ -529,6 +876,11 @@ describe('one-off lifecycle and light fades', () => {
       await f.advance(30_000);
       expect(f.service.snapshot().runs).toEqual([]);
       expect(f.lighting.dispatched).toEqual([]);
+      expect(
+        f.engine.state.intent.holds.filter(
+          (h) => h.scope === 'lighting.activation',
+        ),
+      ).toHaveLength(2);
       expect(
         f.store.snapshot().definitions.find((d) => d.id === 'bedtime-morning')!
           .bedtime!.plan!.consumedAt,
