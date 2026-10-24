@@ -293,6 +293,12 @@ function ui() {
   runInContext(
     `let routineDraft=null, routineOriginal=null, routineGeneration=null, routinePreviewRevision=0;
     let intelligenceDraft=null, intelligenceOriginal=null, intelligenceGeneration=null, mappingDraft=[];
+    const routineDateFormat = new Intl.DateTimeFormat('sv-SE', {
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'Europe/Stockholm',
+    });
     const l2Pending=new Set(); ${functions}
     render = renderLugn2; fetchOverview = async () => testRefresh(); initializeLugn2(); renderLugn2();`,
     Object.assign(context, {
