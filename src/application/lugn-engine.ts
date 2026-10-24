@@ -645,6 +645,7 @@ export class LugnEngine {
         this.computerPlayback?.observe();
         this.musicAutomation?.reconcileComputerPlayback();
         this.musicAutomation?.reconcilePassiveRestoration();
+        this.musicAutomation?.reconcileSourceVolume();
         this.publish(['music']);
       },
     );
@@ -661,6 +662,8 @@ export class LugnEngine {
       authorityControlBlocked: (target) =>
         this.musicController.volumeAuthorityBlocked(target),
       getState: (target) => this.musicController.getState(target),
+      sourceForVolumeTrim: (target, allowSettling) =>
+        this.musicController.sourceForVolumeTrim(target, allowSettling),
       ...(options.computerPlayback === undefined
         ? {}
         : { computerPlayback: options.computerPlayback }),
@@ -690,6 +693,9 @@ export class LugnEngine {
         this.publish(['music', 'diagnostics']);
       },
     });
+    this.musicController.setSourceTrimConfigured((target) =>
+      this.musicAutomation.isSourceVolumeManaged(target),
+    );
     this.musicController.setVolumeRequestGuard((target, provenance, volume) => {
       const guard = this.musicExecutionGuards.get(`${target}:volume`);
       if (guard && guard.requestId === provenance.requestId)
@@ -1056,6 +1062,14 @@ export class LugnEngine {
 
   getMusicVolumeSettings(): MusicVolumeSettings {
     return this.musicAutomation.getVolumeSettings();
+  }
+
+  validateMusicVolumeSettings(settings: MusicVolumeSettings): void {
+    this.musicAutomation.validateVolumeSettings(settings);
+  }
+
+  getMusicSourceOffset(target: string, settings: MusicVolumeSettings): number {
+    return this.musicAutomation.sourceOffset(target, false, settings);
   }
 
   getMusicVolumeEnableIntentRevision(): number {

@@ -4252,7 +4252,7 @@ function renderMusicSettings() {
     (overview.health?.integrations?.home_assistant === undefined ||
       overview.health.integrations.home_assistant === 'connected');
   document.getElementById('music-settings-current').textContent = policy
-    ? `${current ? 'Nu' : 'Senast rapporterat'} · Rapporterad volym ${volumePercent(overview.state.music.devices[target].observed.volume)} · Läge: ${policy.mode === 'manual' ? 'Manuellt' : 'Auto'} · Sparad Auto-bas ${volumePercent(policy.configuredBaseline ?? policy.baseline)} · Manuell referens ${volumePercent(policy.manualReference ?? null)} · Dygn ${volumeOffset(policy.dailyOffset)} · Personer ${volumeOffset(policy.personOffset)} · Automatiskt mål ${volumePercent(policy.target)} · Aktivt mål ${volumePercent(policy.effectiveTarget ?? null)} · ${settingsVolumeReason(policy.activityReason)}`
+    ? `${current ? 'Nu' : 'Senast rapporterat'} · Rapporterad volym ${volumePercent(overview.state.music.devices[target].observed.volume)} · Läge: ${policy.mode === 'manual' ? 'Manuellt' : 'Auto'} · Sparad Auto-bas ${volumePercent(policy.configuredBaseline ?? policy.baseline)} · Manuell referens ${volumePercent(policy.manualReference ?? null)} · Dygn ${volumeOffset(policy.dailyOffset)} · Personer ${volumeOffset(policy.personOffset)} · Optical ${volumeOffset(policy.sourceOffset ?? 0)} · Automatiskt mål ${volumePercent(policy.target)} · Aktivt mål ${volumePercent(policy.effectiveTarget ?? null)} · ${settingsVolumeReason(policy.activityReason)}`
     : 'Väntar på volympolicy.';
   if (
     !volumeSettingsDraft ||
@@ -4304,8 +4304,96 @@ function fillMusicSettings() {
   ])
     settingsElement(id).value =
       Math.round(volumeSettingsDraft[key] * 1000) / 10;
+  fillOpticalOffsets();
   renderVolumePoints();
   updateVolumeSettingsStatus();
+}
+function fillOpticalOffsets() {
+  const container = settingsElement('optical-offsets');
+  container.replaceChildren();
+  for (const [target, device] of Object.entries(overview.state.music.devices)) {
+    const saved = volumeSettingsDraft.opticalOffsets?.[target];
+    const sources = [
+      ...new Set([
+        ...(device.allowedSources ?? []),
+        ...(saved?.source ? [saved.source] : []),
+      ]),
+    ];
+    const group = document.createElement('div');
+    group.className = 'settings-grid optical-offset-row';
+    group.dataset.target = target;
+    const toggleLabel = document.createElement('label');
+    toggleLabel.className = 'settings-toggle';
+    const enabled = document.createElement('input');
+    enabled.type = 'checkbox';
+    enabled.checked = saved?.enabled === true;
+    enabled.setAttribute('aria-describedby', 'settings-optical-help');
+    toggleLabel.append(enabled);
+    const toggleText = document.createElement('span');
+    toggleText.textContent = `Kompensera Optical · ${target}`;
+    toggleLabel.append(toggleText);
+    const sourceLabel = document.createElement('label');
+    sourceLabel.textContent = 'Optical-ingång';
+    const source = document.createElement('select');
+    source.setAttribute('aria-label', `Optical-ingång för ${target}`);
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Välj ingång';
+    source.append(placeholder);
+    for (const name of sources) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      source.append(option);
+    }
+    source.value =
+      saved?.source ??
+      sources.find((name) => /^optical(?: in)?$/i.test(name)) ??
+      '';
+    sourceLabel.append(source);
+    const offsetLabel = document.createElement('label');
+    offsetLabel.textContent = 'Tillägg på Optical (procentenheter)';
+    const offset = document.createElement('input');
+    offset.type = 'number';
+    offset.min = '0';
+    offset.max = '20';
+    offset.step = '0.1';
+    offset.required = true;
+    offset.value = Math.round((saved?.offset ?? 0.07) * 1000) / 10;
+    offset.setAttribute(
+      'aria-label',
+      `Optical-tillägg för ${target} (procentenheter)`,
+    );
+    offsetLabel.append(offset);
+    const sync = () => {
+      enabled.disabled = !source.value;
+      offset.disabled = !source.value;
+    };
+    const update = () => {
+      sync();
+      if (!source.value) {
+        enabled.checked = false;
+        if (volumeSettingsDraft.opticalOffsets)
+          delete volumeSettingsDraft.opticalOffsets[target];
+      } else {
+        volumeSettingsDraft.opticalOffsets ??= {};
+        volumeSettingsDraft.opticalOffsets[target] = {
+          enabled: enabled.checked,
+          source: source.value,
+          offset: Number.isFinite(offset.valueAsNumber)
+            ? offset.valueAsNumber / 100
+            : null,
+        };
+      }
+      updateVolumeSettingsStatus();
+    };
+    enabled.addEventListener('change', update);
+    source.addEventListener('change', update);
+    offset.addEventListener('input', update);
+    sync();
+    group.append(toggleLabel, sourceLabel, offsetLabel);
+    container.append(group);
+  }
 }
 function settingsVolumeReason(reason) {
   return (
@@ -4500,6 +4588,8 @@ async function musicSettingsRequest(path, body) {
         'Inställningarna har ändrats någon annanstans. Ditt utkast finns kvar. Avbryt ändringarna för att hämta senaste versionen.',
       volume_settings_save_failed:
         'Kunde inte lagra inställningarna. Ditt utkast finns kvar. Försök igen.',
+      invalid_optical_offset_source:
+        'Välj en ingång som finns på den valda spelaren. Ditt utkast finns kvar.',
       unauthorized:
         'Sessionen har gått ut. Logga in igen; utkastet finns kvar.',
       csrf_failed: 'Sessionen har ändrats. Försök igen eller logga in igen.',
@@ -4581,7 +4671,7 @@ settingsElement('preview-button').addEventListener('click', async () => {
     });
     if (revision !== volumePreviewRevision) return;
     settingsElement('preview-result').textContent =
-      `Baslinje ${volumePercent(result.baseline)} + dygn ${volumeOffset(result.dailyOffset)} + personer ${volumeOffset(result.personOffset)} → automatiskt mål ${volumePercent(result.target)} (inom utkastets gränser). Rapporterad volym: ${volumePercent(result.observedVolume)}. Nuvarande volymägare: ${volumeOwner(result.activeOwner)}. ${result.enabled ? '' : 'Automatiken är avstängd i utkastet.'} Inga kommandon skickades.`;
+      `Baslinje ${volumePercent(result.baseline)} + dygn ${volumeOffset(result.dailyOffset)} + personer ${volumeOffset(result.personOffset)} + Optical ${volumeOffset(result.sourceOffset ?? 0)} → automatiskt mål ${volumePercent(result.target)} (inom utkastets gränser). Rapporterad volym: ${volumePercent(result.observedVolume)}. Nuvarande volymägare: ${volumeOwner(result.activeOwner)}. ${result.enabled ? '' : 'Automatiken är avstängd i utkastet.'} Inga kommandon skickades.`;
   } catch (error) {
     if (revision === volumePreviewRevision)
       settingsElement('preview-result').textContent = error.message;
