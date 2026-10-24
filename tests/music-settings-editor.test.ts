@@ -84,7 +84,14 @@ function editor() {
     musicSettingsDefaults: structuredClone(defaultMusicVolumeSettings),
     musicVolumePolicies: {},
     state: {
-      music: { devices: { 'music.room': { observed: { volume: 0.4 } } } },
+      music: {
+        devices: {
+          'music.room': {
+            observed: { volume: 0.4, source: 'Spotify' },
+            allowedSources: ['Spotify', 'Optical In'],
+          },
+        },
+      },
     },
   };
   const context = createContext({
@@ -266,4 +273,110 @@ it('qualifies settings observations after upstream trust is lost without droppin
     /^Senast rapporterat ·/,
   );
   expect(s.run('volumeSettingsDraft.minimum')).toBe(0.2);
+});
+
+it('prefills an opt-in Optical offset and preserves edits during source feedback', async () => {
+  const s = editor();
+  const group = s.get('settings-optical-offsets').children[0]!;
+  const enabled = group.children[0]!.children[0]!;
+  const source = group.children[1]!.children[0]!;
+  const offset = group.children[2]!.children[0]!;
+  expect(enabled.checked).toBe(false);
+  expect(source.value).toBe('Optical In');
+  expect(offset.value).toBe(7);
+  expect(s.run('volumeSettingsDirty()')).toBe(false);
+  enabled.checked = true;
+  await enabled.fire('change');
+  offset.value = '9.5';
+  await offset.fire('input');
+  s.overview.state.music.devices['music.room'].observed.source = 'Optical In';
+  s.run('renderMusicSettings()');
+  expect(s.get('settings-optical-offsets').children[0]).toBe(group);
+  expect(offset.value).toBe('9.5');
+  expect(s.run('volumeSettingsDraft.opticalOffsets["music.room"]')).toEqual({
+    enabled: true,
+    source: 'Optical In',
+    offset: 0.095,
+  });
+  expect(s.fetch).not.toHaveBeenCalled();
+  await s.get('settings-cancel').fire('click');
+  expect(s.run('volumeSettingsDirty()')).toBe(false);
+});
+
+it('saves and disables the explicit per-player mapping without changing Auto bases', async () => {
+  const s = editor();
+  const group = s.get('settings-optical-offsets').children[0]!;
+  const enabled = group.children[0]!.children[0]!;
+  enabled.checked = true;
+  await enabled.fire('change');
+  const saved = s.run('structuredClone(volumeSettingsDraft)');
+  s.fetch.mockImplementation(
+    async () =>
+      new Response(JSON.stringify({ settings: saved }), { status: 200 }),
+  );
+  await s.get('music-settings-form').fire('submit');
+  const sent = JSON.parse(s.fetch.mock.calls[0]![1]!.body as string);
+  expect(sent.settings.opticalOffsets).toEqual({
+    'music.room': { enabled: true, source: 'Optical In', offset: 0.07 },
+  });
+  expect(sent.settings.autoBaseVolumes).toEqual(
+    defaultMusicVolumeSettings.autoBaseVolumes,
+  );
+  const restored = s.get('settings-optical-offsets').children[0]!.children[0]!
+    .children[0]!;
+  restored.checked = false;
+  await restored.fire('change');
+  expect(s.run('volumeSettingsDraft.opticalOffsets["music.room"]')).toEqual({
+    enabled: false,
+    source: 'Optical In',
+    offset: 0.07,
+  });
+  expect(s.run('volumeSettingsDraft.autoBaseVolumes')).toEqual(
+    defaultMusicVolumeSettings.autoBaseVolumes,
+  );
+});
+
+it('requires an explicit input when the player does not advertise Optical', async () => {
+  const s = editor();
+  s.overview.state.music.devices['music.room'].allowedSources = [
+    'WiFi',
+    'Line In',
+  ];
+  s.run('fillMusicSettings()');
+  const group = s.get('settings-optical-offsets').children[0]!;
+  const enabled = group.children[0]!.children[0]!;
+  const source = group.children[1]!.children[0]!;
+  expect(source.value).toBe('');
+  expect(enabled.disabled).toBe(true);
+  expect(s.run('volumeSettingsDirty()')).toBe(false);
+  source.value = 'Line In';
+  await source.fire('change');
+  expect(enabled.disabled).toBe(false);
+  expect(s.run('volumeSettingsDraft.opticalOffsets["music.room"]')).toEqual({
+    enabled: false,
+    source: 'Line In',
+    offset: 0.07,
+  });
+});
+
+it('keeps another player’s offset and a blank numeric draft while live state updates', async () => {
+  const s = editor();
+  s.run(`volumeSettingsDraft.opticalOffsets = {
+    'music.other': {enabled:true, source:'Optical', offset:0.1}
+  }; fillOpticalOffsets();`);
+  const offset = s.get('settings-optical-offsets').children[0]!.children[2]!
+    .children[0]!;
+  offset.value = '';
+  await offset.fire('input');
+  s.run('renderMusicSettings()');
+  expect(offset.value).toBe('');
+  expect(
+    s.run('volumeSettingsDraft.opticalOffsets["music.room"].offset'),
+  ).toBeNull();
+  expect(s.run('volumeSettingsDraft.opticalOffsets["music.other"]')).toEqual({
+    enabled: true,
+    source: 'Optical',
+    offset: 0.1,
+  });
+  expect(s.fetch).not.toHaveBeenCalled();
 });

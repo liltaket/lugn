@@ -3,7 +3,12 @@ import { createContext, runInContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { lightingFeedbackBrowserScript } from '../src/runtime/lighting-feedback-script.js';
 
-type Listener = (event?: { target?: Element; key?: string }) => void;
+type Listener = (event?: {
+  target?: Element;
+  key?: string;
+  shiftKey?: boolean;
+  preventDefault?: () => void;
+}) => void;
 class Element {
   textContent = '';
   innerHTML = '';
@@ -11,6 +16,7 @@ class Element {
   dataset: Record<string, string> = {};
   hidden = false;
   disabled = false;
+  checked = false;
   value = '';
   children: Element[] = [];
   parentElement: Element | null = null;
@@ -234,7 +240,9 @@ describe('Hub optional Lugn 2 presentation', () => {
       ui
         .get('#scene-grid')
         .children.some((button) => button.dataset['scene'] === 'scene.all_off'),
-    ).toBe(true);
+    ).toBe(false);
+    expect(ui.get('#scene-off').hidden).toBe(false);
+    expect(ui.get('#scene-off').disabled).toBe(false);
     expect(ui.get('#music-preset-optical').disabled).toBe(false);
     expect(ui.get('#music-volume-up').disabled).toBe(false);
     expect(ui.get('#presence-count-one').disabled).toBe(false);
@@ -248,7 +256,7 @@ describe('Hub optional Lugn 2 presentation', () => {
     expect(ui.calls).toEqual([
       {
         url: '/k/mock-only/display-api/routine',
-        body: { id: 'night', action: 'start' },
+        body: { id: 'night', action: 'start', requestId: expect.any(String) },
       },
     ]);
     expect(ui.get('#context-description').textContent).not.toContain('Pågår');
@@ -265,7 +273,11 @@ describe('Hub optional Lugn 2 presentation', () => {
     expect(cancel.textContent).toBe('Avbryt');
     cancel.click();
     await settle();
-    expect(ui.calls.at(-1)?.body).toEqual({ id: 'night', action: 'cancel' });
+    expect(ui.calls.at(-1)?.body).toEqual({
+      id: 'night',
+      action: 'cancel',
+      requestId: expect.any(String),
+    });
     expect(ui.get('#context-description').textContent).toContain('Pågår');
     data.routines.runs[0].status = 'cancelled';
     ui.render(data);
@@ -286,8 +298,8 @@ describe('Hub optional Lugn 2 presentation', () => {
     actions(ui.get('#context-actions'))[0]!.click();
     await settle();
     expect(ui.calls.map((call) => call.body)).toEqual([
-      { id: 'night', action: 'start' },
-      { id: 'night', action: 'cancel' },
+      { id: 'night', action: 'start', requestId: expect.any(String) },
+      { id: 'night', action: 'cancel', requestId: expect.any(String) },
     ]);
     release();
     await settle();
@@ -338,10 +350,15 @@ describe('Hub optional Lugn 2 presentation', () => {
       id: 'morning',
       action: 'snooze',
       minutes: 10,
+      requestId: expect.any(String),
     });
     actions(ui.get('#context-actions'))[1]!.click();
     await settle();
-    expect(ui.calls.at(-1)?.body).toEqual({ id: 'morning', action: 'skip' });
+    expect(ui.calls.at(-1)?.body).toEqual({
+      id: 'morning',
+      action: 'skip',
+      requestId: expect.any(String),
+    });
   });
   it('prioritizes Desk suggestions, hides expired or unconfigured scenes and uses authenticated-path routes', async () => {
     const data = ui.payload();
@@ -441,9 +458,7 @@ describe('Hub optional Lugn 2 presentation', () => {
     expect(ui.calls).toEqual([]);
   });
   it('retains manual all-off, Optical, volume and presence requests with no client-supplied provenance', async () => {
-    ui.get('#scene-grid')
-      .children.find((button) => button.dataset['scene'] === 'scene.all_off')!
-      .click();
+    ui.get('#scene-off').click();
     await settle();
     ui.get('#music-preset-optical').click();
     await settle();
@@ -507,11 +522,11 @@ describe('Hub optional Lugn 2 presentation', () => {
     expect(ui.get('#scene-grid').children).toHaveLength(6);
     expect(ui.get('#scene-page-label').textContent).toBe('1 / 2');
     ui.get('#scene-next').click();
-    expect(ui.get('#scene-grid').children).toHaveLength(6);
+    expect(ui.get('#scene-grid').children).toHaveLength(5);
     expect(ui.get('#scene-page-label').textContent).toBe('2 / 2');
     ui.get('#scene-previous').click();
     expect(ui.get('#scene-grid').children[0]!.dataset['scene']).toBe(
-      'scene.all_off',
+      'scene.soft_light',
     );
   });
   it('shows failed requests and re-enables retry without claiming a routine is running', async () => {
@@ -644,5 +659,567 @@ describe('Hub lighting pictograms', () => {
     expect(button.disabled).toBe(true);
     expect(button.getAttribute('aria-label')).toContain('Frånkopplad');
     expect(button.getAttribute('aria-label')).not.toContain('Bekräftat');
+  });
+});
+
+function withBedtime() {
+  const data = ui.payload();
+  data.routines.generation = '22222222-2222-4222-8222-222222222222';
+  data.routines.bedtime = {
+    nightRoutineId: 'night',
+    morningRoutineId: 'morning',
+    nightAvailable: true,
+    morningAvailable: true,
+    musicAvailable: true,
+    plan: null,
+    ready: null,
+    skippedTargets: [],
+  };
+  ui.render(data);
+  return data;
+}
+function submitBedtime() {
+  ui.get('#bedtime-form').listeners.get('submit')?.({
+    preventDefault: vi.fn(),
+  });
+}
+function selectMode(mode: 'auto' | 'button' | 'none') {
+  for (const value of ['auto', 'button', 'none'])
+    ui.get(`#bedtime-mode-${value}`).checked = mode === value;
+  ui.get(`#bedtime-mode-${mode}`).listeners.get('change')?.();
+}
+
+describe('Hub bedtime and morning flow (simulated DOM and network)', () => {
+  it('shows the owned one-off morning state instead of disabled generic templates', () => {
+    const data = withBedtime();
+    const [templateNight, templateMorning] = data.routines.definitions;
+    const morning = {
+      ...templateMorning,
+      id: 'bedtime-morning',
+      enabled: true,
+      schedule: null,
+      bedtime: {
+        owner: 'bedtime',
+        role: 'morning',
+        plan: {
+          at: data.generatedAt + 8 * 3600000,
+          time: '07:45',
+          mode: 'button',
+          music: true,
+        },
+      },
+    };
+    const savedPlan = structuredClone(morning.bedtime.plan);
+    const night = {
+      ...templateNight,
+      id: 'bedtime-night',
+      enabled: true,
+      schedule: null,
+      bedtime: { owner: 'bedtime', role: 'night', plan: null },
+    };
+    data.routines.definitions = [
+      { ...templateNight, id: 'good-night', enabled: false, schedule: null },
+      {
+        ...templateMorning,
+        id: 'good-morning',
+        enabled: false,
+        schedule: null,
+      },
+      night,
+      morning,
+    ];
+    data.routines.bedtime.nightRoutineId = 'bedtime-night';
+    data.routines.bedtime.morningRoutineId = 'bedtime-morning';
+    data.routines.definitions.push({
+      id: 'stretch',
+      name: 'Stretch',
+      kind: 'custom',
+      enabled: true,
+      schedule: null,
+      steps: [{ type: 'scene', sceneId: 'scene.soft_light' }],
+    });
+    data.routines.bedtime.plan = { ...savedPlan };
+    ui.render(data);
+    ui.get('#context-details-button').click();
+
+    const summaries = () =>
+      ui.get('#context-list').children.map((item) => ({
+        title: item.children[0]?.textContent,
+        description: item.children[1]?.textContent,
+      }));
+    expect(summaries()).toContainEqual({
+      title: 'Morgonplan',
+      description: expect.stringContaining('Planerad'),
+    });
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('07:45 · Knapp + musik');
+    expect(
+      summaries().filter((item) => item.title === 'God morgon'),
+    ).toHaveLength(0);
+    expect(
+      summaries().filter((item) => item.title === 'God natt'),
+    ).toHaveLength(0);
+    expect(summaries().some((item) => item.title === 'Stretch')).toBe(true);
+
+    data.routines.bedtime.plan = {
+      ...data.routines.bedtime.plan,
+      mode: 'auto',
+      music: false,
+    };
+    ui.render(data);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('07:45 · Ljus');
+    data.routines.bedtime.plan = { ...morning.bedtime.plan };
+
+    const readyAt = data.generatedAt + 10 * 3600000;
+    data.routines.bedtime.plan = null;
+    data.routines.bedtime.ready = { until: readyAt, music: true };
+    morning.bedtime.plan.at = data.generatedAt - 30 * 60000;
+    ui.render(data);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('Redo · knapp');
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('07:45 + musik');
+    expect(
+      actions(ui.get('#context-list')).some(
+        (button) => button.dataset['action'] === 'snooze',
+      ),
+    ).toBe(true);
+
+    data.routines.bedtime.ready = null;
+    data.routines.next = [
+      { routineId: 'bedtime-morning', at: data.generatedAt + 20 * 60000 },
+    ];
+    ui.render(data);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('Uppskjuten till');
+
+    data.routines.next = [];
+    morning.bedtime.plan = null;
+    ui.render(data);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('Ingen morgon planerad');
+
+    data.routines.runs = [
+      {
+        routineId: 'bedtime-morning',
+        status: 'failed',
+        stepIndex: 1,
+        reason: 'bedtime_lights_unavailable',
+        warnings: ['light.hall skipped'],
+      },
+    ];
+    ui.render(data);
+    const historyDescription = summaries().find(
+      (item) => item.title === 'Morgonplan',
+    )?.description;
+    expect(historyDescription).toContain('Ingen morgon planerad');
+    expect(historyDescription).toContain('Senast misslyckades');
+    expect(historyDescription).toContain('bedtime_lights_unavailable');
+    expect(historyDescription).toContain('light.hall skipped');
+
+    morning.bedtime.plan = { ...savedPlan };
+    data.routines.bedtime.plan = {
+      ...savedPlan,
+      at: data.generatedAt + 8 * 3600000,
+    };
+    ui.render(data);
+    const plannedDescription =
+      summaries().find((item) => item.title === 'Morgonplan')?.description ??
+      '';
+    expect(plannedDescription.indexOf('Planerad')).toBeLessThan(
+      plannedDescription.indexOf('Senast misslyckades'),
+    );
+
+    data.routines.runs = [
+      { routineId: 'bedtime-morning', status: 'running', stepIndex: 0 },
+    ];
+    ui.render(data);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('Pågår');
+    runInContext("setConnection('offline', 'test offline')", ui.context);
+    expect(
+      summaries().find((item) => item.title === 'Morgonplan')?.description,
+    ).toContain('Frånkopplad');
+    runInContext("setConnection('connected', 'test connected')", ui.context);
+    data.routines.runs = [
+      { routineId: 'bedtime-night', status: 'running', stepIndex: 1 },
+    ];
+    ui.render(data);
+    expect(summaries().some((item) => item.title === 'Kvällsrutin')).toBe(true);
+  });
+
+  it('opens one purposeful popup with silent defaults and cancels without writes', () => {
+    withBedtime();
+    expect(ui.calls).toEqual([]);
+    expect(ui.get('#bedtime-night').hidden).toBe(false);
+    expect(ui.get('#context-strip').hidden).toBe(true);
+    ui.get('#bedtime-night').click();
+    expect(ui.get('#bedtime-dialog').hidden).toBe(false);
+    expect(ui.get('#bedtime-heading').textContent).toBe('När vill du vakna?');
+    expect(ui.get('#bedtime-time').value).toBe('07:30');
+    expect(ui.get('#bedtime-mode-auto').checked).toBe(true);
+    expect(ui.get('#bedtime-music').checked).toBe(false);
+    expect(ui.get('#bedtime-summary').textContent).toContain(
+      '07:30 börjar ljuset',
+    );
+    expect(ui.get('#bedtime-summary').textContent).toContain(
+      '20 minuter. Ingen musik.',
+    );
+    ui.get('#bedtime-cancel').click();
+    expect(ui.get('#bedtime-dialog').hidden).toBe(true);
+    expect(ui.get('#bedtime-night').focus).toHaveBeenCalled();
+    ui.get('#bedtime-night').click();
+    ui.documentListeners.get('keydown')?.({ key: 'Escape' });
+    expect(ui.get('#bedtime-dialog').hidden).toBe(true);
+    expect(ui.calls).toEqual([]);
+  });
+
+  it('retains the mounted form, input focus, draft time and music selection across SSE updates', async () => {
+    const data = withBedtime();
+    ui.get('#bedtime-night').click();
+    const time = ui.get('#bedtime-time');
+    const form = ui.get('#bedtime-form');
+    time.value = '08:15';
+    time.listeners.get('input')?.();
+    selectMode('button');
+    ui.get('#bedtime-music').checked = true;
+    ui.get('#bedtime-music').listeners.get('change')?.();
+    runInContext('document.activeElement = refs.bedtimeTime', ui.context);
+    ui.streams[0]!.emit({ ...data, deliveryRevision: 2 });
+    await settle();
+    expect(ui.get('#bedtime-time')).toBe(time);
+    expect(ui.get('#bedtime-form')).toBe(form);
+    expect(runInContext('document.activeElement', ui.context)).toBe(time);
+    expect(time.value).toBe('08:15');
+    expect(ui.get('#bedtime-mode-button').checked).toBe(true);
+    expect(ui.get('#bedtime-music').checked).toBe(true);
+    expect(ui.get('#bedtime-summary').textContent).toContain(
+      '08:15 visas God morgon i en timme',
+    );
+    expect(ui.calls).toEqual([]);
+  });
+
+  it('guards duplicate submissions and confirms only after the server acknowledges the saved plan', async () => {
+    const data = withBedtime();
+    ui.get('#bedtime-night').click();
+    ui.get('#bedtime-time-0700').click();
+    const release = ui.holdPost();
+    submitBedtime();
+    submitBedtime();
+    await settle();
+    expect(ui.calls).toEqual([
+      {
+        url: '/k/mock-only/display-api/bedtime',
+        body: {
+          action: 'start',
+          wakeTime: '07:00',
+          mode: 'auto',
+          music: false,
+          expectedGeneration: data.routines.generation,
+          requestId: expect.stringMatching(
+            /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/,
+          ),
+        },
+      },
+    ]);
+    expect(ui.get('#bedtime-confirm').disabled).toBe(true);
+    expect(ui.get('#bedtime-dialog').hidden).toBe(false);
+    expect(ui.get('#toast').textContent).not.toContain('sparat');
+    expect(ui.get('#bedtime-plan').hidden).toBe(true);
+    ui.get('#bedtime-cancel').click();
+    ui.documentListeners.get('keydown')?.({ key: 'Escape' });
+    expect(ui.get('#bedtime-dialog').hidden).toBe(false);
+    data.routines.bedtime.plan = {
+      at: data.generatedAt + 36000000,
+      time: '07:00',
+      mode: 'auto',
+      music: false,
+    };
+    release();
+    await settle();
+    expect(ui.get('#bedtime-dialog').hidden).toBe(true);
+    expect(ui.get('#bedtime-plan').hidden).toBe(false);
+    expect(ui.get('#bedtime-edit').textContent).toBe('07:00 · Ljus');
+    expect(ui.get('#toast').textContent).toContain('sparat');
+    expect(ui.calls).toHaveLength(1);
+  });
+
+  it('keeps validation errors and user choices in the popup, then sends music only after explicit selection', async () => {
+    withBedtime();
+    ui.get('#bedtime-night').click();
+    ui.get('#bedtime-time').value = '';
+    ui.get('#bedtime-time').listeners.get('input')?.();
+    submitBedtime();
+    expect(ui.calls).toHaveLength(0);
+    expect(ui.get('#bedtime-confirm').disabled).toBe(true);
+    ui.get('#bedtime-time-0800').click();
+    ui.get('#bedtime-music').checked = true;
+    ui.get('#bedtime-music').listeners.get('change')?.();
+    ui.failPost(422);
+    submitBedtime();
+    await settle();
+    expect(ui.get('#bedtime-dialog').hidden).toBe(false);
+    expect(ui.get('#bedtime-error').hidden).toBe(false);
+    expect(ui.get('#bedtime-error').textContent).toContain(
+      'Kontrollera väcktiden',
+    );
+    expect(ui.get('#bedtime-time').value).toBe('08:00');
+    expect(ui.get('#bedtime-music').checked).toBe(true);
+    expect(ui.get('#bedtime-confirm').disabled).toBe(false);
+    expect(ui.get('#toast').textContent).not.toContain('sparat');
+    ui.failPost(200);
+    submitBedtime();
+    await settle();
+    expect(ui.calls.at(-1)?.body).toMatchObject({
+      action: 'start',
+      wakeTime: '08:00',
+      music: true,
+    });
+  });
+
+  it('supports no morning without transmitting an invalid unused time or music', async () => {
+    withBedtime();
+    ui.get('#bedtime-night').click();
+    ui.get('#bedtime-time').value = '';
+    ui.get('#bedtime-music').checked = true;
+    selectMode('none');
+    expect(ui.get('#bedtime-time').disabled).toBe(true);
+    expect(ui.get('#bedtime-music').disabled).toBe(true);
+    expect(ui.get('#bedtime-confirm').disabled).toBe(false);
+    submitBedtime();
+    await settle();
+    expect(ui.calls[0]?.body).toMatchObject({
+      action: 'start',
+      mode: 'none',
+      wakeTime: '07:30',
+      music: false,
+    });
+  });
+
+  it('edits or clears the compact plan without starting the night, and preserves the opened generation on conflict', async () => {
+    const data = withBedtime();
+    data.routines.bedtime.plan = {
+      at: data.generatedAt + 36000000,
+      time: '08:00',
+      mode: 'button',
+      music: true,
+    };
+    ui.render(data);
+    ui.get('#bedtime-edit').click();
+    expect(ui.get('#bedtime-time').value).toBe('08:00');
+    expect(ui.get('#bedtime-mode-button').checked).toBe(true);
+    expect(ui.get('#bedtime-music').checked).toBe(true);
+    const oldGeneration = data.routines.generation;
+    data.routines.generation = '33333333-3333-4333-8333-333333333333';
+    ui.render(data);
+    ui.failPost(409);
+    submitBedtime();
+    await settle();
+    expect(ui.calls[0]?.body).toMatchObject({
+      action: 'plan',
+      expectedGeneration: oldGeneration,
+    });
+    expect(ui.get('#bedtime-error').textContent).toContain(
+      'Planen har ändrats',
+    );
+    expect(ui.get('#bedtime-time').value).toBe('08:00');
+    ui.get('#bedtime-close').click();
+    ui.failPost(200);
+    ui.get('#bedtime-clear').click();
+    await settle();
+    expect(ui.calls.at(-1)?.body).toEqual({
+      action: 'clear',
+      expectedGeneration: data.routines.generation,
+      requestId: expect.any(String),
+    });
+  });
+
+  it.each(['05:30', '07:30'])(
+    'honors the exact ready window at %s and saved music opt-in without extending it through normal morning hours',
+    async (time) => {
+      const data = withBedtime();
+      data.generatedAt = Date.parse(`2026-10-23T${time}:00+02:00`);
+      const at = data.generatedAt - 30 * 60000;
+      data.routines.definitions.find(
+        (definition: { id: string }) => definition.id === 'morning',
+      ).bedtime = {
+        owner: 'bedtime',
+        role: 'morning',
+        plan: { at, time: '07:00', mode: 'button', music: true },
+      };
+      data.routines.bedtime.ready = { until: at + 3600000, music: true };
+      ui.render(data);
+      expect(ui.get('#bedtime-morning').hidden).toBe(false);
+      ui.get('#bedtime-edit').click();
+      expect(ui.get('#bedtime-time').value).toBe('07:00');
+      expect(ui.get('#bedtime-music').checked).toBe(true);
+      ui.get('#bedtime-close').click();
+      ui.get('#bedtime-morning').click();
+      await settle();
+      expect(ui.calls.at(-1)?.body).toMatchObject({
+        action: 'morning',
+        music: true,
+        expectedGeneration: data.routines.generation,
+      });
+      data.generatedAt = at + 3600000;
+      data.routines.bedtime.ready = null;
+      ui.render(data);
+      expect(ui.get('#bedtime-morning').hidden).toBe(true);
+      ui.get('#context-details-button').click();
+      expect(
+        actions(ui.get('#context-list')).some(
+          (button) => button.textContent === 'God morgon' && !button.disabled,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it('bounds a missing bedtime ACK without retrying or discarding the form', async () => {
+    withBedtime();
+    ui.get('#bedtime-night').click();
+    ui.get('#bedtime-time-0800').click();
+    const release = ui.holdPost();
+    submitBedtime();
+    await vi.advanceTimersByTimeAsync(8001);
+    await settle();
+    expect(ui.calls).toHaveLength(1);
+    expect(ui.get('#bedtime-dialog').hidden).toBe(false);
+    expect(ui.get('#bedtime-time').value).toBe('08:00');
+    expect(ui.get('#bedtime-error').textContent).toContain('Kvittens saknas');
+    expect(ui.get('#bedtime-confirm').disabled).toBe(false);
+    expect(ui.get('#toast').textContent).not.toContain('sparat');
+    release();
+    await settle();
+    expect(ui.calls).toHaveLength(1);
+  });
+
+  it('lets a selected music option be removed when the player goes offline', () => {
+    const data = withBedtime();
+    ui.get('#bedtime-night').click();
+    ui.get('#bedtime-music').checked = true;
+    data.routines.bedtime.musicAvailable = false;
+    ui.render(data);
+    expect(ui.get('#bedtime-music').checked).toBe(true);
+    expect(ui.get('#bedtime-music').disabled).toBe(false);
+    expect(ui.get('#bedtime-confirm').disabled).toBe(true);
+    expect(ui.get('#bedtime-summary').textContent).toContain('Avmarkera musik');
+    ui.get('#bedtime-music').checked = false;
+    ui.get('#bedtime-music').listeners.get('change')?.();
+    expect(ui.get('#bedtime-confirm').disabled).toBe(false);
+    expect(ui.calls).toEqual([]);
+  });
+
+  it('offers normal manual mornings silently even without an enabled morning definition', async () => {
+    const data = withBedtime();
+    data.generatedAt = Date.parse('2026-10-23T06:30:00+02:00');
+    data.routines.definitions = [];
+    ui.render(data);
+    expect(ui.get('#bedtime-morning').hidden).toBe(false);
+    ui.get('#bedtime-morning').click();
+    await settle();
+    expect(ui.calls.at(-1)?.body).toMatchObject({
+      action: 'morning',
+      music: false,
+    });
+    data.generatedAt = Date.parse('2026-10-23T11:00:00+02:00');
+    ui.render(data);
+    expect(ui.get('#bedtime-morning').hidden).toBe(true);
+  });
+
+  it('keeps all manual routine actions available outside the dock hours and leaves light presets reachable', () => {
+    const data = withBedtime();
+    data.generatedAt = Date.parse('2026-10-23T14:00:00+02:00');
+    ui.render(data);
+    expect(ui.get('#bedtime-night').hidden).toBe(true);
+    expect(ui.get('#bedtime-morning').hidden).toBe(true);
+    expect(ui.get('#scene-grid').hidden).toBe(false);
+    ui.get('#context-details-button').click();
+    const controls = actions(ui.get('#context-list'));
+    expect(
+      controls
+        .filter((button) => button.dataset['bedtimeAction'])
+        .map((button) => button.textContent),
+    ).toEqual(['Godnatt', 'God morgon', 'Planera morgonen']);
+    controls.find((button) => button.textContent === 'Godnatt')!.click();
+    expect(ui.get('#bedtime-dialog').hidden).toBe(false);
+    expect(ui.calls).toEqual([]);
+  });
+
+  it('disables unavailable/offline actions while preserving the draft and permits safe cancel and snooze for a reported run', async () => {
+    const data = withBedtime();
+    ui.get('#bedtime-night').click();
+    ui.get('#bedtime-time').value = '09:15';
+    ui.setOffline(true);
+    ui.streams[0]!.onerror?.();
+    await settle();
+    expect(ui.get('#bedtime-confirm').disabled).toBe(true);
+    expect(ui.get('#bedtime-night').disabled).toBe(true);
+    expect(ui.get('#scene-off').disabled).toBe(true);
+    submitBedtime();
+    expect(ui.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    ui.setOffline(false);
+    ui.streams.at(-1)!.emit({ ...data, deliveryRevision: 2 });
+    await settle();
+    expect(ui.get('#bedtime-time').value).toBe('09:15');
+    expect(ui.get('#bedtime-confirm').disabled).toBe(false);
+    ui.get('#bedtime-close').click();
+    data.routines.runs = [
+      { routineId: 'morning', status: 'running', stepIndex: 0 },
+    ];
+    ui.render(data);
+    expect(ui.get('#bedtime-night').disabled).toBe(true);
+    actions(ui.get('#context-actions'))
+      .find((button) => button.dataset['action'] === 'snooze')!
+      .click();
+    await settle();
+    expect(ui.calls.at(-1)?.body).toEqual({
+      id: 'morning',
+      action: 'snooze',
+      minutes: 10,
+      requestId: expect.any(String),
+    });
+    actions(ui.get('#context-actions'))
+      .find((button) => button.dataset['action'] === 'cancel')!
+      .click();
+    await settle();
+    expect(ui.calls.at(-1)?.body).toMatchObject({
+      id: 'morning',
+      action: 'cancel',
+      requestId: expect.any(String),
+    });
+    data.routines.bedtime.nightAvailable = false;
+    data.routines.bedtime.morningAvailable = false;
+    data.routines.bedtime.musicAvailable = false;
+    data.routines.bedtime.skippedTargets = ['lighting.one'];
+    data.routines.runs = [];
+    ui.render(data);
+    expect(ui.get('#bedtime-night').disabled).toBe(true);
+    expect(ui.get('#bedtime-morning').disabled).toBe(true);
+    expect(ui.get('#bedtime-status').textContent).toContain(
+      '1 lampa saknar status',
+    );
+  });
+
+  it('keeps Desk suggestions discreet and actionable alongside the unchanged preset controls', async () => {
+    const data = withBedtime();
+    data.role = 'desk';
+    ui.render(data);
+    expect(ui.get('#bedtime-dock').hidden).toBe(true);
+    expect(ui.get('#scene-grid').hidden).toBe(false);
+    expect(ui.get('#scene-grid').children).toHaveLength(4);
+    expect(ui.get('#scene-off').hidden).toBe(false);
+    actions(ui.get('#context-actions'))[0]!.click();
+    await settle();
+    expect(ui.calls.at(-1)?.body).toEqual({ id: 'focus', action: 'accept' });
+    expect(ui.calls.every((call) => !call.url.includes('settings'))).toBe(true);
   });
 });

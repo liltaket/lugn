@@ -332,6 +332,19 @@ export async function startRuntime(
     engine,
     capabilities,
     store: routineStore,
+    bedtime: {
+      lightTargets: Object.entries(
+        scenes.find((scene) => scene.id === 'scene.soft_light')?.lighting ??
+          scenes.find((scene) => scene.id === 'scene.everyday_light')
+            ?.lighting ??
+          {},
+      )
+        .filter(([, values]) => values.power !== false)
+        .map(([target]) => target),
+      ...(Object.keys(config.homeAssistant.music)[0] === undefined
+        ? {}
+        : { musicTarget: Object.keys(config.homeAssistant.music)[0]! }),
+    },
   });
   const intelligenceStore = new IntelligenceSettingsStore(
     `${lightingIntentPath}.intelligence.json`,

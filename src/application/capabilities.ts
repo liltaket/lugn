@@ -37,6 +37,8 @@ const ActivateSceneInput = z.object({ sceneId: z.string() });
 const SetLightingInput = z.object({
   target: z.string(),
   values: LightingValuesSchema,
+  /** Explicit routine targets must not expand through scene temperature synchronization. */
+  temperatureScope: z.enum(['target', 'scene']).optional(),
 });
 const AdjustInput = z.object({
   target: z.string(),
@@ -421,6 +423,7 @@ export class CapabilityRegistry {
               : { requestId: provenance.requestId }),
           },
           isCurrent,
+          input.temperatureScope,
         );
         output = { accepted: true };
         break;

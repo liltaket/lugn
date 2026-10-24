@@ -240,6 +240,14 @@ export class LugnEngine {
     (event: Intervention) => void
   >();
   private readonly lightingExecutionGuards = new Map<string, ExecutionGuard>();
+  private readonly bedtimeMorningLighting = new Map<
+    string,
+    {
+      routineId: string;
+      targets: ReadonlySet<string>;
+      isCurrent: ExecutionGuard;
+    }
+  >();
   private readonly musicExecutionGuards = new Map<
     string,
     { requestId: string | undefined; isCurrent: ExecutionGuard }
@@ -645,6 +653,7 @@ export class LugnEngine {
         this.computerPlayback?.observe();
         this.musicAutomation?.reconcileComputerPlayback();
         this.musicAutomation?.reconcilePassiveRestoration();
+        this.musicAutomation?.reconcileSourceVolume();
         this.publish(['music']);
       },
     );
@@ -661,6 +670,8 @@ export class LugnEngine {
       authorityControlBlocked: (target) =>
         this.musicController.volumeAuthorityBlocked(target),
       getState: (target) => this.musicController.getState(target),
+      sourceForVolumeTrim: (target, allowSettling) =>
+        this.musicController.sourceForVolumeTrim(target, allowSettling),
       ...(options.computerPlayback === undefined
         ? {}
         : { computerPlayback: options.computerPlayback }),
@@ -690,6 +701,9 @@ export class LugnEngine {
         this.publish(['music', 'diagnostics']);
       },
     });
+    this.musicController.setSourceTrimConfigured((target) =>
+      this.musicAutomation.isSourceVolumeManaged(target),
+    );
     this.musicController.setVolumeRequestGuard((target, provenance, volume) => {
       const guard = this.musicExecutionGuards.get(`${target}:volume`);
       if (guard && guard.requestId === provenance.requestId)
@@ -1056,6 +1070,14 @@ export class LugnEngine {
 
   getMusicVolumeSettings(): MusicVolumeSettings {
     return this.musicAutomation.getVolumeSettings();
+  }
+
+  validateMusicVolumeSettings(settings: MusicVolumeSettings): void {
+    this.musicAutomation.validateVolumeSettings(settings);
+  }
+
+  getMusicSourceOffset(target: string, settings: MusicVolumeSettings): number {
+    return this.musicAutomation.sourceOffset(target, false, settings);
   }
 
   getMusicVolumeEnableIntentRevision(): number {
@@ -1612,6 +1634,23 @@ export class LugnEngine {
     return this.activateScene(sceneId, actor, source, requestId, isCurrent);
   }
 
+  /** Internal run-scoped authority, issued only after RoutineService consumes a confirmed owned plan.
+   * No capability input or actor identity can request this grant. It only supersedes lighting OFF holds.
+   */
+  authorizeBedtimeMorningLighting(
+    requestId: string,
+    routineId: string,
+    targets: ReadonlySet<string>,
+    isCurrent: ExecutionGuard,
+  ): () => void {
+    const grant = { routineId, targets: new Set(targets), isCurrent };
+    this.bedtimeMorningLighting.set(requestId, grant);
+    return () => {
+      if (this.bedtimeMorningLighting.get(requestId) === grant)
+        this.bedtimeMorningLighting.delete(requestId);
+    };
+  }
+
   async setLighting(
     target: string,
     values: LightingValues,
@@ -1622,17 +1661,29 @@ export class LugnEngine {
       requestId?: string;
     },
     isCurrent?: ExecutionGuard,
+    temperatureScope: 'target' | 'scene' = 'scene',
   ): Promise<void> {
     this.assertExecution(isCurrent);
     values = LightingValuesSchema.parse(values);
     this.requireDevice(target);
-    if (isHumanActor(provenance.actor) && !isCurrent)
-      this.noteIntervention({ domain: 'lighting', target });
+    const morningGrant = provenance.requestId
+      ? this.bedtimeMorningLighting.get(provenance.requestId)
+      : undefined;
+    const confirmedMorning = () =>
+      !!morningGrant &&
+      provenance.actor.type === 'routine' &&
+      provenance.actor.id === morningGrant.routineId &&
+      temperatureScope === 'target' &&
+      morningGrant.targets.has(target) &&
+      !!isCurrent &&
+      isCurrent() &&
+      morningGrant.isCurrent();
     if (
       !isHumanActor(provenance.actor) &&
       Object.keys(values).length > 0 &&
       values.power !== false &&
-      this.holds.blocks('lighting.activation', target)
+      this.holds.blocks('lighting.activation', target) &&
+      !confirmedMorning()
     )
       throw new Error(
         'Automatic lighting is held by explicit human off intent',
@@ -1640,7 +1691,7 @@ export class LugnEngine {
     const scene = this.activeSceneDefinition;
     const physicallyEmpty = this.shouldRemainPhysicallyEmpty();
     const synchronizedTemperatureTargets =
-      values.colorTemperature === undefined
+      values.colorTemperature === undefined || temperatureScope === 'target'
         ? []
         : Object.entries(scene?.lighting ?? {})
             .filter(
@@ -1654,6 +1705,11 @@ export class LugnEngine {
     const targets = synchronizedTemperatureTargets.includes(target)
       ? synchronizedTemperatureTargets
       : [target];
+    // Attribute every affected target before yielding, so pending and running routines
+    // cannot overwrite a human temperature adjustment expanded through the scene.
+    if (isHumanActor(provenance.actor) && !isCurrent)
+      for (const lightingTarget of targets)
+        this.noteIntervention({ domain: 'lighting', target: lightingTarget });
     const updates = new Map<string, LightingValues>(
       targets.map((lightingTarget) => [
         lightingTarget,
@@ -1673,6 +1729,10 @@ export class LugnEngine {
       ),
     );
     this.assertExecution(isCurrent);
+    // The hold remains intact while prelight restoration yields. A new human intent
+    // invalidates the grant before we replace either the hold or the target intent.
+    if (morningGrant && !confirmedMorning())
+      throw new Error('Bedtime morning lighting authorization expired');
     for (const lightingTarget of targets) {
       if (isCurrent)
         this.lightingExecutionGuards.set(lightingTarget, isCurrent);
@@ -1743,7 +1803,8 @@ export class LugnEngine {
         this.holds.clear('lighting.activation', lightingTarget);
         if (this.restoredIntentAwaitingOccupancy)
           this.explicitPowerWhileAwaitingOccupancy.add(lightingTarget);
-      }
+      } else if (confirmedMorning() && targetValues.power === true)
+        this.holds.clear('lighting.activation', lightingTarget);
       const device = this.requireDevice(lightingTarget);
       if (targetValues.rgb !== undefined) {
         delete device.effectiveDesired.colorTemperature;

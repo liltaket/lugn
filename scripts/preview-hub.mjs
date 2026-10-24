@@ -1,6 +1,8 @@
 // Development fixture only: no config, adapters, network clients or runtime imports.
 // Every accepted POST mutates in-memory sample data. Listen on loopback only.
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { tomorrowStockholm } from '../dist/core/routines.js';
 import { readFile } from 'node:fs/promises';
 import { lightingFeedbackMatches } from '../dist/core/lighting-feedback.js';
 
@@ -21,6 +23,35 @@ function snapshot(scenario) {
   if (!scenarios.has(scenario)) {
     const data = structuredClone(fixture);
     data.role = scenario === 'desk' ? 'desk' : 'bed';
+    data.scenes.push({ id: 'scene.party', name: 'Party' });
+    data.routines.bedtime = {
+      nightRoutineId: 'bedtime-night',
+      morningRoutineId: 'bedtime-morning',
+      nightAvailable: true,
+      morningAvailable: true,
+      musicAvailable: true,
+      plan: null,
+      ready: null,
+      skippedTargets: [],
+    };
+    data.routines.definitions.push(
+      {
+        id: 'bedtime-night',
+        name: 'God natt',
+        kind: 'good_night',
+        enabled: true,
+        schedule: null,
+        steps: [{ type: 'delay', durationMs: 900000 }],
+      },
+      {
+        id: 'bedtime-morning',
+        name: 'God morgon',
+        kind: 'good_morning',
+        enabled: true,
+        schedule: null,
+        steps: [{ type: 'delay', durationMs: 1200000 }],
+      },
+    );
     if (scenario === 'legacy') {
       delete data.routines;
       delete data.intelligence;
@@ -137,6 +168,39 @@ const server = createServer(async (request, response) => {
         scenarios.get(scenario) ??
         (snapshot(scenario), scenarios.get(scenario));
       const player = data.state.music.devices['music.room'];
+      if (route === 'display-api/bedtime') {
+        if (body.expectedGeneration !== data.routines.generation)
+          return sendJson(response, 409, { error: 'routines_changed' });
+        if (['start', 'plan'].includes(body.action)) {
+          data.routines.bedtime.plan =
+            body.mode === 'none'
+              ? null
+              : {
+                  at: tomorrowStockholm(
+                    body.wakeTime,
+                    snapshot(scenario).generatedAt,
+                  ),
+                  time: body.wakeTime,
+                  mode: body.mode,
+                  music: body.music === true,
+                };
+        } else if (body.action === 'clear') data.routines.bedtime.plan = null;
+        if (['start', 'morning'].includes(body.action))
+          data.routines.runs = [
+            {
+              id: randomUUID(),
+              routineId:
+                body.action === 'start' ? 'bedtime-night' : 'bedtime-morning',
+              status: 'running',
+              stepIndex: 0,
+              startedAt: data.generatedAt,
+              updatedAt: data.generatedAt,
+              reason: null,
+            },
+          ];
+        data.routines.generation = randomUUID();
+        return sendJson(response, 200, data.routines);
+      }
       if (route === 'display-api/routine') {
         const definition = data.routines?.definitions.find(
           (item) => item.id === body.id,

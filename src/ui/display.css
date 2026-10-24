@@ -1108,3 +1108,258 @@ h2 {
     animation: none;
   }
 }
+
+/* Lighting owns the new bedtime flow; the music column keeps its existing layout. */
+.scene-section .light-off {
+  position: relative;
+  justify-content: center;
+  min-width: 132px;
+  min-height: 54px;
+  flex-shrink: 0;
+  gap: 10px;
+  padding: 10px 20px;
+  flex-direction: row;
+}
+.scene-section .light-off .scene-icon {
+  width: 26px;
+  height: 26px;
+}
+.scene-section .light-off .scene-copy {
+  width: auto;
+}
+.scene-section .light-off .scene-name {
+  font-size: 17px;
+}
+.light-off .scene-name {
+  font-size: 17px;
+}
+.light-off .scene-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+.light-off .scene-current-mark {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+}
+.scene-section .context-strip {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.scene-section .context-copy {
+  gap: 2px;
+}
+.scene-section .context-copy strong {
+  font-size: 14px;
+  -webkit-line-clamp: 1;
+}
+.scene-section .context-copy span {
+  font-size: 12px;
+  -webkit-line-clamp: 1;
+}
+.scene-section .context-strip .context-action {
+  min-height: 44px;
+  padding: 6px 10px;
+  font-size: 13px;
+  background: transparent;
+  color: var(--quiet);
+}
+.scene-section .context-strip .context-action[data-action='accept'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.bedtime-dock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.bedtime-dock button,
+.scene-section .routine-details {
+  min-height: 44px;
+  padding: 6px 10px;
+  font-size: 14px;
+}
+.bedtime-primary {
+  color: var(--accent);
+  border-color: var(--line);
+  background: var(--surface);
+}
+.bedtime-plan {
+  display: flex;
+  margin-left: auto;
+  min-width: 0;
+}
+.bedtime-plan button {
+  font-size: 12px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--quiet);
+}
+#bedtime-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+.scene-section .routine-details {
+  align-self: flex-start;
+  margin-top: -6px;
+  color: var(--muted);
+}
+.bedtime-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 65%);
+}
+.bedtime-dialog {
+  width: min(560px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--ground);
+}
+.bedtime-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.bedtime-heading h2 {
+  font-size: 23px;
+  color: var(--ink);
+}
+.bedtime-heading button {
+  min-height: 44px;
+  padding: 6px 10px;
+  background: transparent;
+}
+.bedtime-time-row {
+  display: flex;
+  align-items: end;
+  gap: 18px;
+  margin: 10px 0;
+}
+.bedtime-time-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--quiet);
+}
+#bedtime-time {
+  min-height: 52px;
+  width: 160px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 28px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.bedtime-quick-times {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.bedtime-quick-times button {
+  min-height: 44px;
+  padding: 6px 10px;
+  font-size: 15px;
+  background: transparent;
+}
+.bedtime-modes {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.bedtime-modes legend {
+  color: var(--quiet);
+  font-size: 14px;
+  margin-bottom: 3px;
+}
+.bedtime-modes label,
+.bedtime-music {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-size: 16px;
+}
+.bedtime-dialog input[type='radio'],
+.bedtime-dialog input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.bedtime-music-hint {
+  margin: 0 0 0 30px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+#bedtime-summary {
+  margin: 10px 0;
+  min-height: 36px;
+  color: var(--quiet);
+  font-size: 14px;
+  line-height: 1.4;
+}
+#bedtime-error {
+  color: var(--bad);
+  font-size: 14px;
+}
+.bedtime-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+#bedtime-confirm {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+@media (max-width: 600px) {
+  .scene-section .section-heading {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .scene-section .section-heading h1 {
+    flex-basis: 100%;
+  }
+  .bedtime-dialog {
+    padding: 16px;
+  }
+  .bedtime-heading h2 {
+    font-size: 20px;
+  }
+  .bedtime-time-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .bedtime-footer {
+    flex-wrap: wrap;
+  }
+  .bedtime-footer button {
+    flex: 1;
+  }
+  .scene-section .context-strip {
+    flex-wrap: wrap;
+  }
+}

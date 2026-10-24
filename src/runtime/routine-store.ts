@@ -30,6 +30,14 @@ export class RoutineStore {
       definitions: defaults,
     });
   }
+  /** Invalidate uncommitted browser requests from an earlier process. The next edit persists this session. */
+  beginSession(): void {
+    this.document = { ...this.document, generation: randomUUID() };
+  }
+  /** Wait for this owner's currently queued durable edits. */
+  async whenIdle(): Promise<void> {
+    await this.pending;
+  }
   snapshot(): RoutineDocument {
     return structuredClone(this.document);
   }
@@ -83,19 +91,32 @@ export class RoutineStore {
       return definitions.filter((d) => d.id !== id);
     });
   }
+  /** One durable replacement for paired bedtime definitions and their retry receipt. */
+  update(
+    expected: string,
+    change: (document: RoutineDocument) => RoutineDocument,
+    validate: () => void = () => undefined,
+  ): Promise<RoutineDocument> {
+    return this.edit(expected, (definitions) => definitions, change, validate);
+  }
   private edit(
     expected: string,
     change: (definitions: RoutineDefinition[]) => RoutineDefinition[],
+    transform?: (document: RoutineDocument) => RoutineDocument,
+    validate: () => void = () => undefined,
   ): Promise<RoutineDocument> {
     const operation = this.pending.then(async () => {
       if (!this.loaded || !this.writable)
         throw new RoutineError(503, 'routine_store_unavailable');
       if (expected !== this.document.generation)
         throw new RoutineError(409, 'routines_changed');
+      validate();
+      const base = this.snapshot();
       const document = RoutineDocumentSchema.parse({
+        ...(transform ? transform(base) : base),
         version: 1,
         generation: randomUUID(),
-        definitions: change(this.snapshot().definitions),
+        ...(transform ? {} : { definitions: change(base.definitions) }),
       });
       const serialized = JSON.stringify(document) + '\n';
       if (Buffer.byteLength(serialized) > 1024 * 1024)
@@ -120,6 +141,7 @@ export class RoutineStore {
           info.ino !== current.ino
         )
           throw new Error('Directory changed');
+        validate();
         await rename(temporary, this.filePath);
         this.document = document;
         for (const listener of this.listeners) {
@@ -129,7 +151,8 @@ export class RoutineStore {
             this.onWarning('Routine subscriber failed.');
           }
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof RoutineError) throw error;
         throw new RoutineError(503, 'routine_save_failed');
       } finally {
         await handle?.close().catch(() => undefined);

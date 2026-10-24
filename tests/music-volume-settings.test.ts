@@ -46,7 +46,7 @@ async function fixture() {
       { id: 'scene.cozy', name: 'Cozy', lighting: {} },
       { id: 'scene.all_off', name: 'Off', lighting: {} },
     ],
-    music: { targets: { 'music.room': [] }, adapter },
+    music: { targets: { 'music.room': ['Spotify', 'Optical'] }, adapter },
     musicVolumeSettings: {
       ...defaultMusicVolumeSettings,
       autoBaseVolumes: { 'music.room': 0.4 },
@@ -366,8 +366,59 @@ it('authenticates preview/save with existing session, origin and CSRF boundaries
   expect(await preview.json()).toMatchObject({
     dailyOffset: -0.15,
     personOffset: -0.1,
+    sourceOffset: 0,
     observedVolume: 0.4,
   });
+  const sourcePreview = await post('/preview', {
+    ...body,
+    settings: {
+      ...settings,
+      opticalOffsets: {
+        'music.room': { enabled: true, source: 'Spotify', offset: 0.07 },
+      },
+    },
+  });
+  expect(sourcePreview.status).toBe(200);
+  expect(await sourcePreview.json()).toMatchObject({
+    sourceOffset: 0.07,
+    target: 0.22,
+  });
+  for (const suffix of ['', '/preview']) {
+    const invalidSource = await post(
+      suffix,
+      suffix
+        ? {
+            ...body,
+            settings: {
+              ...settings,
+              opticalOffsets: {
+                'music.room': {
+                  enabled: true,
+                  source: 'optical',
+                  offset: 0.07,
+                },
+              },
+            },
+          }
+        : {
+            expectedSettings: settings,
+            settings: {
+              ...settings,
+              opticalOffsets: {
+                'music.room': {
+                  enabled: true,
+                  source: 'optical',
+                  offset: 0.07,
+                },
+              },
+            },
+          },
+    );
+    expect(invalidSource.status).toBe(400);
+    expect(await invalidSource.json()).toEqual({
+      error: 'invalid_optical_offset_source',
+    });
+  }
   expect(engine.getMusicIntentSnapshot()).toEqual(before);
   expect(adapter.dispatched).toHaveLength(0);
   expect(await new MusicVolumeSettingsStore(path).load()).toBeUndefined();

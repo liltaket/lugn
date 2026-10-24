@@ -7,6 +7,7 @@ const VOLUME_AUTHORITY_URL = `${BASE_PATH}display-api/volume-authority`;
 const MUSIC_PRESET_URL = `${BASE_PATH}display-api/music-preset`;
 const PRESENCE_COUNT_URL = `${BASE_PATH}display-api/presence-count-one`;
 const ROUTINE_URL = `${BASE_PATH}display-api/routine`;
+const BEDTIME_URL = `${BASE_PATH}display-api/bedtime`;
 const SUGGESTION_URL = `${BASE_PATH}display-api/suggestion`;
 const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
@@ -65,6 +66,27 @@ const refs = {
   contextDetailsButton: document.querySelector('#context-details-button'),
   contextPanel: document.querySelector('#context-panel'),
   contextList: document.querySelector('#context-list'),
+  sceneOff: document.querySelector('#scene-off'),
+  bedtimeDock: document.querySelector('#bedtime-dock'),
+  bedtimeNight: document.querySelector('#bedtime-night'),
+  bedtimeMorning: document.querySelector('#bedtime-morning'),
+  bedtimePlan: document.querySelector('#bedtime-plan'),
+  bedtimeEdit: document.querySelector('#bedtime-edit'),
+  bedtimeClear: document.querySelector('#bedtime-clear'),
+  bedtimeStatus: document.querySelector('#bedtime-status'),
+  bedtimeDialog: document.querySelector('#bedtime-dialog'),
+  bedtimeForm: document.querySelector('#bedtime-form'),
+  bedtimeHeading: document.querySelector('#bedtime-heading'),
+  bedtimeTime: document.querySelector('#bedtime-time'),
+  bedtimeAuto: document.querySelector('#bedtime-mode-auto'),
+  bedtimeButton: document.querySelector('#bedtime-mode-button'),
+  bedtimeNone: document.querySelector('#bedtime-mode-none'),
+  bedtimeMusic: document.querySelector('#bedtime-music'),
+  bedtimeSummary: document.querySelector('#bedtime-summary'),
+  bedtimeError: document.querySelector('#bedtime-error'),
+  bedtimeConfirm: document.querySelector('#bedtime-confirm'),
+  bedtimeCancel: document.querySelector('#bedtime-cancel'),
+  bedtimeClose: document.querySelector('#bedtime-close'),
   scenePagination: document.querySelector('#scene-pagination'),
   scenePrevious: document.querySelector('#scene-previous'),
   sceneNext: document.querySelector('#scene-next'),
@@ -170,6 +192,8 @@ let cameraObjectUrl;
 let contextDetailsOpen = false;
 let contextRenderKey;
 let contextListKey;
+let bedtimeDraft = null;
+let bedtimeReturnFocus;
 let artworkKey;
 let latestPayload;
 let payloadReceivedAt = 0;
@@ -444,9 +468,14 @@ function sceneIconFor(sceneId) {
 function sceneButtonFor(scene) {
   let button = sceneButtons.get(scene.id);
   if (button) return button;
-  button = document.createElement('button');
+  button =
+    scene.id === 'scene.all_off'
+      ? refs.sceneOff
+      : document.createElement('button');
+  if (scene.id === 'scene.all_off') button.replaceChildren();
   button.type = 'button';
-  button.className = 'scene-button';
+  button.className =
+    scene.id === 'scene.all_off' ? 'scene-button light-off' : 'scene-button';
   button.dataset.scene = scene.id;
   button.setAttribute('aria-pressed', 'false');
   const icon = sceneIconFor(scene.id);
@@ -478,26 +507,31 @@ function sceneButtonFor(scene) {
 function renderScenes(payload) {
   if (!refs.sceneGrid) return;
   const allScenes = getSceneList(payload);
-  const pageSize = refs.contextStrip.hidden ? 8 : 6;
-  const pages = Math.max(1, Math.ceil(allScenes.length / pageSize));
+  const presets = allScenes.filter((scene) => scene.id !== 'scene.all_off');
+  const off = allScenes.find((scene) => scene.id === 'scene.all_off');
+  refs.sceneOff.hidden = !off;
+  refs.sceneOff.disabled =
+    !off || isUnavailable() || pending.has('scene:scene.all_off');
+  const pageSize = 6;
+  const pages = Math.max(1, Math.ceil(presets.length / pageSize));
   scenePage = Math.min(scenePage, pages - 1);
   refs.scenePagination.hidden = pages <= 1 || contextDetailsOpen;
   refs.scenePrevious.disabled = scenePage === 0;
   refs.sceneNext.disabled = scenePage === pages - 1;
   setText(refs.scenePageLabel, `${scenePage + 1} / ${pages}`);
-  const scenes = allScenes.slice(
+  const scenes = presets.slice(
     scenePage * pageSize,
     (scenePage + 1) * pageSize,
   );
   const current = payload?.state?.lighting?.currentScene;
   const ids = new Set(allScenes.map((scene) => scene.id));
   for (const [sceneId, button] of sceneButtons) {
-    if (!ids.has(sceneId)) {
+    if (!ids.has(sceneId) && sceneId !== 'scene.all_off') {
       button.remove();
       sceneButtons.delete(sceneId);
     }
   }
-  if (scenes.length === 0) {
+  if (scenes.length === 0 && !off) {
     if (!refs.sceneGrid.querySelector('.section-empty')) {
       const empty = document.createElement('p');
       empty.className = 'section-empty';
@@ -507,15 +541,13 @@ function renderScenes(payload) {
     return;
   }
   const ordered = [];
-  for (const [index, scene] of scenes.entries()) {
+  for (const [index, scene] of [...(off ? [off] : []), ...scenes].entries()) {
     const button = sceneButtonFor(scene);
-    button.querySelector('.scene-name').textContent = scene.name;
+    button.querySelector('.scene-name').textContent =
+      scene.id === 'scene.all_off' ? 'Släck' : scene.name;
     button.dataset.kind = scene.id === 'scene.all_off' ? 'off' : 'scene';
     button.dataset.featured = String(
-      roleName(payload?.role) !== 'unknown' &&
-        refs.contextStrip.hidden &&
-        scenes.length <= 6 &&
-        index < 2,
+      scenes.length % 2 === 1 && index === (off ? 1 : 0),
     );
     const isPending = pending.has(`scene:${scene.id}`);
     button.disabled = isUnavailable() || isPending;
@@ -582,7 +614,7 @@ function renderScenes(payload) {
     button.querySelector('.scene-status').hidden = !status;
     if (button.getAttribute('aria-pressed') !== String(selected))
       button.setAttribute('aria-pressed', String(selected));
-    ordered.push(button);
+    if (scene.id !== 'scene.all_off') ordered.push(button);
   }
   const orderKey = scenes.map((scene) => scene.id).join('\u0000');
   if (
@@ -591,6 +623,298 @@ function renderScenes(payload) {
   ) {
     refs.sceneGrid.replaceChildren(...ordered);
     sceneOrderKey = orderKey;
+  }
+}
+
+function requestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  // The Hub can run on HTTP, where randomUUID is not available.
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (letter) => {
+    const value = Math.floor(Math.random() * 16);
+    return (letter === 'x' ? value : (value & 3) | 8).toString(16);
+  });
+}
+
+function bedtimeData(payload) {
+  const value = payload?.routines?.bedtime;
+  return roleName(payload?.role) === 'bed' && value && typeof value === 'object'
+    ? value
+    : null;
+}
+
+function bedtimeOwnedPlan(payload) {
+  return payload?.routines?.definitions?.find(
+    (definition) =>
+      definition.id === payload?.routines?.bedtime?.morningRoutineId &&
+      definition.bedtime?.owner === 'bedtime',
+  )?.bedtime?.plan;
+}
+
+function bedtimeActionButton(label, action, available = true) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'context-action';
+  button.dataset.bedtimeAction = action;
+  button.dataset.available = String(available);
+  button.textContent = label;
+  button.addEventListener('click', () => {
+    if (action === 'morning') void postBedtime('morning');
+    else openBedtime(action, button);
+  });
+  return button;
+}
+
+function renderBedtime(payload) {
+  const bedtime = bedtimeData(payload);
+  const busy = pending.has('bedtime');
+  const disabled =
+    isUnavailable() ||
+    busy ||
+    !bedtime ||
+    payload?.routines?.generation === undefined;
+  const now = estimatedServerNow();
+  const hour = Number(timeFormat.format(new Date(now)).split(':')[0]);
+  const ownedPlan = bedtimeOwnedPlan(payload);
+  const ready = bedtime?.ready;
+  const scheduledWindow = Number.isFinite(ready?.until) && now < ready.until;
+  const buttonPlan = ownedPlan ?? bedtime?.plan;
+  const scheduledToday =
+    buttonPlan?.mode === 'button' &&
+    datePartsFormat.format(new Date(buttonPlan.at)) ===
+      datePartsFormat.format(new Date(now));
+  const plan = bedtime?.plan ?? (scheduledWindow ? ownedPlan : null);
+  refs.bedtimeDock.hidden = !bedtime || contextDetailsOpen;
+  refs.bedtimeNight.hidden = !(hour >= 18 || hour < 4);
+  refs.bedtimeMorning.hidden = !(
+    scheduledWindow ||
+    (!scheduledToday && hour >= 6 && hour < 11)
+  );
+  refs.bedtimeNight.disabled = disabled || bedtime?.nightAvailable !== true;
+  refs.bedtimeMorning.disabled = disabled || bedtime?.morningAvailable !== true;
+  refs.bedtimePlan.hidden = !plan;
+  setText(
+    refs.bedtimeEdit,
+    plan
+      ? `${plan.time} · ${plan.mode === 'auto' ? 'Ljus' : 'Knapp'}${plan.music ? ' + musik' : ''}`
+      : '',
+  );
+  refs.bedtimeEdit.setAttribute(
+    'aria-label',
+    `Ändra morgonplan ${plan?.time ?? ''}`,
+  );
+  refs.bedtimeEdit.disabled = disabled;
+  refs.bedtimeClear.disabled = disabled;
+  const running = (payload?.routines?.runs ?? []).some(
+    (run) => run.status === 'running',
+  );
+  if (running) {
+    refs.bedtimeNight.disabled = true;
+    refs.bedtimeMorning.disabled = true;
+  }
+  const skipped = bedtime?.skippedTargets?.length ?? 0;
+  setText(
+    refs.bedtimeStatus,
+    isUnavailable()
+      ? 'Frånkopplad'
+      : busy
+        ? 'Skickar …'
+        : skipped
+          ? `${skipped} ${skipped === 1 ? 'lampa saknar' : 'lampor saknar'} status`
+          : '',
+  );
+  refs.bedtimeStatus.hidden = !refs.bedtimeStatus.textContent;
+  for (const button of [
+    refs.bedtimeNight,
+    refs.bedtimeMorning,
+    refs.bedtimeClear,
+  ])
+    button.setAttribute('aria-busy', String(busy));
+  syncBedtimeForm();
+}
+
+function openBedtime(action = 'start', trigger) {
+  const bedtime = bedtimeData(latestPayload);
+  if (!bedtime || isUnavailable() || pending.has('bedtime')) return;
+  if (action === 'start' && !bedtime.nightAvailable) return;
+  const plan =
+    bedtime.plan ??
+    (bedtime.ready?.until > estimatedServerNow()
+      ? bedtimeOwnedPlan(latestPayload)
+      : null);
+  bedtimeReturnFocus = trigger ?? document.activeElement;
+  bedtimeDraft = { action, generation: latestPayload.routines.generation };
+  refs.bedtimeTime.value = plan?.time ?? '07:30';
+  refs.bedtimeAuto.checked = !plan || plan.mode === 'auto';
+  refs.bedtimeButton.checked = plan?.mode === 'button';
+  refs.bedtimeNone.checked = false;
+  refs.bedtimeMusic.checked = plan?.music === true;
+  refs.bedtimeError.hidden = true;
+  refs.bedtimeDialog.hidden = false;
+  root.inert = true;
+  setText(
+    refs.bedtimeHeading,
+    action === 'start' ? 'När vill du vakna?' : 'Planera nästa morgon',
+  );
+  syncBedtimeForm();
+  refs.bedtimeClose.focus?.();
+}
+
+function closeBedtime(confirmed = false) {
+  if (pending.has('bedtime') && !confirmed) return;
+  refs.bedtimeDialog.hidden = true;
+  root.inert = false;
+  bedtimeDraft = null;
+  bedtimeReturnFocus?.focus?.();
+}
+
+function bedtimeFormValue() {
+  const mode = refs.bedtimeNone.checked
+    ? 'none'
+    : refs.bedtimeButton.checked
+      ? 'button'
+      : 'auto';
+  return {
+    wakeTime:
+      mode === 'none' &&
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(refs.bedtimeTime.value)
+        ? '07:30'
+        : refs.bedtimeTime.value,
+    mode,
+    music:
+      mode !== 'none' &&
+      bedtimeData(latestPayload)?.musicAvailable === true &&
+      refs.bedtimeMusic.checked,
+  };
+}
+
+function syncBedtimeForm() {
+  if (!bedtimeDraft) return;
+  const bedtime = bedtimeData(latestPayload);
+  const { wakeTime, mode, music } = bedtimeFormValue();
+  const busy = pending.has('bedtime');
+  const none = mode === 'none';
+  const valid = none || /^([01]\d|2[0-3]):[0-5]\d$/.test(wakeTime);
+  const unavailable = isUnavailable() || !bedtime;
+  refs.bedtimeTime.disabled = busy || none;
+  refs.bedtimeTime.required = !none;
+  refs.bedtimeAuto.disabled = busy || bedtime?.morningAvailable !== true;
+  refs.bedtimeButton.disabled = busy || bedtime?.morningAvailable !== true;
+  refs.bedtimeNone.disabled = busy;
+  const musicUnavailable =
+    !none && refs.bedtimeMusic.checked && bedtime?.musicAvailable !== true;
+  refs.bedtimeMusic.disabled =
+    busy ||
+    none ||
+    (bedtime?.musicAvailable !== true && !refs.bedtimeMusic.checked);
+  refs.bedtimeClose.disabled = busy;
+  refs.bedtimeCancel.disabled = busy;
+  for (const time of ['0700', '0730', '0800'])
+    document.querySelector(`#bedtime-time-${time}`).disabled = busy || none;
+  refs.bedtimeConfirm.disabled =
+    busy ||
+    unavailable ||
+    musicUnavailable ||
+    !valid ||
+    bedtimeDraft.generation === undefined ||
+    (!none && bedtime?.morningAvailable !== true) ||
+    (bedtimeDraft.action === 'start' && bedtime?.nightAvailable !== true);
+  refs.bedtimeConfirm.setAttribute('aria-busy', String(busy));
+  setText(
+    refs.bedtimeConfirm,
+    busy
+      ? 'Skickar …'
+      : bedtimeDraft.action === 'plan'
+        ? 'Spara morgonen'
+        : none
+          ? 'Godnatt utan väckning'
+          : mode === 'auto'
+            ? `Godnatt & väck ${wakeTime}`
+            : `Godnatt · visa knapp ${wakeTime}`,
+  );
+  setText(
+    refs.bedtimeSummary,
+    unavailable
+      ? 'Anslut till Lugn för att spara. Dina val finns kvar.'
+      : musicUnavailable
+        ? 'Musikspelaren saknar kontakt. Avmarkera musik eller vänta på anslutning.'
+        : none
+          ? bedtimeDraft.action === 'start'
+            ? 'Bara kvällsrutinen. Ingen morgon planeras.'
+            : 'Morgonplanen tas bort.'
+          : !valid
+            ? 'Välj en giltig väcktid.'
+            : mode === 'auto'
+              ? `Nästa morgon kl. ${wakeTime} börjar ljuset öka mjukt i 20 minuter.${music ? ' Musik från vald källa, med oförändrad volym.' : ' Ingen musik.'}`
+              : `Nästa morgon kl. ${wakeTime} visas God morgon i en timme. Ljuset väntar på ditt tryck.${music ? ' Musik startas först när du trycker.' : ' Ingen musik.'}`,
+  );
+}
+
+async function postBedtime(action) {
+  const bedtime = bedtimeData(latestPayload);
+  if (!bedtime || isUnavailable() || pending.has('bedtime')) return;
+  const draft = bedtimeDraft;
+  const formAction = action === 'start' || action === 'plan';
+  if (formAction && (!draft || refs.bedtimeConfirm.disabled)) return;
+  if (action === 'morning' && !bedtime.morningAvailable) return;
+  const expectedGeneration = formAction
+    ? draft.generation
+    : latestPayload.routines.generation;
+  if (expectedGeneration === undefined) return;
+  const body = {
+    action,
+    ...(formAction
+      ? bedtimeFormValue()
+      : action === 'morning'
+        ? {
+            music:
+              bedtime.ready?.until > estimatedServerNow() &&
+              bedtime.ready.music === true,
+          }
+        : {}),
+    expectedGeneration,
+    requestId: requestId(),
+  };
+  pending.add('bedtime');
+  refs.bedtimeError.hidden = true;
+  renderContext(latestPayload);
+  try {
+    await postJson(BEDTIME_URL, body);
+    if (formAction && bedtimeDraft === draft) closeBedtime(true);
+    showToast(
+      action === 'clear'
+        ? 'Morgonplanen är borttagen.'
+        : action === 'morning'
+          ? 'God morgon är startad.'
+          : action === 'start'
+            ? 'Godnatt är startad. Morgonvalet är sparat.'
+            : 'Morgonvalet är sparat.',
+      'success',
+    );
+    await refresh(true);
+  } catch (error) {
+    const message =
+      error?.status === 409
+        ? 'Planen har ändrats. Stäng och öppna igen för att se den aktuella planen.'
+        : error?.name === 'AbortError' ||
+            error?.status === 502 ||
+            error?.status === 504
+          ? 'Kvittens saknas. Kontrollera status innan du försöker igen.'
+          : error?.status === 400 || error?.status === 422
+            ? 'Kontrollera väcktiden och dina val. Försök igen.'
+            : 'Kunde inte spara. Dina val finns kvar. Försök igen.';
+    if (error?.status === 401 || error?.status === 403)
+      setConnection(
+        'unauthorized',
+        'Åtkomsten har gått ut. Öppna kontrollpanelen igen.',
+        true,
+      );
+    if (formAction && bedtimeDraft === draft) {
+      setText(refs.bedtimeError, message);
+      refs.bedtimeError.hidden = false;
+    } else showToast(message, 'error');
+  } finally {
+    pending.delete('bedtime');
+    renderContext(latestPayload);
   }
 }
 
@@ -606,6 +930,10 @@ function contextData(payload) {
     : [];
   const runs = Array.isArray(routines?.runs) ? routines.runs : [];
   const now = estimatedServerNow();
+  const bedtime = bedtimeData(payload);
+  const bedtimeOwnedIds = new Set(
+    bedtime ? [bedtime.nightRoutineId, bedtime.morningRoutineId] : [],
+  );
   const next = (Array.isArray(routines?.next) ? routines.next : [])
     .filter(
       (item) =>
@@ -614,8 +942,8 @@ function contextData(payload) {
         definitions.some(
           (definition) =>
             definition.id === item.routineId &&
-            definition.enabled === true &&
-            definition.schedule,
+            (bedtimeOwnedIds.has(definition.id) ||
+              (definition.enabled === true && definition.schedule)),
         ),
     )
     .sort((a, b) => a.at - b.at);
@@ -660,6 +988,7 @@ function contextAction(kind, id, action, label, minutes) {
     void runCommand(pendingKey, {
       id,
       action,
+      ...(kind === 'routine' ? { requestId: requestId() } : {}),
       ...(minutes ? { minutes } : {}),
     });
   });
@@ -667,8 +996,22 @@ function contextAction(kind, id, action, label, minutes) {
 }
 
 function routineActions(definition, run, occurrence) {
-  if (run?.status === 'running')
-    return [contextAction('routine', definition.id, 'cancel', 'Avbryt')];
+  if (run?.status === 'running') {
+    const actions = [
+      contextAction('routine', definition.id, 'cancel', 'Avbryt'),
+    ];
+    if (definition.id === bedtimeData(latestPayload)?.morningRoutineId)
+      actions.push(
+        contextAction(
+          'routine',
+          definition.id,
+          'snooze',
+          'Skjut upp 10 min',
+          10,
+        ),
+      );
+    return actions;
+  }
   const actions = [];
   if (definition.enabled === true)
     actions.push(contextAction('routine', definition.id, 'start', 'Starta'));
@@ -686,6 +1029,7 @@ function setContextDetailsOpen(open) {
   refs.sceneGrid.hidden = open;
   refs.contextStrip.hidden = open || !refs.contextTitle.textContent;
   renderScenes(latestPayload);
+  renderBedtime(latestPayload);
   refs.contextDetailsButton.setAttribute('aria-expanded', String(open));
   setText(refs.contextDetailsButton, open ? 'Tillbaka' : 'Rutiner & förslag');
   if (open) refs.contextPanel.focus?.();
@@ -694,14 +1038,19 @@ function setContextDetailsOpen(open) {
 function renderContext(payload) {
   const data = contextData(payload);
   const { definitions, runs, next, suggestions } = data;
+  const bedtimeProjection = bedtimeData(payload);
   refs.contextDetailsButton.hidden =
-    definitions.length === 0 && suggestions.length === 0;
+    !bedtimeProjection && definitions.length === 0 && suggestions.length === 0;
   if (refs.contextDetailsButton.hidden && contextDetailsOpen)
     setContextDetailsOpen(false);
   const running = runs.find(
     (run) =>
       run?.status === 'running' &&
-      definitions.some((item) => item.id === run.routineId),
+      (definitions.some((item) => item.id === run.routineId) ||
+        [
+          bedtimeProjection?.nightRoutineId,
+          bedtimeProjection?.morningRoutineId,
+        ].includes(run.routineId)),
   );
   const wake = next.find(
     (item) =>
@@ -723,10 +1072,23 @@ function renderContext(payload) {
   if (running) {
     const definition = definitions.find(
       (item) => item.id === running.routineId,
-    );
+    ) ?? {
+      id: running.routineId,
+      name:
+        running.routineId === bedtimeProjection?.nightRoutineId
+          ? 'Godnatt'
+          : 'God morgon',
+    };
     title = definition.name;
     description = `Pågår · steg ${running.stepIndex + 1} av ${definition.steps?.length ?? '—'}`;
     actions = [['routine', definition.id, 'cancel', 'Avbryt']];
+    if (
+      bedtimeProjection &&
+      running.routineId === bedtimeProjection.morningRoutineId
+    )
+      actions.push(['routine', definition.id, 'snooze', '10 min senare', 10]);
+  } else if (bedtimeProjection) {
+    // The compact dock owns evening/morning entry points on current servers.
   } else if (roleName(payload?.role) === 'bed' && bedtime) {
     title = bedtime.name;
     description = wake
@@ -762,14 +1124,147 @@ function renderContext(payload) {
   }
   refs.contextStrip.hidden = contextDetailsOpen || !title;
   syncContextButtons(refs.contextActions);
-  const listKey = JSON.stringify(data);
+  renderBedtime(payload);
+  const listKey = JSON.stringify([data, bedtimeProjection, isUnavailable()]);
   if (listKey === contextListKey) {
     syncContextButtons(refs.contextList);
     return;
   }
   contextListKey = listKey;
   const items = [];
+  if (bedtimeProjection) {
+    const projectedPlan = Object.hasOwn(bedtimeProjection, 'plan')
+      ? bedtimeProjection.plan
+      : bedtimeOwnedPlan(payload);
+    const ready =
+      Number.isFinite(bedtimeProjection.ready?.until) &&
+      bedtimeProjection.ready.until > estimatedServerNow()
+        ? bedtimeProjection.ready
+        : null;
+    const morningRun = runs.find(
+      (item) =>
+        item?.routineId === bedtimeProjection.morningRoutineId &&
+        item.status === 'running',
+    );
+    const nightRun = runs.find(
+      (item) =>
+        item?.routineId === bedtimeProjection.nightRoutineId &&
+        item.status === 'running',
+    );
+    const snoozed = next.find(
+      (item) => item.routineId === bedtimeProjection.morningRoutineId,
+    );
+    const plan =
+      projectedPlan ?? (ready || snoozed ? bedtimeOwnedPlan(payload) : null);
+    const wakeChoice = plan
+      ? `${plan.time} · ${plan.mode === 'auto' ? 'Ljus' : 'Knapp'}${plan.music ? ' + musik' : ''}`
+      : '';
+    const planStatus = morningRun
+      ? `Pågår · steg ${morningRun.stepIndex + 1}.`
+      : ready
+        ? `Redo · knapp kl. ${plan?.time ?? timeFormat.format(new Date(ready.until - 3600000))}${ready.music ? ' + musik' : ''}, till ${timeFormat.format(new Date(ready.until))}.`
+        : projectedPlan
+          ? `Planerad ${occurrenceLabel(plan.at)} · ${wakeChoice}.`
+          : snoozed
+            ? `Uppskjuten till ${occurrenceLabel(snoozed.at)}${wakeChoice ? ` · ${wakeChoice}` : ''}.`
+            : 'Ingen morgon planerad.';
+    const lastMorningRun = runs
+      .filter((item) => item?.routineId === bedtimeProjection.morningRoutineId)
+      .at(-1);
+    const history =
+      lastMorningRun && lastMorningRun.status !== 'running'
+        ? [
+            {
+              failed: 'Senast misslyckades',
+              cancelled: 'Senast avbröts',
+              completed: 'Senast avslutades',
+            }[lastMorningRun.status] ?? '',
+            lastMorningRun.reason ?? '',
+            ...(Array.isArray(lastMorningRun.warnings)
+              ? lastMorningRun.warnings
+              : []),
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : '';
+    const planActions = morningRun
+      ? [
+          contextAction(
+            'routine',
+            bedtimeProjection.morningRoutineId,
+            'cancel',
+            'Avbryt',
+          ),
+          contextAction(
+            'routine',
+            bedtimeProjection.morningRoutineId,
+            'snooze',
+            'Skjut upp 10 min',
+            10,
+          ),
+        ]
+      : ready
+        ? routineActions(
+            definitions.find(
+              (item) => item.id === bedtimeProjection.morningRoutineId,
+            ) ?? { id: bedtimeProjection.morningRoutineId, enabled: true },
+            null,
+            {
+              routineId: bedtimeProjection.morningRoutineId,
+              at: ready.until - 3600000,
+            },
+          )
+        : [];
+    items.push(
+      contextItem(
+        'Morgonplan',
+        `${isUnavailable() ? 'Frånkopplad · ' : ''}${planStatus}${history ? ` Senaste körning: ${history}.` : ''}`,
+        planActions,
+      ),
+    );
+    if (nightRun)
+      items.push(
+        contextItem('Kvällsrutin', `Pågår · steg ${nightRun.stepIndex + 1}.`, [
+          contextAction(
+            'routine',
+            bedtimeProjection.nightRoutineId,
+            'cancel',
+            'Avbryt',
+          ),
+        ]),
+      );
+    items.push(
+      contextItem(
+        'Kväll och morgon',
+        'Starta när du vill eller ändra morgonplanen.',
+        [
+          bedtimeActionButton(
+            'Godnatt',
+            'start',
+            bedtimeProjection.nightAvailable === true && !running,
+          ),
+          bedtimeActionButton(
+            'God morgon',
+            'morning',
+            bedtimeProjection.morningAvailable === true && !running,
+          ),
+          bedtimeActionButton(
+            'Planera morgonen',
+            'plan',
+            bedtimeProjection.morningAvailable === true,
+          ),
+        ],
+      ),
+    );
+  }
   for (const definition of definitions) {
+    if (
+      bedtimeProjection &&
+      definition.enabled !== true &&
+      ['good-night', 'good-morning'].includes(definition.id) &&
+      ['good_night', 'good_morning'].includes(definition.kind)
+    )
+      continue;
     const run = runs.find(
       (item) => item?.routineId === definition.id && item.status === 'running',
     );
@@ -792,6 +1287,14 @@ function renderContext(payload) {
             completed: 'Senaste körningen avslutades.',
           }[last.status] ?? '')
         : '';
+    if (
+      bedtimeProjection &&
+      [
+        bedtimeProjection.nightRoutineId,
+        bedtimeProjection.morningRoutineId,
+      ].includes(definition.id)
+    )
+      continue;
     items.push(
       contextItem(
         definition.name,
@@ -818,11 +1321,19 @@ function renderContext(payload) {
       ),
     );
   refs.contextList.replaceChildren(...items);
+  syncContextButtons(refs.contextList);
 }
 
 function syncContextButtons(container) {
   for (const child of container.children) {
     if (child.className === 'context-action') {
+      if (child.dataset.bedtimeAction) {
+        const busy = pending.has('bedtime');
+        child.disabled =
+          isUnavailable() || busy || child.dataset.available !== 'true';
+        child.setAttribute('aria-busy', String(busy));
+        continue;
+      }
       const busy = pending.has(child.dataset.pendingKey);
       child.disabled = isUnavailable() || busy;
       child.setAttribute('aria-busy', String(busy));
@@ -2294,6 +2805,83 @@ refs.cameraClose.addEventListener('click', () => {
 refs.contextDetailsButton.addEventListener('click', () => {
   setContextDetailsOpen(!contextDetailsOpen);
 });
+refs.sceneOff.addEventListener('click', () => {
+  if (!refs.sceneOff.disabled)
+    void runCommand('scene:scene.all_off', { sceneId: 'scene.all_off' });
+});
+refs.bedtimeNight.addEventListener('click', () =>
+  openBedtime('start', refs.bedtimeNight),
+);
+refs.bedtimeMorning.addEventListener('click', () => {
+  void postBedtime('morning');
+});
+refs.bedtimeEdit.addEventListener('click', () =>
+  openBedtime('plan', refs.bedtimeEdit),
+);
+refs.bedtimeClear.addEventListener('click', () => {
+  void postBedtime('clear');
+});
+refs.bedtimeCancel.addEventListener('click', () => closeBedtime());
+refs.bedtimeClose.addEventListener('click', () => closeBedtime());
+refs.bedtimeForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (bedtimeDraft) void postBedtime(bedtimeDraft.action);
+});
+refs.bedtimeTime.addEventListener('input', () => {
+  syncBedtimeForm();
+});
+for (const input of [
+  refs.bedtimeAuto,
+  refs.bedtimeButton,
+  refs.bedtimeNone,
+  refs.bedtimeMusic,
+])
+  input.addEventListener('change', () => {
+    syncBedtimeForm();
+  });
+for (const [id, time] of [
+  ['0700', '07:00'],
+  ['0730', '07:30'],
+  ['0800', '08:00'],
+])
+  document
+    .querySelector(`#bedtime-time-${id}`)
+    .addEventListener('click', () => {
+      refs.bedtimeTime.value = time;
+      syncBedtimeForm();
+    });
+// Use a regular modal overlay for older Nest Hub Chrome versions without dialog.
+function bedtimeKeydown(event) {
+  if (!bedtimeDraft) return;
+  if (event.key === 'Escape') {
+    event.preventDefault?.();
+    closeBedtime();
+  } else if (event.key === 'Tab') {
+    const controls = [
+      refs.bedtimeClose,
+      refs.bedtimeTime,
+      ...['0700', '0730', '0800'].map((id) =>
+        document.querySelector(`#bedtime-time-${id}`),
+      ),
+      refs.bedtimeAuto,
+      refs.bedtimeButton,
+      refs.bedtimeNone,
+      refs.bedtimeMusic,
+      refs.bedtimeCancel,
+      refs.bedtimeConfirm,
+    ].filter((control) => !control.disabled);
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (
+      !controls.includes(document.activeElement) ||
+      (event.shiftKey && document.activeElement === first) ||
+      (!event.shiftKey && document.activeElement === last)
+    ) {
+      event.preventDefault?.();
+      (event.shiftKey ? last : first)?.focus?.();
+    }
+  }
+}
 refs.musicArtworkImage.addEventListener('error', () => {
   refs.musicArtworkImage.hidden = true;
   refs.musicArtwork.dataset.state = 'unavailable';
@@ -2304,6 +2892,10 @@ refs.musicArtworkImage.addEventListener('load', () => {
   refs.musicArtwork.dataset.state = 'available';
 });
 document.addEventListener('keydown', (event) => {
+  if (bedtimeDraft) {
+    bedtimeKeydown(event);
+    return;
+  }
   if (event.key !== 'Escape') return;
   if (cameraActive || cameraChoicesOpen || cameraPendingShow) {
     void cameraAction('hide');

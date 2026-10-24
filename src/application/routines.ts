@@ -1,4 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import {
+  BEDTIME_MORNING_ID,
+  BedtimeController,
+  type BedtimeOptions,
+} from './bedtime.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
 import { isHumanActor } from '../core/automation-holds.js';
 import {
@@ -31,6 +36,7 @@ const MAX_LATENESS_MS = 1_000;
 const DISPATCH_TIMEOUT_MS = 15_000;
 type Work = {
   definition: RoutineDefinition;
+  savedDefinition: RoutineDefinition;
   run: RoutineRun;
   provenance: Provenance;
   scheduled: boolean;
@@ -40,6 +46,8 @@ type Work = {
   valid: boolean;
   cancelWaits: Set<(error: Error) => void>;
   fades: Map<string, string>;
+  skippedTargets: Set<string>;
+  releaseMorningLighting?: () => void;
 };
 export type RoutineServiceOptions = {
   engine: LugnEngine;
@@ -47,6 +55,7 @@ export type RoutineServiceOptions = {
   store: RoutineStore;
   /** Requested light command spacing; long fades avoid duplicate rounded levels. */
   fadeIntervalMs?: number;
+  bedtime?: BedtimeOptions;
   onChange?: (snapshot: RoutineSnapshot) => void;
 };
 
@@ -65,6 +74,15 @@ export class RoutineService {
   private lastMono: number;
   private highWater: number;
   private definitions: RoutineDefinition[];
+  private readonly bedtime: BedtimeController | undefined;
+  private lastBedtimeProjection = '';
+  private readonly snoozed = new Set<string>();
+  private interventionRevision = 0;
+  private readonly startInvalidations = new Map<string, number>();
+  private readonly pendingOccurrences = new Map<
+    string,
+    { valid: boolean; resources: Set<string>; occurrence: RoutineOccurrence }
+  >();
 
   constructor(
     private readonly clock: Clock,
@@ -80,6 +98,15 @@ export class RoutineService {
     this.lastWall = this.highWater = clock.now();
     this.lastMono = clock.monotonicNow();
     this.definitions = options.store.snapshot().definitions;
+    this.bedtime = options.bedtime
+      ? new BedtimeController(
+          clock,
+          options.engine,
+          options.store,
+          options.bedtime,
+          this,
+        )
+      : undefined;
     this.recompute();
     this.unsubscribers = [
       options.store.subscribe(() => this.definitionsChanged()),
@@ -89,8 +116,12 @@ export class RoutineService {
     this.arm();
   }
   snapshot(): RoutineSnapshot {
+    const document = this.options.store.snapshot();
+    // Retry receipts are storage metadata, not dashboard state.
+    delete document.bedtimeReceipts;
     return {
-      ...this.options.store.snapshot(),
+      ...document,
+      ...(this.bedtime ? { bedtime: this.bedtime.projection() } : {}),
       runs: structuredClone(this.history),
       next: structuredClone(
         [...this.next.values()].sort((a, b) => a.at - b.at),
@@ -105,6 +136,60 @@ export class RoutineService {
     return previewRoutine(definition);
   }
 
+  bedtimeAction(
+    input: unknown,
+    provenance: Provenance,
+  ): Promise<RoutineSnapshot> {
+    if (this.disposed) throw new RoutineError(503, 'routines_disposed');
+    if (!this.bedtime) throw new RoutineError(503, 'bedtime_unavailable');
+    return this.bedtime.request(input, provenance);
+  }
+  /** Used before durable bedtime updates, and again immediately before file replacement. */
+  validateStart(definition: RoutineDefinition): void {
+    if (this.disposed) throw new RoutineError(503, 'routines_disposed');
+    const { resources } = this.resources(
+      RoutineDefinitionSchema.parse(definition),
+    );
+    const unrelated = [...this.active.values()].filter(
+      (w) =>
+        w.definition.id !== definition.id &&
+        ![...resources].some((r) => w.resources.has(r)),
+    );
+    if (unrelated.length >= 8)
+      throw new RoutineError(429, 'routine_run_capacity');
+    for (const step of definition.steps) {
+      if (step.type !== 'light') continue;
+      if (!step.targets.some((target) => this.lightAvailable(target)))
+        throw new RoutineError(409, 'bedtime_lights_unavailable');
+    }
+  }
+  /** Immediate bedtime starts yield to later lighting intent, while optional music keeps its own guards. */
+  captureStartGuard(definition: RoutineDefinition): () => boolean {
+    const revision = this.interventionRevision;
+    const targets = [...this.resources(definition).resources].filter((target) =>
+      target.startsWith('lighting.'),
+    );
+    return () =>
+      !this.disposed &&
+      (this.startInvalidations.get(`routine:${definition.id}`) ?? 0) <=
+        revision &&
+      (this.startInvalidations.get('lighting') ?? 0) <= revision &&
+      targets.every(
+        (target) => (this.startInvalidations.get(target) ?? 0) <= revision,
+      );
+  }
+  startDefinition(definition: RoutineDefinition, provenance: Provenance): void {
+    this.start(definition, provenance, null);
+  }
+  private lightAvailable(target: string): boolean {
+    const device = this.options.engine.state.lighting.devices[target];
+    return (
+      !!device &&
+      device.availability !== 'unavailable' &&
+      (device.observed.power === false ||
+        device.observed.brightness !== undefined)
+    );
+  }
   action(input: unknown, rawProvenance: Provenance): RoutineSnapshot {
     if (this.disposed) throw new RoutineError(503, 'routines_disposed');
     const action = RoutineActionSchema.parse(input);
@@ -132,7 +217,19 @@ export class RoutineService {
         if (!definition.enabled)
           throw new RoutineError(409, 'routine_disabled');
         this.start(definition, provenance, null);
+        if (definition.bedtime?.role === 'morning')
+          this.bedtime?.dismissReady();
       } else if (action.action === 'cancel') {
+        const pending = this.pendingOccurrences.get(definition.id);
+        if (pending) pending.valid = false;
+        if (definition.bedtime)
+          this.startInvalidations.set(
+            `routine:${definition.id}`,
+            ++this.interventionRevision,
+          );
+        if (this.snoozed.delete(definition.id)) this.next.delete(definition.id);
+        if (definition.bedtime?.role === 'morning')
+          this.bedtime?.dismissReady();
         for (const work of [...this.active.values()])
           if (work.definition.id === definition.id)
             this.finish(work, 'cancelled', 'Cancelled explicitly');
@@ -142,9 +239,24 @@ export class RoutineService {
         const running = [...this.active.values()].find(
           (w) => w.definition.id === definition.id && w.occurrence,
         );
-        const occurrence = running?.occurrence ?? this.next.get(definition.id);
+        const occurrence =
+          running?.occurrence ??
+          this.next.get(definition.id) ??
+          (action.action === 'skip'
+            ? this.pendingOccurrences.get(definition.id)?.occurrence
+            : null) ??
+          (definition.bedtime?.plan?.mode === 'button'
+            ? this.bedtime?.readyOccurrence()
+            : null);
         if (!occurrence)
           throw new RoutineError(409, 'routine_occurrence_unknown');
+        if (
+          definition.bedtime?.plan &&
+          definition.bedtime.plan.at > this.clock.now()
+        )
+          throw new RoutineError(409, 'routine_occurrence_not_due');
+        const pending = this.pendingOccurrences.get(definition.id);
+        if (pending) pending.valid = false;
         if (running)
           this.finish(
             running,
@@ -153,12 +265,22 @@ export class RoutineService {
               ? 'Occurrence skipped'
               : 'Occurrence snoozed',
           );
-        if (action.action === 'snooze')
+        if (action.action === 'snooze') {
+          this.snoozed.add(definition.id);
+          if (definition.bedtime?.plan?.mode === 'button')
+            this.bedtime?.openButton(
+              this.clock.now() + (action.minutes ?? 10) * 60_000,
+            );
           this.next.set(definition.id, {
             routineId: definition.id,
             at: this.clock.now() + (action.minutes ?? 10) * 60_000,
           });
-        else this.setNext(definition, Math.max(this.highWater, occurrence.at));
+        } else {
+          if (definition.bedtime?.role === 'morning')
+            this.bedtime?.dismissReady();
+          this.snoozed.delete(definition.id);
+          this.setNext(definition, Math.max(this.highWater, occurrence.at));
+        }
       }
     } catch (error) {
       if (action.requestId) this.requests.delete(action.requestId);
@@ -182,6 +304,7 @@ export class RoutineService {
   private publish(): void {
     if (this.disposed) return;
     const snapshot = this.snapshot();
+    this.lastBedtimeProjection = JSON.stringify(snapshot.bedtime);
     // A publication consumer must not affect device orchestration or persistence.
     try {
       this.options.onChange?.(structuredClone(snapshot));
@@ -200,15 +323,17 @@ export class RoutineService {
     const definitions = this.options.store.snapshot().definitions;
     for (const work of [...this.active.values()]) {
       const current = definitions.find((d) => d.id === work.definition.id);
-      if (JSON.stringify(current) !== JSON.stringify(work.definition))
+      if (JSON.stringify(current) !== JSON.stringify(work.savedDefinition))
         this.finish(work, 'cancelled', 'Definition changed or disabled');
     }
     for (const definition of definitions) {
       if (
         JSON.stringify(definition) !==
         JSON.stringify(this.definitions.find((d) => d.id === definition.id))
-      )
+      ) {
+        this.snoozed.delete(definition.id);
         this.setNext(definition, Math.max(this.highWater, this.clock.now()));
+      }
     }
     for (const id of this.next.keys())
       if (!definitions.some((d) => d.id === id)) this.next.delete(id);
@@ -241,6 +366,7 @@ export class RoutineService {
     this.lastMono = mono;
     this.highWater = Math.max(this.highWater, now);
     if (Math.abs(drift) > MAX_LATENESS_MS) {
+      this.bedtime?.invalidateReady();
       for (const work of [...this.active.values()])
         this.finish(work, 'cancelled', 'Clock changed');
       this.recompute();
@@ -254,7 +380,14 @@ export class RoutineService {
         (d) => d.id === occurrence.routineId,
       );
       if (!definition) continue;
+      const continuation = this.snoozed.delete(definition.id);
       this.setNext(definition, now);
+      if (definition.bedtime?.plan) {
+        if (now - occurrence.at <= MAX_LATENESS_MS)
+          this.dispatchBedtimeOccurrence(definition, occurrence, continuation);
+        this.publish();
+        continue;
+      }
       if (now - occurrence.at <= MAX_LATENESS_MS) {
         try {
           this.start(
@@ -268,6 +401,116 @@ export class RoutineService {
       }
       this.publish();
     }
+  }
+  /** Durable consumption shares the store's atomic edit queue; it adds no scheduler or transport. */
+  private dispatchBedtimeOccurrence(
+    definition: RoutineDefinition,
+    occurrence: RoutineOccurrence,
+    continuation: boolean,
+  ): void {
+    const plan = definition.bedtime!.plan!;
+    const pending = {
+      valid: true,
+      occurrence,
+      // Capture scopes without validating live configuration in the timer callback.
+      // Removed persisted targets are filtered or reported inside the guarded async path.
+      resources: new Set(
+        definition.steps.flatMap((step) =>
+          step.type === 'light'
+            ? step.targets
+            : 'target' in step && step.target
+              ? [step.target]
+              : [],
+        ),
+      ),
+    };
+    this.pendingOccurrences.set(definition.id, pending);
+    void (async () => {
+      let consumed = definition;
+      if (plan.consumedAt === undefined) {
+        consumed = {
+          ...definition,
+          bedtime: {
+            ...definition.bedtime!,
+            plan: { ...plan, consumedAt: this.clock.now() },
+          },
+        };
+        const captured = JSON.stringify(definition);
+        await this.options.store.update(
+          this.options.store.snapshot().generation,
+          (document) => ({
+            ...document,
+            definitions: document.definitions.map((d) =>
+              d.id === definition.id ? consumed : d,
+            ),
+          }),
+          () => {
+            if (
+              JSON.stringify(
+                this.options.store
+                  .snapshot()
+                  .definitions.find((d) => d.id === definition.id),
+              ) !== captured
+            )
+              throw new RoutineError(409, 'routines_changed');
+          },
+        );
+      } else if (!continuation) return;
+      const now = this.clock.now();
+      if (!pending.valid || this.disposed) return;
+      if (now < occurrence.at || now - occurrence.at > MAX_LATENESS_MS) return;
+      if (
+        JSON.stringify(
+          this.options.store
+            .snapshot()
+            .definitions.find((d) => d.id === definition.id),
+        ) !== JSON.stringify(consumed)
+      )
+        return;
+      if (plan.mode === 'button') this.bedtime?.openButton(occurrence.at);
+      else
+        this.start(
+          consumed,
+          { actor: { type: 'routine', id: definition.id } },
+          occurrence,
+          definition.id === BEDTIME_MORNING_ID &&
+            definition.kind === 'good_morning' &&
+            definition.bedtime?.owner === 'bedtime' &&
+            definition.bedtime.role === 'morning' &&
+            consumed.bedtime?.plan?.consumedAt !== undefined &&
+            plan.mode === 'auto' &&
+            (occurrence.at === plan.at ||
+              (continuation && occurrence.at > plan.at)),
+        );
+    })()
+      .catch((error) => {
+        if (!this.disposed && pending.valid) {
+          const now = this.clock.now();
+          this.history.push({
+            id: randomUUID(),
+            routineId: definition.id,
+            status: 'failed',
+            stepIndex: 0,
+            startedAt: now,
+            updatedAt: now,
+            reason:
+              error instanceof Error
+                ? error.message
+                : 'Scheduled routine unavailable',
+          });
+          if (this.history.length > 100) {
+            const index = this.history.findIndex(
+              (run) => run.status !== 'running',
+            );
+            if (index >= 0) this.history.splice(index, 1);
+          }
+        }
+      })
+      .finally(() => {
+        if (this.pendingOccurrences.get(definition.id) === pending)
+          this.pendingOccurrences.delete(definition.id);
+        this.publish();
+      });
   }
   private resources(
     definition: RoutineDefinition,
@@ -304,8 +547,32 @@ export class RoutineService {
     input: RoutineDefinition,
     provenance: Provenance,
     occurrence: RoutineOccurrence | null,
+    confirmedMorning = false,
   ): void {
-    const definition = RoutineDefinitionSchema.parse(input);
+    let definition = RoutineDefinitionSchema.parse(input);
+    // Persisted explicit targets are authoritative; never discover or replace devices.
+    if (definition.bedtime) {
+      definition = {
+        ...definition,
+        steps: definition.steps.map((step) =>
+          step.type === 'light'
+            ? {
+                ...step,
+                targets: step.targets.filter((target) =>
+                  this.lightAvailable(target),
+                ),
+              }
+            : step,
+        ),
+      };
+      if (
+        definition.steps.some(
+          (step) => step.type === 'light' && !step.targets.length,
+        )
+      )
+        throw new RoutineError(409, 'bedtime_lights_unavailable');
+      this.validateStart(definition);
+    }
     const { resources, scenes } = this.resources(definition);
     for (const work of [...this.active.values()]) {
       if (
@@ -326,8 +593,20 @@ export class RoutineService {
       updatedAt: now,
       reason: null,
     };
+    if (definition.bedtime) {
+      const skipped = input.steps.flatMap((step) =>
+        step.type === 'light'
+          ? step.targets.filter((target) => !resources.has(target))
+          : [],
+      );
+      if (skipped.length)
+        run.warnings = skipped.map(
+          (target) => `Light skipped at start: ${target}`,
+        );
+    }
     const work: Work = {
       definition,
+      savedDefinition: structuredClone(input),
       run,
       resources,
       scenes,
@@ -337,8 +616,29 @@ export class RoutineService {
       valid: true,
       cancelWaits: new Set(),
       fades: new Map(),
+      skippedTargets: new Set(),
     };
     this.active.set(run.id, work);
+    if (confirmedMorning) {
+      work.releaseMorningLighting =
+        this.options.engine.authorizeBedtimeMorningLighting(
+          work.run.id,
+          definition.id,
+          new Set(
+            definition.steps.flatMap((step) =>
+              step.type === 'light' ? step.targets : [],
+            ),
+          ),
+          () => {
+            try {
+              this.assert(work);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        );
+    }
     this.history.push(run);
     while (this.history.length > 100) {
       const index = this.history.findIndex((r) => r.status !== 'running');
@@ -350,6 +650,42 @@ export class RoutineService {
     void Promise.resolve().then(() => this.execute(work));
   }
   private intervened(event: Intervention): void {
+    if (event.domain === 'lighting')
+      this.startInvalidations.set(
+        event.target ?? 'lighting',
+        ++this.interventionRevision,
+      );
+    for (const pending of this.pendingOccurrences.values()) {
+      if (
+        event.target
+          ? pending.resources.has(event.target)
+          : [...pending.resources].some((r) => r.startsWith(`${event.domain}.`))
+      )
+        pending.valid = false;
+    }
+    // A manual override also invalidates a paused continuation, never tomorrow's independent plan.
+    for (const id of [...this.snoozed]) {
+      const definition = this.definitions.find((d) => d.id === id);
+      if (!definition) continue;
+      const { resources } = this.resources(definition);
+      if (
+        event.target
+          ? resources.has(event.target)
+          : [...resources].some((r) => r.startsWith(`${event.domain}.`))
+      ) {
+        this.snoozed.delete(id);
+        if (definition.bedtime) {
+          this.next.delete(id);
+          if (definition.bedtime.role === 'morning')
+            this.bedtime?.dismissReady();
+        } else
+          this.setNext(
+            definition,
+            Math.max(this.highWater, this.next.get(id)?.at ?? this.clock.now()),
+          );
+        this.publish();
+      }
+    }
     for (const work of [...this.active.values()]) {
       if (
         event.target
@@ -364,6 +700,11 @@ export class RoutineService {
     }
   }
   private revalidate(): void {
+    if (
+      this.bedtime &&
+      this.lastBedtimeProjection !== JSON.stringify(this.bedtime.projection())
+    )
+      this.publish();
     for (const work of [...this.active.values()]) {
       if (!this.scenesCurrent(work)) {
         this.finish(work, 'cancelled', 'Referenced scene changed or deleted');
@@ -394,6 +735,7 @@ export class RoutineService {
     work.run.status = status;
     work.run.reason = reason;
     work.run.updatedAt = this.clock.now();
+    work.releaseMorningLighting?.();
     if (status !== 'completed') {
       work.valid = false;
       this.options.engine.cancelExecution(work.run.id);
@@ -490,12 +832,20 @@ export class RoutineService {
         ) > MAX_LATENESS_MS
       )
         return false;
+      if (target && work.skippedTargets.has(target)) return false;
       if (target) {
         const state = this.options.engine.state;
         const device =
           state.lighting.devices[target] ?? state.music.devices[target];
         if (!device || device.availability === 'unavailable') return false;
       }
+      if (
+        work.definition.bedtime &&
+        name === 'music.play' &&
+        target &&
+        !this.options.engine.automaticMusicPlaybackAllowed(target)
+      )
+        return false;
       if (work.scheduled) {
         const state = this.options.engine.state;
         if (
@@ -517,7 +867,9 @@ export class RoutineService {
     if (!guard()) throw new Error('Routine action suppressed by policy');
     const provenance: CapabilityInvocation = {
       actor:
-        volume || work.scheduled
+        volume ||
+        work.scheduled ||
+        (work.definition.bedtime !== undefined && name === 'music.play')
           ? { type: 'routine', id: work.definition.id }
           : work.provenance.actor,
       source: `routine.${work.definition.id}`,
@@ -623,13 +975,35 @@ export class RoutineService {
       case 'light':
         await this.light(work, step);
         return;
-      case 'playback':
-        await this.invoke(
-          work,
-          step.state === 'playing' ? 'music.play' : 'music.pause',
-          { target: step.target },
-        );
+      case 'playback': {
+        if (
+          work.definition.bedtime &&
+          step.state === 'playing' &&
+          (!this.options.engine.automaticMusicPlaybackAllowed(step.target) ||
+            this.options.engine.state.music.devices[step.target]
+              ?.availability === 'unavailable')
+        ) {
+          (work.run.warnings ??= []).push(
+            'Optional morning music blocked by policy or availability',
+          );
+          return;
+        }
+        try {
+          await this.invoke(
+            work,
+            step.state === 'playing' ? 'music.play' : 'music.pause',
+            { target: step.target },
+          );
+        } catch (error) {
+          this.assert(work);
+          if (!work.definition.bedtime) throw error;
+          work.skippedTargets.add(step.target);
+          (work.run.warnings ??= []).push(
+            'Optional morning music failed; lighting continues',
+          );
+        }
         return;
+      }
       case 'source':
         await this.invoke(work, 'music.selectSource', {
           target: step.target,
@@ -682,15 +1056,21 @@ export class RoutineService {
     work: Work,
     step: Extract<RoutineStep, { type: 'light' }>,
   ): Promise<void> {
-    const starts = step.targets.map((target) => {
-      const device = this.options.engine.state.lighting.devices[target];
-      if (!device || device.availability === 'unavailable')
-        throw new Error('Light unavailable');
-      const brightness =
-        device.observed.power === false ? 0 : device.observed.brightness;
-      if (brightness === undefined) throw new Error('Light brightness unknown');
-      return { target, brightness };
-    });
+    const starts = step.targets
+      .filter(
+        (target) => !work.definition.bedtime || this.lightAvailable(target),
+      )
+      .map((target) => {
+        const device = this.options.engine.state.lighting.devices[target];
+        if (!device || device.availability === 'unavailable')
+          throw new Error('Light unavailable');
+        const brightness =
+          device.observed.power === false ? 0 : device.observed.brightness;
+        if (brightness === undefined)
+          throw new Error('Light brightness unknown');
+        return { target, brightness };
+      });
+    if (!starts.length) throw new Error('No available lights');
     const change = Math.max(
       ...starts.map((s) => Math.abs(s.brightness - step.brightness)),
     );
@@ -702,25 +1082,67 @@ export class RoutineService {
             Math.min(change, Math.ceil(step.durationMs / this.fadeIntervalMs)),
           );
     const origin = this.clock.now();
+    const failures = new Map<string, string>();
     for (let index = 1; index <= count; index++) {
       const due = origin + (step.durationMs * index) / count;
       const remaining = due - this.clock.now();
       if (remaining > 0) await this.wait(work, null, remaining);
       if (this.clock.now() - due > MAX_LATENESS_MS)
         throw new Error('Stale light fade');
+      let available = 0;
       for (const start of starts) {
+        if (
+          work.definition.bedtime &&
+          !this.lightAvailable(start.target) &&
+          !work.skippedTargets.has(start.target)
+        ) {
+          work.skippedTargets.add(start.target);
+          (work.run.warnings ??= []).push(
+            `Light became unavailable: ${start.target}`,
+          );
+        }
+        if (work.skippedTargets.has(start.target)) continue;
         const brightness = Math.round(
           start.brightness +
             ((step.brightness - start.brightness) * index) / count,
         );
-        await this.invoke(work, 'lighting.set', {
-          target: start.target,
-          values:
-            brightness === 0
-              ? { power: false, brightness: 0 }
-              : { power: true, brightness },
-        });
+        try {
+          await this.invoke(work, 'lighting.set', {
+            target: start.target,
+            ...(step.colorTemperature === undefined
+              ? {}
+              : { temperatureScope: 'target' }),
+            values:
+              brightness === 0
+                ? { power: false, brightness: 0 }
+                : {
+                    power: true,
+                    brightness,
+                    ...(step.colorTemperature === undefined
+                      ? {}
+                      : { colorTemperature: step.colorTemperature }),
+                  },
+          });
+          available++;
+        } catch (error) {
+          this.assert(work);
+          if (!work.definition.bedtime) throw error;
+          work.skippedTargets.add(start.target);
+          failures.set(
+            start.target,
+            error instanceof Error ? error.message : 'Light command failed',
+          );
+          (work.run.warnings ??= []).push(
+            `Light skipped after command failure: ${start.target}: ${failures.get(start.target)}`,
+          );
+        }
       }
+      if (!available)
+        throw new Error(
+          failures.size
+            ? `Light commands rejected: ${[...failures].map(([target, reason]) => `${target}: ${reason}`).join('; ')}`
+            : 'No available lights',
+        );
     }
   }
 }

@@ -118,28 +118,30 @@
           <div class="section-heading">
             <h1 id="scene-heading">Ljuslägen</h1>
             <button
-              id="context-details-button"
-              class="quiet-button"
+              id="scene-off"
+              class="scene-button light-off"
               type="button"
-              aria-expanded="false"
-              aria-controls="context-panel"
-              hidden
+              data-scene="scene.all_off"
+              disabled
+              aria-pressed="false"
             >
-              Rutiner &amp; förslag
+              <svg
+                viewBox="0 0 24 24"
+                width="24"
+                height="24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                aria-hidden="true"
+              >
+                <path d="M12 3v9M6.3 5.7a9 9 0 1 0 11.4 0" />
+              </svg>
+              <span class="scene-name">Släck</span
+              ><span class="scene-status" hidden></span
+              ><span class="scene-current-mark" aria-hidden="true"></span>
             </button>
           </div>
-          <section
-            class="context-strip"
-            id="context-strip"
-            aria-label="Aktuellt"
-            hidden
-          >
-            <div class="context-copy" aria-live="polite" aria-atomic="true">
-              <strong id="context-title"></strong
-              ><span id="context-description"></span>
-            </div>
-            <div class="context-actions" id="context-actions"></div>
-          </section>
           <section
             class="context-panel"
             id="context-panel"
@@ -163,6 +165,62 @@
             <span id="scene-page-label"></span>
             <button id="scene-next" type="button">Nästa</button>
           </div>
+          <section
+            class="context-strip"
+            id="context-strip"
+            aria-label="Aktuellt"
+            hidden
+          >
+            <div class="context-copy" aria-live="polite" aria-atomic="true">
+              <strong id="context-title"></strong
+              ><span id="context-description"></span>
+            </div>
+            <div class="context-actions" id="context-actions"></div>
+          </section>
+          <div
+            id="bedtime-dock"
+            class="bedtime-dock"
+            aria-label="Kväll och morgon"
+            hidden
+          >
+            <button
+              id="bedtime-night"
+              class="bedtime-primary"
+              type="button"
+              hidden
+            >
+              Godnatt
+            </button>
+            <button
+              id="bedtime-morning"
+              class="bedtime-primary"
+              type="button"
+              hidden
+            >
+              God morgon
+            </button>
+            <div id="bedtime-plan" class="bedtime-plan" hidden>
+              <button id="bedtime-edit" type="button"></button>
+              <button
+                id="bedtime-clear"
+                type="button"
+                aria-label="Ta bort morgonplan"
+              >
+                Ta bort
+              </button>
+            </div>
+            <span id="bedtime-status" role="status" hidden></span>
+          </div>
+          <button
+            id="context-details-button"
+            class="quiet-button routine-details"
+            type="button"
+            aria-expanded="false"
+            aria-controls="context-panel"
+            hidden
+          >
+            Rutiner &amp; förslag
+          </button>
         </section>
 
         <section class="music-section" aria-labelledby="music-heading">
@@ -418,5 +476,89 @@
         </section>
       </div>
     </main>
+    <div id="bedtime-dialog" class="bedtime-overlay" hidden>
+      <section
+        class="bedtime-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bedtime-heading"
+        aria-describedby="bedtime-summary"
+        tabindex="-1"
+      >
+        <form id="bedtime-form">
+          <div class="bedtime-heading">
+            <h2 id="bedtime-heading">När vill du vakna?</h2>
+            <button
+              id="bedtime-close"
+              type="button"
+              aria-label="Stäng utan att spara"
+            >
+              Stäng
+            </button>
+          </div>
+          <div class="bedtime-time-row">
+            <label for="bedtime-time"
+              >Väcktid
+              <input id="bedtime-time" type="time" value="07:30" required
+            /></label>
+            <div
+              class="bedtime-quick-times"
+              role="group"
+              aria-label="Välj väcktid"
+            >
+              <button id="bedtime-time-0700" type="button">07:00</button
+              ><button id="bedtime-time-0730" type="button">07:30</button
+              ><button id="bedtime-time-0800" type="button">08:00</button>
+            </div>
+          </div>
+          <fieldset class="bedtime-modes">
+            <legend>Hur vill du börja morgonen?</legend>
+            <label
+              ><input
+                id="bedtime-mode-auto"
+                type="radio"
+                name="wake-mode"
+                value="auto"
+                checked
+              />
+              Starta ljuset automatiskt</label
+            >
+            <label
+              ><input
+                id="bedtime-mode-button"
+                type="radio"
+                name="wake-mode"
+                value="button"
+              />
+              Visa God morgon-knappen</label
+            >
+            <label
+              ><input
+                id="bedtime-mode-none"
+                type="radio"
+                name="wake-mode"
+                value="none"
+              />
+              Ingen planerad morgon</label
+            >
+          </fieldset>
+          <label class="bedtime-music"
+            ><input id="bedtime-music" type="checkbox" /> Spela musik på
+            morgonen</label
+          >
+          <p class="bedtime-music-hint">
+            Vald källa och samma volym. Närvaro, tyst tid och Paus gäller.
+          </p>
+          <p id="bedtime-summary" aria-live="polite"></p>
+          <p id="bedtime-error" role="alert" hidden></p>
+          <div class="bedtime-footer">
+            <button id="bedtime-cancel" type="button">Avbryt</button
+            ><button id="bedtime-confirm" type="submit">
+              Godnatt &amp; väck 07:30
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   </body>
 </html>

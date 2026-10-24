@@ -148,6 +148,10 @@ const routines = new RoutineService(systemClock, {
   engine,
   capabilities,
   store,
+  bedtime: {
+    lightTargets: ['lighting.bed', 'lighting.desk'],
+    musicTarget: 'music.room',
+  },
 });
 const intelligenceStore = new IntelligenceSettingsStore(
   join(directory, 'intelligence.json'),
