@@ -808,3 +808,137 @@ it('requires fresh trusted source resolution after a null gap and rejects older 
   expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.37);
   expect(s.policy()).toMatchObject({ mode: 'auto', configuredBaseline: 0.3 });
 });
+
+it.each([
+  { gap: null, mode: 'auto' },
+  { gap: 'unconfigured input', mode: 'auto' },
+  { gap: null, mode: 'manual' },
+  { gap: 'unconfigured input', mode: 'manual' },
+  { gap: null, mode: 'human' },
+  { gap: 'unconfigured input', mode: 'human' },
+])(
+  'preserves $mode intent when native volume arrives on unresolved source $gap before its alias',
+  async ({ gap, mode }) => {
+    const s = await setup();
+    if (mode === 'manual')
+      s.engine.setMusicVolumeAuthority({ target, mode: 'manual' }, human);
+    if (mode === 'human') await s.manual(0.45);
+    const expectedMode = mode === 'auto' ? 'auto' : 'manual';
+    const reference = mode === 'auto' ? null : mode === 'human' ? 0.45 : 0.3;
+    const volumeChanges = structuredClone(
+      s.engine.state.music.volumeChanges?.[target],
+    );
+    const before = s.volumes().length;
+    s.observe(gap, 0.61);
+    expect(s.policy()).toMatchObject({
+      mode: expectedMode,
+      manualReference: reference,
+      sourceOffset: 0,
+    });
+    expect(s.engine.state.music.volumeChanges?.[target]).toEqual(volumeChanges);
+    expect(s.volumes()).toHaveLength(before);
+    s.clock.advanceBy(100);
+    s.observe('Optical', 0.61);
+    s.clock.advanceBy(trimSettlingMs);
+    await s.settle();
+    expect(s.policy()).toMatchObject({
+      mode: expectedMode,
+      manualReference: reference,
+      configuredBaseline: 0.3,
+    });
+    expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(
+      (reference ?? 0.3) + 0.07,
+    );
+  },
+);
+
+it.each([null, 'unconfigured input'])(
+  'preserves an own human command made during unresolved source %s despite subsequent native feedback',
+  async (gap) => {
+    const s = await setup();
+    s.observe(gap, 0.61);
+    await s.manual(0.45);
+    s.observe(gap, 0.61);
+    expect(s.policy()).toMatchObject({
+      mode: 'manual',
+      manualReference: 0.45,
+      sourceOffset: 0,
+    });
+    s.clock.advanceBy(100);
+    s.observe('Optical', 0.61);
+    s.clock.advanceBy(trimSettlingMs);
+    await s.settle();
+    expect(s.policy().manualReference).toBe(0.45);
+    expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.52);
+  },
+);
+
+it.each([null, 'unconfigured input'])(
+  'keeps legacy volume-first manual detection on unresolved source %s when trim is disabled',
+  async (gap) => {
+    const s = await setup({ ...settings(), opticalOffsets: {} });
+    s.observe(gap, 0.61);
+    expect(s.policy()).toMatchObject({ mode: 'manual', manualReference: 0.61 });
+    s.clock.advanceBy(100);
+    s.observe('Optical', 0.61);
+    s.clock.advanceBy(trimSettlingMs);
+    await s.settle();
+    expect(s.policy()).toMatchObject({
+      mode: 'manual',
+      manualReference: 0.61,
+      sourceOffset: 0,
+    });
+    expect(s.volumes()).toHaveLength(0);
+  },
+);
+
+it('keeps the unresolved-source deferral bounded to two seconds', async () => {
+  const s = await setup();
+  s.observe(null, 0.3);
+  s.clock.advanceBy(trimSettlingMs + 1);
+  s.observe(null, 0.45);
+  expect(s.policy()).toMatchObject({
+    mode: 'manual',
+    manualReference: 0.45,
+    sourceOffset: 0,
+  });
+});
+
+it.each([null, 'unconfigured input'])(
+  'preserves a human fade destination through a volume-first unresolved source %s',
+  async (gap) => {
+    const s = await setup();
+    s.engine.startMusicFade({ target, volume: 0.4, durationMs: 5_000 }, human);
+    s.observe(gap, 0.61);
+    expect(s.engine.state.music.fades[target]?.status).toBe('interrupted');
+    expect(s.policy().manualReference).toBeCloseTo(0.4);
+    s.clock.advanceBy(100);
+    s.observe('Optical', 0.61);
+    s.clock.advanceBy(trimSettlingMs);
+    await s.settle();
+    expect(s.policy().manualReference).toBeCloseTo(0.4);
+    expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.47);
+  },
+);
+
+it.each([null, 'unconfigured input'])(
+  'still accepts explicitly attributed physical volume during unresolved source %s',
+  async (gap) => {
+    const s = await setup();
+    s.observe(gap, 0.45, undefined, undefined, true, {
+      actor: { type: 'physical_remote' },
+      source: 'physical_remote',
+    });
+    expect(s.policy()).toMatchObject({
+      mode: 'manual',
+      manualReference: 0.45,
+      sourceOffset: 0,
+    });
+    s.clock.advanceBy(100);
+    s.observe('Optical', 0.61);
+    s.clock.advanceBy(trimSettlingMs);
+    await s.settle();
+    expect(s.policy().manualReference).toBe(0.45);
+    expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.52);
+  },
+);

@@ -1091,7 +1091,9 @@ export class MusicController {
     // unavailable gap may outlast the previous source's entire settling window.
     if (
       trimConfigured &&
-      (sourceInitialized || sourceResolved) &&
+      (sourceInitialized ||
+        sourceResolved ||
+        device.availability !== 'available') &&
       observation.available
     ) {
       if (device.observed.source !== null && previousVolume !== null) {
@@ -1143,6 +1145,20 @@ export class MusicController {
           knownRestore !== undefined &&
           observation.values.volume !== null &&
           Math.abs(knownRestore - observation.values.volume) < 0.005));
+    // The receiver can publish its restored volume before publishing its source.
+    // During the same bounded transition, unknown aliases carry no neutral-volume
+    // evidence. Keep explicit human commands/observations independently authoritative.
+    const unresolvedSourceVolume =
+      trimConfigured &&
+      observation.available &&
+      this.sourceSettling.has(observation.target) &&
+      !device.allowedSources.includes(observation.values.source ?? '') &&
+      observation.commandId === undefined &&
+      (!observation.provenance ||
+        !['user', 'physical_remote'].includes(
+          observation.provenance.actor.type,
+        ));
+    const sourceVolumeFeedback = nativeSourceVolume || unresolvedSourceVolume;
     const observedVolume = observation.values.volume;
     const observedPlayback = observation.values.playback;
     const newPlaybackTransition = this.isNewPlaybackTransition(
@@ -1215,7 +1231,7 @@ export class MusicController {
           Boolean(olderVolumeCommand || supersededVolumeCommand)));
     const externalVolumeChange =
       volumeChanged &&
-      !nativeSourceVolume &&
+      !sourceVolumeFeedback &&
       !staleVolumeFeedback &&
       !currentCorrelatedVolumeFeedback &&
       !pendingVolumeCommand;
@@ -1237,7 +1253,7 @@ export class MusicController {
     );
     if (
       reportedVolumeChanged &&
-      (!nativeSourceVolume ||
+      (!sourceVolumeFeedback ||
         currentCorrelatedVolumeFeedback ||
         pendingVolumeCommand)
     ) {
@@ -1294,7 +1310,7 @@ export class MusicController {
     // request. Preserve ordinary feedback matching, then cancel old recovery
     // without manufacturing or releasing a Pause hold.
     if (sourceChanged) this.bumpIntent(observation.target, 'playback');
-    if ((sourceChanged || sourceResolved) && trimConfigured)
+    if ((sourceInitialized || sourceResolved) && trimConfigured)
       this.stopFade(observation.target, 'Source changed', 'interrupted');
     if (externalVolumeChange && observedVolume !== null) {
       this.bumpIntent(observation.target, 'volume');
@@ -1361,7 +1377,7 @@ export class MusicController {
       );
     }
     const fade = this.fades.get(observation.target);
-    if (fade && !staleVolumeFeedback)
+    if (fade && !staleVolumeFeedback && !unresolvedSourceVolume)
       this.acceptFadeObservation(fade, observation, sequence);
     this.pruneHistory(confirmedIds);
     this.publish();
