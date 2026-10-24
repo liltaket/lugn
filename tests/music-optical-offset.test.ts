@@ -1070,3 +1070,143 @@ it('does not replay native restoration into a fade after a pending step dispatch
   expect(s.policy().manualReference).toBeCloseTo(0.33);
   expect(s.volumes()).toHaveLength(Math.ceil((0.4 - 0.3) / 0.02));
 });
+
+it.each(['cancel', 'timeout', 'error'] as const)(
+  'does not commit classified native volume to the human reference when its newer fade ends by %s',
+  async (ending) => {
+    const s = await setup();
+    const dispatch = s.adapter.dispatch.bind(s.adapter);
+    s.observe('Optical', 0.3);
+    s.engine.startMusicFade({ target, volume: 0.4, durationMs: 5_000 }, human);
+    s.clock.advanceBy(100);
+    s.observe('Optical', 0.61);
+    if (ending === 'cancel') s.engine.cancelMusicFade(target, human);
+    else {
+      if (ending === 'error')
+        Object.assign(s.adapter, {
+          dispatch: async () => {
+            throw new Error('simulated dispatch failure');
+          },
+        });
+      s.clock.advanceBy(1_000);
+      await flush();
+      if (ending === 'timeout') {
+        s.clock.advanceBy(10_000);
+        await flush();
+      }
+    }
+    expect(s.engine.state.music.fades[target]?.status).toBe(
+      ending === 'cancel'
+        ? 'cancelled'
+        : ending === 'timeout'
+          ? 'unconfirmed'
+          : 'failed',
+    );
+    expect(s.policy().manualReference).toBeCloseTo(0.33);
+    Object.assign(s.adapter, { dispatch });
+    // A settled source may apply the preserved destination once; acknowledge
+    // that correction before checking that terminal handling does not loop.
+    s.clock.advanceBy(trimSettlingMs);
+    await s.settle();
+    expect(s.policy().manualReference).toBeCloseTo(0.33);
+    const count = s.volumes().length;
+    s.clock.advanceBy(20_000);
+    await flush();
+    expect(s.volumes()).toHaveLength(count);
+    await s.switchTo('Spotify');
+    expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.33);
+  },
+);
+
+it('continues committing legitimate observed volume when a human cancels a fade', async () => {
+  const s = await setup();
+  await s.switchTo('Optical');
+  s.engine.startMusicFade({ target, volume: 0.47, durationMs: 5_000 }, human);
+  s.clock.advanceBy(1_000);
+  await s.settle();
+  const actual = s.engine.getMusicState(target).observed.volume!;
+  expect(actual).toBeGreaterThan(0.37);
+  expect(actual).toBeLessThan(0.47);
+  s.engine.cancelMusicFade(target, human);
+  expect(s.policy().manualReference).toBeCloseTo(actual - 0.07);
+  await s.switchTo('Spotify');
+  expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(
+    actual - 0.07,
+  );
+});
+
+it.each(['save', 'toggle'] as const)(
+  'preserves the currently capped Optical physical level when daily automation is disabled via %s',
+  async (path) => {
+    const config = {
+      ...settings(),
+      minimum: 0.05,
+      maximum: 0.8,
+      autoBaseVolumes: { [target]: 0.98 },
+    };
+    const s = await setup(config);
+    await s.switchTo('Optical');
+    expect(s.engine.getMusicState(target).observed.volume).toBe(0.8);
+    const count = s.volumes().length;
+    if (path === 'save')
+      s.engine.applyMusicVolumeSettings({ ...config, enabled: false });
+    else await s.engine.handleBilresaPress('2', 'multi_press_1');
+    s.observe('Optical', 0.8);
+    await s.settle();
+    expect(s.engine.getMusicState(target).observed.volume).toBe(0.8);
+    expect(s.volumes()).toHaveLength(count);
+    expect(s.policy()).toMatchObject({
+      mode: 'auto',
+      policyEnabled: false,
+      configuredBaseline: 0.98,
+    });
+    await s.switchTo('Spotify');
+    expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.73);
+    await s.switchTo('Optical');
+    expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.8);
+    expect(s.engine.getMusicVolumeSettings().autoBaseVolumes[target]).toBe(
+      0.98,
+    );
+  },
+);
+
+it('does not commit a terminal device volume after source observation trust is lost', async () => {
+  const s = await setup();
+  await s.switchTo('Optical');
+  s.engine.startMusicFade({ target, volume: 0.4, durationMs: 5_000 }, human);
+  s.trust(false);
+  s.engine.cancelMusicFade(target, human);
+  expect(s.policy().manualReference).toBeCloseTo(0.33);
+});
+
+it('preserves newer fade intent through disposal after classified native restoration without further commands', async () => {
+  const s = await setup();
+  s.observe('Optical', 0.3);
+  s.engine.startMusicFade({ target, volume: 0.4, durationMs: 5_000 }, human);
+  s.clock.advanceBy(100);
+  s.observe('Optical', 0.61);
+  const count = s.volumes().length;
+  s.engine.dispose();
+  expect(
+    s.engine.getMusicIntentSnapshot().targets[target]?.manualReference,
+  ).toBeCloseTo(0.33);
+  s.clock.advanceBy(60_000);
+  await flush();
+  expect(s.volumes()).toHaveLength(count);
+});
+
+it('retains ignored native-volume attribution across unchanged metadata repeats before terminal cancellation', async () => {
+  const s = await setup();
+  s.observe('Optical', 0.3);
+  s.engine.startMusicFade({ target, volume: 0.4, durationMs: 5_000 }, human);
+  s.clock.advanceBy(100);
+  s.observe('Optical', 0.61);
+  s.clock.advanceBy(trimSettlingMs + 500);
+  await flush();
+  s.observe('Optical', 0.61); // same ignored value, after the classification window
+  expect(s.engine.state.music.fades[target]?.status).toBe('active');
+  s.engine.cancelMusicFade(target, human);
+  expect(s.policy().manualReference).toBeCloseTo(0.33);
+  await s.switchTo('Spotify');
+  expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.33);
+});

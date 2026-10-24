@@ -1215,15 +1215,22 @@ export class MusicAutomation {
         this.options.sourceForVolumeTrim?.(target, true) != null
       ) {
         const automatic = this.calculateVolume(this.configuredBaseline(target));
+        const sourceOffset = this.sourceOffset(target, true);
+        const neutral =
+          automatic.baseline! + automatic.dailyOffset + automatic.personOffset;
+        // Dropping daily bounds must not jump the physical level. Retain an
+        // unclipped neutral reference only when trim-only clamping keeps it.
+        const retainsLevel =
+          Math.abs(Math.min(1, Math.max(0, neutral + sourceOffset)) - volume) <=
+          Number.EPSILON;
         this.sourceReferences.set(
           target,
           !this.getManualVolumeHold(target) &&
             this.presence === 'occupied' &&
-            this.homePresence !== 'away'
-            ? automatic.baseline! +
-                automatic.dailyOffset +
-                automatic.personOffset
-            : volume - this.sourceOffset(target, true),
+            this.homePresence !== 'away' &&
+            retainsLevel
+            ? neutral
+            : volume - sourceOffset,
         );
       }
     }

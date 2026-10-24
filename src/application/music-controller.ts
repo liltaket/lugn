@@ -1234,10 +1234,23 @@ export class MusicController {
         !pendingVolumeCommand) ||
         (volumeChanged &&
           Boolean(olderVolumeCommand || supersededVolumeCommand)));
+    // Metadata repeats are still the same ignored sample, not fresh evidence
+    // of human volume. A matched step or explicitly attributed human event wins.
+    const repeatsIgnoredSourceVolume =
+      observation.available &&
+      device.availability === 'available' &&
+      !sourceInitialized &&
+      !reportedVolumeChanged &&
+      this.lastObservations.get(observation.target)?.fadeFeedbackAllowed ===
+        false &&
+      (!observation.provenance ||
+        !['user', 'physical_remote'].includes(
+          observation.provenance.actor.type,
+        ));
     // Source restore attribution also applies to fade progress, including the
     // dispatch-acceptance replay below. Only matched current steps can progress.
     const fadeFeedbackAllowed =
-      !sourceVolumeFeedback ||
+      (!sourceVolumeFeedback && !repeatsIgnoredSourceVolume) ||
       currentCorrelatedVolumeFeedback ||
       pendingVolumeCommand !== undefined;
     const externalVolumeChange =
@@ -1800,14 +1813,24 @@ export class MusicController {
     runtime: MusicFadeRuntime,
     phase: MusicFadeLifecycleEvent['phase'],
   ): void {
+    const latest = this.lastObservations.get(runtime.state.target);
+    const device = this.state.devices[runtime.state.target];
+    const terminalVolumeUnknown =
+      latest?.fadeFeedbackAllowed === false ||
+      (this.sourceTrimConfigured(runtime.state.target) &&
+        (!this.observationTrusted(runtime.state.target) ||
+          device?.availability !== 'available'));
     this.onFadeLifecycle?.({
       phase,
       target: runtime.state.target,
       state: structuredClone(runtime.state),
-      actualVolume: this.lastObservations.get(runtime.state.target)
-        ?.staleVolumeFeedback
-        ? runtime.state.observedVolume
-        : (this.state.devices[runtime.state.target]?.observed.volume ?? null),
+      // A classified restore is not verified human fade progress, including
+      // cancellation, dispatch errors and feedback timeouts.
+      actualVolume: terminalVolumeUnknown
+        ? null
+        : latest?.staleVolumeFeedback
+          ? runtime.state.observedVolume
+          : (device?.observed.volume ?? null),
       provenance: structuredClone(runtime.provenance),
     });
   }

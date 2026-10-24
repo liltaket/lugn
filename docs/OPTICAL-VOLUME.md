@@ -43,8 +43,10 @@ feedback must not replace the neutral reference. The feature sends existing type
 volume commands; it never starts playback or selects an input itself.
 
 Optical compensation has its own enable switch and also works when daily volume
-automation is disabled. Room presence, home/away, trustworthy feedback and active
-user fades continue to restrict automated commands.
+automation is disabled. Turning daily automation off preserves the current
+physical level, including when Auto's bounds were clipping the target. Room
+presence, home/away, trustworthy feedback and active user fades continue to
+restrict automated commands.
 
 Source changes and the corresponding volume feedback are handled as source
 compensation, rather than a new user volume reference. This includes the player's
