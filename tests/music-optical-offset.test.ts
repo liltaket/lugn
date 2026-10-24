@@ -43,7 +43,7 @@ async function setup(
   let trusted = true;
   let provenanceOverride: MusicObservation['provenance'];
   const wrappedAdapter: MusicAdapter = {
-    dispatch: adapter.dispatch.bind(adapter),
+    dispatch: (command) => adapter.dispatch(command),
     subscribe: (listener) =>
       adapter.subscribe((observation) =>
         listener({
@@ -942,3 +942,131 @@ it.each([null, 'unconfigured input'])(
     expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.52);
   },
 );
+
+it.each([true, false])(
+  'keeps a newer Optical human fade destination through native restore and completes legitimate step feedback (correlated=%s)',
+  async (correlated) => {
+    const s = await setup();
+    s.observe('Optical', 0.3);
+    s.engine.startMusicFade({ target, volume: 0.4, durationMs: 5_000 }, human);
+    s.clock.advanceBy(100);
+    s.observe('Optical', 0.61);
+    expect(s.engine.state.music.fades[target]?.status).toBe('active');
+    expect(s.policy().manualReference).toBeCloseTo(0.33);
+    for (
+      let i = 0;
+      i < 12 && s.engine.state.music.fades[target]?.status !== 'completed';
+      i++
+    ) {
+      s.clock.advanceBy(1_000);
+      await flush();
+      const command = s
+        .volumes()
+        .find(
+          (command) =>
+            s.engine.state.music.commands.find(
+              (record) => record.id === command.id,
+            )?.status === 'pending',
+        );
+      if (command)
+        s.observe(
+          'Optical',
+          (command.requested as { value: number }).value,
+          correlated ? command.id : undefined,
+        );
+      await flush();
+    }
+    expect(s.engine.state.music.fades[target]?.status).toBe('completed');
+    expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.4);
+    expect(s.policy().manualReference).toBeCloseTo(0.33);
+    expect(s.volumes()).toHaveLength(Math.ceil((0.4 - 0.3) / 0.02));
+    const before = s.volumes().length;
+    s.clock.advanceBy(20_000);
+    await s.settle();
+    expect(s.volumes()).toHaveLength(before);
+    await s.switchTo('Spotify');
+    expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.33);
+  },
+);
+
+it.each([true, false])(
+  'accepts a legitimate final fade step equal to remembered native source volume (correlated=%s)',
+  async (correlated) => {
+    const s = await setup();
+    await s.switchTo('Optical');
+    await s.switchTo('Spotify');
+    const before = s.volumes().length;
+    s.observe('Optical', 0.3);
+    s.engine.startMusicFade({ target, volume: 0.37, durationMs: 1_000 }, human);
+    s.clock.advanceBy(100);
+    s.observe('Optical', 0.37); // exact remembered native restore, before any fade step
+    expect(s.engine.state.music.fades[target]?.status).toBe('active');
+    for (
+      let i = 0;
+      i < 20 && s.engine.state.music.fades[target]?.status !== 'completed';
+      i++
+    ) {
+      s.clock.advanceBy(250);
+      await flush();
+      const command = s
+        .volumes()
+        .find(
+          (command) =>
+            s.engine.state.music.commands.find(
+              (record) => record.id === command.id,
+            )?.status === 'pending',
+        );
+      if (command)
+        s.observe(
+          'Optical',
+          (command.requested as { value: number }).value,
+          correlated ? command.id : undefined,
+        );
+      await flush();
+    }
+    expect(s.engine.state.music.fades[target]?.status).toBe('completed');
+    expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.37);
+    expect(s.policy().manualReference).toBeCloseTo(0.3);
+    expect(s.volumes()).toHaveLength(before + Math.ceil((0.37 - 0.3) / 0.02));
+  },
+);
+
+it('does not replay native restoration into a fade after a pending step dispatch is accepted', async () => {
+  const s = await setup();
+  const dispatch = s.adapter.dispatch.bind(s.adapter);
+  let acceptDispatch!: () => void;
+  let first = true;
+  Object.assign(s.adapter, {
+    dispatch: async (command: Parameters<typeof dispatch>[0]) => {
+      await dispatch(command);
+      if (!first) return;
+      first = false;
+      s.observe('Optical', 0.61);
+      await new Promise<void>((resolve) => {
+        acceptDispatch = resolve;
+      });
+    },
+  });
+  s.observe('Optical', 0.3);
+  s.engine.startMusicFade({ target, volume: 0.4, durationMs: 5_000 }, human);
+  s.clock.advanceBy(1_000);
+  await flush();
+  expect(s.engine.state.music.fades[target]?.status).toBe('active');
+  expect(s.policy().manualReference).toBeCloseTo(0.33);
+  acceptDispatch();
+  await flush();
+  expect(s.engine.state.music.fades[target]?.status).toBe('active');
+  await s.settle();
+  for (
+    let i = 0;
+    i < 12 && s.engine.state.music.fades[target]?.status !== 'completed';
+    i++
+  ) {
+    s.clock.advanceBy(1_000);
+    await s.settle();
+  }
+  expect(s.engine.state.music.fades[target]?.status).toBe('completed');
+  expect(s.engine.getMusicState(target).observed.volume).toBeCloseTo(0.4);
+  expect(s.policy().manualReference).toBeCloseTo(0.33);
+  expect(s.volumes()).toHaveLength(Math.ceil((0.4 - 0.3) / 0.02));
+});

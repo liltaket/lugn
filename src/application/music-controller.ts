@@ -115,7 +115,11 @@ export class MusicController {
   private readonly attributedSupersededVolumeCommands = new Set<string>();
   private readonly lastObservations = new Map<
     string,
-    { observation: MusicObservation; staleVolumeFeedback: boolean }
+    {
+      observation: MusicObservation;
+      staleVolumeFeedback: boolean;
+      fadeFeedbackAllowed: boolean;
+    }
   >();
   // Intent/transition ordering must outlive command timeout and bounded ledger
   // history. A metadata-only HA snapshot cannot cancel a user's playback intent.
@@ -779,6 +783,7 @@ export class MusicController {
       if (
         latest &&
         !latest.staleVolumeFeedback &&
+        latest.fadeFeedbackAllowed &&
         sequence > runtime.baselineSequence
       )
         this.acceptFadeObservation(runtime, latest.observation, sequence);
@@ -1229,6 +1234,12 @@ export class MusicController {
         !pendingVolumeCommand) ||
         (volumeChanged &&
           Boolean(olderVolumeCommand || supersededVolumeCommand)));
+    // Source restore attribution also applies to fade progress, including the
+    // dispatch-acceptance replay below. Only matched current steps can progress.
+    const fadeFeedbackAllowed =
+      !sourceVolumeFeedback ||
+      currentCorrelatedVolumeFeedback ||
+      pendingVolumeCommand !== undefined;
     const externalVolumeChange =
       volumeChanged &&
       !sourceVolumeFeedback &&
@@ -1298,6 +1309,7 @@ export class MusicController {
     this.lastObservations.set(observation.target, {
       observation: structuredClone(observation),
       staleVolumeFeedback,
+      fadeFeedbackAllowed,
     });
     const confirmedIds = new Set<string>();
     for (const command of [...this.state.commands])
@@ -1377,7 +1389,7 @@ export class MusicController {
       );
     }
     const fade = this.fades.get(observation.target);
-    if (fade && !staleVolumeFeedback && !unresolvedSourceVolume)
+    if (fade && !staleVolumeFeedback && fadeFeedbackAllowed)
       this.acceptFadeObservation(fade, observation, sequence);
     this.pruneHistory(confirmedIds);
     this.publish();
