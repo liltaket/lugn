@@ -830,11 +830,11 @@ describe('Hub bedtime and morning flow (simulated DOM and network)', () => {
       at: data.generatedAt + 8 * 3600000,
     };
     ui.render(data);
-    const plannedDescription = summaries().find(
-      (item) => item.title === 'Morgonplan',
-    )?.description;
-    expect(plannedDescription?.indexOf('Planerad')).toBeLessThan(
-      plannedDescription?.indexOf('Senast misslyckades'),
+    const plannedDescription =
+      summaries().find((item) => item.title === 'Morgonplan')?.description ??
+      '';
+    expect(plannedDescription.indexOf('Planerad')).toBeLessThan(
+      plannedDescription.indexOf('Senast misslyckades'),
     );
 
     data.routines.runs = [
