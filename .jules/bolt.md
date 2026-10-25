@@ -1,9 +1,3 @@
-## 2024-05-18 - Avoid [...arr].reverse().find()
-
-**Learning:** When trying to find the last item in an array matching a predicate, `[...arr].reverse().find()` creates a shallow copy of the entire array and reverses it. This leads to an O(N) memory allocation and O(N) operation overhead before the search even begins. This was found in `CommandLedger` where it is frequently called.
-**Action:** Replace `[...arr].reverse().find()` with backward `for` loops. This avoids the memory allocation and retains O(N) worst-case time complexity, but fast-paths early exit for matching elements near the end. `Array.prototype.findLast()` would be another option if the project configuration supported ES2023 or newer.
-
-## 2024-05-18 - Caching Intl.DateTimeFormat and Intl.NumberFormat instantiations
-
-**Learning:** `Intl.DateTimeFormat` and `Intl.NumberFormat` instantiation is relatively expensive in JavaScript. If instantiated inline inside highly-frequent operations like render loops or timer callbacks (e.g. `setClock` running every second), it can become a performance bottleneck.
-**Action:** Always extract and cache `Intl.DateTimeFormat` and `Intl.NumberFormat` instances into module-level variables or class-level properties when used repeatedly or on hot paths.
+## 2024-10-24 - Intl object instantiation in hot paths
+**Learning:** Instantiating `Intl.DateTimeFormat` or `Intl.NumberFormat` is a known expensive operation in JS and a performance bottleneck if executed within frequent render loops, especially on low-power displays/clients. The `renderRoutines` function was doing exactly this for every server status update.
+**Action:** Always hoist and cache `Intl` object instances at the module or class level rather than allocating them repeatedly within hot paths or loops. When modifying frontend global variables that are tested via `node:vm` `runInContext`, ensure those variables and dependencies (`Intl` object, custom regex extraction for dependencies) are exposed properly to the test context.

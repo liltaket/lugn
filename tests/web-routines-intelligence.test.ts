@@ -271,6 +271,7 @@ function ui() {
     fetch,
     AbortController,
     TypeError,
+    Intl,
     URL,
     dashboardView: get('dashboard-view'),
     fetchOverview: async () => {
@@ -290,10 +291,17 @@ function ui() {
   ]
     .map(([fn]) => fn)
     .join('\n');
+  const consts = [
+    ...source.matchAll(
+      /^const \w+ = new Intl\.DateTimeFormat\([\s\S]*?^\}\);/gm,
+    ),
+  ]
+    .map(([c]) => c)
+    .join('\n');
   runInContext(
     `let routineDraft=null, routineOriginal=null, routineGeneration=null, routinePreviewRevision=0;
     let intelligenceDraft=null, intelligenceOriginal=null, intelligenceGeneration=null, mappingDraft=[];
-    const l2Pending=new Set(); ${functions}
+    const l2Pending=new Set(); ${consts} ${functions}
     render = renderLugn2; fetchOverview = async () => testRefresh(); initializeLugn2(); renderLugn2();`,
     Object.assign(context, {
       testRefresh: async () => {
