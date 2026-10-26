@@ -7,6 +7,14 @@ const timeFormat = new Intl.DateTimeFormat('sv-SE', {
   second: '2-digit',
 });
 
+// Bolt optimization: Cache Intl.DateTimeFormat instead of recreating inside render function
+const routineDateFormat = new Intl.DateTimeFormat('sv-SE', {
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  timeZone: 'Europe/Stockholm',
+});
+
 const loginView = document.getElementById('login-view');
 const dashboardView = document.getElementById('dashboard-view');
 const loginForm = document.getElementById('login-form');
@@ -1229,8 +1237,9 @@ function render() {
 
 function restoreFocus(focusedKey, focusedValue) {
   if (!focusedKey) return;
-  const element = [...document.querySelectorAll('[data-focus-key]')].find(
-    (candidate) => candidate.dataset.focusKey === focusedKey,
+  // Bolt optimization: Use querySelector instead of converting NodeList to an array
+  const element = document.querySelector(
+    `[data-focus-key="${CSS.escape(focusedKey)}"]`,
   );
   if (!element) return;
   element.focus({ preventScroll: true });
@@ -3724,14 +3733,8 @@ function renderRoutines() {
     return;
   }
   const upcoming = data.next.slice().sort((a, b) => a.at - b.at)[0];
-  const date = new Intl.DateTimeFormat('sv-SE', {
-    weekday: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'Europe/Stockholm',
-  });
   l2('next-routine').textContent = upcoming
-    ? `${data.definitions.find((item) => item.id === upcoming.routineId)?.name ?? 'Rutin'} · ${date.format(upcoming.at)} i Stockholm`
+    ? `${data.definitions.find((item) => item.id === upcoming.routineId)?.name ?? 'Rutin'} · ${routineDateFormat.format(upcoming.at)} i Stockholm`
     : 'Ingen schemalagd rutin väntar. Du väljer när rummet ska förändras.';
   if (!data.definitions.length)
     l2('routine-list').append(
