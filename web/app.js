@@ -64,6 +64,10 @@ class ClerkAuthorizationError extends Error {}
 tokenHelp.textContent =
   'Öppna tunneln från din dator med ssh -N -L 8787:127.0.0.1:8787 <user>@<host> och besök http://127.0.0.1:8787/ui/. Hämta token på Lugn-värden enligt docs/OPERATIONS.md, i ett privat terminalfönster, och klistra in den bara här.';
 
+tokenInput.addEventListener('input', () => {
+  tokenInput.removeAttribute('aria-invalid');
+});
+
 loginForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void createSession();
@@ -286,8 +290,8 @@ async function startSession(credential, automatic) {
     } else if (error instanceof Error) {
       setLoginError(
         error.message,
-        error.message === 'Kontrollera token och försök igen.' ||
-          error.message === 'Det här Clerk-kontot har inte åtkomst till Lugn.',
+        error.message === 'Kontrollera token och försök igen.' &&
+          authProvider === 'token',
       );
     } else {
       setLoginError('Sessionen kunde inte skapas. Försök igen.');
