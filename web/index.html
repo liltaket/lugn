@@ -376,6 +376,7 @@
                 class="button button-quiet"
                 id="close-preset-button"
                 type="button"
+                title="Stäng (Esc)"
               >
                 Stäng
               </button>
@@ -383,7 +384,9 @@
             <form id="preset-form">
               <fieldset id="preset-fields">
                 <div class="preset-name-field">
-                  <label for="preset-name">Namn</label>
+                  <label for="preset-name"
+                    >Namn <span aria-hidden="true">*</span></label
+                  >
                   <input
                     id="preset-name"
                     name="name"
@@ -391,6 +394,7 @@
                     maxlength="80"
                     required
                     autocomplete="off"
+                    placeholder="T.ex. Myskväll"
                   />
                 </div>
                 <div class="preset-light-list" id="preset-light-list"></div>
@@ -437,6 +441,7 @@
                   class="button button-quiet"
                   id="preset-confirm-no"
                   type="button"
+                  title="Avbryt (Esc)"
                 >
                   Avbryt
                 </button>
