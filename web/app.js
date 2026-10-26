@@ -2197,6 +2197,7 @@ function renderMusicPlayer(target, device, commands, fade) {
     `Reglagevärde ${volumeSlider.value}%`,
   );
   volumePreview.htmlFor = volumeSlider.id;
+  volumePreview.setAttribute('aria-live', 'polite');
   volumeSlider.addEventListener('input', () => {
     volumeSlider.setAttribute(
       'aria-valuetext',
@@ -2594,6 +2595,7 @@ function renderBrightnessControl(target, device, disabled) {
     Number.isInteger(current) ? `${current}%` : 'Okänd',
   );
   value.htmlFor = slider.id;
+  value.setAttribute('aria-live', 'polite');
   slider.addEventListener('input', () => {
     slider.setAttribute('aria-valuetext', `${slider.value} procent`);
     value.textContent = `Nytt önskemål ${slider.value}%`;
