@@ -808,7 +808,6 @@ async function restoreSessionOnStartup() {
     tokenInput.disabled = false;
     loginSubmit.disabled = false;
     loginSubmit.textContent = 'Anslut';
-    loginSubmit.removeAttribute('aria-busy');
     setLiveStatus('Inloggning krävs');
   } catch (error) {
     if (!authConfigLoaded) {
@@ -838,13 +837,14 @@ async function restoreSessionOnStartup() {
     tokenInput.disabled = authProvider === 'clerk';
     loginSubmit.disabled = authProvider === 'clerk';
     loginSubmit.textContent = 'Anslut';
-    loginSubmit.removeAttribute('aria-busy');
     setLoginError(
       error instanceof Error
         ? error.message
         : 'Sessionsstatus kunde inte hämtas. Kontrollera SSH-tunneln och försök igen.',
     );
     setLiveStatus('Kan inte kontrollera session', 'bad');
+  } finally {
+    loginSubmit.removeAttribute('aria-busy');
   }
 }
 
