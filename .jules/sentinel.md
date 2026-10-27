@@ -1,0 +1,5 @@
+## 2024-05-15 - Timing Attack Vulnerability in Token Comparison
+
+**Vulnerability:** Found timing attack vulnerabilities in `secretsEqual` (`src/runtime/display-server.ts`), `constantTimeEqual` (`src/runtime/http-server.ts`), and `authorized` (`src/runtime/http-server.ts`). These functions compared token lengths before calling `crypto.timingSafeEqual()`, short-circuiting the comparison if the lengths didn't match.
+**Learning:** `crypto.timingSafeEqual()` requires inputs of identical length. Short-circuiting based on length differences allows attackers to deduce the expected token length and potentially its contents through timing analysis, negating the purpose of constant-time comparison.
+**Prevention:** To safely compare strings of potentially different lengths without leaking timing information, hash both inputs using a cryptographic hash function (like SHA-256) _before_ passing them to `timingSafeEqual()`. This guarantees equal buffer lengths (the hash digest size) and ensures constant execution time regardless of input length.
