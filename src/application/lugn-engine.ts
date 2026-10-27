@@ -1010,28 +1010,35 @@ export class LugnEngine {
     if (!observation.available) return undefined;
     const source = observation.values.source;
     const commands = this.musicController.state.commands;
-    const command = [...commands]
-      .reverse()
-      .find(
-        (item) =>
-          item.target === observation.target &&
-          !['failed', 'superseded'].includes(item.status) &&
-          observation.observedAt >= item.issuedAt &&
-          this.clock.now() - item.issuedAt <= attributionMs &&
-          (observation.commandId === item.id ||
-            (observation.commandId === undefined &&
-              !this.attributedMusicSourceCommands.has(item.id))) &&
-          ((item.requested.property === 'source' &&
-            previous?.source !== source &&
-            item.requested.value === source) ||
-            (item.requested.property === 'preset' &&
-              observation.values.playback === 'playing' &&
-              (observation.commandId === item.id ||
-                source?.toLowerCase() ===
-                  (item.requested.value === 'spotify_dj'
-                    ? 'spotify'
-                    : 'optical')))),
-      );
+    let command: MusicCommandRecord | undefined;
+
+    // Bolt optimization: Iterating backward avoids O(N) allocation overhead compared to [...arr].reverse().find()
+    for (let i = commands.length - 1; i >= 0; i--) {
+      const item = commands[i]!;
+      if (
+        item.target === observation.target &&
+        !['failed', 'superseded'].includes(item.status) &&
+        observation.observedAt >= item.issuedAt &&
+        this.clock.now() - item.issuedAt <= attributionMs &&
+        (observation.commandId === item.id ||
+          (observation.commandId === undefined &&
+            !this.attributedMusicSourceCommands.has(item.id))) &&
+        ((item.requested.property === 'source' &&
+          previous?.source !== source &&
+          item.requested.value === source) ||
+          (item.requested.property === 'preset' &&
+            observation.values.playback === 'playing' &&
+            (observation.commandId === item.id ||
+              source?.toLowerCase() ===
+                (item.requested.value === 'spotify_dj'
+                  ? 'spotify'
+                  : 'optical'))))
+      ) {
+        command = item;
+        break;
+      }
+    }
+
     if (command) {
       this.attributedMusicSourceCommands.add(command.id);
       for (const id of this.attributedMusicSourceCommands)
