@@ -12,6 +12,9 @@ class Element {
   textContent = '';
   type = '';
   className = '';
+  id = '';
+  htmlFor = '';
+  style = { display: '' };
   dataset: Record<string, string> = {};
   children: Element[] = [];
   attributes = new Map<string, string>();
