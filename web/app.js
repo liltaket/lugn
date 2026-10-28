@@ -2370,12 +2370,14 @@ function renderMusicPlayer(target, device, commands, fade) {
 }
 
 function latestMusicCommand(commands, target, property) {
-  return [...commands]
-    .reverse()
-    .find(
-      (command) =>
-        command.target === target && command.requested?.property === property,
-    );
+  // Bolt optimization: Avoid [...arr].reverse().find() to prevent O(N) memory allocation and retain early exit fast-path.
+  for (let i = commands.length - 1; i >= 0; i--) {
+    const command = commands[i];
+    if (command.target === target && command.requested?.property === property) {
+      return command;
+    }
+  }
+  return undefined;
 }
 
 function musicPropertyPending(command, actionKey) {
