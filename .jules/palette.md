@@ -12,3 +12,8 @@
 
 **Learning:** Found that the main login submission button disabled itself and changed text during loading but failed to announce to screen readers via the `aria-busy` attribute, leaving them without context on the background loading status.
 **Action:** When adding or verifying loading states that modify button text to include a loading indication, ensure the `aria-busy` attribute is also toggled correctly and cleaned up using `finally` blocks to keep the component fully accessible in all execution paths.
+
+## 2025-02-18 - Adding aria-busy to camera and automation save operations
+
+**Learning:** During asynchronous API calls to save camera, intelligence, or routine settings, the buttons appropriately updated their text content to indicate saving, but neglected to toggle the `aria-busy` attribute. This is vital for screen readers to convey the pending processing state accurately.
+**Action:** Always complement text changes denoting loading or saving with `setAttribute('aria-busy', 'true')` on the button, and ensure it is reliably cleaned up in success and error paths (or in state-deriving render functions).

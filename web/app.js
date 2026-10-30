@@ -4181,6 +4181,11 @@ function updateLugn2Controls() {
     overviewStale ||
     !routineDirty() ||
     l2Pending.has('routine');
+  if (l2Pending.has('routine')) {
+    l2('routine-save').setAttribute('aria-busy', 'true');
+  } else {
+    l2('routine-save').removeAttribute('aria-busy');
+  }
   l2('routine-delete').disabled =
     !routinesAvailable || overviewStale || l2Pending.has('routine');
   l2('routine-preview').disabled =
@@ -4194,6 +4199,11 @@ function updateLugn2Controls() {
     overviewStale ||
     !intelligenceDirty() ||
     l2Pending.has('intelligence');
+  if (l2Pending.has('intelligence')) {
+    l2('intelligence-save').setAttribute('aria-busy', 'true');
+  } else {
+    l2('intelligence-save').removeAttribute('aria-busy');
+  }
 }
 function renderLugn2() {
   l2('snapshot-notice').hidden = !overviewStale;
@@ -4943,6 +4953,11 @@ function updateCameraWebControls() {
   l2('camera-save').textContent = cameraWebBusy
     ? 'Sparar …'
     : 'Spara kamerainställningar';
+  if (cameraWebBusy) {
+    l2('camera-save').setAttribute('aria-busy', 'true');
+  } else {
+    l2('camera-save').removeAttribute('aria-busy');
+  }
 }
 function renderCameraWeb() {
   const data = overview?.cameraDashboard;
