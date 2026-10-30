@@ -4449,13 +4449,21 @@ function renderVolumePoints() {
     numberLabel.append(number);
     const sliderLabel = document.createElement('label');
     sliderLabel.className = 'settings-point-slider';
-    sliderLabel.textContent = `Justera tillägg vid ${settingsTime(point.minute)}`;
+
+    const sliderLabelText = document.createElement('span');
+    sliderLabelText.textContent = `Justera tillägg vid ${settingsTime(point.minute)}`;
+    sliderLabel.append(sliderLabelText);
+
+    const sliderId = `settings-point-slider-${index}`;
     const slider = document.createElement('input');
+    slider.id = sliderId;
     slider.type = 'range';
     slider.min = '-100';
     slider.max = '100';
     slider.step = '0.1';
     slider.value = number.value;
+    slider.setAttribute('aria-valuetext', `${slider.value} procentenheter`);
+
     sliderLabel.append(slider);
     function changeOffset(value) {
       point.offset = Number.isFinite(value) ? value / 100 : null;
@@ -4472,21 +4480,25 @@ function renderVolumePoints() {
           )
             ? value
             : '';
-          endpoint.querySelector('input[type=range]').value = Number.isFinite(
-            value,
-          )
-            ? value
-            : 0;
+          const endSlider = endpoint.querySelector('input[type=range]');
+          endSlider.value = Number.isFinite(value) ? value : 0;
+          endSlider.setAttribute(
+            'aria-valuetext',
+            `${endSlider.value} procentenheter`,
+          );
         }
       }
+      slider.setAttribute('aria-valuetext', `${slider.value} procentenheter`);
       updateVolumeSettingsStatus();
     }
     number.addEventListener('input', () => {
       slider.value = number.value;
+      slider.setAttribute('aria-valuetext', `${slider.value} procentenheter`);
       changeOffset(number.valueAsNumber);
     });
     slider.addEventListener('input', () => {
       number.value = slider.value;
+      slider.setAttribute('aria-valuetext', `${slider.value} procentenheter`);
       changeOffset(slider.valueAsNumber);
     });
     time.addEventListener('input', () => {
