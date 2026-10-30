@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#111613" />
+    <meta name="theme-color" content="#18201f" />
     <title>Lugn · Rumskontroll</title>
     <link rel="stylesheet" href="./display.css" />
     <script src="./display.js" defer></script>
@@ -20,9 +20,25 @@
               id="presence-count-one"
               class="presence-count-button"
               type="button"
+              aria-label="Sätt till 1 person"
+              title="Sätt till 1 person"
               hidden
             >
-              Sätt till 1 person
+              <svg
+                viewBox="0 0 24 24"
+                width="18"
+                height="18"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <circle cx="12" cy="7" r="3.25" />
+                <path d="M5.5 20v-2a6.5 6.5 0 0 1 13 0v2" />
+              </svg>
+              <span id="presence-count-label" aria-hidden="true">1</span>
             </button>
           </div>
           <div class="clock-meta">
@@ -99,20 +115,178 @@
           id="scene-section"
           aria-labelledby="scene-heading"
         >
-          <h1 id="scene-heading">Ljuslägen</h1>
+          <div class="section-heading">
+            <h1 id="scene-heading">Ljuslägen</h1>
+            <button
+              id="scene-off"
+              class="scene-button light-off"
+              type="button"
+              data-scene="scene.all_off"
+              disabled
+              aria-pressed="false"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="24"
+                height="24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                aria-hidden="true"
+              >
+                <path d="M12 3v9M6.3 5.7a9 9 0 1 0 11.4 0" />
+              </svg>
+              <span class="scene-name">Släck</span
+              ><span class="scene-status" hidden></span
+              ><span class="scene-current-mark" aria-hidden="true"></span>
+            </button>
+          </div>
+          <section
+            class="context-panel"
+            id="context-panel"
+            aria-label="Rutiner och förslag"
+            tabindex="-1"
+            hidden
+          >
+            <div id="context-list" class="context-list"></div>
+          </section>
           <div class="scene-grid" id="scene-grid" aria-live="polite">
             <p class="section-empty">Hämtar ljuslägen …</p>
           </div>
+          <div
+            id="scene-pagination"
+            class="scene-pagination"
+            role="group"
+            aria-label="Fler ljuslägen"
+            hidden
+          >
+            <button id="scene-previous" type="button">Föregående</button>
+            <span id="scene-page-label"></span>
+            <button id="scene-next" type="button">Nästa</button>
+          </div>
+          <section
+            class="context-strip"
+            id="context-strip"
+            aria-label="Aktuellt"
+            hidden
+          >
+            <div class="context-copy" aria-live="polite" aria-atomic="true">
+              <strong id="context-title"></strong
+              ><span id="context-description"></span>
+            </div>
+            <div class="context-actions" id="context-actions"></div>
+          </section>
+          <div
+            id="bedtime-dock"
+            class="bedtime-dock"
+            aria-label="Kväll och morgon"
+            hidden
+          >
+            <button
+              id="bedtime-night"
+              class="bedtime-primary"
+              type="button"
+              hidden
+            >
+              Godnatt
+            </button>
+            <button
+              id="bedtime-morning"
+              class="bedtime-primary"
+              type="button"
+              hidden
+            >
+              God morgon
+            </button>
+            <div id="bedtime-plan" class="bedtime-plan" hidden>
+              <button id="bedtime-edit" type="button"></button>
+              <button
+                id="bedtime-clear"
+                type="button"
+                aria-label="Ta bort morgonplan"
+              >
+                Ta bort
+              </button>
+            </div>
+            <span id="bedtime-status" role="status" hidden></span>
+          </div>
+          <button
+            id="context-details-button"
+            class="quiet-button routine-details"
+            type="button"
+            aria-expanded="false"
+            aria-controls="context-panel"
+            hidden
+          >
+            Rutiner &amp; förslag
+          </button>
         </section>
 
         <section class="music-section" aria-labelledby="music-heading">
           <div class="music-heading">
             <h2 id="music-heading">Musik</h2>
             <span id="music-player-status" role="status"></span>
+            <button
+              id="camera-menu"
+              class="quiet-button"
+              type="button"
+              aria-expanded="false"
+              aria-controls="camera-choices"
+              hidden
+            >
+              Kameror
+            </button>
           </div>
-          <div class="music-now-playing" id="music-now-playing">
-            <strong id="music-title">Ingen musik spelar</strong>
-            <span id="music-source">Välj Spotify DJ eller Optical</span>
+          <div
+            id="camera-choices"
+            class="camera-choices"
+            role="group"
+            aria-label="Välj kamera"
+            hidden
+          ></div>
+          <section
+            id="camera-panel"
+            class="camera-panel"
+            aria-label="Kameravy"
+            hidden
+          >
+            <div class="camera-caption">
+              <div>
+                <strong id="camera-name"></strong
+                ><span id="camera-reason"></span>
+              </div>
+              <button
+                id="camera-close"
+                type="button"
+                aria-label="Stäng kameravyn"
+              >
+                Stäng <span id="camera-countdown" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div class="camera-frame">
+              <img id="camera-image" alt="" hidden />
+              <span id="camera-placeholder">Ansluter till kameran …</span>
+            </div>
+            <p
+              id="camera-status"
+              class="camera-status"
+              role="status"
+              aria-live="off"
+            ></p>
+          </section>
+          <div class="music-feature">
+            <div class="music-artwork" id="music-artwork" data-state="missing">
+              <div class="artwork-fallback" aria-hidden="true">
+                <span>♪</span>
+              </div>
+              <img id="music-artwork-image" alt="" hidden />
+            </div>
+            <div class="music-now-playing" id="music-now-playing">
+              <strong id="music-title">Ingen musik spelar</strong>
+              <span id="music-artist" hidden></span>
+              <span id="music-source">Välj Spotify DJ eller Optical</span>
+            </div>
           </div>
           <div
             class="music-presets"
@@ -146,6 +320,7 @@
               type="button"
               aria-expanded="false"
               aria-controls="music-details"
+              hidden
             >
               Detaljer
             </button>
@@ -192,12 +367,7 @@
               id="music-authority-state"
               role="status"
             ></span>
-            <span class="volume-policy-state" id="music-volume-target-state"
-              >Väntar på volymregel</span
-            >
-            <span class="volume-policy-state" id="music-playback-policy"
-              >Autostartvillkor okända</span
-            >
+
             <span
               class="music-command-state"
               id="music-command-state"
@@ -252,8 +422,16 @@
           aria-labelledby="music-details-heading"
           hidden
         >
-          <h2 id="music-details-heading">Varför och vilka nivåer?</h2>
-          <div class="music-details-scroll">
+          <h2 id="music-details-heading">Musikens villkor</h2>
+          <div
+            class="music-details-scroll"
+            tabindex="0"
+            aria-label="Musikförklaringar"
+          >
+            <p id="music-authority-detail" hidden></p>
+            <p id="music-command-detail" hidden></p>
+            <p id="music-volume-target-state">Väntar på volymregel</p>
+            <p id="music-playback-policy">Autostartvillkor okända</p>
             <dl class="music-facts">
               <div>
                 <dt>Automatik aktiverad</dt>
@@ -298,5 +476,89 @@
         </section>
       </div>
     </main>
+    <div id="bedtime-dialog" class="bedtime-overlay" hidden>
+      <section
+        class="bedtime-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bedtime-heading"
+        aria-describedby="bedtime-summary"
+        tabindex="-1"
+      >
+        <form id="bedtime-form">
+          <div class="bedtime-heading">
+            <h2 id="bedtime-heading">När vill du vakna?</h2>
+            <button
+              id="bedtime-close"
+              type="button"
+              aria-label="Stäng utan att spara"
+            >
+              Stäng
+            </button>
+          </div>
+          <div class="bedtime-time-row">
+            <label for="bedtime-time"
+              >Väcktid
+              <input id="bedtime-time" type="time" value="07:30" required
+            /></label>
+            <div
+              class="bedtime-quick-times"
+              role="group"
+              aria-label="Välj väcktid"
+            >
+              <button id="bedtime-time-0700" type="button">07:00</button
+              ><button id="bedtime-time-0730" type="button">07:30</button
+              ><button id="bedtime-time-0800" type="button">08:00</button>
+            </div>
+          </div>
+          <fieldset class="bedtime-modes">
+            <legend>Hur vill du börja morgonen?</legend>
+            <label
+              ><input
+                id="bedtime-mode-auto"
+                type="radio"
+                name="wake-mode"
+                value="auto"
+                checked
+              />
+              Starta ljuset automatiskt</label
+            >
+            <label
+              ><input
+                id="bedtime-mode-button"
+                type="radio"
+                name="wake-mode"
+                value="button"
+              />
+              Visa God morgon-knappen</label
+            >
+            <label
+              ><input
+                id="bedtime-mode-none"
+                type="radio"
+                name="wake-mode"
+                value="none"
+              />
+              Ingen planerad morgon</label
+            >
+          </fieldset>
+          <label class="bedtime-music"
+            ><input id="bedtime-music" type="checkbox" /> Spela musik på
+            morgonen</label
+          >
+          <p class="bedtime-music-hint">
+            Vald källa och samma volym. Närvaro, tyst tid och Paus gäller.
+          </p>
+          <p id="bedtime-summary" aria-live="polite"></p>
+          <p id="bedtime-error" role="alert" hidden></p>
+          <div class="bedtime-footer">
+            <button id="bedtime-cancel" type="button">Avbryt</button
+            ><button id="bedtime-confirm" type="submit">
+              Godnatt &amp; väck 07:30
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   </body>
 </html>

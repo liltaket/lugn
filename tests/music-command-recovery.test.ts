@@ -890,13 +890,13 @@ it.each(['disable', 'person', 'night'] as const)(
   },
 );
 
-it.each(['explicit', 'temporary'] as const)(
-  'human volume recovery distinguishes %s automation handback',
+it.each(['single-press', 'temporary'] as const)(
+  'human volume recovery survives BILRESA %s suspension and restore',
   async (kind) => {
     const s = setup();
     try {
       const command = await s.issue('volume', 0.4);
-      if (kind === 'explicit') {
+      if (kind === 'single-press') {
         await s.engine.handleBilresaPress('2', 'multi_press_1');
         await s.engine.handleBilresaPress('2', 'multi_press_1');
       } else {
@@ -905,10 +905,8 @@ it.each(['explicit', 'temporary'] as const)(
       }
       await s.advance(1_000);
       await s.advance(2_000);
-      expect(s.adapter.dispatched).toHaveLength(kind === 'explicit' ? 1 : 2);
-      expect(s.record(command.id).recovery?.stage).toBe(
-        kind === 'explicit' ? 'stopped' : 'awaiting_feedback',
-      );
+      expect(s.adapter.dispatched).toHaveLength(2);
+      expect(s.record(command.id).recovery?.stage).toBe('awaiting_feedback');
     } finally {
       s.engine.dispose();
     }

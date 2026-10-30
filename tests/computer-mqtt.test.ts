@@ -105,6 +105,55 @@ function setup() {
 }
 
 describe('ComputerMqttAdapter v1', () => {
+  it('accepts optional bounded artwork while invalid images do not discard valid media', () => {
+    const { state, availability, last } = setup();
+    availability();
+    const original = fixture('state') as {
+      observations: { media: Array<Record<string, unknown>> };
+    };
+    const observations = original.observations;
+    observations.media = [
+      {
+        player: 'spotify',
+        identity: 'Spotify',
+        desktop_entry: 'spotify',
+        playback_status: 'Playing',
+        title: 'Song',
+        artists: ['Artist'],
+        album: 'Album',
+        content_type: null,
+      },
+    ];
+    state({
+      observations: {
+        ...observations,
+        media: observations.media.map((media) => ({
+          ...media,
+          artwork: { provider: 'spotify', id: 'a'.repeat(40) },
+        })),
+      },
+    });
+    expect(last().observed.media?.[0]?.artwork).toEqual({
+      provider: 'spotify',
+      id: 'a'.repeat(40),
+    });
+    state({
+      sequence: 2,
+      observations: {
+        ...observations,
+        media: observations.media.map((media) => ({
+          ...media,
+          artwork: { provider: 'url', url: 'http://127.0.0.1/private' },
+        })),
+      },
+    });
+    expect(last().availability).toBe('online');
+    expect(last().observed.media?.[0]?.title).toBe(
+      observations.media[0]?.['title'],
+    );
+    expect(last().observed.media?.[0]?.artwork).toBeUndefined();
+  });
+
   it('subscribes once to the three concrete QoS 1 topics and cancels on stop', () => {
     const { adapter, subscriber, clock, last, live } = setup();
     adapter.start();

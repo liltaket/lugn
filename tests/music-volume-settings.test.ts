@@ -46,7 +46,7 @@ async function fixture() {
       { id: 'scene.cozy', name: 'Cozy', lighting: {} },
       { id: 'scene.all_off', name: 'Off', lighting: {} },
     ],
-    music: { targets: { 'music.room': [] }, adapter },
+    music: { targets: { 'music.room': ['Spotify', 'Optical'] }, adapter },
     musicVolumeSettings: {
       ...defaultMusicVolumeSettings,
       autoBaseVolumes: { 'music.room': 0.4 },
@@ -366,8 +366,59 @@ it('authenticates preview/save with existing session, origin and CSRF boundaries
   expect(await preview.json()).toMatchObject({
     dailyOffset: -0.15,
     personOffset: -0.1,
+    sourceOffset: 0,
     observedVolume: 0.4,
   });
+  const sourcePreview = await post('/preview', {
+    ...body,
+    settings: {
+      ...settings,
+      opticalOffsets: {
+        'music.room': { enabled: true, source: 'Spotify', offset: 0.07 },
+      },
+    },
+  });
+  expect(sourcePreview.status).toBe(200);
+  expect(await sourcePreview.json()).toMatchObject({
+    sourceOffset: 0.07,
+    target: 0.22,
+  });
+  for (const suffix of ['', '/preview']) {
+    const invalidSource = await post(
+      suffix,
+      suffix
+        ? {
+            ...body,
+            settings: {
+              ...settings,
+              opticalOffsets: {
+                'music.room': {
+                  enabled: true,
+                  source: 'optical',
+                  offset: 0.07,
+                },
+              },
+            },
+          }
+        : {
+            expectedSettings: settings,
+            settings: {
+              ...settings,
+              opticalOffsets: {
+                'music.room': {
+                  enabled: true,
+                  source: 'optical',
+                  offset: 0.07,
+                },
+              },
+            },
+          },
+    );
+    expect(invalidSource.status).toBe(400);
+    expect(await invalidSource.json()).toEqual({
+      error: 'invalid_optical_offset_source',
+    });
+  }
   expect(engine.getMusicIntentSnapshot()).toEqual(before);
   expect(adapter.dispatched).toHaveLength(0);
   expect(await new MusicVolumeSettingsStore(path).load()).toBeUndefined();
@@ -643,6 +694,52 @@ it.each(['rename', 'cleanup', 'directory-sync', 'directory-close'] as const)(
       ...changed,
       enabled: false,
     });
+  },
+);
+
+it.each(['preparation', 'rename'] as const)(
+  'retains explicit Auto during settings %s and after restart',
+  async (boundary) => {
+    const { engine, store, path, clock } = await fixture();
+    const original = engine.getMusicVolumeSettings();
+    const changed = { ...original, enabled: false, minimum: 0.1 };
+    const selectAuto = () =>
+      engine.setMusicVolumeAuthority(
+        { target: 'music.room', mode: 'auto' },
+        { actor: { type: 'user' }, source: 'dashboard' },
+      );
+    await store.save(engine, original, original);
+    if (boundary === 'preparation') {
+      const mkdir = filesystem.mkdir;
+      vi.spyOn(filesystem, 'mkdir').mockImplementationOnce(async (...args) => {
+        selectAuto();
+        return mkdir(...args);
+      });
+      await expect(store.save(engine, changed, original)).rejects.toMatchObject(
+        { status: 409 },
+      );
+    } else {
+      const rename = filesystem.rename;
+      vi.spyOn(filesystem, 'rename').mockImplementationOnce(async (...args) => {
+        await rename(...args);
+        selectAuto();
+      });
+      await expect(
+        store.save(engine, changed, original),
+      ).resolves.toMatchObject({ enabled: true });
+    }
+    expect(engine.getMusicVolumeSettings().enabled).toBe(true);
+    const durable = JSON.parse(await readFile(path, 'utf8'));
+    const restored = new LugnEngine(clock, {
+      deviceIds: [],
+      scenes: [],
+      music: { targets: { 'music.room': [] } },
+      musicVolumeSettings: durable.settings,
+      musicVolumeSettingsGeneration: durable.generation,
+      restoredMusicIntent: engine.getMusicIntentSnapshot(),
+    });
+    engines.push(restored);
+    expect(restored.getMusicVolumeSettings().enabled).toBe(true);
   },
 );
 

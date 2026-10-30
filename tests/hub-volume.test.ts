@@ -379,7 +379,9 @@ describe('Hub role action hierarchy', () => {
           ui.context,
         );
         const buttons = ui.get('#scene-grid').children;
-        expect(buttons).toHaveLength(8);
+        expect(buttons).toHaveLength(6);
+        expect(ui.get('#scene-off').hidden).toBe(false);
+        expect(ui.get('#scene-pagination').hidden).toBe(false);
         expect(
           buttons.every((button) => button.dataset['featured'] === 'false'),
         ).toBe(true);
@@ -387,7 +389,7 @@ describe('Hub role action hierarchy', () => {
           buttons.slice(0, 2).map((button) => button.dataset['scene']),
         ).toEqual(
           role === 'bed'
-            ? ['scene.all_off', 'scene.soft_light']
+            ? ['scene.soft_light', 'scene.sleep']
             : ['scene.focus_light', 'scene.everyday_light'],
         );
       } finally {
@@ -449,13 +451,13 @@ describe('Hub role action hierarchy', () => {
           ui
             .get('#scene-grid')
             .children.map((button) => button.dataset['scene']),
-        ).toEqual(expected);
+        ).toEqual(expected.filter((id) => id !== 'scene.all_off'));
         expect(
           ui
             .get('#scene-grid')
             .children.filter((button) => button.dataset['featured'] === 'true')
             .map((button) => button.dataset['scene']),
-        ).toEqual(role === 'unrecognized' ? [] : expected.slice(0, 2));
+        ).toEqual(expected.filter((id) => id !== 'scene.all_off').slice(0, 1));
         expect(ui.get('#music-presets').children.slice(0, 2)).toEqual(
           djFirst
             ? [ui.get('#music-preset-dj'), ui.get('#music-preset-optical')]
@@ -1920,7 +1922,8 @@ describe('Hub Optical computer media projection', () => {
         runInContext(`render(${JSON.stringify(payload)})`, ui.context);
 
         expect(ui.get('#music-title').textContent).toBe('Catch Me');
-        expect(ui.get('#music-source').textContent).toBe('WizTheMc');
+        expect(ui.get('#music-artist').textContent).toBe('WizTheMc');
+        expect(ui.get('#music-source').textContent).toBe('Optical');
         expect(ui.get('#music-player-status').textContent).toBe('Spelar');
         expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(
           'true',
@@ -2334,7 +2337,8 @@ describe('Hub Optical computer media projection', () => {
       ).toBeLessThanOrEqual(56);
       expect(ui.get('#music-title').textContent).toMatch(/^<img.*…$/);
       expect(ui.get('#music-title').children).toHaveLength(0);
-      expect(ui.get('#music-source').textContent).toBe('Artist');
+      expect(ui.get('#music-artist').textContent).toBe('Artist');
+      expect(ui.get('#music-source').textContent).toBe('Optical');
       expect(ui.get('#music-source').children).toHaveLength(0);
     } finally {
       ui.windowListeners.get('pagehide')?.();

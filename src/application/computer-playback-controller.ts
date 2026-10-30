@@ -32,6 +32,7 @@ export interface ComputerPlaybackControl {
     target: string,
     request: PlaybackRequest,
     provenance: Provenance,
+    isCurrent?: () => boolean,
   ): Promise<MusicCommandRecord>;
   observe(): void;
   invalidate(target?: string): void;
@@ -325,7 +326,10 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
     target: string,
     request: PlaybackRequest,
     provenance: Provenance,
+    isCurrent?: () => boolean,
   ): Promise<MusicCommandRecord> {
+    if (isCurrent && !isCurrent())
+      throw new Error('Computer playback intent was superseded');
     const revision = (this.revisions.get(target) ?? 0) + 1;
     this.revisions.set(target, revision);
     for (const notify of [...this.waiters]) notify();
@@ -335,7 +339,7 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
       if (request.value === 'paused' && prior.requested.value === 'paused')
         return prior.operation;
       await prior.operation;
-      this.assertCurrent(target, revision, request, provenance);
+      this.assertCurrent(target, revision, request, provenance, isCurrent);
       if (prior.requested.value === 'playing')
         resumed = this.resumedPlayers.get(target);
     }
@@ -388,7 +392,7 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
         () => !!this.context(target) && this.ownership.has(target),
       );
     }
-    this.assertCurrent(target, revision, request, provenance);
+    this.assertCurrent(target, revision, request, provenance, isCurrent);
     const context = this.context(target);
     if (!context) throw new Error('Computer playback is unavailable');
     const owned = this.ownership.get(target);
@@ -501,11 +505,23 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
     revision: number,
     request: PlaybackRequest,
     provenance: Provenance,
+    isCurrent?: () => boolean,
   ): void {
-    if (this.disposed || this.revisions.get(target) !== revision)
+    if (
+      this.disposed ||
+      this.revisions.get(target) !== revision ||
+      (isCurrent && !isCurrent())
+    )
       throw new Error('Computer playback intent was superseded');
+    // A live routine's guard authorizes its scheduled Pause independently of
+    // absence-driven Pause. It grants no Resume permission or durable authority.
+    const routinePause =
+      request.value === 'paused' &&
+      provenance.actor.type === 'routine' &&
+      isCurrent?.() === true;
     if (
       !isHumanActor(provenance.actor) &&
+      !routinePause &&
       (request.value === 'playing'
         ? this.options.automaticResumeAllowed?.(target) === false
         : this.options.automaticPauseAllowed?.(target) === false)

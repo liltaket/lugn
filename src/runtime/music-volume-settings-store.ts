@@ -82,6 +82,14 @@ export class MusicVolumeSettingsStore {
     const operation = this.pending.then(async () => {
       const settings = MusicVolumeSettingsSchema.parse(input);
       const expected = MusicVolumeSettingsSchema.parse(expectedSettings);
+      try {
+        engine.validateMusicVolumeSettings(settings);
+      } catch {
+        throw new MusicVolumeSettingsError(
+          400,
+          'invalid_optical_offset_source',
+        );
+      }
       if (
         JSON.stringify(engine.getMusicVolumeSettings()) !==
         JSON.stringify(expected)

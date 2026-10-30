@@ -20,7 +20,7 @@ import {
   SwitchCommandStatusSchema,
 } from '../core/schemas.js';
 import type { ActorSchema } from '../core/schemas.js';
-import type { LugnEngine } from './lugn-engine.js';
+import type { ExecutionGuard, LugnEngine } from './lugn-engine.js';
 import {
   MusicFadeDurationError,
   MusicFadeUnavailableError,
@@ -37,6 +37,8 @@ const ActivateSceneInput = z.object({ sceneId: z.string() });
 const SetLightingInput = z.object({
   target: z.string(),
   values: LightingValuesSchema,
+  /** Explicit routine targets must not expand through scene temperature synchronization. */
+  temperatureScope: z.enum(['target', 'scene']).optional(),
 });
 const AdjustInput = z.object({
   target: z.string(),
@@ -200,7 +202,10 @@ export class CapabilityRegistry {
     name: Name,
     rawInput: unknown,
     invocation: CapabilityInvocation,
+    isCurrent?: ExecutionGuard,
   ): Promise<CapabilityResult<Name>> {
+    if (isCurrent && !isCurrent())
+      throw new Error('Capability execution cancelled');
     const provenance = ProvenanceSchema.parse(invocation);
     let output: unknown;
     switch (name) {
@@ -251,6 +256,7 @@ export class CapabilityRegistry {
             value: name === 'music.play' ? 'playing' : 'paused',
           },
           provenance,
+          isCurrent,
         );
         output = {
           accepted: true,
@@ -265,6 +271,7 @@ export class CapabilityRegistry {
           input.target,
           { property: 'volume', value: input.volume },
           provenance,
+          isCurrent,
         );
         output = {
           accepted: true,
@@ -277,7 +284,7 @@ export class CapabilityRegistry {
         const input = FadeMusicInput.parse(rawInput);
         getMusicTarget(this.engine, input.target);
         try {
-          const fade = this.engine.startMusicFade(input, provenance);
+          const fade = this.engine.startMusicFade(input, provenance, isCurrent);
           output = { accepted: true, fade };
         } catch (error) {
           if (error instanceof MusicFadeUnavailableError)
@@ -294,7 +301,7 @@ export class CapabilityRegistry {
         const before = this.engine.state.music.fades[input.target];
         const cancelled =
           before?.status === 'active' || before?.status === 'settling';
-        const fade = this.engine.cancelMusicFade(input.target);
+        const fade = this.engine.cancelMusicFade(input.target, provenance);
         output = { cancelled, fade };
         break;
       }
@@ -307,6 +314,7 @@ export class CapabilityRegistry {
           input.target,
           { property: 'source', value: input.source },
           provenance,
+          isCurrent,
         );
         output = {
           accepted: true,
@@ -322,6 +330,7 @@ export class CapabilityRegistry {
           input.target,
           { property: 'preset', value: input.preset },
           provenance,
+          isCurrent,
         );
         output = {
           accepted: true,
@@ -379,6 +388,7 @@ export class CapabilityRegistry {
             provenance.actor,
             provenance.source,
             provenance.requestId,
+            isCurrent,
           ),
         };
         break;
@@ -390,24 +400,31 @@ export class CapabilityRegistry {
             provenance.actor,
             provenance.source,
             provenance.requestId,
+            isCurrent,
           ),
         };
         break;
       case 'lighting.set': {
         const input = SetLightingInput.parse(rawInput);
         assertLightingTarget(this.engine, input.target);
-        await this.engine.setLighting(input.target, input.values, {
-          actor: provenance.actor,
-          ...(provenance.source === undefined
-            ? {}
-            : { source: provenance.source }),
-          ...(provenance.reason === undefined
-            ? {}
-            : { reason: provenance.reason }),
-          ...(provenance.requestId === undefined
-            ? {}
-            : { requestId: provenance.requestId }),
-        });
+        await this.engine.setLighting(
+          input.target,
+          input.values,
+          {
+            actor: provenance.actor,
+            ...(provenance.source === undefined
+              ? {}
+              : { source: provenance.source }),
+            ...(provenance.reason === undefined
+              ? {}
+              : { reason: provenance.reason }),
+            ...(provenance.requestId === undefined
+              ? {}
+              : { requestId: provenance.requestId }),
+          },
+          isCurrent,
+          input.temperatureScope,
+        );
         output = { accepted: true };
         break;
       }
@@ -421,6 +438,7 @@ export class CapabilityRegistry {
             provenance.actor,
             provenance.source,
             provenance.requestId,
+            isCurrent,
           ),
         };
         break;

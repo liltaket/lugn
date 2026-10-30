@@ -108,6 +108,8 @@ export const MusicVolumePolicySnapshotSchema = z.object({
   effectiveTarget: z.number().nullable(),
   dailyOffset: z.number(),
   personOffset: z.number(),
+  sourceOffset: z.number(),
+  source: z.string().nullable(),
 });
 export type MusicVolumePolicySnapshot = z.infer<
   typeof MusicVolumePolicySnapshotSchema
@@ -120,6 +122,10 @@ export type MusicAutomationOptions = {
   clock: Clock;
   holds?: AutomationHolds;
   getState: (target: string) => DeviceMusicState;
+  sourceForVolumeTrim?: (
+    target: string,
+    allowSettling?: boolean,
+  ) => string | null;
   computerPlayback?: Pick<
     ComputerPlaybackControl,
     'handles' | 'getPlayback' | 'canResume' | 'needsInputOpen'
@@ -160,6 +166,10 @@ export class MusicAutomation {
   private readonly restoredVisitPauses = new Set<string>();
   private readonly playbackReleasedAt = new Map<string, number>();
   private readonly manualReferences = new Map<string, number>();
+  private readonly sourceReferences = new Map<string, number>();
+  private readonly sourceTrimManaged = new Set<string>();
+  private reconcilingSource = false;
+  private readonly sourceReconciliation = new Map<string, string>();
   private readonly passiveManaged = new Map<string, boolean>();
   private readonly volumeControllers = new Map<string, 'you' | 'lugn'>();
   private readonly resumeUntil = new Map<string, number>();
@@ -194,6 +204,7 @@ export class MusicAutomation {
       this.volumeSettings = MusicVolumeSettingsSchema.parse(
         options.volumeSettings,
       );
+      this.validateVolumeSettings(this.volumeSettings);
       this.volumeAutomationEnabled = this.volumeSettings.enabled;
     }
   }
@@ -397,6 +408,9 @@ export class MusicAutomation {
     const activeFade = this.activeFades.get(event.target);
     if (!activeFade || activeFade.id !== event.state.id) return;
     this.activeFades.delete(event.target);
+    // A source transition can carry the receiver's native volume restore.
+    // It must not replace the user's neutral fade destination with that value.
+    if (event.state.diagnosticReason === 'Source changed') return;
     // An interrupted/superseded automatic fade cannot commit its stale actual
     // volume over newer human intent. External intent can also replace a user fade.
     if (
@@ -517,7 +531,7 @@ export class MusicAutomation {
   getVolumePolicySnapshot(target: string): MusicVolumePolicySnapshot {
     const offsets = this.currentOffsets();
     const baseline = this.configuredBaseline(target);
-    const targetVolume = this.calculateVolume(baseline ?? null).target;
+    const targetVolume = this.calculateVolume(baseline ?? null, target).target;
     const activityReason = this.volumeActivityReason(target, baseline);
     const automatic = activityReason === 'active';
     const hold = this.getManualVolumeHold(target);
@@ -565,29 +579,28 @@ export class MusicAutomation {
       effectiveTarget:
         activeFade?.targetVolume ??
         (hold ? this.manualTarget(target, hold) : null) ??
-        (automatic ? targetVolume : null),
+        (automatic
+          ? targetVolume
+          : this.isSourceVolumeManaged(target)
+            ? this.sourceOnlyTarget(target)
+            : null),
       dailyOffset: offsets.daily,
       personOffset: offsets.person,
+      sourceOffset: this.sourceOffset(target),
+      source: this.options.sourceForVolumeTrim?.(target) ?? null,
     };
   }
 
-  setVolumeAutomationEnabled(
-    enabled: boolean,
-    intent: 'explicit' | 'restore' = 'explicit',
-  ): void {
+  /** Enabling policy preserves each player's independently selected mode. */
+  setVolumeAutomationEnabled(enabled: boolean): void {
     if (this.disposed || this.volumeAutomationEnabled === enabled) return;
     this.recoveryRevision.volume++;
+    if (!enabled) this.captureSourceReferences();
     this.volumeAutomationEnabled = enabled;
     if (!enabled) {
       this.cancelTimer();
       this.cancelAutomaticFades();
       return;
-    }
-    if (intent === 'explicit') {
-      this.manualVolumeHolds.clear();
-      this.selectorIntents.clear();
-      this.manualReferences.clear();
-      this.passiveManaged.clear();
     }
     if (this.presence === 'occupied' && this.homePresence !== 'away') {
       this.applyVolumePolicy();
@@ -609,12 +622,20 @@ export class MusicAutomation {
     preserveEnableIntent = false,
   ): void {
     const settings = MusicVolumeSettingsSchema.parse(input);
+    this.validateVolumeSettings(settings);
     this.cancelAutomaticFades();
     this.recoveryRevision.volume++;
+    if (
+      this.volumeAutomationEnabled &&
+      !settings.enabled &&
+      !preserveEnableIntent
+    )
+      this.captureSourceReferences();
     this.volumeSettings = settings;
     this.volumeSettingsGeneration = generation;
     if (!preserveEnableIntent) this.volumeAutomationEnabled = settings.enabled;
     this.reconcilePassiveRestoration();
+    this.reconcileSourceVolume();
     this.cancelTimer();
     this.applyVolumePolicy();
     if (
@@ -660,7 +681,7 @@ export class MusicAutomation {
         );
         this.passiveManaged.set(
           request.target,
-          this.manualAdjustmentOffset(request.target) !== 0,
+          this.manualPersonOffset(request.target) !== 0,
         );
       }
     } else {
@@ -802,6 +823,12 @@ export class MusicAutomation {
               baselineSource: 'configured',
               volumeMode: this.getManualVolumeHold(target) ? 'manual' : 'auto',
               manualReference: this.manualReferences.get(target) ?? null,
+              ...(this.sourceReferences.has(target)
+                ? { sourceReference: this.sourceReferences.get(target)! }
+                : {}),
+              ...(this.sourceTrimManaged.has(target)
+                ? { sourceTrimManaged: true }
+                : {}),
               passiveManaged: this.passiveManaged.get(target) ?? false,
               selectorIntent: structuredClone(
                 this.selectorIntents.get(target) ?? null,
@@ -852,6 +879,9 @@ export class MusicAutomation {
       : 'unknown';
     this.restoredAbsenceAwaitingPresence = snapshot.confirmedAbsence;
     for (const [target, intent] of Object.entries(snapshot.targets)) {
+      if (intent.sourceReference !== undefined)
+        this.sourceReferences.set(target, intent.sourceReference);
+      if (intent.sourceTrimManaged) this.sourceTrimManaged.add(target);
       if (intent.lastIntentActor !== 'unknown')
         this.volumeControllers.set(
           target,
@@ -917,7 +947,8 @@ export class MusicAutomation {
     if (requested.property === 'volume') {
       const policy = this.getVolumePolicySnapshot(target);
       return (policy.policyActive ||
-        this.passiveVolumeAllowed(target, provenance, requested.value)) &&
+        this.passiveVolumeAllowed(target, provenance, requested.value) ||
+        this.sourceVolumeAllowed(target, provenance, requested.value)) &&
         policy.effectiveTarget !== null &&
         Math.abs(policy.effectiveTarget - requested.value) <= Number.EPSILON
         ? `auto-volume:${this.recoveryRevision.volume}`
@@ -1001,6 +1032,7 @@ export class MusicAutomation {
     volume?: number,
   ): void {
     if (isHumanActor(provenance.actor)) return;
+    if (this.sourceVolumeAllowed(target, provenance, volume)) return;
     if (
       (this.getManualVolumeHold(target) &&
         !this.passiveVolumeAllowed(target, provenance, volume)) ||
@@ -1035,7 +1067,7 @@ export class MusicAutomation {
     });
     const offset = this.manualAdjustmentOffset(target);
     this.manualReferences.set(target, volume - offset);
-    this.passiveManaged.set(target, offset !== 0);
+    this.passiveManaged.set(target, this.manualPersonOffset(target) !== 0);
     this.volumeControllers.set(target, 'you');
   }
 
@@ -1080,12 +1112,7 @@ export class MusicAutomation {
   }
 
   private applyVolumePolicy(onlyTarget?: string): void {
-    if (
-      !this.volumeAutomationEnabled ||
-      this.presence !== 'occupied' ||
-      this.homePresence === 'away'
-    )
-      return;
+    if (this.presence !== 'occupied' || this.homePresence === 'away') return;
     for (const target of this.options.targets) {
       if (onlyTarget !== undefined && target !== onlyTarget) continue;
       const device = this.options.getState(target);
@@ -1095,27 +1122,49 @@ export class MusicAutomation {
         this.activeFades.has(target)
       )
         continue;
+      const sourceManaged = this.isSourceVolumeManaged(target);
+      if (!this.volumeAutomationEnabled && !sourceManaged) continue;
+      if (sourceManaged && this.options.sourceForVolumeTrim?.(target) == null)
+        continue;
       const hold = this.getManualVolumeHold(target);
       if (
         hold &&
+        this.volumeAutomationEnabled &&
+        this.volumeSettings.passiveMultiPersonReductionEnabled &&
+        this.personCount === null
+      )
+        continue;
+      if (
+        hold &&
+        !sourceManaged &&
         (this.personCount === null ||
           (!this.volumeSettings.passiveMultiPersonReductionEnabled &&
             !this.passiveManaged.get(target)))
       )
         continue;
       const baseline = this.configuredBaseline(target);
-      if (!hold && this.volumeActivityReason(target, baseline) !== 'active')
+      if (
+        !hold &&
+        this.volumeAutomationEnabled &&
+        this.volumeActivityReason(target, baseline) !== 'active'
+      )
         continue;
       const desired = hold
         ? this.manualTarget(target, hold)
-        : this.calculateVolume(baseline).target!;
+        : this.volumeAutomationEnabled
+          ? this.calculateVolume(baseline, target).target!
+          : this.sourceOnlyTarget(target);
       const current = device.requested.volume ?? device.observed.volume;
       if (current !== null && Math.abs(current - desired) < 0.005) continue;
       if (!hold) this.volumeControllers.set(target, 'lugn');
       this.send(
         target,
         { property: 'volume', value: desired },
-        hold ? 'set passive room volume' : 'set room volume',
+        sourceManaged
+          ? 'set source volume'
+          : hold
+            ? 'set passive room volume'
+            : 'set room volume',
       );
       if (hold)
         this.passiveManaged.set(
@@ -1124,6 +1173,161 @@ export class MusicAutomation {
             !!this.passiveManaged.get(target),
         );
     }
+  }
+
+  validateVolumeSettings(settings: MusicVolumeSettings): void {
+    for (const [target, trim] of Object.entries(settings.opticalOffsets)) {
+      if (
+        !this.options.targets.includes(target) ||
+        !this.options.getState(target).allowedSources.includes(trim.source)
+      )
+        throw new Error(
+          'Optical offset source must exactly match a configured source for its player',
+        );
+    }
+  }
+
+  sourceOffset(
+    target: string,
+    allowSettling = false,
+    settings = this.volumeSettings,
+  ): number {
+    const trim = settings.opticalOffsets[target];
+    return trim?.enabled &&
+      this.options.sourceForVolumeTrim?.(target, allowSettling) === trim.source
+      ? trim.offset
+      : 0;
+  }
+
+  isSourceVolumeManaged(target: string): boolean {
+    return (
+      !!this.volumeSettings.opticalOffsets[target]?.enabled ||
+      this.sourceTrimManaged.has(target)
+    );
+  }
+
+  private captureSourceReferences(): void {
+    for (const target of this.options.targets) {
+      const volume = this.options.getState(target).observed.volume;
+      if (
+        this.isSourceVolumeManaged(target) &&
+        volume !== null &&
+        this.options.sourceForVolumeTrim?.(target, true) != null
+      ) {
+        const automatic = this.calculateVolume(this.configuredBaseline(target));
+        const sourceOffset = this.sourceOffset(target, true);
+        const neutral =
+          automatic.baseline! + automatic.dailyOffset + automatic.personOffset;
+        // Dropping daily bounds must not jump the physical level. Retain an
+        // unclipped neutral reference only when trim-only clamping keeps it.
+        const retainsLevel =
+          Math.abs(Math.min(1, Math.max(0, neutral + sourceOffset)) - volume) <=
+          Number.EPSILON;
+        this.sourceReferences.set(
+          target,
+          !this.getManualVolumeHold(target) &&
+            this.presence === 'occupied' &&
+            this.homePresence !== 'away' &&
+            retainsLevel
+            ? neutral
+            : volume - sourceOffset,
+        );
+      }
+    }
+  }
+
+  /** Disabled daily automation retains a separate neutral source reference. */
+  private sourceOnlyTarget(target: string): number {
+    return Math.min(
+      1,
+      Math.max(
+        0,
+        (this.sourceReferences.get(target) ??
+          this.options.getState(target).observed.volume ??
+          0.3) + this.sourceOffset(target),
+      ),
+    );
+  }
+
+  reconcileSourceVolume(): void {
+    if (this.disposed || this.reconcilingSource) return;
+    this.reconcilingSource = true;
+    try {
+      for (const target of this.options.targets) {
+        if (!this.isSourceVolumeManaged(target)) continue;
+        const device = this.options.getState(target);
+        if (
+          this.options.sourceForVolumeTrim?.(target) == null ||
+          device.observed.volume === null
+        )
+          continue;
+        const revision = JSON.stringify([
+          device.observedAt,
+          device.observed.source,
+          device.observed.volume,
+          this.recoveryRevision.volume,
+          this.manualRevisions.get(target),
+        ]);
+        if (this.sourceReconciliation.get(target) === revision) continue;
+        this.sourceReconciliation.set(target, revision);
+        if (!this.sourceReferences.has(target))
+          this.sourceReferences.set(target, device.observed.volume);
+        if (this.volumeSettings.opticalOffsets[target]?.enabled)
+          this.sourceTrimManaged.add(target);
+        this.applyVolumePolicy(target);
+        if (
+          !this.volumeSettings.opticalOffsets[target]?.enabled &&
+          device.requested.volume === undefined &&
+          Math.abs(
+            device.observed.volume -
+              (this.getManualVolumeHold(target)
+                ? this.manualTarget(target, this.getManualVolumeHold(target)!)
+                : this.volumeAutomationEnabled
+                  ? this.calculateVolume(
+                      this.configuredBaseline(target),
+                      target,
+                    ).target!
+                  : this.sourceOnlyTarget(target)),
+          ) < 0.005
+        ) {
+          this.sourceTrimManaged.delete(target);
+          this.sourceReferences.delete(target);
+        }
+      }
+    } finally {
+      this.reconcilingSource = false;
+    }
+  }
+
+  private sourceVolumeAllowed(
+    target: string,
+    provenance: Provenance,
+    volume?: number,
+  ): boolean {
+    if (
+      !this.isSourceVolumeManaged(target) ||
+      this.presence !== 'occupied' ||
+      this.homePresence === 'away' ||
+      this.activeFades.has(target) ||
+      (this.getManualVolumeHold(target) &&
+        this.volumeAutomationEnabled &&
+        this.volumeSettings.passiveMultiPersonReductionEnabled &&
+        this.personCount === null) ||
+      this.options.sourceForVolumeTrim?.(target) == null ||
+      provenance.actor.type !== 'automation' ||
+      provenance.actor.id !== 'lugn.music' ||
+      provenance.source !== 'presence_music_automation' ||
+      provenance.reason !== 'set source volume' ||
+      volume === undefined
+    )
+      return false;
+    const hold = this.getManualVolumeHold(target);
+    const expected = hold
+      ? this.manualTarget(target, hold)
+      : this.volumeAutomationEnabled
+        ? this.calculateVolume(this.configuredBaseline(target), target).target!
+        : this.sourceOnlyTarget(target);
+    return Math.abs(expected - volume) <= Number.EPSILON;
   }
 
   private configuredBaseline(target: string): number {
@@ -1138,8 +1342,12 @@ export class MusicAutomation {
       : 0;
   }
 
-  /** De-offset human intent only while person reduction is eligible to apply. */
   private manualAdjustmentOffset(target: string): number {
+    return this.manualPersonOffset(target) + this.sourceOffset(target, true);
+  }
+
+  /** De-offset human intent only while person reduction is eligible to apply. */
+  private manualPersonOffset(target: string): number {
     const device = this.options.getState(target);
     return this.volumeAutomationEnabled &&
       this.presence === 'occupied' &&
@@ -1251,12 +1459,13 @@ export class MusicAutomation {
       .catch(() => this.options.onError?.(target, operation));
   }
 
-  private calculateVolume(baseline: number | null) {
+  private calculateVolume(baseline: number | null, target?: string) {
     return calculateMusicVolume(
       this.volumeSettings,
       baseline,
       this.localHour() * 60,
       this.personCount,
+      target === undefined ? 0 : this.sourceOffset(target),
     );
   }
 }

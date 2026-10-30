@@ -7,6 +7,14 @@ const timeFormat = new Intl.DateTimeFormat('sv-SE', {
   second: '2-digit',
 });
 
+// Bolt optimization: Cache Intl.DateTimeFormat instead of recreating inside render function
+const routineDateFormat = new Intl.DateTimeFormat('sv-SE', {
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  timeZone: 'Europe/Stockholm',
+});
+
 const loginView = document.getElementById('login-view');
 const dashboardView = document.getElementById('dashboard-view');
 const loginForm = document.getElementById('login-form');
@@ -98,6 +106,32 @@ let presetOriginal = null;
 let presetBusy = false;
 let presetReturnFocus = null;
 let presetConfirmationAction = null;
+let routineDraft = null;
+let routineOriginal = null;
+let routineGeneration = null;
+let routinePreviewRevision = 0;
+let cameraWebDraft = null;
+let cameraWebOriginal = null;
+let cameraWebGeneration;
+let cameraWebBusy = false;
+let cameraWebChoicesKey;
+const cameraWebDismissedIds = new Set();
+let cameraWebCloseHoldUntil = 0;
+let cameraWebPendingShow = null;
+let cameraWebActionEpoch = 0;
+let cameraWebActionPending = false;
+let cameraWebActionRequests = 0;
+let cameraWebMediaEpoch = 0;
+let cameraWebMediaKey = null;
+let cameraWebImageTimer;
+let cameraWebImageTimeout;
+let cameraWebController;
+let cameraWebObjectUrl;
+let intelligenceDraft = null;
+let intelligenceOriginal = null;
+let intelligenceGeneration = null;
+let mappingDraft = [];
+const l2Pending = new Set();
 
 class SessionExpiredError extends Error {}
 class ClerkAuthorizationError extends Error {}
@@ -167,6 +201,8 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
+initializeLugn2();
+initializeCameraWeb();
 void restoreSessionOnStartup();
 
 function node(tag, className, text) {
@@ -241,6 +277,7 @@ function scheduleRenewalRetry() {
 }
 
 function showLogin(message = '') {
+  stopCameraWebMedia();
   clearSessionRenewal();
   stopLiveUpdates();
   csrfToken = null;
@@ -702,6 +739,7 @@ async function restoreSessionOnStartup() {
   loginSubmit.disabled = true;
   tokenInput.disabled = true;
   loginSubmit.textContent = 'Kontrollerar session…';
+  loginSubmit.setAttribute('aria-busy', 'true');
   setLiveStatus('Kontrollerar session', 'warn');
   try {
     const authConfig = await fetchAuthConfiguration();
@@ -842,6 +880,8 @@ async function restoreSessionOnStartup() {
         : 'Sessionsstatus kunde inte hämtas. Kontrollera SSH-tunneln och försök igen.',
     );
     setLiveStatus('Kan inte kontrollera session', 'bad');
+  } finally {
+    loginSubmit.removeAttribute('aria-busy');
   }
 }
 
@@ -1185,6 +1225,8 @@ function render() {
   const music = overview.state?.music ?? {};
   renderMusic(music.devices ?? {}, music.commands ?? [], music.fades ?? {});
   renderMusicSettings();
+  renderLugn2();
+  renderCameraWeb();
   renderComputers(overview.state?.computer?.devices ?? {}, overviewStale);
   const devices = overview.state?.lighting?.devices ?? {};
   const presenceState = overview.state?.presence?.state ?? 'unknown';
@@ -1198,8 +1240,9 @@ function render() {
 
 function restoreFocus(focusedKey, focusedValue) {
   if (!focusedKey) return;
-  const element = [...document.querySelectorAll('[data-focus-key]')].find(
-    (candidate) => candidate.dataset.focusKey === focusedKey,
+  // Bolt optimization: Use querySelector instead of converting NodeList to an array
+  const element = document.querySelector(
+    `[data-focus-key="${CSS.escape(focusedKey)}"]`,
   );
   if (!element) return;
   element.focus({ preventScroll: true });
@@ -1371,6 +1414,9 @@ function updatePresetDirtyState() {
   closePresetButton.textContent = presetIsDirty()
     ? 'Avbryt ändringar'
     : 'Stäng';
+  closePresetButton.title = presetIsDirty()
+    ? 'Avbryt ändringar (Esc)'
+    : 'Stäng (Esc)';
 }
 
 function setPresetStatus(message, tone = 'neutral') {
@@ -2004,6 +2050,7 @@ function computerValuesLabel(values) {
 function renderMusicPlayer(target, device, commands, fade) {
   const article = node('article', 'music-row');
   const identity = node('div', 'music-identity');
+  if (overview?.artwork) identity.append(renderMusicArtwork(target));
   identity.append(node('h3', '', displayMusicTarget(target)));
   identity.append(node('code', '', target));
   const availability = availabilityStatus(device.availability);
@@ -2326,12 +2373,14 @@ function renderMusicPlayer(target, device, commands, fade) {
 }
 
 function latestMusicCommand(commands, target, property) {
-  return [...commands]
-    .reverse()
-    .find(
-      (command) =>
-        command.target === target && command.requested?.property === property,
-    );
+  // Bolt optimization: Iterating backward avoids O(N) allocation overhead compared to [...arr].reverse().find()
+  for (let i = commands.length - 1; i >= 0; i--) {
+    const command = commands[i];
+    if (command.target === target && command.requested?.property === property) {
+      return command;
+    }
+  }
+  return undefined;
 }
 
 function musicPropertyPending(command, actionKey) {
@@ -2840,6 +2889,1323 @@ function hasColorTemperature(device) {
   );
 }
 
+// Lugn 2 editors keep local drafts separate from authoritative SSE snapshots.
+function renderMusicArtwork(target) {
+  const frame = node('div', 'music-artwork');
+  frame.setAttribute('aria-label', 'Skivomslag');
+  const fallback = node('span', '', '♪');
+  fallback.setAttribute('aria-label', 'Omslag saknas');
+  frame.append(fallback);
+  const artwork = overview.artwork?.[target];
+  if (artwork?.status !== 'available' || typeof artwork.url !== 'string')
+    return frame;
+  try {
+    const url = new URL(artwork.url, location.origin);
+    if (url.origin !== location.origin || !artwork.url.startsWith('/'))
+      return frame;
+    const image = node('img');
+    image.alt = '';
+    image.width = 72;
+    image.height = 72;
+    image.loading = 'lazy';
+    image.addEventListener('error', () => {
+      image.hidden = true;
+      fallback.hidden = false;
+    });
+    image.addEventListener('load', () => {
+      fallback.hidden = true;
+    });
+    image.src = url.href;
+    frame.append(image);
+  } catch {
+    /* Malformed or external artwork keeps the fixed-size fallback. */
+  }
+  return frame;
+}
+function l2(id) {
+  return document.getElementById(id);
+}
+function clone(value) {
+  return structuredClone(value);
+}
+function same(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+function routineDirty() {
+  return routineDraft !== null && !same(routineDraft, routineOriginal);
+}
+function intelligenceDirty() {
+  return (
+    intelligenceDraft !== null &&
+    (!same(intelligenceDraft, intelligenceOriginal) ||
+      !same(
+        mappingDraft,
+        Object.entries(
+          intelligenceOriginal?.suggestions?.sceneMappings ?? {},
+        ).map(([activity, scene]) => ({ activity, scene })),
+      ))
+  );
+}
+function initializeLugn2() {
+  const pages = {
+    oversikt: 'Översikt',
+    belysning: 'Belysning',
+    musik: 'Musik',
+    rutiner: 'Rutiner',
+    intelligens: 'Intelligens',
+    system: 'System',
+  };
+  const navigate = (focus = false) => {
+    const page = Object.hasOwn(pages, location.hash.slice(1))
+      ? location.hash.slice(1)
+      : 'oversikt';
+    dashboardView.dataset.page = page;
+    l2('page-title').textContent = pages[page];
+    for (const link of document.querySelectorAll('.section-nav a')) {
+      if (link.dataset.page === page) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    }
+    for (const section of document.querySelectorAll('[data-pages]'))
+      section.classList.toggle(
+        'page-inactive',
+        !section.dataset.pages.split(' ').includes(page),
+      );
+    if (focus) l2('page-title').focus();
+    if (overview?.cameraDashboard) renderCameraWeb();
+  };
+  window.addEventListener('hashchange', () => navigate(true));
+  navigate();
+  l2('routine-new').addEventListener('click', () => openRoutine());
+  l2('routine-night').addEventListener('click', () =>
+    openRoutine(null, 'good_night'),
+  );
+  l2('routine-morning').addEventListener('click', () =>
+    openRoutine(null, 'good_morning'),
+  );
+  for (const id of ['name', 'kind', 'enabled', 'scheduled', 'time']) {
+    l2(`routine-${id}`).addEventListener(
+      id === 'name' || id === 'time' ? 'input' : 'change',
+      () => {
+        if (!routineDraft) return;
+        routineDraft.name = l2('routine-name').value;
+        routineDraft.kind = l2('routine-kind').value;
+        routineDraft.enabled = l2('routine-enabled').checked;
+        routineDraft.schedule = l2('routine-scheduled').checked
+          ? {
+              time: l2('routine-time').value,
+              weekdays: routineDraft.schedule?.weekdays ?? [
+                1, 2, 3, 4, 5, 6, 7,
+              ],
+            }
+          : null;
+        l2('routine-schedule').hidden = !routineDraft.schedule;
+        updateWeekdays();
+        routineChanged();
+      },
+    );
+  }
+  l2('routine-add').addEventListener('click', () => {
+    if (!routineDraft) return;
+    if (routineDraft.steps.length >= 32) {
+      l2('routine-status').textContent = 'En rutin kan ha högst 32 steg.';
+      return;
+    }
+    routineDraft.steps.push(defaultRoutineStep(l2('routine-add-type').value));
+    renderRoutineSteps();
+    routineChanged();
+    l2('routine-steps')
+      .lastElementChild?.querySelector('select, input')
+      ?.focus();
+  });
+  l2('routine-form').addEventListener('submit', saveRoutine);
+  l2('routine-preview').addEventListener('click', previewRoutine);
+  l2('routine-delete').addEventListener('click', deleteRoutine);
+  l2('routine-discard').addEventListener('click', () => {
+    if (
+      routineDirty() &&
+      !window.confirm('Kasta osparade ändringar i rutinen?')
+    )
+      return;
+    routineDraft = null;
+    routineOriginal = null;
+    l2('routine-form').hidden = true;
+    l2('routine-new').focus();
+  });
+  l2('intelligence-form').addEventListener('input', readIntelligenceForm);
+  l2('intelligence-form').addEventListener('change', readIntelligenceForm);
+  l2('intelligence-form').addEventListener('submit', saveIntelligence);
+  l2('intelligence-add-mapping').addEventListener('click', () => {
+    mappingDraft.push({ activity: '', scene: overview.scenes?.[0]?.id ?? '' });
+    renderMappings();
+    intelligenceChanged();
+    l2('intelligence-mappings')
+      .lastElementChild?.querySelector('input')
+      ?.focus();
+  });
+  l2('intelligence-discard').addEventListener('click', async () => {
+    if (
+      intelligenceDirty() &&
+      !window.confirm('Kasta osparade inställningar och hämta de sparade?')
+    )
+      return;
+    await l2Operation('intelligence', 'intelligence-status', async () => {
+      await fetchOverview();
+      intelligenceDraft = null;
+      renderLugn2();
+      l2('intelligence-status').textContent =
+        'Visar senast sparade inställningar.';
+    });
+  });
+  window.addEventListener('beforeunload', (event) => {
+    if (routineDirty() || intelligenceDirty() || l2Pending.size) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
+}
+function l2Button(label, action, disabled = false) {
+  const button = node('button', 'button button-quiet', label);
+  button.type = 'button';
+  button.disabled = disabled;
+  button.addEventListener('click', action);
+  return button;
+}
+function l2Select(options, value, onChange, label) {
+  const select = node('select');
+  select.setAttribute('aria-label', label);
+  const entries = options.map((item) =>
+    typeof item === 'string' ? [item, item] : item,
+  );
+  // A removed mapping stays visible in an unsaved draft, never silently replaced.
+  if (value && !entries.some(([key]) => key === value))
+    entries.push([value, `${value} (saknas i senaste status)`]);
+  for (const [key, title] of entries) {
+    const option = node('option', '', title);
+    option.value = key;
+    select.append(option);
+  }
+  select.value = value;
+  select.addEventListener('change', () => onChange(select.value));
+  return select;
+}
+function l2Field(label, input) {
+  const field = node('label', 'editor-field', label);
+  field.append(input);
+  return field;
+}
+function l2Input(
+  value,
+  change,
+  { type = 'text', min, max, step = '1', required = true } = {},
+) {
+  const input = node('input');
+  input.type = type;
+  input.value = value;
+  input.required = required;
+  if (min !== undefined) input.min = min;
+  if (max !== undefined) input.max = max;
+  if (type === 'number') input.step = step;
+  input.addEventListener('input', () => {
+    change(type === 'number' ? input.valueAsNumber : input.value);
+    routineChanged();
+  });
+  return input;
+}
+function sceneOptions() {
+  return (overview.scenes ?? []).map((scene) => [scene.id, scene.name]);
+}
+function musicTargets() {
+  return Object.keys(overview.state?.music?.devices ?? {});
+}
+function lightTargets() {
+  return Object.keys(overview.state?.lighting?.devices ?? {});
+}
+function defaultRoutineStep(type) {
+  const target = musicTargets()[0] ?? '';
+  const defaults = {
+    scene: { type, sceneId: overview.scenes?.[0]?.id ?? '' },
+    light: { type, targets: lightTargets(), brightness: 0, durationMs: 600000 },
+    volume: { type, target, volume: 0.2, durationMs: 30000 },
+    delay: { type, durationMs: 60000 },
+    playback: { type, target, state: 'paused' },
+    source: {
+      type,
+      target,
+      source:
+        overview.state?.music?.devices?.[target]?.allowedSources?.[0] ?? '',
+    },
+    preset: { type, target, preset: 'optical' },
+    condition: { type, condition: 'occupied' },
+  };
+  return defaults[type];
+}
+function openRoutine(definition = null, template = null) {
+  if (!overview.routines || l2Pending.has('routine')) return;
+  if (routineDirty()) {
+    l2('routine-status').textContent =
+      'Spara eller kasta ditt utkast innan du väljer en annan rutin.';
+    l2('routine-name').focus();
+    return;
+  }
+  routineOriginal = definition ? clone(definition) : null;
+  routineGeneration = overview.routines.generation;
+  routineDraft = definition
+    ? clone(definition)
+    : {
+        id: `routine-${crypto.randomUUID()}`,
+        name:
+          template === 'good_night'
+            ? 'God natt'
+            : template === 'good_morning'
+              ? 'God morgon'
+              : '',
+        kind: template ?? 'custom',
+        enabled: false,
+        schedule: null,
+        steps: [],
+      };
+  if (template) {
+    const scenes = overview.scenes ?? [];
+    const cozy =
+      scenes.find((scene) => /mys|cozy/i.test(scene.name)) ?? scenes[0];
+    routineDraft.steps =
+      template === 'good_night'
+        ? [
+            ...(cozy ? [{ type: 'scene', sceneId: cozy.id }] : []),
+            {
+              type: 'light',
+              targets: lightTargets(),
+              brightness: 0,
+              durationMs: 600000,
+            },
+          ]
+        : [
+            {
+              type: 'light',
+              targets: lightTargets(),
+              brightness: 40,
+              durationMs: 600000,
+            },
+          ];
+  }
+  fillRoutineForm();
+  l2('routine-name').focus();
+}
+function fillRoutineForm() {
+  l2('routine-form').hidden = false;
+  l2('routine-name').value = routineDraft.name;
+  l2('routine-kind').value = routineDraft.kind;
+  l2('routine-enabled').checked = routineDraft.enabled;
+  l2('routine-scheduled').checked = !!routineDraft.schedule;
+  l2('routine-time').value = routineDraft.schedule?.time ?? '22:30';
+  l2('routine-schedule').hidden = !routineDraft.schedule;
+  l2('routine-delete').hidden = !routineOriginal;
+  l2('routine-status').textContent = routineDraft.enabled
+    ? 'Aktiverad i utkastet. Ändringar gäller efter Spara.'
+    : 'Avstängd. Spara ändrar inte rummets aktuella läge.';
+  updateWeekdays();
+  renderRoutineSteps();
+  routineChanged();
+}
+function updateWeekdays() {
+  const container = l2('routine-weekdays');
+  container.replaceChildren(node('legend', '', 'Dagar'));
+  ['Mån', 'Tis', 'Ons', 'Tor', 'Fre', 'Lör', 'Sön'].forEach((day, index) => {
+    const input = node('input');
+    input.type = 'checkbox';
+    input.checked =
+      routineDraft?.schedule?.weekdays.includes(index + 1) ?? false;
+    input.addEventListener('change', () => {
+      if (!routineDraft.schedule) return;
+      const days = new Set(routineDraft.schedule.weekdays);
+      if (input.checked) days.add(index + 1);
+      else days.delete(index + 1);
+      routineDraft.schedule.weekdays = [...days].sort((a, b) => a - b);
+      routineChanged();
+    });
+    container.append(l2Field(day, input));
+  });
+}
+function renderRoutineSteps() {
+  const list = l2('routine-steps');
+  list.replaceChildren();
+  const names = {
+    scene: 'Ljusscen',
+    light: 'Dimma / släck',
+    volume: 'Volym',
+    delay: 'Vänta',
+    playback: 'Uppspelning',
+    source: 'Musikkälla',
+    preset: 'Musikpreset',
+    condition: 'Villkor',
+  };
+  routineDraft.steps.forEach((step, index) => {
+    const row = node('li', 'routine-step');
+    const heading = node('div', 'step-heading');
+    heading.append(node('h4', '', `${index + 1}. ${names[step.type]}`));
+    const actions = node('div', 'inline-actions');
+    for (const [label, offset] of [
+      ['Flytta upp', -1],
+      ['Flytta ned', 1],
+    ])
+      actions.append(
+        l2Button(
+          label,
+          () => {
+            const next = index + offset;
+            [routineDraft.steps[index], routineDraft.steps[next]] = [
+              routineDraft.steps[next],
+              routineDraft.steps[index],
+            ];
+            renderRoutineSteps();
+            routineChanged();
+            l2('routine-steps')
+              .children[next]?.querySelector('select, input')
+              ?.focus();
+          },
+          index + offset < 0 || index + offset >= routineDraft.steps.length,
+        ),
+      );
+    actions.append(
+      l2Button('Ta bort steg', () => {
+        routineDraft.steps.splice(index, 1);
+        renderRoutineSteps();
+        routineChanged();
+        l2('routine-add').focus();
+      }),
+    );
+    heading.append(actions);
+    row.append(heading);
+    const fields = node('div', 'form-grid');
+    const choose = (key, label, options) =>
+      fields.append(
+        l2Field(
+          label,
+          l2Select(
+            options,
+            step[key] ?? '',
+            (value) => {
+              step[key] = value;
+              routineChanged();
+            },
+            label,
+          ),
+        ),
+      );
+    if (step.type === 'scene') choose('sceneId', 'Ljusscen', sceneOptions());
+    if ('target' in step && step.type !== 'condition')
+      choose('target', 'Musikspelare', musicTargets());
+    if (step.type === 'light') {
+      const targets = node('fieldset', 'step-targets');
+      targets.append(node('legend', '', 'Lampor'));
+      const available = [...new Set([...lightTargets(), ...step.targets])];
+      if (!available.length)
+        targets.append(
+          node('p', 'field-help', 'Inga lampor är konfigurerade.'),
+        );
+      for (const target of available) {
+        const input = node('input');
+        input.type = 'checkbox';
+        input.checked = step.targets.includes(target);
+        input.addEventListener('change', () => {
+          step.targets = input.checked
+            ? [...new Set([...step.targets, target])]
+            : step.targets.filter((item) => item !== target);
+          routineChanged();
+        });
+        targets.append(l2Field(displayTarget(target), input));
+      }
+      fields.append(
+        targets,
+        l2Field(
+          'Ljusstyrka (%)',
+          l2Input(
+            step.brightness,
+            (value) => {
+              step.brightness = value;
+            },
+            { type: 'number', min: 0, max: 100 },
+          ),
+        ),
+      );
+    }
+    if (step.type === 'volume')
+      fields.append(
+        l2Field(
+          'Volym (%)',
+          l2Input(
+            step.volume * 100,
+            (value) => {
+              step.volume = value / 100;
+            },
+            { type: 'number', min: 0, max: 100, step: 'any' },
+          ),
+        ),
+      );
+    if ('durationMs' in step) {
+      const volume = step.type === 'volume';
+      const unit = volume ? 1000 : 60000;
+      fields.append(
+        l2Field(
+          volume
+            ? 'Förändringstid (sekunder)'
+            : step.type === 'delay'
+              ? 'Vänta (minuter)'
+              : 'Förändringstid (minuter)',
+          l2Input(
+            step.durationMs / unit,
+            (value) => {
+              step.durationMs = Math.round(value * unit);
+            },
+            {
+              type: 'number',
+              min: 0,
+              max: volume ? 120 : 60,
+              step: 'any',
+            },
+          ),
+        ),
+      );
+      if (volume)
+        fields.append(
+          node(
+            'p',
+            'field-help',
+            '0 sekunder ändrar direkt. Annars 1–120 sekunder. Manuellt ägd volym kan blockera steget; serverns körningsstatus visar utfallet.',
+          ),
+        );
+    }
+    if (step.type === 'playback')
+      choose('state', 'Uppspelning', [
+        ['playing', 'Spela'],
+        ['paused', 'Pausa'],
+      ]);
+    if (step.type === 'preset')
+      choose('preset', 'Preset', [
+        ['spotify_dj', 'Spotify DJ'],
+        ['optical', 'Optical'],
+      ]);
+    if (step.type === 'source')
+      fields.append(
+        l2Field(
+          'Exakt källnamn',
+          l2Input(step.source, (value) => {
+            step.source = value;
+          }),
+        ),
+      );
+    if (step.type === 'condition') {
+      choose('condition', 'Fortsätt bara om', [
+        ['occupied', 'Någon är i rummet'],
+        ['home', 'Hemma'],
+        ['music_idle', 'Musiken är inaktiv'],
+      ]);
+      choose('target', 'Spelare (valfri)', [
+        ['', 'Ingen särskild spelare'],
+        ...musicTargets().map((target) => [target, target]),
+      ]);
+    }
+    row.append(fields);
+    list.append(row);
+  });
+  if (!routineDraft.steps.length)
+    list.append(node('li', 'empty-note', 'Lägg till det första steget nedan.'));
+}
+function routineChanged() {
+  routinePreviewRevision += 1;
+  l2('routine-preview-summary').textContent =
+    'Utkastet behöver förhandsvisas. Inga kommandon skickas vid förhandsvisning.';
+  l2('routine-timeline').replaceChildren();
+  updateLugn2Controls();
+}
+function validateRoutine() {
+  if (!routineDraft.name.trim()) throw new Error('Ge rutinen ett namn.');
+  if (!routineDraft.steps.length) throw new Error('Lägg till minst ett steg.');
+  if (routineDraft.steps.length > 32)
+    throw new Error('En rutin kan ha högst 32 steg.');
+  if (
+    routineDraft.steps.reduce(
+      (total, step) => total + (step.durationMs ?? 0),
+      0,
+    ) > 21600000
+  )
+    throw new Error('Stegens sammanlagda tid får vara högst 6 timmar.');
+  if (
+    routineDraft.schedule &&
+    (!/^\d{2}:\d{2}$/.test(routineDraft.schedule.time) ||
+      !routineDraft.schedule.weekdays.length)
+  )
+    throw new Error('Välj en tid och minst en veckodag.');
+  for (const step of routineDraft.steps) {
+    if (step.type === 'scene' && !step.sceneId)
+      throw new Error('Välj ljusscen för varje scensteg.');
+    if (
+      step.type === 'light' &&
+      (!step.targets.length ||
+        !Number.isFinite(step.brightness) ||
+        step.brightness < 0 ||
+        step.brightness > 100)
+    )
+      throw new Error('Välj lampor och en ljusstyrka mellan 0 och 100 %.');
+    if (
+      'durationMs' in step &&
+      (!Number.isFinite(step.durationMs) || step.durationMs < 0)
+    )
+      throw new Error('Ange en giltig tid som är minst 0.');
+    if (
+      (step.type === 'light' || step.type === 'delay') &&
+      step.durationMs > 3600000
+    )
+      throw new Error('Ett ljus- eller väntesteg får ta högst 60 minuter.');
+    if (
+      step.type === 'volume' &&
+      (step.durationMs > 120000 ||
+        (step.durationMs > 0 && step.durationMs < 1000))
+    )
+      throw new Error(
+        'Volymändring måste vara direkt (0 sekunder) eller ta 1–120 sekunder.',
+      );
+    if (step.type !== 'condition' && 'target' in step && !step.target)
+      throw new Error('Välj musikspelare för varje musiksteg.');
+    if (step.type === 'source' && !step.source.trim())
+      throw new Error('Ange ett exakt källnamn.');
+    if (
+      step.type === 'volume' &&
+      (!Number.isFinite(step.volume) || step.volume < 0 || step.volume > 1)
+    )
+      throw new Error('Volym måste vara mellan 0 och 100 %.');
+  }
+  const result = clone(routineDraft);
+  for (const step of result.steps)
+    if (step.type === 'condition' && !step.target) delete step.target;
+  return result;
+}
+async function l2Request(path, body) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(`${API_ROOT}/${path}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json', 'X-Lugn-CSRF': csrfToken },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 409) {
+        try {
+          await fetchOverview();
+          render();
+        } catch {
+          /* Keep the draft if the recovery read also fails. */
+        }
+        throw new Error(
+          'Ändrat på annat håll. Ditt utkast finns kvar. Kasta utkastet och öppna den sparade versionen innan du sparar igen.',
+        );
+      }
+      if (response.status === 401 || response.status === 403)
+        throw new Error(
+          'Sessionen har gått ut eller ändrats. Logga in igen. Ditt utkast finns kvar.',
+        );
+      if (response.status === 404 || response.status === 501)
+        throw new Error(
+          'Funktionen är inte tillgänglig på den här servern ännu. Ditt utkast finns kvar.',
+        );
+      const details = Array.isArray(result.issues)
+        ? result.issues.map((issue) => issue.message).join(' ')
+        : null;
+      throw new Error(
+        details ||
+          result.message ||
+          'Begäran misslyckades. Ditt utkast finns kvar. Försök igen.',
+      );
+    }
+    return result;
+  } catch (error) {
+    if (error.name === 'AbortError' || error instanceof TypeError)
+      throw new Error(
+        'Servern svarar inte. Utfallet är okänt; kontrollera serverstatus innan du försöker igen. Utkastet finns kvar.',
+      );
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+async function l2Mutation(path, body, key) {
+  const previous = overview[key];
+  const result = await l2Request(path, body);
+  const valid =
+    typeof result.generation === 'string' &&
+    (key === 'routines'
+      ? result.version === 1 &&
+        Array.isArray(result.definitions) &&
+        Array.isArray(result.runs) &&
+        Array.isArray(result.next)
+      : result.settings?.version === 1 &&
+        Array.isArray(result.suggestions) &&
+        Array.isArray(result.optical));
+  if (!valid)
+    throw new Error(
+      'Servern tog emot begäran men returnerade ett ogiltigt status. Ditt utkast finns kvar. Hämta aktuell status innan du försöker igen.',
+    );
+  if (overview[key] === previous || same(overview[key], result))
+    overview[key] = result;
+  else {
+    // Never overwrite a snapshot received while the request was pending with an older response.
+    try {
+      await fetchOverview();
+    } catch {
+      throw new Error(
+        'Servern tog emot begäran men senaste status kunde inte hämtas. Ditt utkast finns kvar. Kontrollera anslutningen innan du försöker igen.',
+      );
+    }
+  }
+  return result;
+}
+async function l2Operation(key, statusId, work) {
+  if (l2Pending.has(key)) return;
+  l2Pending.add(key);
+  updateLugn2Controls();
+  l2(statusId).textContent = 'Väntar på serverns svar…';
+  try {
+    await work();
+  } catch (error) {
+    l2(statusId).textContent = error.message;
+  } finally {
+    l2Pending.delete(key);
+    updateLugn2Controls();
+  }
+}
+async function saveRoutine(event) {
+  event.preventDefault();
+  await l2Operation('routine', 'routine-status', async () => {
+    const definition = validateRoutine();
+    const saved = await l2Mutation(
+      'routines/save',
+      {
+        definition,
+        expectedGeneration: routineGeneration,
+      },
+      'routines',
+    );
+    routineDraft = clone(
+      saved.definitions.find((item) => item.id === definition.id) ?? definition,
+    );
+    routineOriginal = clone(routineDraft);
+    routineGeneration = saved.generation;
+    render();
+    l2('routine-delete').hidden = false;
+    l2('routine-status').textContent = routineDraft.enabled
+      ? 'Sparad och aktiverad. Enhetsläge bekräftas separat.'
+      : 'Sparad och avstängd.';
+  });
+}
+async function previewRoutine() {
+  if (l2Pending.has('routine-preview')) return;
+  const revision = routinePreviewRevision;
+  await l2Operation('routine-preview', 'routine-status', async () => {
+    const result = await l2Request('routines/preview', {
+      definition: validateRoutine(),
+    });
+    if (revision !== routinePreviewRevision) {
+      l2('routine-status').textContent =
+        'Utkastet ändrades. Förhandsvisa igen.';
+      return;
+    }
+    if (
+      !Array.isArray(result.timeline) ||
+      !Array.isArray(result.warnings) ||
+      !Number.isFinite(result.durationMs)
+    )
+      throw new Error('Servern returnerade ett ogiltigt förlopp.');
+    l2('routine-timeline').replaceChildren(
+      ...result.timeline.map((entry, index) =>
+        node(
+          'li',
+          '',
+          `${formatRoutineDuration(entry.atMs)} · ${routineStepLabel(routineDraft.steps[index]) ?? entry.label}`,
+        ),
+      ),
+    );
+    l2('routine-preview-summary').textContent =
+      `Total tid: ${formatRoutineDuration(result.durationMs)}. ${result.warnings.map(routineWarningLabel).join(' ')}`;
+    l2('routine-status').textContent =
+      'Förhandsvisning klar. Inga enhetskommandon har skickats.';
+  });
+}
+function routineStepLabel(step) {
+  if (!step) return null;
+  const target = step.target ? displayMusicTarget(step.target) : '';
+  const duration =
+    'durationMs' in step && step.durationMs > 0
+      ? ` under ${formatRoutineDuration(step.durationMs)}`
+      : '';
+  switch (step.type) {
+    case 'scene':
+      return `Välj ${overview.scenes.find((scene) => scene.id === step.sceneId)?.name ?? 'ljusscenen'}`;
+    case 'light':
+      return `${step.brightness === 0 ? 'Släck' : 'Dimma'} ${step.targets.map(displayTarget).join(', ')}${step.brightness === 0 ? '' : ` till ${step.brightness} %`}${duration}`;
+    case 'volume':
+      return `Ändra volymen för ${target} till ${Math.round(step.volume * 100)} %${duration}`;
+    case 'delay':
+      return `Vänta ${formatRoutineDuration(step.durationMs)}`;
+    case 'playback':
+      return `${step.state === 'playing' ? 'Spela' : 'Pausa'} ${target}`;
+    case 'source':
+      return `Välj ${step.source} på ${target}`;
+    case 'preset':
+      return `Välj ${step.preset === 'optical' ? 'Optical' : 'Spotify DJ'} på ${target}`;
+    case 'condition':
+      return {
+        occupied: 'Fortsätt om någon är i rummet',
+        home: 'Fortsätt om du är hemma',
+        music_idle: `Fortsätt om ${target} inte spelar`,
+      }[step.condition];
+    default:
+      return null;
+  }
+}
+function routineWarningLabel(warning) {
+  return (
+    {
+      'Routine is disabled; enable it explicitly before starting.':
+        'Rutinen är avstängd. Aktivera och spara innan du startar.',
+      'Europe/Stockholm: missing DST times are skipped; repeated times run once.':
+        'Svensk tid: överhoppade klockslag vid sommartid hoppas över; upprepade klockslag körs en gång.',
+      'Preview shows requested timing, not device confirmation. Policy and availability are rechecked during execution.':
+        'Tiderna visar det planerade förloppet. Enhetsläge och tillåtelse kontrolleras när rutinen körs.',
+    }[warning] ?? warning
+  );
+}
+async function deleteRoutine() {
+  if (!routineOriginal || !window.confirm(`Radera ”${routineDraft.name}”?`))
+    return;
+  await l2Operation('routine', 'routines-availability', async () => {
+    await l2Mutation(
+      'routines/delete',
+      {
+        id: routineDraft.id,
+        expectedGeneration: routineGeneration,
+      },
+      'routines',
+    );
+    routineDraft = null;
+    routineOriginal = null;
+    l2('routine-form').hidden = true;
+    render();
+    l2('routines-availability').textContent = 'Rutinen är raderad.';
+    l2('routine-new').focus();
+  });
+}
+function formatRoutineDuration(ms) {
+  return ms < 60000
+    ? `${Math.round(ms / 1000)} s`
+    : `${Math.round(ms / 6000) / 10} min`;
+}
+async function routineAction(id, action) {
+  await l2Operation(`action:${id}`, 'routines-availability', async () => {
+    await l2Mutation(
+      'routines/action',
+      {
+        id,
+        action,
+        requestId: crypto.randomUUID(),
+        ...(action === 'snooze' ? { minutes: 10 } : {}),
+      },
+      'routines',
+    );
+    render();
+    l2('routines-availability').textContent =
+      'Begäran mottagen. Körningsstatus visas från servern; enheternas rapporter bekräftar läget.';
+  });
+}
+function renderRoutines() {
+  const data = overview.routines;
+  const available =
+    data?.version === 1 &&
+    typeof data.generation === 'string' &&
+    Array.isArray(data.definitions) &&
+    Array.isArray(data.runs) &&
+    Array.isArray(data.next);
+  l2('routines-availability').textContent = available
+    ? 'Sparade rutiner. Nya rutiner och mallar är avstängda från början.'
+    : 'Rutiner är inte tillgängliga på den här servern ännu. Befintliga ljus- och musikkontroller fungerar som vanligt.';
+  for (const id of ['routine-new', 'routine-night', 'routine-morning'])
+    l2(id).disabled = !available || overviewStale || l2Pending.has('routine');
+  l2('routine-list').replaceChildren();
+  l2('routine-runs').replaceChildren();
+  if (!available) {
+    l2('next-routine').textContent = 'Rutinstatus är inte tillgängligt ännu.';
+    return;
+  }
+  const upcoming = data.next.slice().sort((a, b) => a.at - b.at)[0];
+  l2('next-routine').textContent = upcoming
+    ? `${data.definitions.find((item) => item.id === upcoming.routineId)?.name ?? 'Rutin'} · ${routineDateFormat.format(upcoming.at)} i Stockholm`
+    : 'Ingen schemalagd rutin väntar. Du väljer när rummet ska förändras.';
+  if (!data.definitions.length)
+    l2('routine-list').append(
+      node(
+        'p',
+        'empty-note',
+        'Skapa en egen rutin eller börja med en avstängd mall.',
+      ),
+    );
+  for (const definition of data.definitions) {
+    const row = node('article', 'routine-row');
+    const copy = node('div');
+    copy.append(
+      node('h3', '', definition.name),
+      node(
+        'p',
+        'field-help',
+        `${definition.enabled ? 'Aktiverad' : 'Avstängd'} · ${definition.steps.length} steg${definition.schedule ? ` · ${definition.schedule.time} Stockholm` : ' · startas manuellt'}`,
+      ),
+    );
+    const actions = node('div', 'inline-actions');
+    const disabled = overviewStale || l2Pending.has(`action:${definition.id}`);
+    const edit = l2Button(
+      'Redigera',
+      () => openRoutine(definition),
+      l2Pending.has('routine'),
+    );
+    edit.setAttribute('aria-label', `Redigera ${definition.name}`);
+    actions.append(edit);
+    actions.append(
+      l2Button(
+        'Starta',
+        () => routineAction(definition.id, 'start'),
+        disabled || !definition.enabled,
+      ),
+    );
+    if (data.next.some((item) => item.routineId === definition.id)) {
+      actions.append(
+        l2Button(
+          'Snooza 10 min',
+          () => routineAction(definition.id, 'snooze'),
+          disabled,
+        ),
+        l2Button(
+          'Hoppa över nästa',
+          () => routineAction(definition.id, 'skip'),
+          disabled,
+        ),
+      );
+    }
+    for (const button of actions.children) {
+      button.dataset.focusKey = `routine:${definition.id}:${button.textContent}`;
+      button.dataset.l2Pending =
+        button.textContent === 'Redigera'
+          ? 'routine'
+          : `action:${definition.id}`;
+      button.dataset.l2Unavailable = String(
+        button.textContent === 'Starta' && !definition.enabled,
+      );
+    }
+    row.append(copy, actions);
+    l2('routine-list').append(row);
+  }
+  const statusNames = {
+    running: 'Pågår',
+    completed: 'Slutförd',
+    cancelled: 'Avbruten',
+    failed: 'Misslyckad',
+  };
+  for (const run of data.runs) {
+    const row = node('article', 'run-row');
+    row.append(
+      node(
+        'h3',
+        '',
+        data.definitions.find((item) => item.id === run.routineId)?.name ??
+          run.routineId,
+      ),
+      node(
+        'p',
+        '',
+        `${statusNames[run.status] ?? run.status}${run.status === 'running' || run.status === 'failed' ? ` · steg ${run.stepIndex + 1}` : ''}${run.reason ? ` · ${run.reason}` : ''}`,
+      ),
+    );
+    if (run.status === 'running') {
+      const cancel = l2Button(
+        'Avbryt körning',
+        () => routineAction(run.routineId, 'cancel'),
+        overviewStale || l2Pending.has(`action:${run.routineId}`),
+      );
+      cancel.dataset.focusKey = `run:${run.id}:cancel`;
+      cancel.dataset.l2Pending = `action:${run.routineId}`;
+      cancel.dataset.l2Unavailable = 'false';
+      row.append(cancel);
+    }
+    l2('routine-runs').append(row);
+  }
+  // A clean editor may track a new generation; a dirty editor retains its original concurrency token.
+  if (routineDraft && !routineDirty() && !l2Pending.has('routine')) {
+    const latest = data.definitions.find((item) => item.id === routineDraft.id);
+    if (
+      latest &&
+      (!same(latest, routineDraft) || routineGeneration !== data.generation)
+    ) {
+      routineOriginal = clone(latest);
+      routineDraft = clone(latest);
+      routineGeneration = data.generation;
+      fillRoutineForm();
+    }
+  }
+}
+function fillIntelligence() {
+  const data = overview.intelligence;
+  intelligenceDraft = clone(data.settings);
+  intelligenceOriginal = clone(data.settings);
+  intelligenceGeneration = data.generation;
+  const settings = intelligenceDraft;
+  l2('intelligence-optical-enabled').checked = settings.optical.enabled;
+  l2('intelligence-mode').value = settings.optical.mode;
+  const fillSelect = (id, options, value) => {
+    const select = l2(id);
+    select.replaceChildren(node('option', '', 'Välj…'));
+    select.firstElementChild.value = '';
+    const values = [...new Set([...options, ...(value ? [value] : [])])];
+    for (const item of values) {
+      const option = node('option', '', item);
+      option.value = item;
+      select.append(option);
+    }
+    select.value = value ?? '';
+  };
+  fillSelect(
+    'intelligence-device',
+    Object.keys(overview.state?.computer?.devices ?? {}),
+    settings.optical.deviceId,
+  );
+  fillSelect('intelligence-target', musicTargets(), settings.optical.target);
+  l2('intelligence-source').value = settings.optical.source ?? '';
+  const sources = [
+    ...new Set(
+      Object.values(overview.state?.music?.devices ?? {}).flatMap(
+        (device) => device.allowedSources ?? [],
+      ),
+    ),
+  ];
+  l2('intelligence-sources').replaceChildren(
+    ...sources.map((source) => {
+      const option = node('option');
+      option.value = source;
+      return option;
+    }),
+  );
+  l2('intelligence-stability').value = settings.optical.stabilityMs / 1000;
+  l2('intelligence-optical-cooldown').value =
+    settings.optical.cooldownMs / 60000;
+  l2('intelligence-activities').value =
+    settings.optical.allowedActivities.join(', ');
+  l2('intelligence-suggestions-enabled').checked = settings.suggestions.enabled;
+  l2('intelligence-suggestions-cooldown').value =
+    settings.suggestions.cooldownMs / 60000;
+  mappingDraft = Object.entries(settings.suggestions.sceneMappings).map(
+    ([activity, scene]) => ({ activity, scene }),
+  );
+  renderMappings();
+}
+function renderMappings() {
+  l2('intelligence-mappings').replaceChildren();
+  mappingDraft.forEach((mapping, index) => {
+    const row = node('div', 'mapping-row');
+    const input = node('input');
+    input.value = mapping.activity;
+    input.required = true;
+    input.placeholder = 'Aktivitet, till exempel gaming';
+    input.addEventListener('input', () => {
+      mapping.activity = input.value;
+      intelligenceChanged();
+    });
+    row.append(
+      l2Field('Rapporterad aktivitet', input),
+      l2Field(
+        'Ljusscen',
+        l2Select(
+          sceneOptions(),
+          mapping.scene,
+          (value) => {
+            mapping.scene = value;
+            intelligenceChanged();
+          },
+          'Ljusscen för aktiviteten',
+        ),
+      ),
+      l2Button('Ta bort koppling', () => {
+        mappingDraft.splice(index, 1);
+        renderMappings();
+        intelligenceChanged();
+        l2('intelligence-add-mapping').focus();
+      }),
+    );
+    l2('intelligence-mappings').append(row);
+  });
+}
+function readIntelligenceForm() {
+  if (!intelligenceDraft) return;
+  const optical = intelligenceDraft.optical;
+  optical.enabled = l2('intelligence-optical-enabled').checked;
+  optical.mode = l2('intelligence-mode').value;
+  optical.deviceId = l2('intelligence-device').value || null;
+  optical.target = l2('intelligence-target').value || null;
+  optical.source = l2('intelligence-source').value.trim() || null;
+  optical.stabilityMs = Math.round(
+    l2('intelligence-stability').valueAsNumber * 1000,
+  );
+  optical.cooldownMs = Math.round(
+    l2('intelligence-optical-cooldown').valueAsNumber * 60000,
+  );
+  optical.allowedActivities = [
+    ...new Set(
+      l2('intelligence-activities')
+        .value.split(',')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
+  optical.respectManual = true;
+  intelligenceDraft.suggestions.enabled = l2(
+    'intelligence-suggestions-enabled',
+  ).checked;
+  intelligenceDraft.suggestions.cooldownMs = Math.round(
+    l2('intelligence-suggestions-cooldown').valueAsNumber * 60000,
+  );
+  intelligenceChanged();
+}
+function intelligenceChanged() {
+  intelligenceDraft.suggestions.sceneMappings = Object.fromEntries(
+    mappingDraft.map(({ activity, scene }) => [activity.trim(), scene]),
+  );
+  l2('intelligence-status').textContent = intelligenceDirty()
+    ? 'Osparade ändringar. Sparade regler gäller tills du sparar.'
+    : 'Inga osparade ändringar.';
+  updateLugn2Controls();
+}
+async function saveIntelligence(event) {
+  event.preventDefault();
+  await l2Operation('intelligence', 'intelligence-status', async () => {
+    readIntelligenceForm();
+    const settings = clone(intelligenceDraft);
+    if (
+      !Number.isInteger(settings.optical.stabilityMs) ||
+      settings.optical.stabilityMs < 1000 ||
+      settings.optical.stabilityMs > 300000 ||
+      [settings.optical.cooldownMs, settings.suggestions.cooldownMs].some(
+        (value) => !Number.isInteger(value) || value < 1000 || value > 86400000,
+      )
+    )
+      throw new Error(
+        'Stabil aktivitet måste vara 1–300 sekunder. Pausen mellan beslut eller förslag måste vara 1 sekund–24 timmar.',
+      );
+    if (
+      settings.optical.enabled &&
+      (!settings.optical.deviceId ||
+        !settings.optical.target ||
+        !settings.optical.source ||
+        !settings.optical.allowedActivities.length)
+    )
+      throw new Error(
+        'Välj dator, spelare, exakt källa och tillåtna aktiviteter innan du aktiverar Optical.',
+      );
+    const activities = new Set([
+      'gaming',
+      'video',
+      'music',
+      'desktop',
+      'idle',
+      'unknown',
+    ]);
+    if (
+      settings.optical.allowedActivities.some(
+        (activity) => !activities.has(activity),
+      ) ||
+      mappingDraft.some((mapping) => !activities.has(mapping.activity.trim()))
+    )
+      throw new Error(
+        'Välj en rapporterad aktivitet: gaming, video, music, desktop, idle eller unknown.',
+      );
+    if (
+      mappingDraft.some(
+        (mapping) => !mapping.activity.trim() || !mapping.scene,
+      ) ||
+      new Set(mappingDraft.map((mapping) => mapping.activity.trim())).size !==
+        mappingDraft.length
+    )
+      throw new Error(
+        'Varje scenkoppling behöver en unik aktivitet och en ljusscen.',
+      );
+    const saved = await l2Mutation(
+      'intelligence/settings',
+      {
+        settings,
+        expectedGeneration: intelligenceGeneration,
+      },
+      'intelligence',
+    );
+    intelligenceDraft = clone(saved.settings);
+    intelligenceOriginal = clone(saved.settings);
+    intelligenceGeneration = saved.generation;
+    render();
+    l2('intelligence-status').textContent =
+      'Inställningarna är sparade. Serverns beslut visas ovan.';
+  });
+}
+async function suggestionAction(id, action) {
+  await l2Operation(
+    `suggestion:${id}`,
+    'intelligence-availability',
+    async () => {
+      await l2Mutation(
+        'intelligence/suggestion',
+        { id, action },
+        'intelligence',
+      );
+      render();
+      l2('intelligence-availability').textContent =
+        action === 'accept'
+          ? 'Begäran mottagen. Servern kontrollerar tillgänglighet och gällande regler; enhetens rapport bekräftar läget.'
+          : 'Förslaget har hanterats. Servern avgör när ett nytt förslag kan visas.';
+    },
+  );
+}
+function renderIntelligence() {
+  const data = overview.intelligence;
+  const available =
+    data?.settings?.version === 1 &&
+    typeof data.generation === 'string' &&
+    data.settings.optical &&
+    data.settings.suggestions &&
+    Array.isArray(data.suggestions) &&
+    Array.isArray(data.optical);
+  l2('intelligence-form').hidden = !available;
+  l2('intelligence-availability').textContent = available
+    ? 'Optical och förslag är frivilliga. Inget nytt aktiveras utan ditt sparade val.'
+    : 'Intelligensinställningar är inte tillgängliga på den här servern ännu.';
+  l2('intelligence-suggestions').replaceChildren();
+  l2('optical-decisions').replaceChildren();
+  l2('optical-evidence').hidden = !available;
+  if (!available) return;
+  if (
+    !intelligenceDraft ||
+    (!intelligenceDirty() &&
+      intelligenceGeneration !== data.generation &&
+      !l2Pending.has('intelligence'))
+  )
+    fillIntelligence();
+  if (!data.suggestions.length)
+    l2('intelligence-suggestions').append(
+      node(
+        'p',
+        'empty-note',
+        'Inga aktuella förslag. Bara konfigurerade scenkopplingar kan ge scenförslag.',
+      ),
+    );
+  for (const suggestion of data.suggestions) {
+    const row = node('article', 'suggestion-row');
+    row.append(
+      node('h3', '', suggestion.title),
+      node('p', '', suggestion.reason),
+      node(
+        'p',
+        'field-help',
+        `Dator: ${suggestion.deviceId ?? 'okänd'}${suggestion.target ? ` · spelare: ${suggestion.target}` : ''}${suggestion.source ? ` · källa: ${suggestion.source}` : ''}`,
+      ),
+    );
+    const actions = node('div', 'inline-actions');
+    for (const [label, action] of [
+      ['Acceptera', 'accept'],
+      ['Avvisa', 'reject'],
+      ['Stäng förslaget', 'dismiss'],
+    ])
+      actions.append(
+        l2Button(
+          label,
+          () => suggestionAction(suggestion.id, action),
+          overviewStale || l2Pending.has(`suggestion:${suggestion.id}`),
+        ),
+      );
+    for (const button of actions.children) {
+      button.dataset.focusKey = `suggestion:${suggestion.id}:${button.textContent}`;
+      button.dataset.l2Pending = `suggestion:${suggestion.id}`;
+      button.dataset.l2Unavailable = 'false';
+    }
+    row.append(actions);
+    l2('intelligence-suggestions').append(row);
+  }
+  if (!data.optical.length)
+    l2('optical-decisions').append(
+      node(
+        'p',
+        'field-help',
+        'Inget Optical-beslut är rapporterat. Uppspelning från PipeWire bevisar inte att ljud hörs.',
+      ),
+    );
+  for (const decision of data.optical) {
+    const row = node('div', 'evidence-row');
+    row.append(
+      node(
+        'p',
+        '',
+        `${decision.deviceId ?? 'Dator'} · ${decision.status ?? decision.state ?? 'Bedömning'}${decision.reason ? ` · ${decision.reason}` : ''}`,
+      ),
+    );
+    const details = node('details');
+    details.append(
+      node('summary', '', 'Serverns underlag'),
+      node('pre', 'evidence-data', JSON.stringify(decision, null, 2)),
+    );
+    row.append(details);
+    l2('optical-decisions').append(row);
+  }
+}
+function updateLugn2Controls() {
+  l2('routine-add').disabled =
+    !routineDraft ||
+    routineDraft.steps.length >= 32 ||
+    l2Pending.has('routine');
+  for (const button of document.querySelectorAll('[data-l2-pending]')) {
+    button.disabled =
+      overviewStale ||
+      button.dataset.l2Unavailable === 'true' ||
+      l2Pending.has(button.dataset.l2Pending);
+  }
+  const routinesAvailable =
+    overview?.routines?.version === 1 &&
+    typeof overview.routines.generation === 'string';
+  l2('routine-fields').disabled = l2Pending.has('routine');
+  l2('routine-save').disabled =
+    !routinesAvailable ||
+    overviewStale ||
+    !routineDirty() ||
+    l2Pending.has('routine');
+  l2('routine-delete').disabled =
+    !routinesAvailable || overviewStale || l2Pending.has('routine');
+  l2('routine-preview').disabled =
+    !routinesAvailable ||
+    overviewStale ||
+    l2Pending.has('routine-preview') ||
+    l2Pending.has('routine');
+  l2('intelligence-fields').disabled = l2Pending.has('intelligence');
+  l2('intelligence-save').disabled =
+    !overview?.intelligence ||
+    overviewStale ||
+    !intelligenceDirty() ||
+    l2Pending.has('intelligence');
+}
+function renderLugn2() {
+  l2('snapshot-notice').hidden = !overviewStale;
+  l2('snapshot-notice').textContent =
+    'Anslutningen är osäker. Senast kända värden visas. Nya rutiner och intelligensändringar väntar tills kontakten är återställd.';
+  l2('system-snapshot').textContent =
+    `Tillståndsrevision ${overview.state.revision}. ${overviewStale ? 'Inaktuellt tillstånd.' : 'Senaste mottagna serverstatus.'}`;
+  renderRoutines();
+  renderIntelligence();
+  updateLugn2Controls();
+}
+
 function settingsElement(id) {
   return document.getElementById(`settings-${id}`);
 }
@@ -2897,7 +4263,7 @@ function renderMusicSettings() {
     (overview.health?.integrations?.home_assistant === undefined ||
       overview.health.integrations.home_assistant === 'connected');
   document.getElementById('music-settings-current').textContent = policy
-    ? `${current ? 'Nu' : 'Senast rapporterat'} · Rapporterad volym ${volumePercent(overview.state.music.devices[target].observed.volume)} · Läge: ${policy.mode === 'manual' ? 'Manuellt' : 'Auto'} · Sparad Auto-bas ${volumePercent(policy.configuredBaseline ?? policy.baseline)} · Manuell referens ${volumePercent(policy.manualReference ?? null)} · Dygn ${volumeOffset(policy.dailyOffset)} · Personer ${volumeOffset(policy.personOffset)} · Automatiskt mål ${volumePercent(policy.target)} · Aktivt mål ${volumePercent(policy.effectiveTarget ?? null)} · ${settingsVolumeReason(policy.activityReason)}`
+    ? `${current ? 'Nu' : 'Senast rapporterat'} · Rapporterad volym ${volumePercent(overview.state.music.devices[target].observed.volume)} · Läge: ${policy.mode === 'manual' ? 'Manuellt' : 'Auto'} · Sparad Auto-bas ${volumePercent(policy.configuredBaseline ?? policy.baseline)} · Manuell referens ${volumePercent(policy.manualReference ?? null)} · Dygn ${volumeOffset(policy.dailyOffset)} · Personer ${volumeOffset(policy.personOffset)} · Optical ${volumeOffset(policy.sourceOffset ?? 0)} · Automatiskt mål ${volumePercent(policy.target)} · Aktivt mål ${volumePercent(policy.effectiveTarget ?? null)} · ${settingsVolumeReason(policy.activityReason)}`
     : 'Väntar på volympolicy.';
   if (
     !volumeSettingsDraft ||
@@ -2949,8 +4315,96 @@ function fillMusicSettings() {
   ])
     settingsElement(id).value =
       Math.round(volumeSettingsDraft[key] * 1000) / 10;
+  fillOpticalOffsets();
   renderVolumePoints();
   updateVolumeSettingsStatus();
+}
+function fillOpticalOffsets() {
+  const container = settingsElement('optical-offsets');
+  container.replaceChildren();
+  for (const [target, device] of Object.entries(overview.state.music.devices)) {
+    const saved = volumeSettingsDraft.opticalOffsets?.[target];
+    const sources = [
+      ...new Set([
+        ...(device.allowedSources ?? []),
+        ...(saved?.source ? [saved.source] : []),
+      ]),
+    ];
+    const group = document.createElement('div');
+    group.className = 'settings-grid optical-offset-row';
+    group.dataset.target = target;
+    const toggleLabel = document.createElement('label');
+    toggleLabel.className = 'settings-toggle';
+    const enabled = document.createElement('input');
+    enabled.type = 'checkbox';
+    enabled.checked = saved?.enabled === true;
+    enabled.setAttribute('aria-describedby', 'settings-optical-help');
+    toggleLabel.append(enabled);
+    const toggleText = document.createElement('span');
+    toggleText.textContent = `Kompensera Optical · ${target}`;
+    toggleLabel.append(toggleText);
+    const sourceLabel = document.createElement('label');
+    sourceLabel.textContent = 'Optical-ingång';
+    const source = document.createElement('select');
+    source.setAttribute('aria-label', `Optical-ingång för ${target}`);
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Välj ingång';
+    source.append(placeholder);
+    for (const name of sources) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      source.append(option);
+    }
+    source.value =
+      saved?.source ??
+      sources.find((name) => /^optical(?: in)?$/i.test(name)) ??
+      '';
+    sourceLabel.append(source);
+    const offsetLabel = document.createElement('label');
+    offsetLabel.textContent = 'Tillägg på Optical (procentenheter)';
+    const offset = document.createElement('input');
+    offset.type = 'number';
+    offset.min = '0';
+    offset.max = '20';
+    offset.step = '0.1';
+    offset.required = true;
+    offset.value = Math.round((saved?.offset ?? 0.07) * 1000) / 10;
+    offset.setAttribute(
+      'aria-label',
+      `Optical-tillägg för ${target} (procentenheter)`,
+    );
+    offsetLabel.append(offset);
+    const sync = () => {
+      enabled.disabled = !source.value;
+      offset.disabled = !source.value;
+    };
+    const update = () => {
+      sync();
+      if (!source.value) {
+        enabled.checked = false;
+        if (volumeSettingsDraft.opticalOffsets)
+          delete volumeSettingsDraft.opticalOffsets[target];
+      } else {
+        volumeSettingsDraft.opticalOffsets ??= {};
+        volumeSettingsDraft.opticalOffsets[target] = {
+          enabled: enabled.checked,
+          source: source.value,
+          offset: Number.isFinite(offset.valueAsNumber)
+            ? offset.valueAsNumber / 100
+            : null,
+        };
+      }
+      updateVolumeSettingsStatus();
+    };
+    enabled.addEventListener('change', update);
+    source.addEventListener('change', update);
+    offset.addEventListener('input', update);
+    sync();
+    group.append(toggleLabel, sourceLabel, offsetLabel);
+    container.append(group);
+  }
 }
 function settingsVolumeReason(reason) {
   return (
@@ -3145,6 +4599,8 @@ async function musicSettingsRequest(path, body) {
         'Inställningarna har ändrats någon annanstans. Ditt utkast finns kvar. Avbryt ändringarna för att hämta senaste versionen.',
       volume_settings_save_failed:
         'Kunde inte lagra inställningarna. Ditt utkast finns kvar. Försök igen.',
+      invalid_optical_offset_source:
+        'Välj en ingång som finns på den valda spelaren. Ditt utkast finns kvar.',
       unauthorized:
         'Sessionen har gått ut. Logga in igen; utkastet finns kvar.',
       csrf_failed: 'Sessionen har ändrats. Försök igen eller logga in igen.',
@@ -3227,7 +4683,7 @@ settingsElement('preview-button').addEventListener('click', async () => {
     });
     if (revision !== volumePreviewRevision) return;
     settingsElement('preview-result').textContent =
-      `Baslinje ${volumePercent(result.baseline)} + dygn ${volumeOffset(result.dailyOffset)} + personer ${volumeOffset(result.personOffset)} → automatiskt mål ${volumePercent(result.target)} (inom utkastets gränser). Rapporterad volym: ${volumePercent(result.observedVolume)}. Nuvarande volymägare: ${volumeOwner(result.activeOwner)}. ${result.enabled ? '' : 'Automatiken är avstängd i utkastet.'} Inga kommandon skickades.`;
+      `Baslinje ${volumePercent(result.baseline)} + dygn ${volumeOffset(result.dailyOffset)} + personer ${volumeOffset(result.personOffset)} + Optical ${volumeOffset(result.sourceOffset ?? 0)} → automatiskt mål ${volumePercent(result.target)} (inom utkastets gränser). Rapporterad volym: ${volumePercent(result.observedVolume)}. Nuvarande volymägare: ${volumeOwner(result.activeOwner)}. ${result.enabled ? '' : 'Automatiken är avstängd i utkastet.'} Inga kommandon skickades.`;
   } catch (error) {
     if (revision === volumePreviewRevision)
       settingsElement('preview-result').textContent = error.message;
@@ -3280,3 +4736,466 @@ window.addEventListener('beforeunload', (event) => {
     event.returnValue = '';
   }
 });
+
+// Camera settings keep an independent local draft while live room state changes.
+function cameraWebDirty() {
+  return (
+    cameraWebDraft !== null &&
+    JSON.stringify(cameraWebDraft) !== JSON.stringify(cameraWebOriginal)
+  );
+}
+function cameraWebNow() {
+  return Number.isFinite(overview?.generatedAt)
+    ? overview.generatedAt + Date.now() - lastOverviewAt
+    : Date.now();
+}
+function cameraWebSafeUrl(value) {
+  if (typeof value !== 'string' || !/^(\/|\.\/)/.test(value)) return null;
+  try {
+    const url = new URL(value, location.href);
+    return url.origin === location.origin && !url.username && !url.password
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+function stopCameraWebMedia() {
+  cameraWebMediaEpoch += 1;
+  window.clearTimeout(cameraWebImageTimer);
+  window.clearTimeout(cameraWebImageTimeout);
+  cameraWebController?.abort();
+  cameraWebController = null;
+  const image = l2('camera-web-image');
+  image.onload = null;
+  image.onerror = null;
+  image.removeAttribute('src');
+  image.hidden = true;
+  if (cameraWebObjectUrl) URL.revokeObjectURL(cameraWebObjectUrl);
+  cameraWebObjectUrl = null;
+  cameraWebMediaKey = null;
+}
+function cameraWebCanRun(epoch) {
+  return (
+    epoch === cameraWebMediaEpoch &&
+    !overviewStale &&
+    csrfToken &&
+    !dashboardView.hidden &&
+    document.visibilityState !== 'hidden' &&
+    !l2('camera-web-panel').hidden &&
+    ['oversikt', 'intelligens'].includes(dashboardView.dataset.page) &&
+    overview?.cameraDashboard?.active?.expiresAt > cameraWebNow()
+  );
+}
+function startCameraWebMedia(active) {
+  stopCameraWebMedia();
+  const epoch = cameraWebMediaEpoch;
+  cameraWebMediaKey = `${active.id}|${active.imageUrl ?? ''}`;
+  const image = l2('camera-web-image');
+  const placeholder = l2('camera-web-placeholder');
+  const status = l2('camera-web-media-status');
+  placeholder.hidden = false;
+  placeholder.textContent = 'Hämtar kamerabild …';
+  status.textContent = 'Tyst kameravy · uppdateras varje sekund';
+  const imageUrl = cameraWebSafeUrl(active.imageUrl);
+  if (!imageUrl) {
+    placeholder.textContent = 'Kamerabilden är inte tillgänglig.';
+    return;
+  }
+  let failures = 0;
+  const frame = async () => {
+    if (!cameraWebCanRun(epoch)) return;
+    const controller = new AbortController();
+    cameraWebController = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+    cameraWebImageTimeout = timeout;
+    try {
+      const response = await fetch(imageUrl, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: controller.signal,
+      });
+      if (
+        !response.ok ||
+        !response.headers.get('content-type')?.startsWith('image/')
+      )
+        throw new Error('image_unavailable');
+      const blob = await response.blob();
+      if (!cameraWebCanRun(epoch)) return;
+      if (blob.size > 8 * 1024 * 1024) throw new Error('image_too_large');
+      const nextUrl = URL.createObjectURL(blob);
+      if (cameraWebObjectUrl) URL.revokeObjectURL(cameraWebObjectUrl);
+      cameraWebObjectUrl = nextUrl;
+      image.onload = () => {
+        if (!cameraWebCanRun(epoch)) return;
+        failures = 0;
+        image.hidden = false;
+        placeholder.hidden = true;
+        status.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
+        cameraWebImageTimer = window.setTimeout(frame, 1000);
+      };
+      image.onerror = () => {
+        if (!cameraWebCanRun(epoch)) return;
+        status.textContent = 'Kamerabilden kunde inte visas.';
+      };
+      image.src = nextUrl;
+    } catch {
+      if (!cameraWebCanRun(epoch)) return;
+      failures += 1;
+      status.textContent =
+        failures < 3
+          ? 'Ingen ny bild. Försöker igen …'
+          : 'Kameran svarar inte. Stäng och öppna vyn för att försöka igen.';
+      if (!image.hidden) status.textContent += ' Bilden är inaktuell.';
+      if (failures < 3) cameraWebImageTimer = window.setTimeout(frame, 2000);
+    } finally {
+      window.clearTimeout(timeout);
+      if (cameraWebController === controller) cameraWebController = null;
+    }
+  };
+  void frame();
+}
+function cameraWebCheckbox(container, label, value, checked, onChange) {
+  const row = node('label', 'check-label');
+  const input = node('input');
+  input.type = 'checkbox';
+  input.value = value;
+  input.checked = checked;
+  input.addEventListener('change', () => {
+    onChange(input.checked);
+    updateCameraWebControls();
+  });
+  row.append(input, node('span', '', label));
+  container.append(row);
+  return row;
+}
+function fillCameraWebSettings(data) {
+  cameraWebOriginal = structuredClone(data.settings);
+  cameraWebDraft = structuredClone(data.settings);
+  cameraWebGeneration = data.generation;
+  l2('camera-enabled').checked = cameraWebDraft.enabled;
+  l2('camera-automatic').checked = cameraWebDraft.automaticEnabled;
+  l2('camera-duration').value = String(cameraWebDraft.durationSeconds);
+  const cameras = l2('camera-camera-fields');
+  cameras.replaceChildren();
+  for (const camera of data.definitions) {
+    const row = cameraWebCheckbox(
+      cameras,
+      `${camera.name}${camera.available ? '' : ' (otillgänglig)'}`,
+      camera.id,
+      cameraWebDraft.cameras[camera.id] === true,
+      (checked) => {
+        cameraWebDraft.cameras[camera.id] = checked;
+      },
+    );
+    row.dataset.cameraId = camera.id;
+  }
+  const triggers = l2('camera-trigger-fields');
+  triggers.replaceChildren();
+  for (const trigger of data.triggers)
+    cameraWebCheckbox(
+      triggers,
+      trigger.name,
+      trigger.id,
+      cameraWebDraft.triggers[trigger.id] === true,
+      (checked) => {
+        cameraWebDraft.triggers[trigger.id] = checked;
+      },
+    );
+  if (!data.triggers.length)
+    triggers.append(node('p', '', 'Inga kamerahändelser är konfigurerade.'));
+  const viewers = l2('camera-viewer-fields');
+  viewers.replaceChildren();
+  for (const [id, label] of [
+    ['bed', 'Bed'],
+    ['desk', 'Desk'],
+    ['web', 'Webb'],
+  ])
+    cameraWebCheckbox(
+      viewers,
+      label,
+      id,
+      cameraWebDraft.viewers.includes(id),
+      (checked) => {
+        cameraWebDraft.viewers = checked
+          ? [...cameraWebDraft.viewers, id]
+          : cameraWebDraft.viewers.filter((item) => item !== id);
+      },
+    );
+}
+function updateCameraWebControls() {
+  const dirty = cameraWebDirty();
+  l2('camera-save').disabled = !dirty || cameraWebBusy || overviewStale;
+  l2('camera-discard').disabled = !dirty || cameraWebBusy;
+  l2('camera-fields').disabled = cameraWebBusy;
+  l2('camera-save').textContent = cameraWebBusy
+    ? 'Sparar …'
+    : 'Spara kamerainställningar';
+}
+function renderCameraWeb() {
+  const data = overview?.cameraDashboard;
+  l2('cameras-section').hidden = !data;
+  if (!data) {
+    if (cameraWebMediaKey) stopCameraWebMedia();
+    return;
+  }
+  if (
+    !cameraWebDraft ||
+    (!cameraWebDirty() &&
+      !cameraWebBusy &&
+      cameraWebGeneration !== data.generation)
+  )
+    fillCameraWebSettings(data);
+  for (const row of l2('camera-camera-fields').children) {
+    const camera = data.definitions.find(
+      (item) => item.id === row.dataset.cameraId,
+    );
+    if (camera && row.children[1])
+      row.children[1].textContent = `${camera.name}${camera.available ? '' : ' (otillgänglig)'}`;
+  }
+  l2('camera-web-summary').textContent = !data.settings.enabled
+    ? 'Kameravisning är avstängd.'
+    : data.settings.automaticEnabled
+      ? `Händelsestyrd kameravy är på · ${data.settings.durationSeconds} sekunder`
+      : 'Manuell kameravisning är på. Automatisk visning är avstängd.';
+  const choices = l2('camera-web-choices');
+  const definitions = data.definitions.filter(
+    (item) => item.enabled && item.available,
+  );
+  const key = JSON.stringify(definitions);
+  if (cameraWebChoicesKey !== key) {
+    cameraWebChoicesKey = key;
+    choices.replaceChildren(
+      ...definitions.map((camera) => {
+        const button = node(
+          'button',
+          'button button-quiet',
+          `Visa ${camera.name}`,
+        );
+        button.type = 'button';
+        button.addEventListener('click', () => {
+          void cameraWebAction('show', camera.id);
+        });
+        return button;
+      }),
+    );
+  }
+  choices.hidden =
+    !data.settings.enabled || !data.settings.viewers.includes('web');
+  for (const button of choices.children)
+    button.disabled =
+      cameraWebActionPending || cameraWebActionRequests > 0 || overviewStale;
+  if (data.active?.id && cameraWebCloseHoldUntil > cameraWebNow()) {
+    cameraWebDismissedIds.add(data.active.id);
+    if (cameraWebDismissedIds.size > 32)
+      cameraWebDismissedIds.delete(cameraWebDismissedIds.values().next().value);
+  }
+  const showingPending =
+    cameraWebActionPending &&
+    cameraWebPendingShow &&
+    cameraWebCloseHoldUntil <= cameraWebNow() &&
+    data.settings.enabled &&
+    data.settings.viewers.includes('web');
+  const active =
+    data.settings.enabled &&
+    data.settings.viewers.includes('web') &&
+    cameraWebCloseHoldUntil <= cameraWebNow() &&
+    !cameraWebDismissedIds.has(data.active?.id) &&
+    data.active?.expiresAt > cameraWebNow()
+      ? data.active
+      : null;
+  l2('camera-web-panel').hidden = !active && !showingPending;
+  if (active) {
+    l2('camera-web-name').textContent = active.name;
+    l2('camera-web-reason').textContent = active.reason || 'Manuellt öppnad';
+    l2('camera-web-countdown').textContent =
+      `${Math.max(0, Math.ceil((active.expiresAt - cameraWebNow()) / 1000))} s`;
+    l2('camera-web-image').alt = `${active.name}, senast hämtade kamerabild`;
+  }
+  const keyActive = active ? `${active.id}|${active.imageUrl ?? ''}` : null;
+  if (!active || !cameraWebCanRun(cameraWebMediaEpoch)) {
+    if (cameraWebMediaKey) stopCameraWebMedia();
+    if (showingPending && !active) {
+      l2('camera-web-name').textContent =
+        definitions.find((item) => item.id === cameraWebPendingShow)?.name ||
+        'Kamera';
+      l2('camera-web-reason').textContent = 'Väntar på servern';
+      l2('camera-web-countdown').textContent = '';
+      l2('camera-web-placeholder').hidden = false;
+      l2('camera-web-placeholder').textContent = 'Öppnar kameravyn …';
+      l2('camera-web-media-status').textContent =
+        'Du kan stänga vyn medan den öppnas.';
+    }
+    if (active && overviewStale)
+      l2('camera-web-media-status').textContent =
+        'Kontakten med Lugn bröts. Kameran har stoppats.';
+  } else if (cameraWebMediaKey !== keyActive) startCameraWebMedia(active);
+  updateCameraWebControls();
+}
+async function cameraWebRequest(path, method, body) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(`${API_ROOT}/cameras/${path}`, {
+      method,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json', 'X-Lugn-CSRF': csrfToken },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 409)
+        throw new Error(
+          'Ändrat på annat håll eller inte tillgängligt. Ditt utkast finns kvar. Kasta utkastet för att hämta de sparade inställningarna.',
+        );
+      if (response.status === 401 || response.status === 403)
+        throw new Error(
+          'Sessionen saknar åtkomst. Logga in igen. Ditt utkast finns kvar.',
+        );
+      throw new Error(
+        'Kameran eller servern är inte tillgänglig. Försök igen.',
+      );
+    }
+    return result;
+  } catch (error) {
+    if (error.name === 'AbortError' || error instanceof TypeError)
+      throw new Error(
+        'Servern svarar inte. Utfallet är okänt; kontrollera anslutningen innan du försöker igen.',
+      );
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+async function cameraWebAction(action, cameraId) {
+  if (
+    !csrfToken ||
+    (action === 'show' &&
+      (cameraWebActionPending || cameraWebActionRequests > 0 || overviewStale))
+  )
+    return;
+  cameraWebActionRequests += 1;
+  const operation = ++cameraWebActionEpoch;
+  if (action === 'hide') {
+    cameraWebCloseHoldUntil = cameraWebNow() + 60000;
+    if (overview?.cameraDashboard?.active?.id)
+      cameraWebDismissedIds.add(overview.cameraDashboard.active.id);
+    cameraWebPendingShow = null;
+    stopCameraWebMedia();
+    l2('camera-web-panel').hidden = true;
+    l2('camera-web-choices').children[0]?.focus?.();
+  } else {
+    cameraWebCloseHoldUntil = 0;
+    cameraWebDismissedIds.clear();
+    cameraWebPendingShow = cameraId;
+  }
+  cameraWebActionPending = true;
+  renderCameraWeb();
+  try {
+    const result = await cameraWebRequest('action', 'POST', {
+      action,
+      ...(cameraId ? { cameraId } : {}),
+    });
+    if (operation !== cameraWebActionEpoch) {
+      if (action === 'show' && cameraWebCloseHoldUntil > cameraWebNow()) {
+        await cameraWebRequest('action', 'POST', { action: 'hide' });
+      }
+      return;
+    }
+    if (result.cameraDashboard && overview)
+      overview.cameraDashboard = result.cameraDashboard;
+  } catch (error) {
+    if (operation === cameraWebActionEpoch)
+      setActionMessage(error.message, 'bad');
+  } finally {
+    cameraWebActionRequests -= 1;
+    if (operation === cameraWebActionEpoch) {
+      cameraWebActionPending = false;
+      cameraWebPendingShow = null;
+    }
+    renderCameraWeb();
+  }
+}
+function initializeCameraWeb() {
+  if (!l2('camera-form')) return;
+  l2('camera-enabled').addEventListener('change', () => {
+    if (cameraWebDraft) cameraWebDraft.enabled = l2('camera-enabled').checked;
+    updateCameraWebControls();
+  });
+  l2('camera-automatic').addEventListener('change', () => {
+    if (cameraWebDraft)
+      cameraWebDraft.automaticEnabled = l2('camera-automatic').checked;
+    updateCameraWebControls();
+  });
+  l2('camera-duration').addEventListener('input', () => {
+    if (cameraWebDraft)
+      cameraWebDraft.durationSeconds = Number(l2('camera-duration').value);
+    updateCameraWebControls();
+  });
+  l2('camera-discard').addEventListener('click', async () => {
+    try {
+      await fetchOverview();
+      fillCameraWebSettings(overview.cameraDashboard);
+      l2('camera-settings-status').textContent = 'Utkastet är borttaget.';
+      renderCameraWeb();
+    } catch {
+      l2('camera-settings-status').textContent =
+        'De sparade inställningarna kunde inte hämtas. Utkastet finns kvar.';
+    }
+  });
+  l2('camera-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (
+      !cameraWebDirty() ||
+      cameraWebBusy ||
+      !l2('camera-form').checkValidity()
+    )
+      return;
+    cameraWebBusy = true;
+    updateCameraWebControls();
+    const status = l2('camera-settings-status');
+    status.textContent = 'Sparar kamerainställningar …';
+    status.dataset.tone = 'neutral';
+    try {
+      const result = await cameraWebRequest('settings', 'PUT', {
+        generation: cameraWebGeneration,
+        settings: structuredClone(cameraWebDraft),
+      });
+      if (
+        !result.cameraDashboard?.settings ||
+        typeof result.cameraDashboard.generation !== 'string'
+      )
+        throw new Error(
+          'Servern kunde inte bekräfta inställningarna. Utkastet finns kvar.',
+        );
+      overview.cameraDashboard = result.cameraDashboard;
+      fillCameraWebSettings(result.cameraDashboard);
+      status.textContent = 'Kamerainställningarna är sparade.';
+    } catch (error) {
+      status.textContent = error.message;
+      status.dataset.tone = 'bad';
+    } finally {
+      cameraWebBusy = false;
+      renderCameraWeb();
+    }
+  });
+  l2('camera-web-close').addEventListener('click', () => {
+    void cameraWebAction('hide');
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') stopCameraWebMedia();
+    else renderCameraWeb();
+  });
+  window.addEventListener('pagehide', stopCameraWebMedia);
+  window.addEventListener('beforeunload', (event) => {
+    if (cameraWebDirty() || cameraWebBusy) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
+  window.setInterval(() => {
+    if (overview?.cameraDashboard?.active) renderCameraWeb();
+  }, 1000);
+}

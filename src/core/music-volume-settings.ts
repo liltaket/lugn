@@ -9,6 +9,18 @@ export const MusicVolumeSettingsSchema = z
         z.number().finite().min(0).max(1),
       )
       .default({}),
+    opticalOffsets: z
+      .record(
+        z.string().regex(/^music\.[a-zA-Z0-9_.-]+$/),
+        z
+          .object({
+            enabled: z.boolean(),
+            source: z.string().min(1).max(200),
+            offset: z.number().finite().min(0).max(0.2).default(0.07),
+          })
+          .strict(),
+      )
+      .default({}),
     passiveMultiPersonReductionEnabled: z.boolean().default(false),
     dailyCurve: z
       .array(
@@ -61,6 +73,7 @@ export type MusicVolumeSettings = z.infer<typeof MusicVolumeSettingsSchema>;
 export const defaultMusicVolumeSettings: MusicVolumeSettings = {
   enabled: true,
   autoBaseVolumes: {},
+  opticalOffsets: {},
   passiveMultiPersonReductionEnabled: false,
   dailyCurve: [
     { minute: 0, offset: -0.15 },
@@ -79,6 +92,7 @@ export function calculateMusicVolume(
   baseline: number | null,
   minute: number,
   personCount: number | null,
+  sourceOffset = 0,
 ) {
   const position = Math.min(1440, Math.max(0, minute));
   const rightIndex = settings.dailyCurve.findIndex(
@@ -96,12 +110,16 @@ export function calculateMusicVolume(
     baseline,
     dailyOffset,
     personOffset,
+    sourceOffset,
     target:
       baseline === null
         ? null
         : Math.min(
             settings.maximum,
-            Math.max(settings.minimum, baseline + dailyOffset + personOffset),
+            Math.max(
+              settings.minimum,
+              baseline + dailyOffset + personOffset + sourceOffset,
+            ),
           ),
   };
 }

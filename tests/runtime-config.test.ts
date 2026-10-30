@@ -29,6 +29,67 @@ describe('runtime configuration cross references', () => {
     },
     scenes: [],
   };
+  it('rejects RGB in a dedicated WLED CCT scene before runtime startup', () => {
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        homeAssistant: {
+          ...minimal.homeAssistant,
+          wledCct: { 'lighting.ceiling': { baseUrl: 'http://wled.test' } },
+        },
+        scenes: [
+          {
+            id: 'scene.party',
+            name: 'Party',
+            lighting: {
+              'lighting.ceiling': { power: true, rgb: [255, 10, 100] },
+            },
+          },
+        ],
+      }),
+    ).toThrow('Dedicated WLED CCT targets cannot use RGB');
+  });
+  it('accepts optional camera presentation config with validated local definitions and passive triggers', () => {
+    expect(loadConfig(minimal).cameraDashboard).toBeUndefined();
+    const cameraDashboard = {
+      cameras: [{ id: 'entry', name: 'Entré', entityId: 'camera.entry' }],
+      triggers: [
+        {
+          id: 'motion',
+          name: 'Rörelse',
+          cameraId: 'entry',
+          kind: 'state',
+          entityId: 'binary_sensor.entry_motion',
+          from: 'off',
+          to: 'on',
+        },
+      ],
+    };
+    expect(loadConfig({ ...minimal, cameraDashboard }).cameraDashboard).toEqual(
+      cameraDashboard,
+    );
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        cameraDashboard: {
+          ...cameraDashboard,
+          triggers: [{ ...cameraDashboard.triggers[0], cameraId: 'missing' }],
+        },
+      }),
+    ).toThrow('Unknown camera');
+    expect(() =>
+      loadConfig({
+        ...minimal,
+        cameraDashboard: {
+          ...cameraDashboard,
+          cameras: [
+            { id: 'entry', name: 'Entré', entityId: 'https://camera.test/' },
+          ],
+        },
+      }),
+    ).toThrow('Invalid configuration');
+  });
+
   it('routes computer media only through an explicitly configured MQTT computer and input', () => {
     const config = {
       ...minimal,
@@ -49,6 +110,15 @@ describe('runtime configuration cross references', () => {
     expect(
       loadConfig(config).homeAssistant.music['music.room']?.computerAudio,
     ).toEqual({ deviceId: 'kuffe', source: 'Optical In' });
+    const artworkConfig = structuredClone(config);
+    Object.assign(
+      artworkConfig.homeAssistant.music['music.room'].computerAudio,
+      { artwork: true },
+    );
+    expect(
+      loadConfig(artworkConfig).homeAssistant.music['music.room']?.computerAudio
+        ?.artwork,
+    ).toBe(true);
     expect(() => loadConfig({ ...config, mqtt: undefined })).toThrow(
       'Computer audio device must be configured',
     );

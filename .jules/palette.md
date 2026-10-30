@@ -7,3 +7,8 @@
 
 **Learning:** During long-running operations like API calls for music settings, buttons must reflect an `aria-busy` state for screen reader users, indicating the pending operation without simply relying on text changes.
 **Action:** When updating a button's visual or text state during async operations (e.g., `button.textContent = 'Sparar…'`), remember to also add `button.setAttribute('aria-busy', 'true')` and remove it in the `finally` block to ensure a consistent experience for assistive technologies.
+
+## 2024-05-18 - Missing ARIA busy state on login loading button
+
+**Learning:** Found that the main login submission button disabled itself and changed text during loading but failed to announce to screen readers via the `aria-busy` attribute, leaving them without context on the background loading status.
+**Action:** When adding or verifying loading states that modify button text to include a loading indication, ensure the `aria-busy` attribute is also toggled correctly and cleaned up using `finally` blocks to keep the component fully accessible in all execution paths.

@@ -396,6 +396,10 @@ describe('semantic music control', () => {
     expect(controller.getState('music.room').requested.volume).toBeUndefined();
 
     automation.setVolumeAutomationEnabled(true);
+    automation.setVolumeAuthority(
+      { target: 'music.room', mode: 'auto' },
+      actor,
+    );
     await flushMicrotasks();
     expect(adapter.dispatched).toHaveLength(1);
     expect(adapter.dispatched[0]?.requested).toEqual({

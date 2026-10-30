@@ -12,6 +12,12 @@ pub struct Audio {
     pub applications: Vec<String>,
     pub roles: Vec<String>,
 }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "provider", rename_all = "lowercase", deny_unknown_fields)]
+pub enum Artwork {
+    Spotify { id: String },
+    Inline { data: String },
+}
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Media {
     pub player: String,
@@ -22,6 +28,8 @@ pub struct Media {
     pub artists: Option<Vec<String>>,
     pub album: Option<String>,
     pub content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artwork: Option<Artwork>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Observations {

@@ -1,4 +1,17 @@
+import { CameraDashboardService } from '../application/camera-dashboard.js';
+import { createCameraSettings } from '../core/cameras.js';
+import { CameraSettingsStore } from './camera-settings-store.js';
+import { CameraMediaProvider } from './camera-media.js';
 import { MusicVolumeSettingsStore } from './music-volume-settings-store.js';
+import { HomeAssistantArtworkService } from './artwork-service.js';
+import { ComputerNowPlayingSelector } from '../application/computer-now-playing.js';
+import { RoutineService } from '../application/routines.js';
+import { createRoutineTemplates } from '../core/routines.js';
+import { RoutineStore } from './routine-store.js';
+import { RoutineApi } from './routine-api.js';
+import { IntelligenceSettingsStore } from './intelligence-settings-store.js';
+import { IntelligenceApi } from './intelligence-api.js';
+import { createComputerIntelligenceRuntime } from './computer-intelligence-runtime.js';
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
@@ -304,6 +317,59 @@ export async function startRuntime(
       ? {}
       : { buttonAdapter: homeAssistantButton }),
   });
+  const routineStore = new RoutineStore(
+    `${lightingIntentPath}.routines.json`,
+    createRoutineTemplates({
+      lightTargets: deviceIds,
+      ...(Object.keys(config.homeAssistant.music)[0] === undefined
+        ? {}
+        : { musicTarget: Object.keys(config.homeAssistant.music)[0]! }),
+    }),
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  await routineStore.load();
+  const routines = new RoutineService(systemClock, {
+    engine,
+    capabilities,
+    store: routineStore,
+    bedtime: {
+      lightTargets: Object.entries(
+        scenes.find((scene) => scene.id === 'scene.soft_light')?.lighting ??
+          scenes.find((scene) => scene.id === 'scene.everyday_light')
+            ?.lighting ??
+          {},
+      )
+        .filter(([, values]) => values.power !== false)
+        .map(([target]) => target),
+      ...(Object.keys(config.homeAssistant.music)[0] === undefined
+        ? {}
+        : { musicTarget: Object.keys(config.homeAssistant.music)[0]! }),
+    },
+  });
+  const intelligenceStore = new IntelligenceSettingsStore(
+    `${lightingIntentPath}.intelligence.json`,
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  await intelligenceStore.load();
+  const computerIntelligence = createComputerIntelligenceRuntime({
+    clock: systemClock,
+    engine,
+    capabilities,
+    settingsStore: intelligenceStore,
+    computerDeviceIds: (config.mqtt?.computers ?? []).map(
+      ({ deviceId }) => deviceId,
+    ),
+    computerAudio: Object.fromEntries(
+      Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+        mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
+      ),
+    ),
+    observationTrusted: (target) => isMusicObservationTrusted(target),
+  });
+  const experience = new IntelligenceApi(
+    new RoutineApi(routines, routineStore),
+    computerIntelligence.service,
+  );
   let syncingHomeAssistantStates = false;
   let homeAssistantConnection: HomeAssistantConnection | undefined;
   const trustedMusicTargets = new Set<string>();
@@ -328,8 +394,92 @@ export async function startRuntime(
         isMusicObservationTrusted(target),
       ]),
     );
+  const computerAudioMappings = Object.fromEntries(
+    Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+      mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
+    ),
+  );
+  const computerNowPlaying = new ComputerNowPlayingSelector(
+    computerAudioMappings,
+  );
+  computerNowPlaying.observe(engine.state.computer.devices);
+  const unsubscribeComputerNowPlaying = engine.stream.subscribe((update) => {
+    if (update.patch.computer)
+      computerNowPlaying.observe(update.patch.computer.devices);
+  });
+  const artwork = homeAssistantMusic
+    ? new HomeAssistantArtworkService(
+        {
+          baseUrl: config.homeAssistant.baseUrl,
+          token: config.homeAssistant.token,
+          entities: Object.fromEntries(
+            Object.entries(config.homeAssistant.music).map(
+              ([target, mapping]) => [target, mapping.entityId],
+            ),
+          ),
+          metadataProvider: (target) =>
+            homeAssistantMusic.artworkMetadata(target),
+          observationTrusted: (target) => isMusicObservationTrusted(target),
+          computer: {
+            selector: computerNowPlaying,
+            routes: Object.fromEntries(
+              Object.entries(computerAudioMappings).filter(
+                ([, mapping]) => mapping.artwork === true,
+              ),
+            ),
+          },
+          excludedSources: Object.fromEntries(
+            Object.entries(config.homeAssistant.music).flatMap(
+              ([target, mapping]) =>
+                mapping.computerAudio
+                  ? [[target, [mapping.computerAudio.source]]]
+                  : [],
+            ),
+          ),
+        },
+        homeAssistantFetch,
+        systemClock,
+      )
+    : undefined;
+  const cameraStore = config.cameraDashboard
+    ? new CameraSettingsStore(
+        `${lightingIntentPath}.cameras.json`,
+        createCameraSettings(config.cameraDashboard),
+        (message) => console.warn(`[lugn] ${message}`),
+      )
+    : undefined;
+  await cameraStore?.load();
+  const cameraService =
+    config.cameraDashboard && cameraStore
+      ? new CameraDashboardService(
+          config.cameraDashboard,
+          cameraStore,
+          systemClock,
+        )
+      : undefined;
+  const cameraMedia =
+    config.cameraDashboard && cameraService
+      ? new CameraMediaProvider(
+          cameraService,
+          config.cameraDashboard,
+          config.homeAssistant.baseUrl,
+          config.homeAssistant.token,
+          homeAssistantFetch,
+          systemClock,
+        )
+      : undefined;
   const bufferedHomeAssistantEvents: unknown[] = [];
-  const forwardHomeAssistantEvent = (event: unknown): void => {
+  const forwardHomeAssistantEvent = (
+    event: unknown,
+    allowCamera = true,
+  ): void => {
+    if (
+      allowCamera &&
+      typeof event === 'object' &&
+      event !== null &&
+      'event' in event
+    )
+      cameraService?.acceptEvent(event.event);
     homeAssistantLighting.acceptStateChangedEvent(event);
     homeAssistantSwitch?.acceptStateChangedEvent(event);
     homeAssistantMusic?.acceptStateChangedEvent(event);
@@ -341,11 +491,13 @@ export async function startRuntime(
     connection: HomeAssistantConnection,
   ): Promise<void> => {
     computerPlayback?.invalidate();
+    cameraService?.setConnected(false);
     homeAssistantConnection = connection;
     trustedMusicTargets.clear();
     reconciledMusicTargets.clear();
     syncingHomeAssistantStates = true;
     bufferedHomeAssistantEvents.length = 0;
+    let cameraSeed: unknown[] | undefined;
     const reconciled = await seedHomeAssistantObservations(
       config.homeAssistant.baseUrl,
       config.homeAssistant.token,
@@ -356,16 +508,23 @@ export async function startRuntime(
       homeAssistantHomePresence,
       homeAssistantFetch,
       () => connection.isCurrent(),
+      (states) => {
+        cameraSeed = states;
+      },
     );
     if (homeAssistantConnection !== connection || !connection.isCurrent())
       return;
+    if (reconciled && cameraSeed) {
+      cameraService?.setConnected(true);
+      cameraService?.seedStates(cameraSeed);
+    }
     if (reconciled)
       for (const target of reconciledMusicTargets)
         trustedMusicTargets.add(target);
     reconciledMusicTargets.clear();
     syncingHomeAssistantStates = false;
     for (const event of bufferedHomeAssistantEvents.splice(0))
-      forwardHomeAssistantEvent(event);
+      forwardHomeAssistantEvent(event, false);
     computerPlayback?.observe();
   };
   const homeAssistantSocket = new HomeAssistantWebSocketTransport(
@@ -384,7 +543,19 @@ export async function startRuntime(
       ...(dependencies.createHomeAssistantSocket === undefined
         ? {}
         : { createSocket: dependencies.createHomeAssistantSocket }),
+      additionalEventTypes: [
+        ...new Set(
+          (config.cameraDashboard?.triggers ?? []).flatMap((trigger) =>
+            trigger.kind === 'automation'
+              ? ['automation_triggered' as const]
+              : trigger.kind === 'service'
+                ? ['call_service' as const]
+                : [],
+          ),
+        ),
+      ],
       onConnected: refreshHomeAssistantStates,
+      onDisconnected: () => cameraService?.setConnected(false),
       onError: (kind) => {
         if (kind !== 'socket') return;
         trustedMusicTargets.clear();
@@ -487,6 +658,9 @@ export async function startRuntime(
     scenePresetStore,
     volumeSettingsStore,
     capabilities,
+    ...(artwork ? { artworkProvider: artwork } : {}),
+    ...(cameraService && cameraMedia ? { cameraService, cameraMedia } : {}),
+    experience,
     musicObservationTrustProvider: musicObservationTrust,
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
     integrations: () => ({
@@ -510,6 +684,9 @@ export async function startRuntime(
           token,
         })),
         capabilities,
+        ...(artwork ? { artworkProvider: artwork } : {}),
+        ...(cameraService && cameraMedia ? { cameraService, cameraMedia } : {}),
+        experience,
         presenceCountCorrectionAvailable: config.presenceControl !== undefined,
         scenes: Array.from(engine.scenes.values()),
         scenesProvider: () => Array.from(engine.scenes.values()),
@@ -518,12 +695,8 @@ export async function startRuntime(
           homeAssistantSocket.status === 'connected',
         musicObservationTrustProvider: musicObservationTrust,
         stateStream: engine.stream,
-        computerAudioMappings: Object.fromEntries(
-          Object.entries(config.homeAssistant.music).flatMap(
-            ([target, mapping]) =>
-              mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
-          ),
-        ),
+        computerAudioMappings,
+        computerNowPlayingSelector: computerNowPlaying,
         musicVolumePoliciesProvider: () =>
           engine.getMusicVolumePolicySnapshots(),
         musicPlaybackPoliciesProvider: () =>
@@ -593,6 +766,12 @@ export async function startRuntime(
     await displayServer?.start();
     castManager?.start();
   } catch (error) {
+    unsubscribeComputerNowPlaying();
+    routines.dispose();
+    computerIntelligence.dispose();
+    cameraMedia?.dispose();
+    cameraService?.dispose();
+    artwork?.dispose();
     await castManager?.stop();
     await displayServer?.stop();
     await http.stop();
@@ -618,6 +797,12 @@ export async function startRuntime(
   return {
     engine,
     async stop() {
+      unsubscribeComputerNowPlaying();
+      routines.dispose();
+      computerIntelligence.dispose();
+      cameraMedia?.dispose();
+      cameraService?.dispose();
+      artwork?.dispose();
       await castManager?.stop();
       await displayServer?.stop();
       await http.stop();
@@ -649,6 +834,7 @@ async function seedHomeAssistantObservations(
   homePresenceAdapter?: HomeAssistantHomePresenceAdapter,
   fetcher: typeof fetch = fetch,
   shouldApply: () => boolean = () => true,
+  onStates?: (states: unknown[]) => void,
 ): Promise<boolean> {
   try {
     const response = await fetcher(`${baseUrl}/api/states`, {
@@ -672,6 +858,7 @@ async function seedHomeAssistantObservations(
       );
       return false;
     }
+    onStates?.(states);
     for (const state of states) {
       if (typeof state !== 'object' || state === null) continue;
       const candidate = state as Record<string, unknown>;

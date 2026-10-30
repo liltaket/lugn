@@ -129,6 +129,19 @@ export class ComputerNowPlayingSelector {
       : null;
   }
 
+  /** Artwork and transport controls use the same player as the visible title. */
+  selectedMedia(state: RoomState, target: string): Media | null {
+    const player = this.selectedPlayer(state, target);
+    const deviceId = this.routes[target]?.deviceId;
+    return (
+      (deviceId && player
+        ? state.computer.devices[deviceId]?.observed.media?.find(
+            (media) => media.player === player,
+          )
+        : null) ?? null
+    );
+  }
+
   private select(
     deviceId: string,
     computer: ComputerObservation | undefined,

@@ -52,7 +52,7 @@ export function withRoomPresets(
 }
 
 /**
- * Keeps active lights in the installed room's shared CCT range and lifts WLED.
+ * Keeps white lights in the installed room's shared CCT range and lifts WLED.
  */
 function normalizeRoomScenes(
   scenes: readonly LightingScene[],
@@ -72,7 +72,7 @@ function normalizeRoomScenes(
   });
 }
 
-/** Completes room Kelvin without reapplying generated-preset brightness boosts. */
+/** Completes white intent, including off lamps, without changing RGB or brightness. */
 export function synchronizeSceneColorTemperature(
   scene: LightingScene,
   fallbackKelvin?: number,
@@ -83,7 +83,7 @@ export function synchronizeSceneColorTemperature(
     lighting: Object.fromEntries(
       Object.entries(scene.lighting).map(([target, values]) => [
         target,
-        values.power !== false && cct !== undefined
+        values.rgb === undefined && cct !== undefined
           ? { ...values, colorTemperature: cct }
           : { ...values },
       ]),
@@ -96,7 +96,11 @@ function mostCommonSceneColorTemperature(
 ): number | undefined {
   const counts = new Map<number, number>();
   for (const values of Object.values(scene.lighting)) {
-    if (values.power === false || values.colorTemperature === undefined)
+    if (
+      values.rgb !== undefined ||
+      values.power === false ||
+      values.colorTemperature === undefined
+    )
       continue;
     counts.set(
       values.colorTemperature,

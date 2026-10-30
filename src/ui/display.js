@@ -6,6 +6,9 @@ const MUSIC_URL = `${BASE_PATH}display-api/music`;
 const VOLUME_AUTHORITY_URL = `${BASE_PATH}display-api/volume-authority`;
 const MUSIC_PRESET_URL = `${BASE_PATH}display-api/music-preset`;
 const PRESENCE_COUNT_URL = `${BASE_PATH}display-api/presence-count-one`;
+const ROUTINE_URL = `${BASE_PATH}display-api/routine`;
+const BEDTIME_URL = `${BASE_PATH}display-api/bedtime`;
+const SUGGESTION_URL = `${BASE_PATH}display-api/suggestion`;
 const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
@@ -44,10 +47,58 @@ const environmentNumberFormatWithFractions = new Intl.NumberFormat('sv-SE', {
 
 const root = document.querySelector('#app-root');
 const refs = {
+  cameraMenu: document.querySelector('#camera-menu'),
+  cameraChoices: document.querySelector('#camera-choices'),
+  cameraPanel: document.querySelector('#camera-panel'),
+  cameraName: document.querySelector('#camera-name'),
+  cameraReason: document.querySelector('#camera-reason'),
+  cameraClose: document.querySelector('#camera-close'),
+  cameraCountdown: document.querySelector('#camera-countdown'),
+  cameraImage: document.querySelector('#camera-image'),
+  cameraPlaceholder: document.querySelector('#camera-placeholder'),
+  cameraStatus: document.querySelector('#camera-status'),
+  musicSection: document.querySelector('.music-section'),
+  musicHeading: document.querySelector('#music-heading'),
+  contextStrip: document.querySelector('#context-strip'),
+  contextTitle: document.querySelector('#context-title'),
+  contextDescription: document.querySelector('#context-description'),
+  contextActions: document.querySelector('#context-actions'),
+  contextDetailsButton: document.querySelector('#context-details-button'),
+  contextPanel: document.querySelector('#context-panel'),
+  contextList: document.querySelector('#context-list'),
+  sceneOff: document.querySelector('#scene-off'),
+  bedtimeDock: document.querySelector('#bedtime-dock'),
+  bedtimeNight: document.querySelector('#bedtime-night'),
+  bedtimeMorning: document.querySelector('#bedtime-morning'),
+  bedtimePlan: document.querySelector('#bedtime-plan'),
+  bedtimeEdit: document.querySelector('#bedtime-edit'),
+  bedtimeClear: document.querySelector('#bedtime-clear'),
+  bedtimeStatus: document.querySelector('#bedtime-status'),
+  bedtimeDialog: document.querySelector('#bedtime-dialog'),
+  bedtimeForm: document.querySelector('#bedtime-form'),
+  bedtimeHeading: document.querySelector('#bedtime-heading'),
+  bedtimeTime: document.querySelector('#bedtime-time'),
+  bedtimeAuto: document.querySelector('#bedtime-mode-auto'),
+  bedtimeButton: document.querySelector('#bedtime-mode-button'),
+  bedtimeNone: document.querySelector('#bedtime-mode-none'),
+  bedtimeMusic: document.querySelector('#bedtime-music'),
+  bedtimeSummary: document.querySelector('#bedtime-summary'),
+  bedtimeError: document.querySelector('#bedtime-error'),
+  bedtimeConfirm: document.querySelector('#bedtime-confirm'),
+  bedtimeCancel: document.querySelector('#bedtime-cancel'),
+  bedtimeClose: document.querySelector('#bedtime-close'),
+  scenePagination: document.querySelector('#scene-pagination'),
+  scenePrevious: document.querySelector('#scene-previous'),
+  sceneNext: document.querySelector('#scene-next'),
+  scenePageLabel: document.querySelector('#scene-page-label'),
+  musicArtwork: document.querySelector('#music-artwork'),
+  musicArtworkImage: document.querySelector('#music-artwork-image'),
+  musicArtist: document.querySelector('#music-artist'),
   clockTime: document.querySelector('#clock-time'),
   clockDate: document.querySelector('#clock-date'),
   roomPresence: document.querySelector('#room-presence'),
   presenceCountOne: document.querySelector('#presence-count-one'),
+  presenceCountLabel: document.querySelector('#presence-count-label'),
   clockTop: document.querySelector('.clock-top'),
   connection: document.querySelector('#connection-notice'),
   connectionMessage: document.querySelector('#connection-message'),
@@ -78,6 +129,8 @@ const refs = {
   musicPlaybackHold: document.querySelector('#music-playback-hold'),
   musicResumeWindow: document.querySelector('#music-resume-window'),
   musicCommandState: document.querySelector('#music-command-state'),
+  musicAuthorityDetail: document.querySelector('#music-authority-detail'),
+  musicCommandDetail: document.querySelector('#music-command-detail'),
   musicDecisionHistory: document.querySelector('#music-decision-history'),
   musicPlayerStatus: document.querySelector('#music-player-status'),
   musicTitle: document.querySelector('#music-title'),
@@ -121,12 +174,34 @@ const metricRefs = new Map(
   ]),
 );
 
+let cameraActive = null;
+const cameraDismissedIds = new Set();
+let cameraCloseHoldUntil = 0;
+let cameraPendingShow = null;
+let cameraChoicesOpen = false;
+let cameraChoicesKey;
+let cameraActionPending = false;
+let cameraActionRequests = 0;
+let cameraActionEpoch = 0;
+let cameraMediaEpoch = 0;
+let cameraMediaKey = null;
+let cameraImageController;
+let cameraImageTimer;
+let cameraMediaTimeout;
+let cameraObjectUrl;
+let contextDetailsOpen = false;
+let contextRenderKey;
+let contextListKey;
+let bedtimeDraft = null;
+let bedtimeReturnFocus;
+let artworkKey;
 let latestPayload;
 let payloadReceivedAt = 0;
 let musicDetailsOpen = false;
 let historyRenderKey;
 let lastFreshAt = 0;
 let sceneOrderKey = null;
+let scenePage = 0;
 let presetRoleKey = null;
 let musicTarget = '';
 let polling = null;
@@ -281,10 +356,12 @@ function setConnection(state, message, retry = false) {
     refs.toast.hidden = true;
   }
   syncFeedback();
+  renderContext(latestPayload);
   renderScenes(latestPayload);
   renderPresenceCorrection(latestPayload);
   renderRoomPresence(latestPayload?.state);
   renderMusic(latestPayload);
+  renderCamera(latestPayload);
 }
 
 function setClock() {
@@ -303,8 +380,11 @@ function setClock() {
   );
   refs.clockDate.dateTime = `${dateValue.year}-${dateValue.month}-${dateValue.day}`;
   if (latestPayload) {
+    renderContext(latestPayload);
+    renderScenes(latestPayload);
     renderMusicVolumePolicy(latestPayload, musicTarget);
     renderMusicExplanations(latestPayload, musicTarget);
+    renderCamera(latestPayload);
   }
 }
 
@@ -327,6 +407,7 @@ function getSceneList(payload) {
     'scene.everyday_light',
     'scene.movie_light',
     'scene.focus_light',
+    'scene.party',
   ];
   const role = roleName(payload?.role);
   const sceneOrder =
@@ -345,14 +426,68 @@ function getSceneList(payload) {
   });
 }
 
+// Only these established scene IDs have an unambiguous visual meaning. User
+// presets keep their names; user-controlled strings never enter SVG markup.
+function sceneIconFor(sceneId) {
+  const icons = {
+    'scene.all_off': {
+      name: 'power',
+      paths: '<path d="M12 3v9"/><path d="M6.3 5.7a8 8 0 1 0 11.4 0"/>',
+    },
+    'scene.soft_light': {
+      name: 'moon',
+      paths:
+        '<path d="M20.2 15.6A8.6 8.6 0 0 1 8.4 3.8 8.6 8.6 0 1 0 20.2 15.6Z"/>',
+    },
+    'scene.everyday_light': {
+      name: 'sun',
+      paths:
+        '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    },
+    'scene.focus_light': {
+      name: 'desk-lamp',
+      paths:
+        '<path d="M7 21h11M12.5 21v-4L7 11l4-5"/><circle cx="7" cy="11" r="1.5"/><path d="m11 6 4-3 6 6-3 4Z"/><path d="m15 10 2 2"/>',
+    },
+    'scene.party': {
+      name: 'disco-ball',
+      paths:
+        '<path d="M12 1.5V4"/><circle cx="12" cy="11" r="7"/><path d="M5.5 8.5h13m-13 5h13M12 4c-4 4-4 10 0 14m0-14c4 4 4 10 0 14M3 20l1-1m16 0 1 1m-9 0v2"/>',
+    },
+    'scene.movie_light': {
+      name: 'film',
+      paths:
+        '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/><path d="m10 8 5 2.5-5 2.5Z"/>',
+    },
+  };
+  return Object.prototype.hasOwnProperty.call(icons, sceneId)
+    ? icons[sceneId]
+    : null;
+}
+
 function sceneButtonFor(scene) {
   let button = sceneButtons.get(scene.id);
   if (button) return button;
-  button = document.createElement('button');
+  button =
+    scene.id === 'scene.all_off'
+      ? refs.sceneOff
+      : document.createElement('button');
+  if (scene.id === 'scene.all_off') button.replaceChildren();
   button.type = 'button';
-  button.className = 'scene-button';
+  button.className =
+    scene.id === 'scene.all_off' ? 'scene-button light-off' : 'scene-button';
   button.dataset.scene = scene.id;
   button.setAttribute('aria-pressed', 'false');
+  const icon = sceneIconFor(scene.id);
+  button.dataset.icon = String(!!icon);
+  if (icon) {
+    const symbol = document.createElement('span');
+    symbol.className = 'scene-icon';
+    symbol.dataset.symbol = icon.name;
+    symbol.setAttribute('aria-hidden', 'true');
+    symbol.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" focusable="false">${icon.paths}</svg>`;
+    button.append(symbol);
+  }
   const copy = document.createElement('span');
   copy.className = 'scene-copy';
   const name = document.createElement('span');
@@ -371,16 +506,32 @@ function sceneButtonFor(scene) {
 
 function renderScenes(payload) {
   if (!refs.sceneGrid) return;
-  const scenes = getSceneList(payload);
+  const allScenes = getSceneList(payload);
+  const presets = allScenes.filter((scene) => scene.id !== 'scene.all_off');
+  const off = allScenes.find((scene) => scene.id === 'scene.all_off');
+  refs.sceneOff.hidden = !off;
+  refs.sceneOff.disabled =
+    !off || isUnavailable() || pending.has('scene:scene.all_off');
+  const pageSize = 6;
+  const pages = Math.max(1, Math.ceil(presets.length / pageSize));
+  scenePage = Math.min(scenePage, pages - 1);
+  refs.scenePagination.hidden = pages <= 1 || contextDetailsOpen;
+  refs.scenePrevious.disabled = scenePage === 0;
+  refs.sceneNext.disabled = scenePage === pages - 1;
+  setText(refs.scenePageLabel, `${scenePage + 1} / ${pages}`);
+  const scenes = presets.slice(
+    scenePage * pageSize,
+    (scenePage + 1) * pageSize,
+  );
   const current = payload?.state?.lighting?.currentScene;
-  const ids = new Set(scenes.map((scene) => scene.id));
+  const ids = new Set(allScenes.map((scene) => scene.id));
   for (const [sceneId, button] of sceneButtons) {
-    if (!ids.has(sceneId)) {
+    if (!ids.has(sceneId) && sceneId !== 'scene.all_off') {
       button.remove();
       sceneButtons.delete(sceneId);
     }
   }
-  if (scenes.length === 0) {
+  if (scenes.length === 0 && !off) {
     if (!refs.sceneGrid.querySelector('.section-empty')) {
       const empty = document.createElement('p');
       empty.className = 'section-empty';
@@ -390,12 +541,13 @@ function renderScenes(payload) {
     return;
   }
   const ordered = [];
-  for (const [index, scene] of scenes.entries()) {
+  for (const [index, scene] of [...(off ? [off] : []), ...scenes].entries()) {
     const button = sceneButtonFor(scene);
-    button.querySelector('.scene-name').textContent = scene.name;
+    button.querySelector('.scene-name').textContent =
+      scene.id === 'scene.all_off' ? 'Släck' : scene.name;
     button.dataset.kind = scene.id === 'scene.all_off' ? 'off' : 'scene';
     button.dataset.featured = String(
-      roleName(payload?.role) !== 'unknown' && scenes.length <= 6 && index < 2,
+      scenes.length % 2 === 1 && index === (off ? 1 : 0),
     );
     const isPending = pending.has(`scene:${scene.id}`);
     button.disabled = isUnavailable() || isPending;
@@ -434,11 +586,35 @@ function renderScenes(payload) {
           : confirmed
             ? 'Bekräftat'
             : 'Valt';
+    const availability = isUnavailable()
+      ? selected
+        ? 'Frånkopplad. Senast valda ljusläge'
+        : 'Frånkopplad'
+      : status;
+    button.setAttribute(
+      'aria-label',
+      `${scene.name}${availability ? `. ${availability}` : ''}`,
+    );
+    button.setAttribute(
+      'title',
+      `${scene.name}${availability ? ` · ${availability}` : ''}`,
+    );
+    button.dataset.state = isUnavailable()
+      ? 'offline'
+      : isPending
+        ? 'pending'
+        : !selected
+          ? 'idle'
+          : awaitingDevices
+            ? 'awaiting'
+            : confirmed
+              ? 'confirmed'
+              : 'selected';
     setText(button.querySelector('.scene-status'), status);
     button.querySelector('.scene-status').hidden = !status;
     if (button.getAttribute('aria-pressed') !== String(selected))
       button.setAttribute('aria-pressed', String(selected));
-    ordered.push(button);
+    if (scene.id !== 'scene.all_off') ordered.push(button);
   }
   const orderKey = scenes.map((scene) => scene.id).join('\u0000');
   if (
@@ -448,6 +624,752 @@ function renderScenes(payload) {
     refs.sceneGrid.replaceChildren(...ordered);
     sceneOrderKey = orderKey;
   }
+}
+
+function requestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  // The Hub can run on HTTP, where randomUUID is not available.
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (letter) => {
+    const value = Math.floor(Math.random() * 16);
+    return (letter === 'x' ? value : (value & 3) | 8).toString(16);
+  });
+}
+
+function bedtimeData(payload) {
+  const value = payload?.routines?.bedtime;
+  return roleName(payload?.role) === 'bed' && value && typeof value === 'object'
+    ? value
+    : null;
+}
+
+function bedtimeOwnedPlan(payload) {
+  return payload?.routines?.definitions?.find(
+    (definition) =>
+      definition.id === payload?.routines?.bedtime?.morningRoutineId &&
+      definition.bedtime?.owner === 'bedtime',
+  )?.bedtime?.plan;
+}
+
+function bedtimeActionButton(label, action, available = true) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'context-action';
+  button.dataset.bedtimeAction = action;
+  button.dataset.available = String(available);
+  button.textContent = label;
+  button.addEventListener('click', () => {
+    if (action === 'morning') void postBedtime('morning');
+    else openBedtime(action, button);
+  });
+  return button;
+}
+
+function renderBedtime(payload) {
+  const bedtime = bedtimeData(payload);
+  const busy = pending.has('bedtime');
+  const disabled =
+    isUnavailable() ||
+    busy ||
+    !bedtime ||
+    payload?.routines?.generation === undefined;
+  const now = estimatedServerNow();
+  const hour = Number(timeFormat.format(new Date(now)).split(':')[0]);
+  const ownedPlan = bedtimeOwnedPlan(payload);
+  const ready = bedtime?.ready;
+  const scheduledWindow = Number.isFinite(ready?.until) && now < ready.until;
+  const buttonPlan = ownedPlan ?? bedtime?.plan;
+  const scheduledToday =
+    buttonPlan?.mode === 'button' &&
+    datePartsFormat.format(new Date(buttonPlan.at)) ===
+      datePartsFormat.format(new Date(now));
+  const plan = bedtime?.plan ?? (scheduledWindow ? ownedPlan : null);
+  refs.bedtimeDock.hidden = !bedtime || contextDetailsOpen;
+  refs.bedtimeNight.hidden = !(hour >= 18 || hour < 4);
+  refs.bedtimeMorning.hidden = !(
+    scheduledWindow ||
+    (!scheduledToday && hour >= 6 && hour < 11)
+  );
+  refs.bedtimeNight.disabled = disabled || bedtime?.nightAvailable !== true;
+  refs.bedtimeMorning.disabled = disabled || bedtime?.morningAvailable !== true;
+  refs.bedtimePlan.hidden = !plan;
+  setText(
+    refs.bedtimeEdit,
+    plan
+      ? `${plan.time} · ${plan.mode === 'auto' ? 'Ljus' : 'Knapp'}${plan.music ? ' + musik' : ''}`
+      : '',
+  );
+  refs.bedtimeEdit.setAttribute(
+    'aria-label',
+    `Ändra morgonplan ${plan?.time ?? ''}`,
+  );
+  refs.bedtimeEdit.disabled = disabled;
+  refs.bedtimeClear.disabled = disabled;
+  const running = (payload?.routines?.runs ?? []).some(
+    (run) => run.status === 'running',
+  );
+  if (running) {
+    refs.bedtimeNight.disabled = true;
+    refs.bedtimeMorning.disabled = true;
+  }
+  const skipped = bedtime?.skippedTargets?.length ?? 0;
+  setText(
+    refs.bedtimeStatus,
+    isUnavailable()
+      ? 'Frånkopplad'
+      : busy
+        ? 'Skickar …'
+        : skipped
+          ? `${skipped} ${skipped === 1 ? 'lampa saknar' : 'lampor saknar'} status`
+          : '',
+  );
+  refs.bedtimeStatus.hidden = !refs.bedtimeStatus.textContent;
+  for (const button of [
+    refs.bedtimeNight,
+    refs.bedtimeMorning,
+    refs.bedtimeClear,
+  ])
+    button.setAttribute('aria-busy', String(busy));
+  syncBedtimeForm();
+}
+
+function openBedtime(action = 'start', trigger) {
+  const bedtime = bedtimeData(latestPayload);
+  if (!bedtime || isUnavailable() || pending.has('bedtime')) return;
+  if (action === 'start' && !bedtime.nightAvailable) return;
+  const plan =
+    bedtime.plan ??
+    (bedtime.ready?.until > estimatedServerNow()
+      ? bedtimeOwnedPlan(latestPayload)
+      : null);
+  bedtimeReturnFocus = trigger ?? document.activeElement;
+  bedtimeDraft = { action, generation: latestPayload.routines.generation };
+  refs.bedtimeTime.value = plan?.time ?? '07:30';
+  refs.bedtimeAuto.checked = !plan || plan.mode === 'auto';
+  refs.bedtimeButton.checked = plan?.mode === 'button';
+  refs.bedtimeNone.checked = false;
+  refs.bedtimeMusic.checked = plan?.music === true;
+  refs.bedtimeError.hidden = true;
+  refs.bedtimeDialog.hidden = false;
+  root.inert = true;
+  setText(
+    refs.bedtimeHeading,
+    action === 'start' ? 'När vill du vakna?' : 'Planera nästa morgon',
+  );
+  syncBedtimeForm();
+  refs.bedtimeClose.focus?.();
+}
+
+function closeBedtime(confirmed = false) {
+  if (pending.has('bedtime') && !confirmed) return;
+  refs.bedtimeDialog.hidden = true;
+  root.inert = false;
+  bedtimeDraft = null;
+  bedtimeReturnFocus?.focus?.();
+}
+
+function bedtimeFormValue() {
+  const mode = refs.bedtimeNone.checked
+    ? 'none'
+    : refs.bedtimeButton.checked
+      ? 'button'
+      : 'auto';
+  return {
+    wakeTime:
+      mode === 'none' &&
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(refs.bedtimeTime.value)
+        ? '07:30'
+        : refs.bedtimeTime.value,
+    mode,
+    music:
+      mode !== 'none' &&
+      bedtimeData(latestPayload)?.musicAvailable === true &&
+      refs.bedtimeMusic.checked,
+  };
+}
+
+function syncBedtimeForm() {
+  if (!bedtimeDraft) return;
+  const bedtime = bedtimeData(latestPayload);
+  const { wakeTime, mode, music } = bedtimeFormValue();
+  const busy = pending.has('bedtime');
+  const none = mode === 'none';
+  const valid = none || /^([01]\d|2[0-3]):[0-5]\d$/.test(wakeTime);
+  const unavailable = isUnavailable() || !bedtime;
+  refs.bedtimeTime.disabled = busy || none;
+  refs.bedtimeTime.required = !none;
+  refs.bedtimeAuto.disabled = busy || bedtime?.morningAvailable !== true;
+  refs.bedtimeButton.disabled = busy || bedtime?.morningAvailable !== true;
+  refs.bedtimeNone.disabled = busy;
+  const musicUnavailable =
+    !none && refs.bedtimeMusic.checked && bedtime?.musicAvailable !== true;
+  refs.bedtimeMusic.disabled =
+    busy ||
+    none ||
+    (bedtime?.musicAvailable !== true && !refs.bedtimeMusic.checked);
+  refs.bedtimeClose.disabled = busy;
+  refs.bedtimeCancel.disabled = busy;
+  for (const time of ['0700', '0730', '0800'])
+    document.querySelector(`#bedtime-time-${time}`).disabled = busy || none;
+  refs.bedtimeConfirm.disabled =
+    busy ||
+    unavailable ||
+    musicUnavailable ||
+    !valid ||
+    bedtimeDraft.generation === undefined ||
+    (!none && bedtime?.morningAvailable !== true) ||
+    (bedtimeDraft.action === 'start' && bedtime?.nightAvailable !== true);
+  refs.bedtimeConfirm.setAttribute('aria-busy', String(busy));
+  setText(
+    refs.bedtimeConfirm,
+    busy
+      ? 'Skickar …'
+      : bedtimeDraft.action === 'plan'
+        ? 'Spara morgonen'
+        : none
+          ? 'Godnatt utan väckning'
+          : mode === 'auto'
+            ? `Godnatt & väck ${wakeTime}`
+            : `Godnatt · visa knapp ${wakeTime}`,
+  );
+  setText(
+    refs.bedtimeSummary,
+    unavailable
+      ? 'Anslut till Lugn för att spara. Dina val finns kvar.'
+      : musicUnavailable
+        ? 'Musikspelaren saknar kontakt. Avmarkera musik eller vänta på anslutning.'
+        : none
+          ? bedtimeDraft.action === 'start'
+            ? 'Bara kvällsrutinen. Ingen morgon planeras.'
+            : 'Morgonplanen tas bort.'
+          : !valid
+            ? 'Välj en giltig väcktid.'
+            : mode === 'auto'
+              ? `Nästa morgon kl. ${wakeTime} börjar ljuset öka mjukt i 20 minuter.${music ? ' Musik från vald källa, med oförändrad volym.' : ' Ingen musik.'}`
+              : `Nästa morgon kl. ${wakeTime} visas God morgon i en timme. Ljuset väntar på ditt tryck.${music ? ' Musik startas först när du trycker.' : ' Ingen musik.'}`,
+  );
+}
+
+async function postBedtime(action) {
+  const bedtime = bedtimeData(latestPayload);
+  if (!bedtime || isUnavailable() || pending.has('bedtime')) return;
+  const draft = bedtimeDraft;
+  const formAction = action === 'start' || action === 'plan';
+  if (formAction && (!draft || refs.bedtimeConfirm.disabled)) return;
+  if (action === 'morning' && !bedtime.morningAvailable) return;
+  const expectedGeneration = formAction
+    ? draft.generation
+    : latestPayload.routines.generation;
+  if (expectedGeneration === undefined) return;
+  const body = {
+    action,
+    ...(formAction
+      ? bedtimeFormValue()
+      : action === 'morning'
+        ? {
+            music:
+              bedtime.ready?.until > estimatedServerNow() &&
+              bedtime.ready.music === true,
+          }
+        : {}),
+    expectedGeneration,
+    requestId: requestId(),
+  };
+  pending.add('bedtime');
+  refs.bedtimeError.hidden = true;
+  renderContext(latestPayload);
+  try {
+    await postJson(BEDTIME_URL, body);
+    if (formAction && bedtimeDraft === draft) closeBedtime(true);
+    showToast(
+      action === 'clear'
+        ? 'Morgonplanen är borttagen.'
+        : action === 'morning'
+          ? 'God morgon är startad.'
+          : action === 'start'
+            ? 'Godnatt är startad. Morgonvalet är sparat.'
+            : 'Morgonvalet är sparat.',
+      'success',
+    );
+    await refresh(true);
+  } catch (error) {
+    const message =
+      error?.status === 409
+        ? 'Planen har ändrats. Stäng och öppna igen för att se den aktuella planen.'
+        : error?.name === 'AbortError' ||
+            error?.status === 502 ||
+            error?.status === 504
+          ? 'Kvittens saknas. Kontrollera status innan du försöker igen.'
+          : error?.status === 400 || error?.status === 422
+            ? 'Kontrollera väcktiden och dina val. Försök igen.'
+            : 'Kunde inte spara. Dina val finns kvar. Försök igen.';
+    if (error?.status === 401 || error?.status === 403)
+      setConnection(
+        'unauthorized',
+        'Åtkomsten har gått ut. Öppna kontrollpanelen igen.',
+        true,
+      );
+    if (formAction && bedtimeDraft === draft) {
+      setText(refs.bedtimeError, message);
+      refs.bedtimeError.hidden = false;
+    } else showToast(message, 'error');
+  } finally {
+    pending.delete('bedtime');
+    renderContext(latestPayload);
+  }
+}
+
+// Optional Lugn 2 projections are independent of room state. Older servers may
+// omit them, and an empty/disabled template never creates a control implicitly.
+function contextData(payload) {
+  const routines = payload?.routines;
+  const definitions = Array.isArray(routines?.definitions)
+    ? routines.definitions.filter(
+        (item) =>
+          item && typeof item.id === 'string' && typeof item.name === 'string',
+      )
+    : [];
+  const runs = Array.isArray(routines?.runs) ? routines.runs : [];
+  const now = estimatedServerNow();
+  const bedtime = bedtimeData(payload);
+  const bedtimeOwnedIds = new Set(
+    bedtime ? [bedtime.nightRoutineId, bedtime.morningRoutineId] : [],
+  );
+  const next = (Array.isArray(routines?.next) ? routines.next : [])
+    .filter(
+      (item) =>
+        Number.isFinite(item?.at) &&
+        item.at > now &&
+        definitions.some(
+          (definition) =>
+            definition.id === item.routineId &&
+            (bedtimeOwnedIds.has(definition.id) ||
+              (definition.enabled === true && definition.schedule)),
+        ),
+    )
+    .sort((a, b) => a.at - b.at);
+  const scenes = getSceneList(payload);
+  const suggestions = (
+    Array.isArray(payload?.intelligence?.suggestions)
+      ? payload.intelligence.suggestions
+      : []
+  ).filter(
+    (item) =>
+      item &&
+      typeof item.id === 'string' &&
+      typeof item.title === 'string' &&
+      Number.isFinite(item.expiresAt) &&
+      item.expiresAt > now &&
+      (item.kind === 'scene'
+        ? scenes.some((scene) => scene.id === item.sceneId)
+        : item.kind === 'optical' &&
+          !!payload?.state?.music?.devices?.[item.target]),
+  );
+  return { definitions, runs, next, suggestions };
+}
+
+function occurrenceLabel(at) {
+  return `${dateFormat.format(new Date(at))} kl. ${timeFormat.format(new Date(at))}`;
+}
+
+function contextAction(kind, id, action, label, minutes) {
+  // A server-observed run can be cancelled even if its Start response was lost.
+  const pendingKey = `${kind}:${id}${kind === 'routine' && action === 'cancel' ? ':cancel' : ''}`;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'context-action';
+  button.dataset.action = action;
+  button.dataset.kind = kind;
+  button.dataset.id = id;
+  button.dataset.pendingKey = pendingKey;
+  button.textContent = label;
+  button.disabled = isUnavailable() || pending.has(pendingKey);
+  button.setAttribute('aria-busy', String(pending.has(pendingKey)));
+  button.addEventListener('click', () => {
+    void runCommand(pendingKey, {
+      id,
+      action,
+      ...(kind === 'routine' ? { requestId: requestId() } : {}),
+      ...(minutes ? { minutes } : {}),
+    });
+  });
+  return button;
+}
+
+function routineActions(definition, run, occurrence) {
+  if (run?.status === 'running') {
+    const actions = [
+      contextAction('routine', definition.id, 'cancel', 'Avbryt'),
+    ];
+    if (definition.id === bedtimeData(latestPayload)?.morningRoutineId)
+      actions.push(
+        contextAction(
+          'routine',
+          definition.id,
+          'snooze',
+          'Skjut upp 10 min',
+          10,
+        ),
+      );
+    return actions;
+  }
+  const actions = [];
+  if (definition.enabled === true)
+    actions.push(contextAction('routine', definition.id, 'start', 'Starta'));
+  if (occurrence)
+    actions.push(
+      contextAction('routine', definition.id, 'snooze', 'Skjut upp 10 min', 10),
+      contextAction('routine', definition.id, 'skip', 'Hoppa över'),
+    );
+  return actions;
+}
+
+function setContextDetailsOpen(open) {
+  contextDetailsOpen = open;
+  refs.contextPanel.hidden = !open;
+  refs.sceneGrid.hidden = open;
+  refs.contextStrip.hidden = open || !refs.contextTitle.textContent;
+  renderScenes(latestPayload);
+  renderBedtime(latestPayload);
+  refs.contextDetailsButton.setAttribute('aria-expanded', String(open));
+  setText(refs.contextDetailsButton, open ? 'Tillbaka' : 'Rutiner & förslag');
+  if (open) refs.contextPanel.focus?.();
+}
+
+function renderContext(payload) {
+  const data = contextData(payload);
+  const { definitions, runs, next, suggestions } = data;
+  const bedtimeProjection = bedtimeData(payload);
+  refs.contextDetailsButton.hidden =
+    !bedtimeProjection && definitions.length === 0 && suggestions.length === 0;
+  if (refs.contextDetailsButton.hidden && contextDetailsOpen)
+    setContextDetailsOpen(false);
+  const running = runs.find(
+    (run) =>
+      run?.status === 'running' &&
+      (definitions.some((item) => item.id === run.routineId) ||
+        [
+          bedtimeProjection?.nightRoutineId,
+          bedtimeProjection?.morningRoutineId,
+        ].includes(run.routineId)),
+  );
+  const wake = next.find(
+    (item) =>
+      definitions.find((definition) => definition.id === item.routineId)
+        ?.kind === 'good_morning',
+  );
+  const hour = Number(
+    timeFormat.format(new Date(estimatedServerNow())).split(':')[0],
+  );
+  const bedtime =
+    roleName(payload?.role) === 'bed' && (hour >= 18 || hour < 6)
+      ? definitions.find(
+          (item) => item.kind === 'good_night' && item.enabled === true,
+        )
+      : null;
+  let title = '',
+    description = '',
+    actions = [];
+  if (running) {
+    const definition = definitions.find(
+      (item) => item.id === running.routineId,
+    ) ?? {
+      id: running.routineId,
+      name:
+        running.routineId === bedtimeProjection?.nightRoutineId
+          ? 'Godnatt'
+          : 'God morgon',
+    };
+    title = definition.name;
+    description = `Pågår · steg ${running.stepIndex + 1} av ${definition.steps?.length ?? '—'}`;
+    actions = [['routine', definition.id, 'cancel', 'Avbryt']];
+    if (
+      bedtimeProjection &&
+      running.routineId === bedtimeProjection.morningRoutineId
+    )
+      actions.push(['routine', definition.id, 'snooze', '10 min senare', 10]);
+  } else if (bedtimeProjection) {
+    // The compact dock owns evening/morning entry points on current servers.
+  } else if (roleName(payload?.role) === 'bed' && bedtime) {
+    title = bedtime.name;
+    description = wake
+      ? `Väckning ${occurrenceLabel(wake.at)}`
+      : 'Din valda kvällsrutin';
+    actions = [['routine', bedtime.id, 'start', 'Starta']];
+  } else if (roleName(payload?.role) === 'bed' && wake) {
+    title = definitions.find((item) => item.id === wake.routineId).name;
+    description = `Planerad ${occurrenceLabel(wake.at)}`;
+    actions = [
+      ['routine', wake.routineId, 'snooze', '10 min senare', 10],
+      ['routine', wake.routineId, 'skip', 'Hoppa över'],
+    ];
+  } else if (roleName(payload?.role) === 'desk' && suggestions.length) {
+    const suggestion = suggestions[0];
+    title = suggestion.title;
+    description = suggestion.reason;
+    actions = [
+      ['suggestion', suggestion.id, 'accept', 'Välj'],
+      ['suggestion', suggestion.id, 'dismiss', 'Inte nu'],
+    ];
+  }
+  if (title && isUnavailable())
+    description = `Senast rapporterat · ${description}`;
+  setText(refs.contextTitle, title);
+  setText(refs.contextDescription, description);
+  const key = JSON.stringify(actions);
+  if (key !== contextRenderKey) {
+    refs.contextActions.replaceChildren(
+      ...actions.map((args) => contextAction(...args)),
+    );
+    contextRenderKey = key;
+  }
+  refs.contextStrip.hidden = contextDetailsOpen || !title;
+  syncContextButtons(refs.contextActions);
+  renderBedtime(payload);
+  const listKey = JSON.stringify([data, bedtimeProjection, isUnavailable()]);
+  if (listKey === contextListKey) {
+    syncContextButtons(refs.contextList);
+    return;
+  }
+  contextListKey = listKey;
+  const items = [];
+  if (bedtimeProjection) {
+    const projectedPlan = Object.hasOwn(bedtimeProjection, 'plan')
+      ? bedtimeProjection.plan
+      : bedtimeOwnedPlan(payload);
+    const ready =
+      Number.isFinite(bedtimeProjection.ready?.until) &&
+      bedtimeProjection.ready.until > estimatedServerNow()
+        ? bedtimeProjection.ready
+        : null;
+    const morningRun = runs.find(
+      (item) =>
+        item?.routineId === bedtimeProjection.morningRoutineId &&
+        item.status === 'running',
+    );
+    const nightRun = runs.find(
+      (item) =>
+        item?.routineId === bedtimeProjection.nightRoutineId &&
+        item.status === 'running',
+    );
+    const snoozed = next.find(
+      (item) => item.routineId === bedtimeProjection.morningRoutineId,
+    );
+    const plan =
+      projectedPlan ?? (ready || snoozed ? bedtimeOwnedPlan(payload) : null);
+    const wakeChoice = plan
+      ? `${plan.time} · ${plan.mode === 'auto' ? 'Ljus' : 'Knapp'}${plan.music ? ' + musik' : ''}`
+      : '';
+    const planStatus = morningRun
+      ? `Pågår · steg ${morningRun.stepIndex + 1}.`
+      : ready
+        ? `Redo · knapp kl. ${plan?.time ?? timeFormat.format(new Date(ready.until - 3600000))}${ready.music ? ' + musik' : ''}, till ${timeFormat.format(new Date(ready.until))}.`
+        : projectedPlan
+          ? `Planerad ${occurrenceLabel(plan.at)} · ${wakeChoice}.`
+          : snoozed
+            ? `Uppskjuten till ${occurrenceLabel(snoozed.at)}${wakeChoice ? ` · ${wakeChoice}` : ''}.`
+            : 'Ingen morgon planerad.';
+    const lastMorningRun = runs
+      .filter((item) => item?.routineId === bedtimeProjection.morningRoutineId)
+      .at(-1);
+    const history =
+      lastMorningRun && lastMorningRun.status !== 'running'
+        ? [
+            {
+              failed: 'Senast misslyckades',
+              cancelled: 'Senast avbröts',
+              completed: 'Senast avslutades',
+            }[lastMorningRun.status] ?? '',
+            lastMorningRun.reason ?? '',
+            ...(Array.isArray(lastMorningRun.warnings)
+              ? lastMorningRun.warnings
+              : []),
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : '';
+    const planActions = morningRun
+      ? [
+          contextAction(
+            'routine',
+            bedtimeProjection.morningRoutineId,
+            'cancel',
+            'Avbryt',
+          ),
+          contextAction(
+            'routine',
+            bedtimeProjection.morningRoutineId,
+            'snooze',
+            'Skjut upp 10 min',
+            10,
+          ),
+        ]
+      : ready
+        ? routineActions(
+            definitions.find(
+              (item) => item.id === bedtimeProjection.morningRoutineId,
+            ) ?? { id: bedtimeProjection.morningRoutineId, enabled: true },
+            null,
+            {
+              routineId: bedtimeProjection.morningRoutineId,
+              at: ready.until - 3600000,
+            },
+          )
+        : [];
+    items.push(
+      contextItem(
+        'Morgonplan',
+        `${isUnavailable() ? 'Frånkopplad · ' : ''}${planStatus}${history ? ` Senaste körning: ${history}.` : ''}`,
+        planActions,
+      ),
+    );
+    if (nightRun)
+      items.push(
+        contextItem('Kvällsrutin', `Pågår · steg ${nightRun.stepIndex + 1}.`, [
+          contextAction(
+            'routine',
+            bedtimeProjection.nightRoutineId,
+            'cancel',
+            'Avbryt',
+          ),
+        ]),
+      );
+    items.push(
+      contextItem(
+        'Kväll och morgon',
+        'Starta när du vill eller ändra morgonplanen.',
+        [
+          bedtimeActionButton(
+            'Godnatt',
+            'start',
+            bedtimeProjection.nightAvailable === true && !running,
+          ),
+          bedtimeActionButton(
+            'God morgon',
+            'morning',
+            bedtimeProjection.morningAvailable === true && !running,
+          ),
+          bedtimeActionButton(
+            'Planera morgonen',
+            'plan',
+            bedtimeProjection.morningAvailable === true,
+          ),
+        ],
+      ),
+    );
+  }
+  for (const definition of definitions) {
+    if (
+      bedtimeProjection &&
+      definition.enabled !== true &&
+      ['good-night', 'good-morning'].includes(definition.id) &&
+      ['good_night', 'good_morning'].includes(definition.kind)
+    )
+      continue;
+    const run = runs.find(
+      (item) => item?.routineId === definition.id && item.status === 'running',
+    );
+    const last = runs
+      .filter((item) => item?.routineId === definition.id)
+      .at(-1);
+    const occurrence = next.find((item) => item.routineId === definition.id);
+    const status = run
+      ? 'Pågår. Avbryt stoppar kommande steg.'
+      : definition.enabled !== true
+        ? 'Avstängd. Aktivera i webbpanelen.'
+        : occurrence
+          ? `Nästa: ${occurrenceLabel(occurrence.at)}`
+          : 'Ingen kommande tid planerad. Starta när du vill.';
+    const result =
+      !run && last
+        ? ({
+            failed: 'Senaste körningen misslyckades.',
+            cancelled: 'Senaste körningen avbröts.',
+            completed: 'Senaste körningen avslutades.',
+          }[last.status] ?? '')
+        : '';
+    if (
+      bedtimeProjection &&
+      [
+        bedtimeProjection.nightRoutineId,
+        bedtimeProjection.morningRoutineId,
+      ].includes(definition.id)
+    )
+      continue;
+    items.push(
+      contextItem(
+        definition.name,
+        `${status} ${result} ${last?.reason ?? ''}`.trim(),
+        routineActions(definition, run, occurrence),
+      ),
+    );
+  }
+  for (const suggestion of suggestions) {
+    items.push(
+      contextItem(suggestion.title, suggestion.reason, [
+        contextAction('suggestion', suggestion.id, 'accept', 'Välj'),
+        contextAction('suggestion', suggestion.id, 'reject', 'Avvisa'),
+        contextAction('suggestion', suggestion.id, 'dismiss', 'Inte nu'),
+      ]),
+    );
+  }
+  if (!items.length)
+    items.push(
+      contextItem(
+        'Inga rutiner eller förslag',
+        'Konfigurera rutiner och förslag i webbpanelen.',
+        [],
+      ),
+    );
+  refs.contextList.replaceChildren(...items);
+  syncContextButtons(refs.contextList);
+}
+
+function syncContextButtons(container) {
+  for (const child of container.children) {
+    if (child.className === 'context-action') {
+      if (child.dataset.bedtimeAction) {
+        const busy = pending.has('bedtime');
+        child.disabled =
+          isUnavailable() || busy || child.dataset.available !== 'true';
+        child.setAttribute('aria-busy', String(busy));
+        continue;
+      }
+      const busy = pending.has(child.dataset.pendingKey);
+      child.disabled = isUnavailable() || busy;
+      child.setAttribute('aria-busy', String(busy));
+    } else syncContextButtons(child);
+  }
+}
+
+function contextItem(title, description, actions) {
+  const item = document.createElement('article');
+  item.className = 'context-item';
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  const copy = document.createElement('p');
+  copy.textContent = description;
+  const controls = document.createElement('div');
+  controls.className = 'context-actions';
+  controls.append(...actions);
+  item.append(heading, copy, controls);
+  return item;
+}
+
+function renderArtwork(payload, target) {
+  const art = payload?.artwork?.[target];
+  // Keep artwork local. Never load arbitrary external metadata URLs in a Hub.
+  const safePath =
+    typeof art?.url === 'string' &&
+    /^\/(?!\/)/.test(art.url) &&
+    !/[\\\x00-\x20]/.test(art.url);
+  const url =
+    target && art?.status === 'available' && safePath ? art.url : null;
+  const key = JSON.stringify([target, url, art?.status]);
+  if (key === artworkKey) return;
+  artworkKey = key;
+  refs.musicArtworkImage.hidden = true;
+  refs.musicArtwork.dataset.state = url ? 'loading' : 'missing';
+  if (url) refs.musicArtworkImage.setAttribute('src', url);
 }
 
 function renderEnvironment(environment) {
@@ -620,7 +1542,9 @@ function compactMediaText(value, limit) {
 
 function renderComputerMediaTitle(media, status) {
   setText(refs.musicTitle, compactMediaText(media.title, 56));
-  setText(refs.musicSource, compactMediaText(media.artist, 42) || 'Optical');
+  setText(refs.musicSource, 'Optical');
+  setText(refs.musicArtist, compactMediaText(media.artist, 42));
+  refs.musicArtist.hidden = !refs.musicArtist.textContent;
   setText(refs.musicPlayerStatus, status);
 }
 
@@ -1054,6 +1978,10 @@ function renderMusicExplanations(payload, target) {
       : '');
   setText(refs.musicCommandState, commandText);
   refs.musicCommandState.hidden = !commandText;
+  setText(refs.musicAuthorityDetail, refs.musicAuthorityState.textContent);
+  refs.musicAuthorityDetail.hidden = !refs.musicAuthorityState.textContent;
+  setText(refs.musicCommandDetail, commandText);
+  refs.musicCommandDetail.hidden = !commandText;
   const history = payload?.state?.music?.decisions;
   const decisions = Array.isArray(history)
     ? history
@@ -1149,6 +2077,7 @@ function setMusicDetailsOpen(open) {
   musicDetailsOpen = open;
   refs.musicDetails.hidden = !open;
   refs.sceneSection.hidden = open;
+  if (open) setContextDetailsOpen(false);
   root.dataset.musicDetails = String(open);
   refs.musicDetailsButton.setAttribute('aria-expanded', String(open));
   setText(refs.musicDetailsButton, open ? 'Tillbaka' : 'Detaljer');
@@ -1159,6 +2088,9 @@ function renderMusic(payload) {
   if (entries.length === 0) {
     clearComputerMediaDisplay();
     musicTarget = '';
+    renderArtwork(payload, null);
+    setText(refs.musicArtist, '');
+    refs.musicArtist.hidden = true;
     setMusicDetailsOpen(false);
     refs.musicDetailsButton.disabled = true;
     renderMusicVolumePolicy(payload, null);
@@ -1344,6 +2276,12 @@ function renderMusic(payload) {
     reportedOnly,
     playbackLabel,
   );
+  const computer = payload?.computerNowPlaying?.[musicTarget];
+  // Computer media and receiver metadata must never be presented as one album.
+  const artist = computer ? computerMediaDisplay?.artist : observed.artist;
+  setText(refs.musicArtist, typeof artist === 'string' ? artist.trim() : '');
+  refs.musicArtist.hidden = !refs.musicArtist.textContent;
+  renderArtwork(payload, musicTarget);
   refs.musicVolumeValue.value = formatVolume(volume);
   setText(refs.musicVolumeValue, refs.musicVolumeValue.value);
 }
@@ -1352,11 +2290,13 @@ function render(payload) {
   latestPayload = payload;
   payloadReceivedAt = monotonicNow();
   setRole(payload?.role);
+  renderContext(payload);
   renderScenes(payload);
   renderEnvironment(payload?.environment);
   renderRoomPresence(payload?.state);
   renderPresenceCorrection(payload);
   renderMusic(payload);
+  renderCamera(payload);
   setClock();
 }
 
@@ -1367,7 +2307,7 @@ function renderPresenceCorrection(payload) {
   refs.presenceCountOne.disabled = busy || isUnavailable();
   refs.presenceCountOne.setAttribute('aria-busy', String(busy));
   refs.clockTop.dataset.correction = String(available);
-  setText(refs.presenceCountOne, busy ? 'Sparar …' : 'Sätt till 1 person');
+  setText(refs.presenceCountLabel, busy ? '…' : '1');
 }
 
 async function getState() {
@@ -1454,6 +2394,7 @@ async function readState() {
         !lastFreshAt,
       );
     }
+    renderContext(latestPayload);
     renderScenes(latestPayload);
     renderMusic(latestPayload);
   } finally {
@@ -1475,10 +2416,8 @@ function isUnavailable() {
 }
 
 async function postJson(url, body) {
-  const controller = url === PRESENCE_COUNT_URL ? new AbortController() : null;
-  const timeout = controller
-    ? window.setTimeout(() => controller.abort(), 8_000)
-    : null;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 8_000);
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -1489,7 +2428,7 @@ async function postJson(url, body) {
         'content-type': 'application/json',
       },
       body: JSON.stringify(body),
-      ...(controller ? { signal: controller.signal } : {}),
+      signal: controller.signal,
     });
     if (!response.ok) {
       const error = new Error(`command_${response.status}`);
@@ -1500,7 +2439,7 @@ async function postJson(url, body) {
     }
     return await response.json().catch(() => ({}));
   } finally {
-    if (timeout !== null) window.clearTimeout(timeout);
+    window.clearTimeout(timeout);
   }
 }
 
@@ -1511,19 +2450,23 @@ async function runCommand(key, body) {
   syncFeedback();
   pending.add(key);
   renderPresenceCorrection(latestPayload);
+  renderContext(latestPayload);
   renderScenes(latestPayload);
   renderMusic(latestPayload);
   try {
-    const url =
-      key === 'presence:one'
-        ? PRESENCE_COUNT_URL
-        : key.startsWith('scene:')
-          ? SCENE_URL
-          : key.startsWith('music-preset:')
-            ? MUSIC_PRESET_URL
-            : key.startsWith('volume-authority:')
-              ? VOLUME_AUTHORITY_URL
-              : MUSIC_URL;
+    const url = key.startsWith('routine:')
+      ? ROUTINE_URL
+      : key.startsWith('suggestion:')
+        ? SUGGESTION_URL
+        : key === 'presence:one'
+          ? PRESENCE_COUNT_URL
+          : key.startsWith('scene:')
+            ? SCENE_URL
+            : key.startsWith('music-preset:')
+              ? MUSIC_PRESET_URL
+              : key.startsWith('volume-authority:')
+                ? VOLUME_AUTHORITY_URL
+                : MUSIC_URL;
     await postJson(url, body);
     if (key === 'presence:one')
       showToast(
@@ -1538,7 +2481,11 @@ async function runCommand(key, body) {
         'Åtkomsten har gått ut. Öppna kontrollpanelen igen.',
         true,
       );
-    } else if (error?.status === 502 || error?.status === 504) {
+    } else if (
+      error?.name === 'AbortError' ||
+      error?.status === 502 ||
+      error?.status === 504
+    ) {
       showToast(
         key === 'presence:one'
           ? 'Räknaren kunde inte bekräfta ändringen. Kontrollera antalet och försök igen.'
@@ -1562,10 +2509,405 @@ async function runCommand(key, body) {
   } finally {
     pending.delete(key);
     renderPresenceCorrection(latestPayload);
+    renderContext(latestPayload);
     renderScenes(latestPayload);
     renderMusic(latestPayload);
   }
 }
+
+refs.scenePrevious.addEventListener('click', () => {
+  if (scenePage > 0) scenePage -= 1;
+  renderScenes(latestPayload);
+});
+refs.sceneNext.addEventListener('click', () => {
+  scenePage += 1;
+  renderScenes(latestPayload);
+});
+
+// Camera media is scoped to one server-issued view. No HA credentials enter the browser.
+function cameraMediaUrl(value) {
+  if (typeof value !== 'string' || !/^(\/|\.\/)/.test(value)) return null;
+  try {
+    const url = new URL(value, location.href);
+    return url.origin === location.origin && !url.username && !url.password
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function stopCameraMedia() {
+  const hadMedia = cameraMediaKey || cameraImageController || cameraObjectUrl;
+  cameraMediaEpoch += 1;
+  window.clearTimeout(cameraImageTimer);
+  window.clearTimeout(cameraMediaTimeout);
+  cameraImageController?.abort();
+  cameraImageController = null;
+  if (!hadMedia) return;
+  refs.cameraImage.onload = null;
+  refs.cameraImage.onerror = null;
+  refs.cameraImage.removeAttribute('src');
+  refs.cameraImage.hidden = true;
+  if (cameraObjectUrl) URL.revokeObjectURL(cameraObjectUrl);
+  cameraObjectUrl = null;
+  cameraMediaKey = null;
+}
+
+function cameraCanRun(epoch) {
+  return (
+    epoch === cameraMediaEpoch &&
+    !stopped &&
+    !isUnavailable() &&
+    document.visibilityState !== 'hidden' &&
+    !refs.cameraPanel.hidden &&
+    cameraActive?.expiresAt > estimatedServerNow()
+  );
+}
+
+function startCameraImages(active, epoch) {
+  window.clearTimeout(cameraMediaTimeout);
+  const imageUrl = cameraMediaUrl(active.imageUrl);
+  if (!imageUrl) {
+    refs.cameraPlaceholder.textContent = 'Kamerabilden är inte tillgänglig.';
+    refs.cameraStatus.textContent =
+      'Ingen bild kunde hämtas. Rumskontrollerna fungerar som vanligt.';
+    return;
+  }
+  let failures = 0;
+  const frame = async () => {
+    if (!cameraCanRun(epoch)) return;
+    const controller = new AbortController();
+    cameraImageController = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+    cameraMediaTimeout = timeout;
+    try {
+      const response = await fetch(imageUrl, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: controller.signal,
+      });
+      if (
+        !response.ok ||
+        !response.headers.get('content-type')?.startsWith('image/')
+      )
+        throw new Error('image_unavailable');
+      const blob = await response.blob();
+      if (!cameraCanRun(epoch)) return;
+      if (blob.size > 8 * 1024 * 1024) throw new Error('image_too_large');
+      const nextUrl = URL.createObjectURL(blob);
+      if (cameraObjectUrl) URL.revokeObjectURL(cameraObjectUrl);
+      cameraObjectUrl = nextUrl;
+      refs.cameraImage.onload = () => {
+        if (!cameraCanRun(epoch)) return;
+        failures = 0;
+        refs.cameraImage.hidden = false;
+        refs.cameraPlaceholder.hidden = true;
+        refs.cameraStatus.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
+        cameraImageTimer = window.setTimeout(frame, 1000);
+      };
+      refs.cameraImage.onerror = () => {
+        if (!cameraCanRun(epoch)) return;
+        refs.cameraStatus.textContent = 'Kamerabilden kunde inte visas.';
+      };
+      refs.cameraImage.src = nextUrl;
+    } catch {
+      if (!cameraCanRun(epoch)) return;
+      failures += 1;
+      refs.cameraStatus.textContent =
+        failures < 3
+          ? 'Ingen ny bild. Försöker igen …'
+          : 'Kameran svarar inte. Stäng och öppna vyn för att försöka igen.';
+      if (!refs.cameraImage.hidden)
+        refs.cameraStatus.textContent += ' Bilden är inaktuell.';
+      if (failures < 3) cameraImageTimer = window.setTimeout(frame, 2000);
+    } finally {
+      window.clearTimeout(timeout);
+      if (cameraImageController === controller) cameraImageController = null;
+    }
+  };
+  void frame();
+}
+
+function startCameraMedia(active) {
+  stopCameraMedia();
+  cameraMediaKey = `${active.id}|${active.imageUrl ?? ''}`;
+  refs.cameraPlaceholder.hidden = false;
+  refs.cameraPlaceholder.textContent = 'Hämtar kamerabild …';
+  refs.cameraStatus.textContent = 'Tyst kameravy · uppdateras varje sekund';
+  startCameraImages(active, cameraMediaEpoch);
+}
+
+function renderCamera(payload) {
+  const camera = payload?.cameraDashboard;
+  const allowed = camera?.settings?.enabled === true;
+  const viewers = camera?.settings?.viewers;
+  const viewerAllowed =
+    !Array.isArray(viewers) || viewers.includes(roleName(payload?.role));
+  const definitions = Array.isArray(camera?.definitions)
+    ? camera.definitions.filter((item) => item.enabled && item.available)
+    : [];
+  refs.cameraMenu.hidden = !allowed || !viewerAllowed || !definitions.length;
+  refs.cameraMenu.disabled = isUnavailable() || cameraActionRequests > 0;
+  if (cameraChoicesKey !== JSON.stringify(definitions)) {
+    cameraChoicesKey = JSON.stringify(definitions);
+    refs.cameraChoices.replaceChildren(
+      ...definitions.map((item) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = item.name;
+        button.dataset.cameraId = item.id;
+        button.addEventListener('click', () => {
+          void cameraAction('show', item.id);
+        });
+        return button;
+      }),
+    );
+  }
+  for (const button of refs.cameraChoices.children)
+    button.disabled =
+      cameraActionPending || cameraActionRequests > 0 || isUnavailable();
+  if (camera?.active?.id && cameraCloseHoldUntil > estimatedServerNow()) {
+    cameraDismissedIds.add(camera.active.id);
+    if (cameraDismissedIds.size > 32)
+      cameraDismissedIds.delete(cameraDismissedIds.values().next().value);
+  }
+  const showingPending =
+    cameraActionPending &&
+    cameraPendingShow &&
+    cameraCloseHoldUntil <= estimatedServerNow() &&
+    allowed &&
+    viewerAllowed;
+  const active =
+    allowed &&
+    viewerAllowed &&
+    cameraCloseHoldUntil <= estimatedServerNow() &&
+    !cameraDismissedIds.has(camera?.active?.id) &&
+    camera?.active?.expiresAt > estimatedServerNow()
+      ? camera.active
+      : null;
+  cameraActive = active;
+  refs.cameraPanel.hidden = !active && !showingPending;
+  if (!allowed || !viewerAllowed) cameraChoicesOpen = false;
+  refs.cameraChoices.hidden = !cameraChoicesOpen;
+  refs.cameraMenu.setAttribute('aria-expanded', String(cameraChoicesOpen));
+  refs.cameraMenu.textContent =
+    cameraActionRequests > 0
+      ? cameraCloseHoldUntil > estimatedServerNow()
+        ? 'Stänger …'
+        : 'Öppnar …'
+      : active
+        ? 'Byt kamera'
+        : 'Kameror';
+  refs.musicSection.dataset.camera = String(
+    !!active || !!showingPending || cameraChoicesOpen,
+  );
+  setText(
+    refs.musicHeading,
+    active || showingPending ? 'Utanför rummet' : 'Musik',
+  );
+  if (!active || isUnavailable() || document.visibilityState === 'hidden') {
+    if (cameraMediaKey) stopCameraMedia();
+    if (showingPending && !active) {
+      setText(
+        refs.cameraName,
+        definitions.find((item) => item.id === cameraPendingShow)?.name ||
+          'Kamera',
+      );
+      setText(refs.cameraReason, 'Väntar på servern');
+      setText(refs.cameraCountdown, '');
+      refs.cameraPlaceholder.hidden = false;
+      refs.cameraPlaceholder.textContent = 'Öppnar kameravyn …';
+      refs.cameraStatus.textContent = 'Du kan stänga vyn medan den öppnas.';
+    }
+    if (active && isUnavailable())
+      refs.cameraStatus.textContent =
+        'Kontakten med Lugn bröts. Kameran har stoppats.';
+    return;
+  }
+  setText(refs.cameraName, active.name);
+  setText(refs.cameraReason, active.reason || 'Manuellt öppnad');
+  setText(
+    refs.cameraCountdown,
+    `${Math.max(0, Math.ceil((active.expiresAt - estimatedServerNow()) / 1000))} s`,
+  );
+  refs.cameraImage.alt = `${active.name}, senast hämtade kamerabild`;
+  const key = `${active.id}|${active.imageUrl ?? ''}`;
+  if (cameraMediaKey !== key) void startCameraMedia(active);
+}
+
+async function cameraAction(action, cameraId) {
+  if (
+    action === 'show' &&
+    (cameraActionPending || cameraActionRequests > 0 || isUnavailable())
+  )
+    return;
+  cameraActionRequests += 1;
+  const operation = ++cameraActionEpoch;
+  if (action === 'hide') {
+    cameraCloseHoldUntil = estimatedServerNow() + 60000;
+    if (cameraActive?.id) cameraDismissedIds.add(cameraActive.id);
+    cameraPendingShow = null;
+    cameraChoicesOpen = false;
+    stopCameraMedia();
+    refs.cameraPanel.hidden = true;
+    refs.musicSection.dataset.camera = 'false';
+    refs.cameraMenu.focus?.();
+  } else {
+    cameraCloseHoldUntil = 0;
+    cameraDismissedIds.clear();
+    cameraPendingShow = cameraId;
+    cameraChoicesOpen = false;
+  }
+  cameraActionPending = true;
+  renderCamera(latestPayload);
+  try {
+    const result = await postJson(`${BASE_PATH}display-api/camera`, {
+      action,
+      ...(cameraId ? { cameraId } : {}),
+    });
+    if (operation !== cameraActionEpoch) {
+      if (action === 'show' && cameraCloseHoldUntil > estimatedServerNow()) {
+        await postJson(`${BASE_PATH}display-api/camera`, { action: 'hide' });
+      }
+      return;
+    }
+    if (result.cameraDashboard && latestPayload) {
+      latestPayload.cameraDashboard = result.cameraDashboard;
+    }
+    renderCamera(latestPayload);
+  } catch {
+    if (operation === cameraActionEpoch)
+      showToast(
+        action === 'hide'
+          ? 'Vyn är stängd här. Servern kunde inte bekräfta stängningen.'
+          : 'Kameran kunde inte öppnas. Kontrollera anslutningen och kamerainställningarna.',
+        'error',
+      );
+  } finally {
+    cameraActionRequests -= 1;
+    if (operation === cameraActionEpoch) {
+      cameraActionPending = false;
+      cameraPendingShow = null;
+    }
+    renderCamera(latestPayload);
+  }
+}
+
+refs.cameraMenu.addEventListener('click', () => {
+  cameraChoicesOpen = !cameraChoicesOpen;
+  renderCamera(latestPayload);
+});
+refs.cameraClose.addEventListener('click', () => {
+  void cameraAction('hide');
+});
+
+refs.contextDetailsButton.addEventListener('click', () => {
+  setContextDetailsOpen(!contextDetailsOpen);
+});
+refs.sceneOff.addEventListener('click', () => {
+  if (!refs.sceneOff.disabled)
+    void runCommand('scene:scene.all_off', { sceneId: 'scene.all_off' });
+});
+refs.bedtimeNight.addEventListener('click', () =>
+  openBedtime('start', refs.bedtimeNight),
+);
+refs.bedtimeMorning.addEventListener('click', () => {
+  void postBedtime('morning');
+});
+refs.bedtimeEdit.addEventListener('click', () =>
+  openBedtime('plan', refs.bedtimeEdit),
+);
+refs.bedtimeClear.addEventListener('click', () => {
+  void postBedtime('clear');
+});
+refs.bedtimeCancel.addEventListener('click', () => closeBedtime());
+refs.bedtimeClose.addEventListener('click', () => closeBedtime());
+refs.bedtimeForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (bedtimeDraft) void postBedtime(bedtimeDraft.action);
+});
+refs.bedtimeTime.addEventListener('input', () => {
+  syncBedtimeForm();
+});
+for (const input of [
+  refs.bedtimeAuto,
+  refs.bedtimeButton,
+  refs.bedtimeNone,
+  refs.bedtimeMusic,
+])
+  input.addEventListener('change', () => {
+    syncBedtimeForm();
+  });
+for (const [id, time] of [
+  ['0700', '07:00'],
+  ['0730', '07:30'],
+  ['0800', '08:00'],
+])
+  document
+    .querySelector(`#bedtime-time-${id}`)
+    .addEventListener('click', () => {
+      refs.bedtimeTime.value = time;
+      syncBedtimeForm();
+    });
+// Use a regular modal overlay for older Nest Hub Chrome versions without dialog.
+function bedtimeKeydown(event) {
+  if (!bedtimeDraft) return;
+  if (event.key === 'Escape') {
+    event.preventDefault?.();
+    closeBedtime();
+  } else if (event.key === 'Tab') {
+    const controls = [
+      refs.bedtimeClose,
+      refs.bedtimeTime,
+      ...['0700', '0730', '0800'].map((id) =>
+        document.querySelector(`#bedtime-time-${id}`),
+      ),
+      refs.bedtimeAuto,
+      refs.bedtimeButton,
+      refs.bedtimeNone,
+      refs.bedtimeMusic,
+      refs.bedtimeCancel,
+      refs.bedtimeConfirm,
+    ].filter((control) => !control.disabled);
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (
+      !controls.includes(document.activeElement) ||
+      (event.shiftKey && document.activeElement === first) ||
+      (!event.shiftKey && document.activeElement === last)
+    ) {
+      event.preventDefault?.();
+      (event.shiftKey ? last : first)?.focus?.();
+    }
+  }
+}
+refs.musicArtworkImage.addEventListener('error', () => {
+  refs.musicArtworkImage.hidden = true;
+  refs.musicArtwork.dataset.state = 'unavailable';
+});
+refs.musicArtworkImage.addEventListener('load', () => {
+  if (refs.musicArtwork.dataset.state !== 'loading') return;
+  refs.musicArtworkImage.hidden = false;
+  refs.musicArtwork.dataset.state = 'available';
+});
+document.addEventListener('keydown', (event) => {
+  if (bedtimeDraft) {
+    bedtimeKeydown(event);
+    return;
+  }
+  if (event.key !== 'Escape') return;
+  if (cameraActive || cameraChoicesOpen || cameraPendingShow) {
+    void cameraAction('hide');
+    refs.cameraMenu.focus?.();
+  } else if (contextDetailsOpen) {
+    setContextDetailsOpen(false);
+    refs.contextDetailsButton.focus?.();
+  } else if (musicDetailsOpen) {
+    setMusicDetailsOpen(false);
+    refs.musicDetailsButton.focus?.();
+  }
+});
 
 refs.presenceCountOne.addEventListener('click', () => {
   void runCommand('presence:one', {});
@@ -1672,6 +3014,7 @@ document.addEventListener('visibilitychange', () => {
     connectStream();
     void refresh();
   } else {
+    stopCameraMedia();
     disconnectStream();
     window.clearTimeout(reconnectTimer);
   }
@@ -1679,6 +3022,7 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('pagehide', () => {
   stopped = true;
+  stopCameraMedia();
   clearComputerMediaDisplay();
   disconnectStream();
   window.clearTimeout(reconnectTimer);

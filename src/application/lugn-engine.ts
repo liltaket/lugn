@@ -3,6 +3,11 @@ import {
   ComputerObservationSchema,
   type ComputerObservation,
 } from '../core/computer.js';
+import {
+  SimulatedMusicAdapter,
+  type MusicAdapter,
+  type MusicObservation,
+} from '../adapters/simulated-music.js';
 import { MusicController, type MusicOptions } from './music-controller.js';
 import type { ComputerPlaybackControl } from './computer-playback-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
@@ -33,7 +38,12 @@ import {
   type SwitchObservation,
 } from '../adapters/simulated-switch.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
-import { lightingFeedbackMatches } from '../core/lighting-feedback.js';
+import {
+  lightingFeedbackMatches,
+  lightingIntentMatches,
+  mergeLightingValues,
+  withLightingColor,
+} from '../core/lighting-feedback.js';
 import { StateEventStream } from '../core/event-stream.js';
 import { RoomSessions } from './room-sessions.js';
 import {
@@ -135,6 +145,9 @@ export const defaultScenes: LightingScene[] = [
 ];
 
 type DeviceRuntime = RoomState['lighting']['devices'][string];
+export type ExecutionGuard = () => boolean;
+export type Intervention = { domain: 'lighting' | 'music'; target?: string };
+
 type IntentProvenance = {
   actor: Actor;
   source: string;
@@ -216,6 +229,29 @@ export class LugnEngine {
   private readonly enforcedLightingTargets = new Set<string>();
   private lightingEnforcementTimer: TimerHandle | undefined;
   private disposed = false;
+  private readonly acquiringMusicFades = new Set<string>();
+  private readonly musicFadeOwners = new Map<
+    string,
+    { requestId: string | undefined; id: string; isCurrent: ExecutionGuard }
+  >();
+  private readonly selectorFeedbackTargets = new Set<string>();
+  private readonly attributedMusicSourceCommands = new Set<string>();
+  private readonly interventionListeners = new Set<
+    (event: Intervention) => void
+  >();
+  private readonly lightingExecutionGuards = new Map<string, ExecutionGuard>();
+  private readonly bedtimeMorningLighting = new Map<
+    string,
+    {
+      routineId: string;
+      targets: ReadonlySet<string>;
+      isCurrent: ExecutionGuard;
+    }
+  >();
+  private readonly musicExecutionGuards = new Map<
+    string,
+    { requestId: string | undefined; isCurrent: ExecutionGuard }
+  >();
   private publicationBatchDepth = 0;
   private readonly pendingPublicationDomains = new Set<
     StateUpdate['domains'][number]
@@ -481,20 +517,49 @@ export class LugnEngine {
         )) {
           const device = devices[target];
           if (!device) continue;
-          for (const property of LightingProperties) {
-            const sceneValue = values[property];
-            const ownsSceneValue = device.ownership[property]?.kind === 'scene';
+          // Scene edits may change color mode. Baseline follows the saved scene;
+          // an explicit override in the other color mode remains human intent.
+          if (
+            values.rgb !== undefined ||
+            values.colorTemperature !== undefined
+          ) {
+            const color =
+              values.rgb !== undefined
+                ? { rgb: values.rgb }
+                : { colorTemperature: values.colorTemperature! };
+            device.baselineDesired = mergeLightingValues(
+              device.baselineDesired,
+              color,
+            );
+            const property =
+              values.rgb !== undefined ? 'rgb' : 'colorTemperature';
+            const opposite = property === 'rgb' ? 'colorTemperature' : 'rgb';
+            const manualOpposite =
+              device.ownership[opposite]?.kind === 'override';
+            const ownsColor =
+              device.ownership[property]?.kind === 'scene' ||
+              device.ownership[opposite]?.kind === 'scene';
             const synchronizeCct =
-              property === 'colorTemperature' &&
-              values.power !== false &&
-              sceneValue !== undefined;
+              property === 'colorTemperature' && values.power !== false;
+            if (!manualOpposite && (ownsColor || synchronizeCct)) {
+              device.effectiveDesired = mergeLightingValues(
+                device.effectiveDesired,
+                color,
+              );
+              delete device.ownership[opposite];
+              device.ownership[property] = {
+                kind: 'scene',
+                revision: restoredIntent.sceneRevision,
+              };
+            }
+          }
+          for (const property of ['power', 'brightness'] as const) {
+            const sceneValue = values[property];
             if (
               sceneValue === undefined ||
-              (!ownsSceneValue && !synchronizeCct)
+              device.ownership[property]?.kind !== 'scene'
             )
               continue;
-            // Migrate stale scene values after preset changes. CCT is stricter:
-            // older per-light overrides cannot split an active room scene.
             Object.assign(device.baselineDesired, { [property]: sceneValue });
             Object.assign(device.effectiveDesired, { [property]: sceneValue });
             device.ownership[property] = {
@@ -521,13 +586,74 @@ export class LugnEngine {
       };
     }
     this.computerPlayback = options.computerPlayback;
+    const musicAdapter: MusicAdapter =
+      options.music?.adapter ?? new SimulatedMusicAdapter(clock);
+    const guardedMusicAdapter: MusicAdapter = {
+      dispatch: (command, signal) => {
+        const record = this.musicController.state.commands.find(
+          (item) => item.id === command.id,
+        );
+        const guard = this.musicExecutionGuards.get(
+          `${command.target}:${command.requested.property === 'volume' ? 'volume' : 'playback'}`,
+        );
+        if (guard && guard.requestId === record?.provenance.requestId)
+          this.assertExecution(guard.isCurrent);
+        return musicAdapter.dispatch(command, signal);
+      },
+      subscribe: (listener) =>
+        musicAdapter.subscribe((observation) => {
+          const previous =
+            this.musicController?.state.devices[observation.target]?.observed;
+          const changed =
+            previous &&
+            (previous.source !== observation.values.source ||
+              previous.playback !== observation.values.playback);
+          const selector = changed
+            ? this.attributeMusicSelectorFeedback(
+                observation,
+                previous,
+                options.music?.feedbackTimeoutMs ?? 10_000,
+              )
+            : undefined;
+          if (
+            selector &&
+            observation.values.playback === 'playing' &&
+            previous?.playback !== 'playing'
+          )
+            this.selectorFeedbackTargets.add(observation.target);
+          try {
+            listener(observation);
+          } finally {
+            this.selectorFeedbackTargets.delete(observation.target);
+          }
+          if (
+            !selector &&
+            previous?.source != null &&
+            observation.available &&
+            observation.values.source !== null &&
+            observation.values.source !== previous.source &&
+            this.musicController.state.devices[observation.target]?.observed
+              .source === observation.values.source
+          )
+            this.noteIntervention({
+              domain: 'music',
+              target: observation.target,
+            });
+        }),
+    };
+    // Preserve optional live adapter status support (including simulated adapters
+    // whose readStatus implementation is installed after engine construction).
+    Object.defineProperty(guardedMusicAdapter, 'readStatus', {
+      get: () => musicAdapter.readStatus?.bind(musicAdapter),
+    });
     this.musicController = new MusicController(
       clock,
-      options.music ?? {},
+      { ...options.music, adapter: guardedMusicAdapter },
       () => {
         this.computerPlayback?.observe();
         this.musicAutomation?.reconcileComputerPlayback();
         this.musicAutomation?.reconcilePassiveRestoration();
+        this.musicAutomation?.reconcileSourceVolume();
         this.publish(['music']);
       },
     );
@@ -544,6 +670,8 @@ export class LugnEngine {
       authorityControlBlocked: (target) =>
         this.musicController.volumeAuthorityBlocked(target),
       getState: (target) => this.musicController.getState(target),
+      sourceForVolumeTrim: (target, allowSettling) =>
+        this.musicController.sourceForVolumeTrim(target, allowSettling),
       ...(options.computerPlayback === undefined
         ? {}
         : { computerPlayback: options.computerPlayback }),
@@ -573,14 +701,29 @@ export class LugnEngine {
         this.publish(['music', 'diagnostics']);
       },
     });
-    this.musicController.setVolumeRequestGuard((target, provenance, volume) =>
+    this.musicController.setSourceTrimConfigured((target) =>
+      this.musicAutomation.isSourceVolumeManaged(target),
+    );
+    this.musicController.setVolumeRequestGuard((target, provenance, volume) => {
+      const guard = this.musicExecutionGuards.get(`${target}:volume`);
+      if (guard && guard.requestId === provenance.requestId)
+        this.assertExecution(guard.isCurrent);
       this.musicAutomation.assertVolumeRequestAllowed(
         target,
         provenance,
         volume,
-      ),
-    );
+      );
+    });
     this.musicController.setRecoveryPolicyGuard((command) => {
+      const guard = this.musicExecutionGuards.get(
+        `${command.target}:${command.requested.property === 'volume' ? 'volume' : 'playback'}`,
+      );
+      if (
+        guard?.requestId === command.provenance.requestId &&
+        guard &&
+        !guard.isCurrent()
+      )
+        return null;
       if (
         command.provenance.reason === 'open computer input' &&
         (this.computerPlayback?.needsInputOpen?.(command.target) !== true ||
@@ -590,15 +733,20 @@ export class LugnEngine {
       return this.musicAutomation.recoveryAuthorization(command);
     });
     this.musicController.setExternalVolumeChangeHandler(
-      (target, volume, provenance) =>
+      (target, volume, provenance) => {
+        this.noteIntervention({ domain: 'music', target });
         this.musicAutomation.noteExternalVolumeChange(
           target,
           volume,
           provenance,
-        ),
+        );
+      },
     );
     this.musicController.setExternalPlaybackChangeHandler(
       (target, playback, provenance, changedAt) => {
+        // A selector's attributed Playing feedback is no new human permission.
+        if (this.selectorFeedbackTargets.has(target)) return;
+        this.noteIntervention({ domain: 'music', target });
         // Receiver transport state does not describe desktop playback intent.
         if (this.computerPlayback?.handles(target)) return;
         this.musicAutomation.noteExternalPlaybackChange(
@@ -749,11 +897,15 @@ export class LugnEngine {
         if (!device || values.power === false) continue;
         const cct = values.colorTemperature;
         if (cct === undefined) continue;
-        if (device.baselineDesired.colorTemperature === undefined)
+        if (
+          device.baselineDesired.colorTemperature === undefined &&
+          device.baselineDesired.rgb === undefined
+        )
           device.baselineDesired.colorTemperature = cct;
         if (
           device.effectiveDesired.power !== false &&
-          device.effectiveDesired.colorTemperature === undefined
+          device.effectiveDesired.colorTemperature === undefined &&
+          device.effectiveDesired.rgb === undefined
         ) {
           device.effectiveDesired.colorTemperature = cct;
           device.ownership.colorTemperature = {
@@ -762,7 +914,10 @@ export class LugnEngine {
           };
         }
         const original = this.activeSceneDefinition.lighting[target]!;
-        if (original.colorTemperature === undefined)
+        if (
+          original.colorTemperature === undefined &&
+          original.rgb === undefined
+        )
           original.colorTemperature = cct;
       }
     }
@@ -816,6 +971,92 @@ export class LugnEngine {
     ]);
   }
 
+  /** Orchestrators subscribe to attributed human intent, never raw telemetry. */
+  subscribeInterventions(listener: (event: Intervention) => void): () => void {
+    this.interventionListeners.add(listener);
+    return () => this.interventionListeners.delete(listener);
+  }
+
+  private noteIntervention(event: Intervention): void {
+    for (const listener of this.interventionListeners) listener(event);
+  }
+
+  /** Invalidate only transport work owned by this orchestration request. */
+  cancelExecution(requestId: string): void {
+    for (const [key, guard] of this.musicExecutionGuards) {
+      if (
+        guard.requestId === requestId &&
+        !guard.isCurrent() &&
+        key.endsWith(':playback')
+      )
+        this.computerPlayback?.invalidate(key.slice(0, -':playback'.length));
+    }
+    for (const [target, owner] of this.musicFadeOwners) {
+      if (
+        owner.requestId === requestId &&
+        !owner.isCurrent() &&
+        !this.acquiringMusicFades.has(target) &&
+        this.musicController.state.fades[target]?.id === owner.id
+      )
+        this.musicController.cancelFade(target);
+    }
+  }
+
+  private attributeMusicSelectorFeedback(
+    observation: MusicObservation,
+    previous: DeviceMusicState['observed'] | undefined,
+    attributionMs: number,
+  ): MusicCommandRecord | undefined {
+    if (!observation.available) return undefined;
+    const source = observation.values.source;
+    const commands = this.musicController.state.commands;
+    let command: MusicCommandRecord | undefined;
+
+    // Bolt optimization: Iterating backward avoids O(N) allocation overhead compared to [...arr].reverse().find()
+    for (let i = commands.length - 1; i >= 0; i--) {
+      const item = commands[i]!;
+      if (
+        item.target === observation.target &&
+        !['failed', 'superseded'].includes(item.status) &&
+        observation.observedAt >= item.issuedAt &&
+        this.clock.now() - item.issuedAt <= attributionMs &&
+        (observation.commandId === item.id ||
+          (observation.commandId === undefined &&
+            !this.attributedMusicSourceCommands.has(item.id))) &&
+        ((item.requested.property === 'source' &&
+          previous?.source !== source &&
+          item.requested.value === source) ||
+          (item.requested.property === 'preset' &&
+            observation.values.playback === 'playing' &&
+            (observation.commandId === item.id ||
+              source?.toLowerCase() ===
+                (item.requested.value === 'spotify_dj'
+                  ? 'spotify'
+                  : 'optical'))))
+      ) {
+        command = item;
+        break;
+      }
+    }
+
+    if (command) {
+      this.attributedMusicSourceCommands.add(command.id);
+      for (const id of this.attributedMusicSourceCommands)
+        if (!commands.some((item) => item.id === id))
+          this.attributedMusicSourceCommands.delete(id);
+    }
+    return command;
+  }
+
+  automaticMusicPlaybackAllowed(target: string): boolean {
+    return this.musicAutomation.automaticPlaybackAllowed(target);
+  }
+
+  private assertExecution(isCurrent?: ExecutionGuard): void {
+    if (this.disposed || (isCurrent && !isCurrent()))
+      throw new Error('Capability execution cancelled');
+  }
+
   getMusicState(target: string): DeviceMusicState {
     return this.musicController.getState(target);
   }
@@ -836,6 +1077,14 @@ export class LugnEngine {
 
   getMusicVolumeSettings(): MusicVolumeSettings {
     return this.musicAutomation.getVolumeSettings();
+  }
+
+  validateMusicVolumeSettings(settings: MusicVolumeSettings): void {
+    this.musicAutomation.validateVolumeSettings(settings);
+  }
+
+  getMusicSourceOffset(target: string, settings: MusicVolumeSettings): number {
+    return this.musicAutomation.sourceOffset(target, false, settings);
   }
 
   getMusicVolumeEnableIntentRevision(): number {
@@ -898,6 +1147,7 @@ export class LugnEngine {
   ): Promise<void> {
     const actor: Actor = { type: 'physical_remote', id: `bilresa-${button}` };
     const source = `bilresa.button_${button}.${gesture}`;
+    this.noteIntervention({ domain: button === '1' ? 'lighting' : 'music' });
     if (button === '1' && gesture === 'multi_press_1') {
       const sceneId =
         this.state.lighting.currentScene === 'scene.all_off' ||
@@ -945,7 +1195,6 @@ export class LugnEngine {
         this.bilresaPriorVolumeAutomation = null;
         this.musicAutomation.setVolumeAutomationEnabled(
           restoreVolumeAutomation,
-          'restore',
         );
         await this.activateScene(
           this.lastNonOffSceneId ?? this.fallbackRemoteSceneId(),
@@ -1038,8 +1287,17 @@ export class LugnEngine {
       throw new VolumeAuthorityError('human_actor_required');
     const blocked = this.musicController.volumeAuthorityBlocked(request.target);
     if (blocked) throw new VolumeAuthorityError(blocked);
+    this.noteIntervention({ domain: 'music', target: request.target });
     this.musicController.noteVolumeAuthorityIntent(request.target);
+    if (request.mode === 'auto') {
+      this.musicVolumeEnableIntentRevision++;
+      // An explicit Auto choice also supersedes a temporary volume suspension.
+      if (this.bilresaPriorVolumeAutomation !== null)
+        this.bilresaPriorVolumeAutomation = true;
+    }
     this.musicAutomation.setVolumeAuthority(request, provenance);
+    if (request.mode === 'auto')
+      this.musicAutomation.setVolumeAutomationEnabled(true);
     this.publish(['music', 'intent']);
     return this.musicAutomation.getVolumePolicySnapshot(request.target);
   }
@@ -1048,10 +1306,22 @@ export class LugnEngine {
     target: string,
     requested: MusicRequest,
     provenance: Provenance,
+    isCurrent?: ExecutionGuard,
   ): Promise<MusicCommandRecord> {
+    this.assertExecution(isCurrent);
     requested = MusicRequestSchema.parse(requested);
     provenance = ProvenanceSchema.parse(provenance);
     this.musicController.getState(target);
+    if (isHumanActor(provenance.actor) && !isCurrent)
+      this.noteIntervention({ domain: 'music', target });
+    const key = `${target}:${requested.property === 'volume' ? 'volume' : 'playback'}`;
+    if (isCurrent)
+      this.musicExecutionGuards.set(key, {
+        requestId: provenance.requestId,
+        isCurrent,
+      });
+    else this.musicExecutionGuards.delete(key);
+
     if (
       !isHumanActor(provenance.actor) &&
       this.holds.blocks('music.playback', target) &&
@@ -1066,7 +1336,12 @@ export class LugnEngine {
         requested.value,
       );
     this.musicAutomation.noteExplicitRequest(target, requested, provenance);
-    const command = this.dispatchMusicRequest(target, requested, provenance);
+    const command = this.dispatchMusicRequest(
+      target,
+      requested,
+      provenance,
+      isCurrent,
+    );
     this.publish(['intent']);
     return command;
   }
@@ -1075,7 +1350,9 @@ export class LugnEngine {
     target: string,
     requested: MusicRequest,
     provenance: Provenance,
+    isCurrent?: ExecutionGuard,
   ): Promise<MusicCommandRecord> {
+    this.assertExecution(isCurrent);
     if (
       requested.property === 'playback' &&
       this.computerPlayback?.handles(target)
@@ -1094,7 +1371,9 @@ export class LugnEngine {
         target,
         requested,
         provenance,
+        isCurrent,
       );
+      this.assertExecution(isCurrent);
       if (requested.value === 'playing' && command.status === 'confirmed')
         await this.openComputerInput(target, provenance);
       return command;
@@ -1125,13 +1404,56 @@ export class LugnEngine {
   startMusicFade(
     request: MusicFadeRequest,
     provenance: Provenance,
+    isCurrent?: ExecutionGuard,
   ): MusicFadeState {
-    const fade = this.musicController.startFade(request, provenance);
+    this.assertExecution(isCurrent);
+    if (isHumanActor(provenance.actor) && !isCurrent)
+      this.noteIntervention({ domain: 'music', target: request.target });
+    const previousGuard = this.musicExecutionGuards.get(
+      `${request.target}:volume`,
+    );
+    if (isCurrent)
+      this.musicExecutionGuards.set(`${request.target}:volume`, {
+        requestId: provenance.requestId,
+        isCurrent,
+      });
+    this.acquiringMusicFades.add(request.target);
+    let fade: MusicFadeState;
+    try {
+      fade = this.musicController.startFade(request, provenance);
+    } catch (error) {
+      if (previousGuard)
+        this.musicExecutionGuards.set(
+          `${request.target}:volume`,
+          previousGuard,
+        );
+      else this.musicExecutionGuards.delete(`${request.target}:volume`);
+      throw error;
+    } finally {
+      this.acquiringMusicFades.delete(request.target);
+    }
+    if (isCurrent)
+      this.musicFadeOwners.set(request.target, {
+        requestId: provenance.requestId,
+        id: fade.id,
+        isCurrent,
+      });
+    else this.musicFadeOwners.delete(request.target);
+    if (isCurrent && !isCurrent()) {
+      if (this.musicController.state.fades[request.target]?.id === fade.id)
+        this.musicController.cancelFade(request.target);
+      throw new Error('Capability execution cancelled');
+    }
     this.musicAutomation.noteExplicitFade(request, provenance);
     return fade;
   }
 
-  cancelMusicFade(target: string): MusicFadeState | null {
+  cancelMusicFade(
+    target: string,
+    provenance?: Provenance,
+  ): MusicFadeState | null {
+    if (provenance && isHumanActor(provenance.actor))
+      this.noteIntervention({ domain: 'music', target });
     return this.musicController.cancelFade(target);
   }
 
@@ -1247,9 +1569,16 @@ export class LugnEngine {
     actor: Actor = systemActor,
     source = 'capability',
     requestId?: string,
+    isCurrent?: ExecutionGuard,
   ): Promise<number> {
+    this.assertExecution(isCurrent);
     const scene = this.scenes.get(sceneId);
     if (!scene) throw new Error(`Unknown scene: ${sceneId}`);
+    // beginScene replaces intent only for included targets; omitted targets
+    // retain their intent and guards even when reconciliation retries them.
+    if (isHumanActor(actor) && !isCurrent)
+      for (const target of Object.keys(scene.lighting))
+        this.noteIntervention({ domain: 'lighting', target });
     if (
       !isHumanActor(actor) &&
       Object.entries(scene.lighting).some(
@@ -1262,48 +1591,71 @@ export class LugnEngine {
       throw new Error(
         'Automatic lighting is held by explicit human off intent',
       );
-    if (sceneId !== 'scene.all_off' && sceneId !== 'scene.sleep')
-      this.lastNonOffSceneId = sceneId;
     const restoredTargets =
       this.prelightActive || this.prelightFinishPromise
         ? await this.finishPrelight(true, scene)
         : new Set<string>();
+    this.assertExecution(isCurrent);
     // The dashboard can delete a definition while prelight restoration awaits
     // device feedback. Never attach an already deleted scene to logical intent.
     if (!this.scenes.has(sceneId)) throw new Error(`Unknown scene: ${sceneId}`);
-    this.beginScene(scene, {
-      actor,
-      source,
-      ...(requestId === undefined ? {} : { requestId }),
-      reason: 'Scene explicitly selected',
-      allowWhileEmpty: this.shouldRemainPhysicallyEmpty(),
-    });
+    if (sceneId !== 'scene.all_off' && sceneId !== 'scene.sleep')
+      this.lastNonOffSceneId = sceneId;
+    const revision = this.beginScene(
+      scene,
+      {
+        actor,
+        source,
+        ...(requestId === undefined ? {} : { requestId }),
+        reason: 'Scene explicitly selected',
+        allowWhileEmpty: this.shouldRemainPhysicallyEmpty(),
+      },
+      isCurrent,
+    );
+    this.assertExecution(isCurrent);
+    if (revision !== this.state.lighting.sceneRevision) return revision;
     if (sceneId === 'scene.all_off')
       this.forceOffTargetsByRevision.set(
-        this.state.lighting.sceneRevision,
+        revision,
         new Set(
           Object.entries(scene.lighting)
             .filter(([, values]) => values.power === false)
             .map(([target]) => target),
         ),
       );
-    await this.reconcileScene(
-      this.state.lighting.sceneRevision,
-      undefined,
-      restoredTargets,
-      { allowInFlight: isHumanActor(actor) },
-    );
-    return this.state.lighting.sceneRevision;
+    await this.reconcileScene(revision, undefined, restoredTargets, {
+      allowInFlight: isHumanActor(actor),
+      ...(isCurrent ? { isCurrent } : {}),
+    });
+    return revision;
   }
 
   async reapplyScene(
     actor: Actor = systemActor,
     source = 'capability',
     requestId?: string,
+    isCurrent?: ExecutionGuard,
   ): Promise<number> {
     const sceneId = this.state.lighting.currentScene;
     if (!sceneId) throw new Error('There is no active scene to reapply');
-    return this.activateScene(sceneId, actor, source, requestId);
+    return this.activateScene(sceneId, actor, source, requestId, isCurrent);
+  }
+
+  /** Internal run-scoped authority, issued only after RoutineService consumes a confirmed owned plan.
+   * No capability input or actor identity can request this grant. It only supersedes lighting OFF holds.
+   */
+  authorizeBedtimeMorningLighting(
+    requestId: string,
+    routineId: string,
+    targets: ReadonlySet<string>,
+    isCurrent: ExecutionGuard,
+  ): () => void {
+    const grant = { routineId, targets: new Set(targets), isCurrent };
+    this.bedtimeMorningLighting.set(requestId, grant);
+    return () => {
+      if (this.bedtimeMorningLighting.get(requestId) === grant)
+        this.bedtimeMorningLighting.delete(requestId);
+    };
   }
 
   async setLighting(
@@ -1315,13 +1667,30 @@ export class LugnEngine {
       reason?: string;
       requestId?: string;
     },
+    isCurrent?: ExecutionGuard,
+    temperatureScope: 'target' | 'scene' = 'scene',
   ): Promise<void> {
+    this.assertExecution(isCurrent);
+    values = LightingValuesSchema.parse(values);
     this.requireDevice(target);
+    const morningGrant = provenance.requestId
+      ? this.bedtimeMorningLighting.get(provenance.requestId)
+      : undefined;
+    const confirmedMorning = () =>
+      !!morningGrant &&
+      provenance.actor.type === 'routine' &&
+      provenance.actor.id === morningGrant.routineId &&
+      temperatureScope === 'target' &&
+      morningGrant.targets.has(target) &&
+      !!isCurrent &&
+      isCurrent() &&
+      morningGrant.isCurrent();
     if (
       !isHumanActor(provenance.actor) &&
       Object.keys(values).length > 0 &&
       values.power !== false &&
-      this.holds.blocks('lighting.activation', target)
+      this.holds.blocks('lighting.activation', target) &&
+      !confirmedMorning()
     )
       throw new Error(
         'Automatic lighting is held by explicit human off intent',
@@ -1329,7 +1698,7 @@ export class LugnEngine {
     const scene = this.activeSceneDefinition;
     const physicallyEmpty = this.shouldRemainPhysicallyEmpty();
     const synchronizedTemperatureTargets =
-      values.colorTemperature === undefined
+      values.colorTemperature === undefined || temperatureScope === 'target'
         ? []
         : Object.entries(scene?.lighting ?? {})
             .filter(
@@ -1343,6 +1712,11 @@ export class LugnEngine {
     const targets = synchronizedTemperatureTargets.includes(target)
       ? synchronizedTemperatureTargets
       : [target];
+    // Attribute every affected target before yielding, so pending and running routines
+    // cannot overwrite a human temperature adjustment expanded through the scene.
+    if (isHumanActor(provenance.actor) && !isCurrent)
+      for (const lightingTarget of targets)
+        this.noteIntervention({ domain: 'lighting', target: lightingTarget });
     const updates = new Map<string, LightingValues>(
       targets.map((lightingTarget) => [
         lightingTarget,
@@ -1361,6 +1735,16 @@ export class LugnEngine {
         ]),
       ),
     );
+    this.assertExecution(isCurrent);
+    // The hold remains intact while prelight restoration yields. A new human intent
+    // invalidates the grant before we replace either the hold or the target intent.
+    if (morningGrant && !confirmedMorning())
+      throw new Error('Bedtime morning lighting authorization expired');
+    for (const lightingTarget of targets) {
+      if (isCurrent)
+        this.lightingExecutionGuards.set(lightingTarget, isCurrent);
+      else this.lightingExecutionGuards.delete(lightingTarget);
+    }
     this.terminateAllFastPathEvents();
     const source = provenance.source ?? 'capability';
     const reason = provenance.reason ?? 'Explicit lighting adjustment';
@@ -1376,11 +1760,27 @@ export class LugnEngine {
     const now = this.clock.now();
     const deviceBeforeUpdate = this.requireDevice(target);
     if (
+      values.power === true &&
+      values.rgb === undefined &&
+      values.colorTemperature === undefined &&
+      deviceBeforeUpdate.effectiveDesired.rgb === undefined &&
+      deviceBeforeUpdate.effectiveDesired.colorTemperature === undefined &&
+      this.hasExplicitAllLightsOffScene()
+    ) {
+      const white =
+        this.scenes.get('scene.everyday_light')?.lighting[target]
+          ?.colorTemperature ??
+        [...this.scenes.values()]
+          .map((scene) => scene.lighting[target]?.colorTemperature)
+          .find((temperature) => temperature !== undefined);
+      if (white !== undefined) updates.get(target)!.colorTemperature = white;
+    }
+    if (
       isHumanActor(provenance.actor) &&
       values.power === true &&
       deviceBeforeUpdate.effectiveDesired.power === false
     ) {
-      for (const property of ['brightness', 'colorTemperature'] as const) {
+      for (const property of ['brightness'] as const) {
         if (
           values[property] === undefined &&
           deviceBeforeUpdate.ownership[property]?.kind === 'scene'
@@ -1410,8 +1810,17 @@ export class LugnEngine {
         this.holds.clear('lighting.activation', lightingTarget);
         if (this.restoredIntentAwaitingOccupancy)
           this.explicitPowerWhileAwaitingOccupancy.add(lightingTarget);
-      }
+      } else if (confirmedMorning() && targetValues.power === true)
+        this.holds.clear('lighting.activation', lightingTarget);
       const device = this.requireDevice(lightingTarget);
+      if (targetValues.rgb !== undefined) {
+        delete device.effectiveDesired.colorTemperature;
+        delete device.ownership.colorTemperature;
+      }
+      if (targetValues.colorTemperature !== undefined) {
+        delete device.effectiveDesired.rgb;
+        delete device.ownership.rgb;
+      }
       for (const property of LightingProperties) {
         const value = targetValues[property];
         if (value === undefined) continue;
@@ -1438,6 +1847,7 @@ export class LugnEngine {
         ...(targets.length > 1 ? { synchronizedTargets: targets } : {}),
       },
     );
+    const revision = this.state.lighting.sceneRevision;
     this.publish(['lighting', 'commands', 'diagnostics']);
     await Promise.all(
       [...updates].map(([lightingTarget, targetValues]) =>
@@ -1449,12 +1859,18 @@ export class LugnEngine {
               this.manualLightingWhileEmpty.has(lightingTarget))))
           ? this.dispatch(
               lightingTarget,
-              targetValues,
-              this.state.lighting.sceneRevision,
+              withLightingColor(
+                targetValues,
+                this.requireDevice(lightingTarget).effectiveDesired,
+              ),
+              revision,
               source,
               reason,
               provenance.actor,
               provenance.requestId,
+              undefined,
+              'scene',
+              isCurrent,
             )
           : Promise.resolve(),
       ),
@@ -1467,6 +1883,7 @@ export class LugnEngine {
     actor: Actor,
     source = 'capability',
     requestId?: string,
+    isCurrent?: ExecutionGuard,
   ): Promise<number> {
     const current =
       this.state.lighting.devices[target]?.observed.brightness ?? 0;
@@ -1480,6 +1897,7 @@ export class LugnEngine {
         reason: `Brightness adjusted by ${delta}`,
         ...(requestId === undefined ? {} : { requestId }),
       },
+      isCurrent,
     );
     return next;
   }
@@ -1871,7 +2289,10 @@ export class LugnEngine {
     this.prelightAppliedValues = new Map();
     for (const [target, values] of Object.entries(targetValues)) {
       const device = this.requireDevice(target);
-      const snapshot = { ...device.effectiveDesired, ...device.observed };
+      const snapshot = mergeLightingValues(
+        device.effectiveDesired,
+        device.observed,
+      );
       this.prelightSnapshot.set(target, snapshot);
       this.prelightAppliedValues.set(target, { ...values });
     }
@@ -1935,9 +2356,12 @@ export class LugnEngine {
     options: {
       onlyTargets?: ReadonlySet<string>;
       allowInFlight?: boolean;
+      isCurrent?: ExecutionGuard;
     } = {},
   ): Promise<void> {
+    const executionGuards = new Map(this.lightingExecutionGuards);
     if (
+      (options.isCurrent && !options.isCurrent()) ||
       revision !== this.state.lighting.sceneRevision ||
       (this.shouldRemainPhysicallyEmpty() &&
         !this.sceneIntentCanRunWhileEmpty(revision) &&
@@ -1964,6 +2388,12 @@ export class LugnEngine {
     for (const [target, device] of Object.entries(
       this.state.lighting.devices,
     )) {
+      const executionGuard = options.isCurrent ?? executionGuards.get(target);
+      if (
+        revision !== this.state.lighting.sceneRevision ||
+        (executionGuard && !executionGuard())
+      )
+        continue;
       if (!this.canReconcileLightingTarget(target)) continue;
       if (options.onlyTargets && !options.onlyTargets.has(target)) continue;
       if (!options.allowInFlight && this.hasEnforcedLightingTransport(target))
@@ -2026,6 +2456,11 @@ export class LugnEngine {
         device.effectiveDesired.colorTemperature !== undefined
       )
         desired.colorTemperature = device.effectiveDesired.colorTemperature;
+      if (
+        device.effectiveDesired.power !== false &&
+        device.effectiveDesired.rgb !== undefined
+      )
+        desired.rgb = device.effectiveDesired.rgb;
       if (device.availability === 'degraded') continue;
       if (now - targetStartedAt >= this.convergenceTimeoutMs) {
         device.availability = 'degraded';
@@ -2077,10 +2512,17 @@ export class LugnEngine {
           intent.actor,
           intent.requestId,
           timingEventId,
+          'scene',
+          executionGuard,
         ),
       );
     }
     if (dispatches.length > 0) await Promise.all(dispatches);
+    if (
+      revision !== this.state.lighting.sceneRevision ||
+      (options.isCurrent && !options.isCurrent())
+    )
+      return;
     const converged = Object.values(this.state.lighting.devices).every(
       (device) =>
         device.effectiveDesired.power === false
@@ -2168,6 +2610,12 @@ export class LugnEngine {
       this.clock.clearTimeout(handle);
     this.switchFeedbackTimers.clear();
     for (const unsubscribe of this.unsubscribers) unsubscribe();
+    this.interventionListeners.clear();
+    this.lightingExecutionGuards.clear();
+    this.musicExecutionGuards.clear();
+    this.musicFadeOwners.clear();
+    this.attributedMusicSourceCommands.clear();
+    this.selectorFeedbackTargets.clear();
   }
 
   private requireSwitch(target: string): DeviceSwitchState {
@@ -2303,6 +2751,11 @@ export class LugnEngine {
       for (const property of LightingProperties) {
         if (
           excluded.has(property) ||
+          (property === 'rgb' &&
+            (sceneValues.colorTemperature !== undefined ||
+              excluded.has('colorTemperature'))) ||
+          (property === 'colorTemperature' &&
+            (sceneValues.rgb !== undefined || excluded.has('rgb'))) ||
           sceneValues[property] !== undefined ||
           previousValues[property] === undefined
         )
@@ -2338,8 +2791,16 @@ export class LugnEngine {
     return restoredTargets;
   }
 
-  private beginScene(scene: LightingScene, intent: IntentProvenance): void {
+  private beginScene(
+    scene: LightingScene,
+    intent: IntentProvenance,
+    isCurrent?: ExecutionGuard,
+  ): number {
     const includedTargets = new Set(Object.keys(scene.lighting));
+    for (const target of includedTargets) {
+      if (isCurrent) this.lightingExecutionGuards.set(target, isCurrent);
+      else this.lightingExecutionGuards.delete(target);
+    }
     for (const target of includedTargets)
       this.explicitPowerWhileAwaitingOccupancy.delete(target);
     if (isHumanActor(intent.actor)) {
@@ -2372,7 +2833,11 @@ export class LugnEngine {
           LightingProperties.every(
             (property) =>
               command.desired[property] === undefined ||
-              command.desired[property] === sceneValues[property],
+              lightingIntentMatches(
+                property,
+                command.desired[property],
+                sceneValues[property],
+              ),
           )
         );
       },
@@ -2427,6 +2892,7 @@ export class LugnEngine {
       ...intent,
     });
     this.publish(['lighting', 'commands', 'diagnostics']);
+    return revision;
   }
 
   private async dispatch(
@@ -2439,8 +2905,16 @@ export class LugnEngine {
     requestId?: string,
     eventId?: string,
     retryMode: LightingRetryMode = 'scene',
+    executionGuard?: ExecutionGuard,
   ): Promise<void> {
-    if (Object.keys(values).length === 0) return;
+    // The caller owns this immutable scope; a newer target intent must never
+    // replace the guard belonging to these captured values, including on retry.
+    if (
+      Object.keys(values).length === 0 ||
+      revision !== this.state.lighting.sceneRevision ||
+      (executionGuard && !executionGuard())
+    )
+      return;
     if (
       values.power !== false &&
       this.holds.blocks('lighting.activation', target)
@@ -2494,6 +2968,20 @@ export class LugnEngine {
       );
       this.publish(['timings']);
     }
+    if (
+      revision !== this.state.lighting.sceneRevision ||
+      this.ledger.latestCommandId(target) !== command.id ||
+      (executionGuard && !executionGuard())
+    ) {
+      this.ledger.cancel(
+        command.id,
+        'Orchestration execution cancelled before dispatch',
+      );
+      const timer = this.lightingFeedbackTimers.get(command.id);
+      if (timer !== undefined) this.clock.clearTimeout(timer);
+      this.lightingFeedbackTimers.delete(command.id);
+      return;
+    }
     let dispatchFailed = false;
     let dispatchError: unknown;
     this.inFlightLightingCommandIds.add(command.id);
@@ -2515,6 +3003,7 @@ export class LugnEngine {
       const currentIntent = this.isCurrentLightingDeliveryIntent(
         command,
         retryMode,
+        executionGuard,
       );
       const retryScheduled =
         currentIntent && deliveryAttempt < maxLightingDeliveryAttempts;
@@ -2551,7 +3040,9 @@ export class LugnEngine {
           : String(dispatchError);
       const device = this.state.lighting.devices[target];
       if (device) device.availability = 'unavailable';
-      if (this.isCurrentLightingDeliveryIntent(command, retryMode)) {
+      if (
+        this.isCurrentLightingDeliveryIntent(command, retryMode, executionGuard)
+      ) {
         if (retryMode === 'confirmed_empty_off') {
           if (deliveryAttempt < maxLightingDeliveryAttempts)
             this.scheduleRetry(revision, this.retryDelayMs, eventId, retryMode);
@@ -2573,7 +3064,9 @@ export class LugnEngine {
     }
     if (command.status === 'pending')
       this.acceptedLightingCommandIds.add(command.id);
-    if (this.isCurrentLightingDeliveryIntent(command, retryMode)) {
+    if (
+      this.isCurrentLightingDeliveryIntent(command, retryMode, executionGuard)
+    ) {
       command.diagnosticReason =
         'Lighting adapter accepted the request; device state has not yet been observed';
       const retryScheduled = deliveryAttempt < maxLightingDeliveryAttempts;
@@ -2748,11 +3241,36 @@ export class LugnEngine {
       : undefined;
     let effectiveIntentChanged = false;
     let attributedStaleCommand = false;
-    let activePrelightPowerFeedback = false;
+    // WLED/HA repeat state without a command ID after the initial command has
+    // already been confirmed. The preview owns these lamps until handoff or
+    // timeout; attribution to a still-pending command cannot define its lifetime.
+    const activePrelightPowerFeedback =
+      this.prelightActive &&
+      observation.values.power === true &&
+      this.prelightAppliedValues.get(observation.target)?.power === true;
+    const priorRgb = device.observed.rgb;
+    const priorTemperature = device.observed.colorTemperature;
+    if (observation.values.rgb !== undefined || observation.colorMode === 'rgb')
+      delete device.observed.colorTemperature;
+    if (
+      observation.values.colorTemperature !== undefined ||
+      observation.colorMode === 'color_temp'
+    )
+      delete device.observed.rgb;
+    if (observation.colorMode === 'unknown') {
+      delete device.observed.rgb;
+      delete device.observed.colorTemperature;
+    }
     for (const property of LightingProperties) {
       const value = observation.values[property];
       if (value === undefined) continue;
-      const previouslyObserved = device.observed[property];
+      const previouslyObserved =
+        device.observed[property] ??
+        (property === 'rgb'
+          ? priorTemperature
+          : property === 'colorTemperature'
+            ? priorRgb
+            : undefined);
       Object.assign(device.observed, { [property]: value });
       const command = this.ledger.attributeObservation(
         observation.target,
@@ -2791,14 +3309,6 @@ export class LugnEngine {
       if (command && !fastPathEventId)
         fastPathEventId = this.fastPathEventByCommand.get(command.id);
       if (
-        property === 'power' &&
-        value === true &&
-        this.prelightActive &&
-        command?.reason === prelightCommandReason
-      )
-        activePrelightPowerFeedback = true;
-      if (
-        !this.enforcedLightingTargets.has(observation.target) &&
         !command &&
         !supersededCommand &&
         !pendingHaProperties.has(property) &&
@@ -2811,17 +3321,23 @@ export class LugnEngine {
           )
         ) &&
         !(
-          property === 'power' &&
-          value === true &&
-          this.shouldRemainPhysicallyEmpty()
-        ) &&
-        !(
           observation.commandId &&
           this.ledger.isKnownCommandId(observation.commandId)
         ) &&
         previouslyObserved !== undefined &&
-        previouslyObserved !== value
+        !lightingFeedbackMatches(property, previouslyObserved, value)
       ) {
+        this.noteIntervention({
+          domain: 'lighting',
+          target: observation.target,
+        });
+        if (
+          this.enforcedLightingTargets.has(observation.target) ||
+          (property === 'power' &&
+            value === true &&
+            this.shouldRemainPhysicallyEmpty())
+        )
+          continue;
         this.terminateAllFastPathEvents();
         if (property === 'power' && value === true)
           this.holds.clear('lighting.activation', observation.target);
@@ -2833,6 +3349,8 @@ export class LugnEngine {
           // A room scene owns Kelvin as a shared value. Keep the external
           // observation visible, but do not turn a single lamp's drift into a
           // permanent per-light override.
+          delete device.effectiveDesired.rgb;
+          delete device.ownership.rgb;
           device.effectiveDesired.colorTemperature = synchronizedTemperature;
           if (device.ownership.colorTemperature?.kind !== 'override')
             device.ownership.colorTemperature = {
@@ -2850,7 +3368,12 @@ export class LugnEngine {
             },
           );
         } else {
-          Object.assign(device.effectiveDesired, { [property]: value });
+          device.effectiveDesired = mergeLightingValues(
+            device.effectiveDesired,
+            { [property]: value },
+          );
+          if (property === 'rgb') delete device.ownership.colorTemperature;
+          if (property === 'colorTemperature') delete device.ownership.rgb;
           effectiveIntentChanged = true;
           device.ownership[property] = {
             kind: 'override',
@@ -3734,6 +4257,8 @@ export class LugnEngine {
   }
 
   private canReconcileLightingTarget(target: string): boolean {
+    const guard = this.lightingExecutionGuards.get(target);
+    if (guard && !guard()) return false;
     const device = this.requireDevice(target);
     // OFF never needs permission to activate a remembered scene.
     if (device.effectiveDesired.power === false) return true;
@@ -3887,8 +4412,10 @@ export class LugnEngine {
       desired: LightingValues;
     },
     retryMode: LightingRetryMode,
+    executionGuard?: ExecutionGuard,
   ): boolean {
     if (
+      (executionGuard && !executionGuard()) ||
       command.revision !== this.state.lighting.sceneRevision ||
       this.ledger.latestCommandId(command.target) !== command.id
     )
@@ -3910,7 +4437,14 @@ export class LugnEngine {
     if (!this.canReconcileLightingTarget(command.target)) return false;
     const stillDesired = LightingProperties.every((property) => {
       const value = command.desired[property];
-      return value === undefined || device.effectiveDesired[property] === value;
+      return (
+        value === undefined ||
+        lightingIntentMatches(
+          property,
+          device.effectiveDesired[property],
+          value,
+        )
+      );
     });
     if (!stillDesired) return false;
     return LightingProperties.some((property) => {

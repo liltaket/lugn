@@ -37,12 +37,19 @@ export type Provenance = z.infer<typeof ProvenanceSchema>;
 export const AutomationHoldSchema = z.object({
   scope: z.enum(['music.playback', 'lighting.activation', 'lighting.property']),
   target: z.string(),
-  property: z.enum(['power', 'brightness', 'colorTemperature']).optional(),
+  property: z
+    .enum(['power', 'brightness', 'colorTemperature', 'rgb'])
+    .optional(),
   intent: z.union([
     z.literal('paused'),
     z.literal('off'),
     z.boolean(),
     z.number(),
+    z.tuple([
+      z.number().int().min(0).max(255),
+      z.number().int().min(0).max(255),
+      z.number().int().min(0).max(255),
+    ]),
   ]),
   provenance: ProvenanceSchema,
   createdAt: z.number().nonnegative(),
@@ -59,15 +66,32 @@ export const LightingProperties = [
   'power',
   'brightness',
   'colorTemperature',
+  'rgb',
 ] as const;
 export const LightingPropertySchema = z.enum(LightingProperties);
 export type LightingProperty = z.infer<typeof LightingPropertySchema>;
 
-export const LightingValuesSchema = z.object({
-  power: z.boolean().optional(),
-  brightness: z.number().int().min(0).max(100).optional(),
-  colorTemperature: z.number().int().min(1000).max(10000).optional(),
-});
+export const LightingValuesSchema = z
+  .object({
+    power: z.boolean().optional(),
+    brightness: z.number().int().min(0).max(100).optional(),
+    colorTemperature: z.number().int().min(1000).max(10000).optional(),
+    // Either color field selects its mode; a command cannot request both.
+    rgb: z
+      .tuple([
+        z.number().int().min(0).max(255),
+        z.number().int().min(0).max(255),
+        z.number().int().min(0).max(255),
+      ])
+      .optional(),
+  })
+  .refine(
+    (values) =>
+      values.rgb === undefined || values.colorTemperature === undefined,
+    {
+      message: 'RGB and color temperature are mutually exclusive',
+    },
+  );
 export type LightingValues = z.infer<typeof LightingValuesSchema>;
 
 export const SemanticLightingIdSchema = z
@@ -160,6 +184,8 @@ export const MusicObservationValuesSchema = z
     volume: z.number().min(0).max(1).nullable(),
     source: z.string().nullable(),
     title: z.string().nullable(),
+    artist: z.string().max(1024).nullable().optional(),
+    album: z.string().max(1024).nullable().optional(),
   })
   .strict();
 export type MusicObservationValues = z.infer<
@@ -403,10 +429,12 @@ export const MusicIntentSnapshotSchema = z
           manualReference: z
             .number()
             .finite()
-            .min(0)
+            .min(-1)
             .max(2)
             .nullable()
             .optional(),
+          sourceReference: z.number().finite().min(-2).max(2).optional(),
+          sourceTrimManaged: z.boolean().optional(),
           passiveManaged: z.boolean().optional(),
           selectorIntent: ManualVolumeHoldSchema.nullable().optional(),
           lastAuthorityIntent: z

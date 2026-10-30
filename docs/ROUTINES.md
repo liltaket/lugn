@@ -1,5 +1,14 @@
 # Routines and suggestions
 
+The current bounded implementation supports manual runs, Stockholm weekday/time
+schedules, scene/light/music/delay/condition steps and cancellation through the
+existing typed capabilities. Good Night and Good Morning templates default off.
+The web editor previews timelines without commands. Definitions persist atomically;
+active runs and snoozes do not resume after restart and overdue work is skipped.
+See [implementation and limits](lugn-2/ROUTINES.md),
+[computer suggestions](lugn-2/COMPUTER-INTELLIGENCE.md) and
+[web authoring](lugn-2/WEB.md). The broader ideas below remain product direction.
+
 ## Routines are orchestration
 
 A routine should compose existing capabilities rather than implementing device protocols itself.

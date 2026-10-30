@@ -1,3 +1,6 @@
+import type { CameraDashboardService } from '../application/camera-dashboard.js';
+import { CameraError } from '../core/cameras.js';
+import type { CameraMediaProvider } from './camera-media.js';
 import {
   ComputerNowPlayingSelector,
   type ComputerAudioRoute,
@@ -32,7 +35,21 @@ import type {
   MusicPlaybackPolicySnapshot,
 } from '../application/music-automation.js';
 import type { StateEventStream } from '../core/event-stream.js';
+import type { ArtworkProvider } from '../core/artwork.js';
+import {
+  ExperienceRequestError,
+  type ExperienceApi,
+} from '../application/experience-api.js';
 
+const CameraActionSchema = z.discriminatedUnion('action', [
+  z
+    .object({
+      action: z.literal('show'),
+      cameraId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/),
+    })
+    .strict(),
+  z.object({ action: z.literal('hide') }).strict(),
+]);
 const MAX_REQUEST_BYTES = 8 * 1024;
 const DisplaySceneRequestSchema = z
   .object({ sceneId: z.string().min(1).max(128) })
@@ -93,11 +110,16 @@ export type LugnDisplayServerOptions = {
   musicObservationTrustProvider?: () => Record<string, boolean>;
   stateStream?: StateEventStream;
   computerAudioMappings?: Readonly<Record<string, ComputerAudioRoute>>;
+  computerNowPlayingSelector?: ComputerNowPlayingSelector;
   musicVolumePoliciesProvider?: () => Record<string, MusicVolumePolicySnapshot>;
   musicPlaybackPoliciesProvider?: () => Record<
     string,
     MusicPlaybackPolicySnapshot
   >;
+  artworkProvider?: ArtworkProvider;
+  experience?: ExperienceApi;
+  cameraService?: CameraDashboardService;
+  cameraMedia?: CameraMediaProvider;
   environmentProvider?: () => EnvironmentSnapshot;
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
 };
@@ -151,9 +173,9 @@ export class LugnDisplayServer {
   private unsubscribeComputerObservations: (() => void) | undefined;
 
   constructor(private readonly options: LugnDisplayServerOptions) {
-    this.computerNowPlaying = new ComputerNowPlayingSelector(
-      options.computerAudioMappings ?? {},
-    );
+    this.computerNowPlaying =
+      options.computerNowPlayingSelector ??
+      new ComputerNowPlayingSelector(options.computerAudioMappings ?? {});
     validateOptions(options);
     this.acceptedHosts = buildAcceptedHosts(options);
     if (this.acceptedHosts.size === 0)
@@ -200,7 +222,8 @@ export class LugnDisplayServer {
   async stop(): Promise<void> {
     this.unsubscribeComputerObservations?.();
     this.unsubscribeComputerObservations = undefined;
-    this.computerNowPlaying.reset();
+    if (!this.options.computerNowPlayingSelector)
+      this.computerNowPlaying.reset();
     const server = this.server;
     this.server = undefined;
     for (const response of this.eventStreams.keys()) response.destroy();
@@ -265,6 +288,95 @@ export class LugnDisplayServer {
         sendJson(response, 403, { error: 'invalid_origin' });
         return;
       }
+      if (
+        request.method === 'POST' &&
+        (hubRequest.route === '/display-api/routine' ||
+          hubRequest.route === '/display-api/bedtime' ||
+          hubRequest.route === '/display-api/suggestion')
+      ) {
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        if (!this.options.experience) {
+          sendJson(response, 503, { error: 'experience_unavailable' });
+          return;
+        }
+        const body = await readJsonBody(request);
+        try {
+          const result = await this.options.experience.request(
+            hubRequest.route === '/display-api/routine'
+              ? 'routines/action'
+              : hubRequest.route === '/display-api/bedtime'
+                ? 'routines/bedtime'
+                : 'intelligence/suggestion',
+            body,
+            hubProvenance(hubRequest.hub),
+          );
+          sendJson(response, 200, result);
+        } catch (error) {
+          if (error instanceof ZodError) throw error;
+          if (error instanceof ExperienceRequestError)
+            sendJson(response, error.status, { error: error.code });
+          else sendJson(response, 502, { error: 'experience_request_failed' });
+        }
+        return;
+      }
+
+      if (
+        request.method === 'POST' &&
+        hubRequest.route === '/display-api/camera'
+      ) {
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        const service = this.options.cameraService;
+        if (!service || !this.options.cameraMedia)
+          throw new CameraError(503, 'cameras_unavailable');
+        const body = CameraActionSchema.parse(await readJsonBody(request));
+        if (body.action === 'show')
+          service.show(hubRequest.hub.role, body.cameraId);
+        else service.dismiss(hubRequest.hub.role);
+        sendJson(response, 200, {
+          cameraDashboard: this.cameraSnapshot(hubRequest.hub),
+        });
+        return;
+      }
+      const cameraImage =
+        /^\/display-api\/cameras\/([A-Za-z0-9_-]{16,80})\/([A-Za-z0-9][A-Za-z0-9._-]{0,79})\/image$/.exec(
+          hubRequest.route,
+        );
+      if (request.method === 'GET' && cameraImage) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        if (!this.options.cameraMedia)
+          throw new CameraError(404, 'camera_view_unavailable');
+        const image = await this.options.cameraMedia.read(
+          hubRequest.hub.role,
+          cameraImage[1]!,
+          cameraImage[2]!,
+        );
+        response.writeHead(200, {
+          'content-type': image.contentType,
+          'content-length': image.body.byteLength,
+          'cache-control': 'private, no-store',
+          'x-content-type-options': 'nosniff',
+          'cross-origin-resource-policy': 'same-origin',
+          'content-security-policy': "default-src 'none'; sandbox",
+        });
+        response.end(image.body);
+        return;
+      }
 
       if (request.method === 'GET' && hubRequest.route === '/') {
         await this.serveAsset(
@@ -299,6 +411,40 @@ export class LugnDisplayServer {
           return;
         }
         this.startEventStream(request, response, hubRequest.hub);
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        hubRequest.route.startsWith('/display-api/artwork/')
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        const token = /^\/display-api\/artwork\/([A-Za-z0-9_-]{32})$/.exec(
+          hubRequest.route,
+        )?.[1];
+        const asset = token
+          ? await this.options.artworkProvider?.read(
+              token,
+              this.options.stateProvider(),
+            )
+          : null;
+        if (!asset) {
+          sendJson(response, 404, { error: 'artwork_unavailable' });
+          return;
+        }
+        response.writeHead(200, {
+          'cache-control': 'no-store',
+          'content-type': asset.contentType,
+          'content-length': asset.body.byteLength,
+          'x-content-type-options': 'nosniff',
+          'cross-origin-resource-policy': 'same-origin',
+        });
+        response.end(asset.body);
         return;
       }
       if (
@@ -393,6 +539,10 @@ export class LugnDisplayServer {
       sendJson(response, 404, { error: 'not_found' });
     } catch (error) {
       if (response.headersSent || response.destroyed) return;
+      if (error instanceof CameraError) {
+        sendJson(response, error.status, { error: error.code });
+        return;
+      }
       if (error instanceof DisplayRequestError) {
         sendJson(response, error.status, { error: error.code });
         return;
@@ -408,11 +558,27 @@ export class LugnDisplayServer {
     }
   }
 
+  private cameraSnapshot(hub: LugnDisplayHub) {
+    return this.options.cameraMedia?.snapshot(
+      hub.role,
+      `${this.pathForHub(hub.id)}display-api/cameras/`,
+    );
+  }
+
   private snapshot(hub: LugnDisplayHub) {
     const state = this.options.stateProvider();
     return {
       state,
+      ...(this.options.cameraMedia
+        ? { cameraDashboard: this.cameraSnapshot(hub) }
+        : {}),
+      ...this.options.experience?.snapshot(),
       computerNowPlaying: this.computerNowPlaying.snapshot(state),
+      artwork:
+        this.options.artworkProvider?.snapshot(
+          state,
+          `${this.pathForHub(hub.id)}display-api/artwork/`,
+        ) ?? {},
       deliveryRevision: ++this.nextDeliveryRevision,
       instanceId: this.instanceId,
       generatedAt: Date.now(),
@@ -477,16 +643,25 @@ export class LugnDisplayServer {
       }
     };
     let pendingUpdate: NodeJS.Immediate | undefined;
-    const unsubscribe = stream.subscribe(() => {
+    const scheduleSend = (): void => {
       if (pendingUpdate) return;
       pendingUpdate = setImmediate(() => {
         pendingUpdate = undefined;
         send();
       });
-    });
+    };
+    const unsubscribe = stream.subscribe(scheduleSend);
+    const unsubscribeArtwork =
+      this.options.artworkProvider?.subscribe?.(scheduleSend);
+    const unsubscribeExperience =
+      this.options.experience?.subscribe(scheduleSend);
+    const unsubscribeCamera = this.options.cameraMedia?.subscribe(scheduleSend);
     const heartbeat = setInterval(send, 5_000);
     response.once('close', () => {
       unsubscribe();
+      unsubscribeArtwork?.();
+      unsubscribeExperience?.();
+      unsubscribeCamera?.();
       clearInterval(heartbeat);
       if (pendingUpdate) clearImmediate(pendingUpdate);
       this.eventStreams.delete(response);
@@ -976,7 +1151,7 @@ function setSecurityHeaders(response: ServerResponse): void {
       "base-uri 'none'",
       "form-action 'none'",
       'frame-ancestors https://www.gstatic.com',
-      "img-src 'self' data:",
+      "img-src 'self' data: blob:",
       "connect-src 'self'",
       "script-src 'self'",
       "style-src 'self'",
