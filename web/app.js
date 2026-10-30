@@ -4681,6 +4681,7 @@ for (const id of ['preview-target', 'preview-time', 'preview-people'])
   });
 settingsElement('preview-button').addEventListener('click', async () => {
   const revision = ++volumePreviewRevision;
+  settingsElement('preview-button').setAttribute('aria-busy', 'true');
   settingsElement('preview-button').disabled = true;
   settingsElement('preview-result').textContent = 'Beräknar…';
   try {
@@ -4699,6 +4700,7 @@ settingsElement('preview-button').addEventListener('click', async () => {
     if (revision === volumePreviewRevision)
       settingsElement('preview-result').textContent = error.message;
   } finally {
+    settingsElement('preview-button').removeAttribute('aria-busy');
     settingsElement('preview-button').disabled = false;
   }
 });
@@ -4711,6 +4713,7 @@ document
     settingsElement('fields').disabled = true;
     for (const id of ['save', 'cancel', 'reset', 'preview-button'])
       settingsElement(id).disabled = true;
+    settingsElement('save').setAttribute('aria-busy', 'true');
     settingsElement('save').textContent = 'Sparar…';
     settingsElement('status').textContent = 'Sparar inställningar…';
     try {
@@ -4731,6 +4734,7 @@ document
     } finally {
       volumeSettingsBusy = false;
       settingsElement('fields').disabled = false;
+      settingsElement('save').removeAttribute('aria-busy');
       settingsElement('save').textContent = 'Spara och tillämpa';
       settingsElement('save').disabled = !volumeSettingsDirty();
       settingsElement('cancel').disabled = !volumeSettingsDirty();
