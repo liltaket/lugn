@@ -59,6 +59,7 @@ let actionTone = 'neutral';
 const pendingActions = new Set();
 
 class SessionExpiredError extends Error {}
+class TokenRejectedError extends Error {}
 class ClerkAuthorizationError extends Error {}
 
 tokenHelp.textContent =
@@ -266,6 +267,8 @@ async function startSession(credential, automatic) {
         clerkAccountRejected = true;
         throw new Error('Det här Clerk-kontot har inte åtkomst till Lugn.');
       }
+      if (response.status === 401 && authProvider === 'token')
+        throw new TokenRejectedError('Kontrollera token och försök igen.');
       if (response.status === 401 || response.status === 403)
         throw new Error('Kontrollera token och försök igen.');
       throw new Error('Sessionen kunde inte skapas. Försök igen.');
@@ -288,11 +291,7 @@ async function startSession(credential, automatic) {
     if (error instanceof SessionExpiredError) {
       setLoginError('Sessionen kunde inte verifieras. Logga in igen.');
     } else if (error instanceof Error) {
-      setLoginError(
-        error.message,
-        error.message === 'Kontrollera token och försök igen.' &&
-          authProvider === 'token',
-      );
+      setLoginError(error.message, error instanceof TokenRejectedError);
     } else {
       setLoginError('Sessionen kunde inte skapas. Försök igen.');
     }
