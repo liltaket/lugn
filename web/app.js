@@ -139,6 +139,10 @@ class ClerkAuthorizationError extends Error {}
 tokenHelp.textContent =
   'Använd installationens lokala HTTPS-adress eller en SSH-tunnel. Hämta åtkomsttoken på Lugn-värden enligt docs/OPERATIONS.md i ett privat terminalfönster och klistra in den bara här.';
 
+tokenInput.addEventListener('input', () => {
+  tokenInput.removeAttribute('aria-invalid');
+});
+
 loginForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void createSession();
@@ -217,9 +221,14 @@ function setLiveStatus(label, tone = 'neutral') {
   liveStatus.dataset.tone = tone;
 }
 
-function setLoginError(message) {
+function setLoginError(message, isInvalidToken = false) {
   loginError.textContent = message;
   loginError.hidden = !message;
+  if (isInvalidToken) {
+    tokenInput.setAttribute('aria-invalid', 'true');
+  } else {
+    tokenInput.removeAttribute('aria-invalid');
+  }
 }
 
 function updateLoginPresentation() {
@@ -395,7 +404,11 @@ async function startSession(credential, automatic) {
     if (error instanceof SessionExpiredError) {
       setLoginError('Sessionen kunde inte verifieras. Logga in igen.');
     } else if (error instanceof Error) {
-      setLoginError(error.message);
+      setLoginError(
+        error.message,
+        error.message === 'Kontrollera token och försök igen.' &&
+          authProvider === 'token',
+      );
     } else {
       setLoginError('Sessionen kunde inte skapas. Försök igen.');
     }
