@@ -739,6 +739,7 @@ async function restoreSessionOnStartup() {
   loginSubmit.disabled = true;
   tokenInput.disabled = true;
   loginSubmit.textContent = 'Kontrollerar session…';
+  loginSubmit.setAttribute('aria-busy', 'true');
   setLiveStatus('Kontrollerar session', 'warn');
   try {
     const authConfig = await fetchAuthConfiguration();
@@ -879,6 +880,8 @@ async function restoreSessionOnStartup() {
         : 'Sessionsstatus kunde inte hämtas. Kontrollera SSH-tunneln och försök igen.',
     );
     setLiveStatus('Kan inte kontrollera session', 'bad');
+  } finally {
+    loginSubmit.removeAttribute('aria-busy');
   }
 }
 
