@@ -1,0 +1,5 @@
+## 2025-02-14 - Timing Attack via Length Short-Circuiting in crypto.timingSafeEqual
+
+**Vulnerability:** Node.js `crypto.timingSafeEqual()` requires both arguments to have the exact same byte length. Previously, this was checked using an early return (`left.length === right.length && timingSafeEqual(...)`), which creates a timing side-channel that leaks the length of the expected secret.
+**Learning:** Checking length separately or throwing exceptions for unequal lengths defeats the purpose of constant-time comparison, as an attacker can observe the timing difference between a length mismatch (fast) and a matching length with differing contents (slower).
+**Prevention:** Always hash inputs using a fixed-length cryptographic hash function (e.g., `createHash('sha256').update(input).digest()`) _before_ passing them to `timingSafeEqual()`. This guarantees the buffers are always the same length (32 bytes for SHA-256) regardless of the original string lengths, ensuring a truly constant-time execution path.
