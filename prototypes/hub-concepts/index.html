@@ -1,0 +1,1136 @@
+<!doctype html>
+<!--
+  PROTOTYP – kastbar skiss av en enkel Nest Hub-panel för Lugn.
+  Ljus, musik, klocka/datum/temperatur och en automatikbrytare. Inga nätverksanrop;
+  knapparna ändrar bara minnesstate. Öppna filen direkt i en webbläsare.
+-->
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prototyp: enkel Hub-panel</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --skiffer: #121816;
+        --lav: #1c2522;
+        --kalk: #eef1ea;
+        --grasten: #9aa99f;
+        --glod: #f0a05a;
+        --varm: #f6d39c;
+        --kvall: #8fb3d1;
+        --dag: #f1f4ee;
+        --sans: 'IBM Plex Sans', 'Ubuntu Sans', system-ui, sans-serif;
+        --cond:
+          'IBM Plex Sans Condensed', 'IBM Plex Sans Cond', 'Ubuntu Sans',
+          sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+      }
+      body {
+        font-family: var(--sans);
+        color: var(--kalk);
+      }
+      button {
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+        touch-action: manipulation;
+        border: 0;
+      }
+      :focus-visible {
+        outline: 3px solid var(--kalk);
+        outline-offset: 3px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
+      }
+      .ico {
+        width: 1em;
+        height: 1em;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .stage {
+        position: relative;
+      }
+      .hub {
+        position: absolute;
+        left: 50%;
+        top: 12px;
+        transform-origin: top center;
+        overflow: hidden;
+        background: var(--skiffer);
+        border-radius: 18px;
+        box-shadow: 0 0 0 10px #0b0e0d;
+        container-type: size;
+      }
+      .safe-zone {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 128px;
+        height: 112px;
+        z-index: 5;
+        pointer-events: none;
+        border: 2px dashed rgba(255, 120, 120, 0.7);
+        border-top: 0;
+        border-right: 0;
+        background: rgba(255, 80, 80, 0.06);
+        display: grid;
+        place-items: center;
+        font-size: 13px;
+        color: rgba(255, 170, 170, 0.9);
+      }
+
+      .p {
+        height: 100%;
+        padding: 4.6cqh 3.4cqw;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 3.4cqh;
+        transition: filter 500ms;
+      }
+      .hub[data-night='true'] .p {
+        filter: brightness(0.55) saturate(0.7) sepia(0.25);
+      }
+
+      .head {
+        display: flex;
+        align-items: baseline;
+        gap: 2.2cqw;
+        white-space: nowrap;
+      }
+      .time {
+        font-family: var(--cond);
+        font-weight: 300;
+        font-size: 10.5cqh;
+        line-height: 0.9;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.01em;
+      }
+      .date {
+        font-size: 3.4cqh;
+        color: var(--grasten);
+      }
+      .climate {
+        font-size: 3.4cqh;
+        display: flex;
+        gap: 1.6cqw;
+      }
+      .climate span {
+        color: var(--grasten);
+      }
+      .climate b {
+        font-weight: 400;
+        color: var(--kalk);
+      }
+
+      .main {
+        display: grid;
+        grid-template-columns: 1.42fr 1fr;
+        gap: 2.2cqw;
+        min-height: 0;
+      }
+
+      /* Ljus */
+      .lights {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: 1fr 1fr auto;
+        gap: 1.6cqh 1.2cqw;
+        min-height: 0;
+      }
+      .tile {
+        position: relative;
+        overflow: hidden;
+        border-radius: 22px;
+        background: var(--lav);
+        text-align: left;
+        padding: 2.6cqh 1.8cqw;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+        transition:
+          background 250ms,
+          color 250ms,
+          box-shadow 250ms;
+      }
+      .tile::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: radial-gradient(
+          90% 85% at 15% 0%,
+          color-mix(in srgb, var(--l) 20%, transparent),
+          transparent 70%
+        );
+      }
+      .tile .ic {
+        position: relative;
+        width: 7cqh;
+        height: 7cqh;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: color-mix(in srgb, var(--l) 15%, transparent);
+        color: var(--l);
+        font-size: 3.8cqh;
+      }
+      .tile .n {
+        position: relative;
+        font-size: 4.3cqh;
+        font-weight: 450;
+      }
+      .tile .on {
+        position: absolute;
+        top: 2.8cqh;
+        right: 1.8cqw;
+        font-size: 2.6cqh;
+        font-weight: 500;
+        opacity: 0;
+        transition: opacity 250ms;
+      }
+      .tile[aria-pressed='true'] {
+        color: #17130e;
+        background: linear-gradient(
+          155deg,
+          var(--l) 0%,
+          color-mix(in srgb, var(--l) 70%, #000) 100%
+        );
+        box-shadow: 0 14px 44px -14px
+          color-mix(in srgb, var(--l) 70%, transparent);
+      }
+      .tile[aria-pressed='true']::before {
+        opacity: 0;
+      }
+      .tile[aria-pressed='true'] .ic {
+        background: rgba(0, 0, 0, 0.12);
+        color: inherit;
+      }
+      .tile[aria-pressed='true'] .on {
+        opacity: 0.75;
+      }
+      .tile:active {
+        transform: scale(0.98);
+      }
+
+      .row {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 1.2cqw;
+      }
+      .off,
+      .auto {
+        height: 11cqh;
+        min-height: 60px;
+        border-radius: 999px;
+        background: var(--lav);
+        font-size: 3.3cqh;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+      }
+      .off {
+        justify-content: center;
+      }
+      .off .ico {
+        font-size: 3.6cqh;
+      }
+      .off[aria-pressed='true'] {
+        background: #0a0d0c;
+        box-shadow: inset 0 0 0 2px var(--kalk);
+      }
+      .auto {
+        padding: 0 2cqw 0 1.4cqw;
+      }
+      .sw {
+        position: relative;
+        flex: none;
+        width: 54px;
+        height: 32px;
+        border-radius: 999px;
+        background: #3a4541;
+        transition: background 200ms;
+      }
+      .sw::after {
+        content: '';
+        position: absolute;
+        top: 4px;
+        left: 4px;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: var(--kalk);
+        transition: transform 200ms;
+      }
+      .auto[aria-checked='true'] .sw {
+        background: var(--glod);
+      }
+      .auto[aria-checked='true'] .sw::after {
+        transform: translateX(22px);
+      }
+
+      /* Musik */
+      .music {
+        position: relative;
+        overflow: hidden;
+        border-radius: 26px;
+        background: #1d2622;
+        isolation: isolate;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding: 3.6cqh 2cqw 3.2cqh;
+      }
+      .music .bg {
+        position: absolute;
+        inset: -20%;
+        width: 140%;
+        height: 140%;
+        z-index: -1;
+        filter: blur(42px) saturate(1.3) brightness(0.5);
+      }
+      .music .art {
+        width: 27cqh;
+        height: 27cqh;
+        flex: none;
+        border-radius: 16px;
+        box-shadow: 0 20px 40px -14px rgba(0, 0, 0, 0.7);
+      }
+      .title {
+        margin-top: 2.6cqh;
+        font-size: 4.3cqh;
+        font-weight: 500;
+        line-height: 1.15;
+      }
+      .artist {
+        margin-top: 0.6cqh;
+        font-size: 2.9cqh;
+        color: rgba(255, 255, 255, 0.72);
+      }
+      .sources {
+        margin-top: 1.6cqh;
+        display: flex;
+        gap: 6px;
+      }
+      .sources button {
+        min-height: 44px;
+        padding: 0 16px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        font-size: 2.6cqh;
+        color: rgba(255, 255, 255, 0.8);
+      }
+      .sources button[aria-pressed='true'] {
+        background: rgba(255, 255, 255, 0.22);
+        color: #fff;
+      }
+      .controls {
+        margin-top: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 2.4cqw;
+      }
+      .round {
+        width: 9.6cqh;
+        height: 9.6cqh;
+        min-width: 54px;
+        min-height: 54px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.12);
+        display: grid;
+        place-items: center;
+        font-size: 3.6cqh;
+      }
+      .play {
+        width: 13.5cqh;
+        height: 13.5cqh;
+        min-width: 76px;
+        min-height: 76px;
+        background: var(--kalk);
+        color: var(--skiffer);
+        font-size: 5cqh;
+      }
+      .play .ico {
+        fill: currentColor;
+      }
+      .round:active {
+        transform: scale(0.95);
+      }
+      .level {
+        margin-top: 1.8cqh;
+        width: 64%;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 2.5cqh;
+        color: rgba(255, 255, 255, 0.72);
+        font-variant-numeric: tabular-nums;
+      }
+      .level i {
+        flex: 1;
+        height: 4px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.16);
+        position: relative;
+        overflow: hidden;
+      }
+      .level i::after {
+        content: '';
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: var(--v);
+        background: var(--kalk);
+        border-radius: 2px;
+        transition: width 200ms;
+      }
+
+      /* Gemensamt för varianterna */
+      .glass {
+        background: rgba(255, 255, 255, 0.08);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+        -webkit-backdrop-filter: blur(18px);
+        backdrop-filter: blur(18px);
+      }
+      .hub[data-night='true'] .v {
+        filter: brightness(0.55) saturate(0.7) sepia(0.25);
+      }
+      .v {
+        height: 100%;
+        transition: filter 500ms;
+      }
+
+      /* B: Glas – omslaget färgar hela skärmen */
+      .vb {
+        position: relative;
+        isolation: isolate;
+        overflow: hidden;
+      }
+      .vb > .bg {
+        position: absolute;
+        inset: -15%;
+        width: 130%;
+        height: 130%;
+        z-index: -1;
+        filter: blur(64px) saturate(1.5) brightness(0.42);
+      }
+      .vb .wrap {
+        height: 100%;
+        padding: 4.6cqh 3.4cqw;
+        display: grid;
+        grid-template-columns: 1.05fr 1fr;
+        gap: 3.4cqw;
+      }
+      .vb .left {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .vb .time {
+        font-size: 21cqh;
+      }
+      .vb .meta {
+        margin-top: 1.6cqh;
+        font-size: 3.4cqh;
+        color: rgba(255, 255, 255, 0.72);
+        white-space: nowrap;
+      }
+      .vb .meta b {
+        color: #fff;
+        font-weight: 400;
+      }
+      .vb .np {
+        margin-top: auto;
+        display: flex;
+        gap: 2cqw;
+        align-items: center;
+      }
+      .vb .np .art {
+        width: 21cqh;
+        height: 21cqh;
+        flex: none;
+        border-radius: 14px;
+        box-shadow: 0 18px 36px -14px rgba(0, 0, 0, 0.7);
+      }
+      .vb .np .title {
+        margin: 0;
+        text-align: left;
+      }
+      .vb .np .artist {
+        text-align: left;
+      }
+      .vb .np .sources {
+        justify-content: flex-start;
+      }
+      .vb .ctrl {
+        margin-top: 3cqh;
+        display: flex;
+        align-items: center;
+        gap: 1.6cqw;
+      }
+      .vb .ctrl .level {
+        margin: 0 0 0 1cqw;
+        flex: 1;
+        width: auto;
+      }
+      .vb .right {
+        padding-top: 15cqh;
+        display: grid;
+        grid-template-rows: repeat(4, minmax(0, 1fr)) auto;
+        gap: 1.4cqh;
+        min-height: 0;
+      }
+      .pillbtn {
+        border-radius: 999px;
+        display: flex;
+        align-items: center;
+        gap: 1.4cqw;
+        padding: 0 2cqw 0 1cqw;
+        font-size: 3.9cqh;
+        text-align: left;
+        transition:
+          background 250ms,
+          color 250ms;
+      }
+      .pillbtn .ic {
+        width: 8cqh;
+        height: 8cqh;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        flex: none;
+        background: color-mix(in srgb, var(--l) 22%, transparent);
+        color: var(--l);
+        font-size: 3.8cqh;
+      }
+      .pillbtn .on {
+        margin-left: auto;
+        font-size: 2.6cqh;
+        opacity: 0;
+      }
+      .pillbtn[aria-pressed='true'] {
+        background: var(--l);
+        color: #17130e;
+        box-shadow: 0 10px 34px -12px var(--l);
+      }
+      .pillbtn[aria-pressed='true'] .ic {
+        background: rgba(0, 0, 0, 0.12);
+        color: inherit;
+      }
+      .pillbtn[aria-pressed='true'] .on {
+        opacity: 0.75;
+      }
+      .vb .row .off,
+      .vb .row .auto {
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      /* C: Lampor – runda lampknappar */
+      .vc {
+        padding: 4.6cqh 3.4cqw 4cqh;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 2.6cqh;
+      }
+      .lamps {
+        display: grid;
+        grid-template-rows: 1fr auto;
+        gap: 2.4cqh;
+        min-height: 0;
+      }
+      .lamp-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        align-items: center;
+        justify-items: center;
+        min-height: 0;
+      }
+      .lampbtn {
+        background: none;
+        display: grid;
+        justify-items: center;
+        gap: 1.6cqh;
+        padding: 0;
+      }
+      .lampbtn .orb {
+        width: 25cqh;
+        height: 25cqh;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-size: 7cqh;
+        color: var(--l);
+        background: radial-gradient(
+          circle at 50% 35%,
+          color-mix(in srgb, var(--l) 18%, var(--lav)) 0%,
+          var(--lav) 70%
+        );
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+        transition:
+          background 300ms,
+          box-shadow 300ms,
+          color 300ms;
+      }
+      .lampbtn .n {
+        font-size: 3.6cqh;
+        color: var(--grasten);
+      }
+      .lampbtn[aria-pressed='true'] .orb {
+        color: #17130e;
+        background: radial-gradient(
+          circle at 50% 35%,
+          color-mix(in srgb, var(--l) 70%, #fff) 0%,
+          var(--l) 45%,
+          color-mix(in srgb, var(--l) 65%, #000) 100%
+        );
+        box-shadow:
+          0 0 0 6px color-mix(in srgb, var(--l) 18%, transparent),
+          0 0 70px color-mix(in srgb, var(--l) 55%, transparent);
+      }
+      .lampbtn[aria-pressed='true'] .n {
+        color: var(--kalk);
+      }
+      .lampbtn:active .orb {
+        transform: scale(0.97);
+      }
+      .vc .row {
+        width: min(100%, 72cqw);
+        justify-self: center;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 1.6cqw;
+        height: 16cqh;
+        min-height: 84px;
+        padding: 0 1.4cqw 0 1cqw;
+        border-radius: 22px;
+        background: var(--lav);
+        position: relative;
+        overflow: hidden;
+        isolation: isolate;
+      }
+      .bar > .bg {
+        position: absolute;
+        inset: -40%;
+        width: 180%;
+        height: 180%;
+        z-index: -1;
+        filter: blur(50px) saturate(1.3) brightness(0.4);
+      }
+      .bar .art {
+        width: 11cqh;
+        height: 11cqh;
+        min-width: 58px;
+        min-height: 58px;
+        border-radius: 10px;
+        flex: none;
+      }
+      .bar .txt {
+        min-width: 0;
+        flex: 1;
+        text-align: left;
+      }
+      .bar .title {
+        margin: 0;
+        font-size: 3.6cqh;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .bar .artist {
+        margin: 0;
+        font-size: 2.6cqh;
+      }
+      .bar .sources {
+        margin: 0;
+      }
+      .bar .round {
+        width: 8.6cqh;
+        height: 8.6cqh;
+        min-width: 50px;
+        min-height: 50px;
+      }
+      .bar .play {
+        width: 11cqh;
+        height: 11cqh;
+        min-width: 62px;
+        min-height: 62px;
+      }
+      .bar .vol {
+        font-size: 2.8cqh;
+        min-width: 4.5ch;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* D: Musik först – omslaget stort, ljuset som en rad */
+      .vd {
+        padding: 4.6cqh 3.4cqw 4cqh;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 3cqh;
+      }
+      .hero {
+        position: relative;
+        overflow: hidden;
+        isolation: isolate;
+        border-radius: 26px;
+        display: flex;
+        align-items: center;
+        gap: 3cqw;
+        padding: 3cqh 3cqw;
+        min-height: 0;
+      }
+      .hero > .bg {
+        position: absolute;
+        inset: -30%;
+        width: 160%;
+        height: 160%;
+        z-index: -1;
+        filter: blur(56px) saturate(1.4) brightness(0.45);
+      }
+      .hero .art {
+        height: 100%;
+        max-height: 38cqh;
+        aspect-ratio: 1;
+        width: auto;
+        border-radius: 16px;
+        flex: none;
+        box-shadow: 0 20px 40px -14px rgba(0, 0, 0, 0.7);
+      }
+      .hero .info {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .hero .title {
+        margin: 0;
+        font-size: 6cqh;
+        line-height: 1.05;
+      }
+      .hero .artist {
+        font-size: 3.4cqh;
+      }
+      .hero .sources {
+        margin-top: 2cqh;
+      }
+      .hero .ctl {
+        display: grid;
+        justify-items: center;
+        gap: 1.6cqh;
+      }
+      .hero .ctl .controls {
+        margin: 0;
+      }
+      .hero .ctl .level {
+        margin: 0;
+        width: 100%;
+      }
+      .scene-row {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+        gap: 1cqw;
+        height: 19cqh;
+        min-height: 100px;
+      }
+      .sq {
+        border-radius: 20px;
+        background: var(--lav);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1.4cqh;
+        font-size: 3.2cqh;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+        transition:
+          background 250ms,
+          color 250ms;
+      }
+      .sq .ico {
+        font-size: 5cqh;
+        color: var(--l, var(--grasten));
+      }
+      .sq[aria-pressed='true'] {
+        background: linear-gradient(
+          160deg,
+          var(--l) 0%,
+          color-mix(in srgb, var(--l) 72%, #000) 100%
+        );
+        color: #17130e;
+        box-shadow: 0 12px 36px -14px var(--l);
+      }
+      .sq[aria-pressed='true'] .ico {
+        color: inherit;
+      }
+      .sq.off-sq[aria-pressed='true'] {
+        background: #0a0d0c;
+        color: var(--kalk);
+        box-shadow: inset 0 0 0 2px var(--kalk);
+      }
+      .sq.auto {
+        flex-direction: column;
+        justify-content: center;
+        height: auto;
+        min-height: 0;
+        padding: 0 2cqw;
+        border-radius: 20px;
+        gap: 1.6cqh;
+        font-size: 2.9cqh;
+      }
+
+      /* Prototypväxlare (inte en del av panelen) */
+      .switcher {
+        margin: 24px auto 0;
+        max-width: 1040px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #161a19;
+        font-size: 14px;
+        color: #c8d0ca;
+      }
+      .switcher button {
+        background: #232a27;
+        border: 1px solid #36403c;
+        border-radius: 8px;
+        min-height: 36px;
+        padding: 0 12px;
+      }
+      .switcher button[aria-pressed='true'] {
+        background: #e8ece4;
+        color: #121816;
+      }
+      .switcher .grp {
+        display: inline-flex;
+        gap: 4px;
+        margin-right: 8px;
+      }
+      .switcher .tag {
+        margin-left: auto;
+        color: #e9a37a;
+      }
+      .switcher .label {
+        flex: 1 1 100%;
+        order: -1;
+      }
+      .switcher .label b {
+        color: #fff;
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage" id="stage"><div class="hub" id="hub"></div></div>
+    <nav class="switcher" aria-label="Prototypväxlare">
+      <button id="prev" aria-label="Föregående variant">‹</button
+      ><span class="label" id="label"></span
+      ><button id="next" aria-label="Nästa variant">›</button>
+      <span class="grp" role="group" aria-label="Roll"
+        ><button data-set="role" data-val="bed">Bed</button
+        ><button data-set="role" data-val="desk">Desk</button></span
+      >
+      <span class="grp" role="group" aria-label="Skärm"
+        ><button data-set="size" data-val="hub">Hub</button
+        ><button data-set="size" data-val="max">Hub Max</button></span
+      >
+      <span class="grp" role="group" aria-label="Tid"
+        ><button data-set="night" data-val="false">Kväll</button
+        ><button data-set="night" data-val="true">Natt</button></span
+      >
+      <span class="grp"
+        ><button data-set="overlay" data-val="toggle">Systemyta</button></span
+      >
+      <span class="tag">Prototyp</span>
+    </nav>
+
+    <script>
+      const ICONS = {
+        moon: '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/>',
+        sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+        film: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+        lamp: '<path d="M8 4h8l3 7H5Z"/><path d="M12 11v8M8 20h8"/>',
+        power: '<path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/>',
+        play: '<path d="M8 5.5 18.5 12 8 18.5Z"/>',
+        pause:
+          '<rect x="7" y="5" width="3.2" height="14" rx="1"/><rect x="13.8" y="5" width="3.2" height="14" rx="1"/>',
+        minus: '<path d="M6 12h12"/>',
+        plus: '<path d="M12 6v12M6 12h12"/>',
+      };
+      const icon = (n) =>
+        `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg>`;
+      const cover = (cls) =>
+        `<svg class="${cls}" viewBox="0 0 320 320" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><rect width="320" height="320" fill="#a4b4a0"/><path d="M0 180L100 86 190 158 320 42V320H0Z" fill="#718777"/><path d="M0 244L133 136 320 246V320H0Z" fill="#435e55"/><path d="M0 298L166 231 320 283V320H0Z" fill="#263d37"/><circle cx="240" cy="79" r="25" fill="#e7d9b4"/></svg>`;
+
+      const SCENES = {
+        soft: { name: 'Mysljus', l: 'var(--glod)', ic: 'moon' },
+        everyday: { name: 'Vardagsljus', l: 'var(--varm)', ic: 'sun' },
+        movie: { name: 'Filmkväll', l: 'var(--kvall)', ic: 'film' },
+        focus: { name: 'Fokus', l: 'var(--dag)', ic: 'lamp' },
+      };
+      const ORDER = {
+        bed: ['soft', 'everyday', 'movie', 'focus'],
+        desk: ['focus', 'everyday', 'soft', 'movie'],
+      };
+      const q = new URLSearchParams(location.search);
+      const S = {
+        v: Math.max(0, ['a', 'b', 'c', 'd'].indexOf(q.get('variant'))),
+        role: 'bed',
+        size: 'hub',
+        night: false,
+        overlay: false,
+        scene: 'soft',
+        auto: true,
+        playing: true,
+        vol: 23,
+        source: 'spotify',
+      };
+
+      const VARIANTS = [
+        {
+          key: 'a',
+          name: 'Rutor',
+          idea: 'Ljusrutor till vänster, musikkort till höger.',
+        },
+        {
+          key: 'b',
+          name: 'Glas',
+          idea: 'Omslaget färgar hela skärmen, ljuset som glaspiller.',
+        },
+        {
+          key: 'c',
+          name: 'Lampor',
+          idea: 'Fyra runda lampor som lyser när de är på, musiken som en list.',
+        },
+        {
+          key: 'd',
+          name: 'Musik först',
+          idea: 'Stort omslag överst, ljuset som en rad längst ner.',
+        },
+      ];
+      const headTxt = () =>
+        `<span class="time">${S.night ? '23:41' : '21:43'}</span>`;
+      const offBtn = (cls = 'off') =>
+        `<button class="${cls}" data-scene="off" aria-pressed="${S.scene === 'off'}">${icon('power')} ${S.scene === 'off' ? 'Allt är släckt' : 'Släck allt'}</button>`;
+      const autoBtn = (cls = 'auto') =>
+        `<button class="${cls}" data-act="auto" role="switch" aria-checked="${S.auto}"><span class="sw"></span>Automatik</button>`;
+      const srcList = () =>
+        S.role === 'desk'
+          ? [
+              ['optical', 'Optical'],
+              ['spotify', 'Spotify DJ'],
+            ]
+          : [
+              ['spotify', 'Spotify DJ'],
+              ['optical', 'Optical'],
+            ];
+      const sources = () =>
+        `<div class="sources">${srcList()
+          .map(
+            ([k, n]) =>
+              `<button data-act="src" data-val="${k}" aria-pressed="${S.source === k}">${n}</button>`,
+          )
+          .join('')}</div>`;
+      const ctrls = () =>
+        `<div class="controls"><button class="round" data-act="vol-" aria-label="Sänk volymen">${icon('minus')}</button><button class="round play" data-act="play" aria-label="${S.playing ? 'Pausa' : 'Spela'}">${icon(S.playing ? 'pause' : 'play')}</button><button class="round" data-act="vol+" aria-label="Höj volymen">${icon('plus')}</button></div>`;
+      const level = () =>
+        `<div class="level" aria-label="Volym ${S.vol} procent"><i style="--v:${S.vol}%"></i>${S.vol}&nbsp;%</div>`;
+      const meta = () => `måndag 2 november, <b>21,4°</b>, 43 % fukt`;
+
+      function panelB() {
+        return `<div class="v vb">${cover('bg')}<div class="wrap">
+          <div class="left">
+            <div class="time">${S.night ? '23:41' : '21:43'}</div>
+            <div class="meta">${meta()}</div>
+            <div class="np">${cover('art')}<div><div class="title">The Sea</div><div class="artist">Hania Rani</div>${sources()}</div></div>
+            <div class="ctrl">${ctrls()}${level()}</div>
+          </div>
+          <div class="right">
+            ${ORDER[S.role]
+              .map((id) => {
+                const s = SCENES[id];
+                return `<button class="pillbtn glass" data-scene="${id}" style="--l:${s.l}" aria-pressed="${S.scene === id}"><span class="ic">${icon(s.ic)}</span>${s.name}<span class="on">På</span></button>`;
+              })
+              .join('')}
+            <div class="row">${offBtn()}${autoBtn()}</div>
+          </div></div></div>`;
+      }
+      function panelC() {
+        return `<div class="v vc">
+          <header class="head">${headTxt()}<span class="date">måndag 2 november</span><span class="climate"><b>21,4°</b><span><b>43</b> % fukt</span></span></header>
+          <section class="lamps" aria-label="Ljus">
+            <div class="lamp-row">${ORDER[S.role]
+              .map((id) => {
+                const s = SCENES[id];
+                return `<button class="lampbtn" data-scene="${id}" style="--l:${s.l}" aria-pressed="${S.scene === id}"><span class="orb">${icon(s.ic)}</span><span class="n">${s.name}</span></button>`;
+              })
+              .join('')}</div>
+            <div class="row">${offBtn()}${autoBtn()}</div>
+          </section>
+          <section class="bar" aria-label="Musik">${cover('bg')}${cover('art')}
+            <div class="txt"><div class="title">The Sea</div><div class="artist">Hania Rani</div></div>
+            ${sources()}${ctrls()}<span class="vol">${S.vol}&nbsp;%</span>
+          </section></div>`;
+      }
+      function panelD() {
+        const all = [
+          [
+            'off',
+            {
+              name: S.scene === 'off' ? 'Släckt' : 'Släck',
+              ic: 'power',
+              l: '',
+            },
+          ],
+          ...ORDER[S.role].map((id) => [id, SCENES[id]]),
+        ];
+        return `<div class="v vd">
+          <header class="head">${headTxt()}<span class="date">måndag 2 november</span><span class="climate"><b>21,4°</b><span><b>43</b> % fukt</span></span></header>
+          <section class="hero" aria-label="Musik">${cover('bg')}${cover('art')}
+            <div class="info"><div class="title">The Sea</div><div class="artist">Hania Rani</div>${sources()}</div>
+            <div class="ctl">${ctrls()}${level()}</div>
+          </section>
+          <section class="scene-row" aria-label="Ljus">
+            ${all.map(([id, s]) => `<button class="sq ${id === 'off' ? 'off-sq' : ''}" data-scene="${id}" ${s.l ? `style="--l:${s.l}"` : ''} aria-pressed="${S.scene === id}">${icon(s.ic)}${s.name}</button>`).join('')}
+            ${autoBtn('sq auto')}
+          </section></div>`;
+      }
+
+      function panel() {
+        const sources =
+          S.role === 'desk'
+            ? [
+                ['optical', 'Optical'],
+                ['spotify', 'Spotify DJ'],
+              ]
+            : [
+                ['spotify', 'Spotify DJ'],
+                ['optical', 'Optical'],
+              ];
+        return `<div class="p">
+          <header class="head">
+            <span class="time">${S.night ? '23:41' : '21:43'}</span>
+            <span class="date">måndag 2 november</span>
+            <span class="climate"><b>21,4°</b><span><b>43</b> % fukt</span></span>
+          </header>
+          <div class="main">
+            <section class="lights" aria-label="Ljus">
+              ${ORDER[S.role]
+                .map((id) => {
+                  const s = SCENES[id];
+                  return `<button class="tile" data-scene="${id}" style="--l:${s.l}" aria-pressed="${S.scene === id}">
+                <span class="ic">${icon(s.ic)}</span><span class="n">${s.name}</span><span class="on">På</span></button>`;
+                })
+                .join('')}
+              <div class="row">
+                <button class="off" data-scene="off" aria-pressed="${S.scene === 'off'}">${icon('power')} ${S.scene === 'off' ? 'Allt är släckt' : 'Släck allt'}</button>
+                <button class="auto" data-act="auto" role="switch" aria-checked="${S.auto}"><span class="sw"></span>Automatik</button>
+              </div>
+            </section>
+            <section class="music" aria-label="Musik">
+              ${cover('bg')}${cover('art')}
+              <div class="title">The Sea</div>
+              <div class="artist">Hania Rani</div>
+              <div class="sources">${sources.map(([k, n]) => `<button data-act="src" data-val="${k}" aria-pressed="${S.source === k}">${n}</button>`).join('')}</div>
+              <div class="controls">
+                <button class="round" data-act="vol-" aria-label="Sänk volymen">${icon('minus')}</button>
+                <button class="round play" data-act="play" aria-label="${S.playing ? 'Pausa' : 'Spela'}">${icon(S.playing ? 'pause' : 'play')}</button>
+                <button class="round" data-act="vol+" aria-label="Höj volymen">${icon('plus')}</button>
+              </div>
+              <div class="level" aria-label="Volym ${S.vol} procent"><i style="--v:${S.vol}%"></i>${S.vol}&nbsp;%</div>
+            </section>
+          </div>
+        </div>`;
+      }
+
+      const hub = document.getElementById('hub');
+      const stage = document.getElementById('stage');
+      function fit() {
+        const [w, h] = S.size === 'max' ? [1280, 800] : [1024, 600];
+        hub.style.width = w + 'px';
+        hub.style.height = h + 'px';
+        const k = Math.min(1, (stage.clientWidth - 24) / w);
+        hub.style.transform = `translateX(-50%) scale(${k})`;
+        stage.style.height = h * k + 24 + 'px';
+      }
+      function render() {
+        hub.dataset.night = S.night;
+        hub.innerHTML =
+          [panel, panelB, panelC, panelD][S.v]() +
+          (S.overlay && S.role === 'bed'
+            ? '<div class="safe-zone">Systemyta</div>'
+            : '');
+        document.querySelectorAll('[data-set]').forEach((b) => {
+          const k = b.dataset.set;
+          b.setAttribute(
+            'aria-pressed',
+            k === 'overlay' ? S.overlay : String(S[k]) === b.dataset.val,
+          );
+        });
+        const v = VARIANTS[S.v];
+        document.getElementById('label').innerHTML =
+          `<b>${v.key.toUpperCase()} ${v.name}</b>: ${v.idea}`;
+        try {
+          history.replaceState(null, '', '?variant=' + v.key);
+        } catch {}
+        fit();
+      }
+      hub.addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        if (b.dataset.scene) S.scene = b.dataset.scene;
+        const a = b.dataset.act;
+        if (a === 'auto') S.auto = !S.auto;
+        if (a === 'play') S.playing = !S.playing;
+        if (a === 'vol-') S.vol = Math.max(0, S.vol - 5);
+        if (a === 'vol+') S.vol = Math.min(100, S.vol + 5);
+        if (a === 'src') {
+          S.source = b.dataset.val;
+          S.playing = true;
+        }
+        render();
+      });
+      document.querySelector('.switcher').addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        if (b.id === 'prev') S.v = (S.v + 3) % 4;
+        else if (b.id === 'next') S.v = (S.v + 1) % 4;
+        else if (b.dataset.set === 'overlay') S.overlay = !S.overlay;
+        else if (b.dataset.set === 'night') S.night = b.dataset.val === 'true';
+        else if (b.dataset.set) S[b.dataset.set] = b.dataset.val;
+        render();
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.target.closest('input, textarea, [contenteditable]')) return;
+        if (e.key === 'ArrowLeft') document.getElementById('prev').click();
+        if (e.key === 'ArrowRight') document.getElementById('next').click();
+      });
+      new ResizeObserver(fit).observe(stage);
+      render();
+    </script>
+  </body>
+</html>
