@@ -12,3 +12,8 @@
 
 **Learning:** Found that the main login submission button disabled itself and changed text during loading but failed to announce to screen readers via the `aria-busy` attribute, leaving them without context on the background loading status.
 **Action:** When adding or verifying loading states that modify button text to include a loading indication, ensure the `aria-busy` attribute is also toggled correctly and cleaned up using `finally` blocks to keep the component fully accessible in all execution paths.
+
+## 2024-11-03 - Setting aria-busy on Async Trigger Buttons
+
+**Learning:** During async operations, setting disabled properties on trigger buttons is not enough. Screen readers need `aria-busy="true"` on the element to announce the state correctly to the user.
+**Action:** Always add `aria-busy="true"` logic when applying `disabled` and loading text states to buttons that trigger asynchronous operations.
