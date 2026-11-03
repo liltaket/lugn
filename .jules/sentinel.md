@@ -1,0 +1,5 @@
+## 2024-11-06 - Prevent Timing Attacks in crypto.timingSafeEqual
+
+**Vulnerability:** String comparison functions `constantTimeEqual` in `src/runtime/http-server.ts` and `secretsEqual` in `src/runtime/display-server.ts` used `crypto.timingSafeEqual` but were short-circuiting on length checks (`leftBytes.length === rightBytes.length`). This allows attackers to potentially infer the length of the secret token through timing attacks.
+**Learning:** `crypto.timingSafeEqual` throws an error if the input buffers do not have the same length. Simply checking for length equality beforehand introduces a timing vulnerability because the function exits early on mismatched lengths.
+**Prevention:** Always hash both inputs (e.g., using `createHash('sha256').update(input).digest()`) before comparing them with `timingSafeEqual`. This guarantees that both buffers will have identical lengths (32 bytes for SHA-256), completely avoiding length-based short circuits and ensuring constant execution time regardless of the raw input length.
