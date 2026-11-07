@@ -68,9 +68,10 @@ receive updated presets, with no preset editor on their pages.
 
 Lugn serves its own room dashboard for Nest Hubs. It is a custom Lugn page, not
 a Home Assistant dashboard. The primary layout fits the Hub screen without
-horizontal or vertical scrolling. The in-place Details pane may scroll its
-secondary explanations; music controls remain visible and `Tillbaka` restores
-lighting controls.
+horizontal or vertical scrolling. The Hub presents clock, climate, paged lighting
+scenes, all-off, routines, camera, and music controls. Bed keeps text and controls
+outside the top-right system-overlay area; cover art may extend underneath it.
+Camera images keep their original proportions.
 
 The primary controls are large room-light preset buttons:
 
@@ -97,13 +98,13 @@ Volume steps and their boundary buttons use the latest pending requested volume,
 falling back to the reported volume after confirmation, failure, expiry or an
 external change. The displayed current volume remains the player's observation.
 
-The main music panel names the active volume owner and its typed reason. The
-effective target belongs to that owner; it does not become a requested volume
-merely because a command was accepted. Details separates automatic policy
-enabled/activity, the last reported volume changer, requested volume, baseline,
-daily/person-count offsets and the calculated automatic target. A matching
-uncorrelated report is labelled as matching a request, rather than proof of
-who moved the physical control. Missing attribution remains unknown.
+The volume controls reflect backend authority and observed values. Detailed
+policy explanations remain available in the desktop control panel.
+
+The music panel stays visible for ten seconds after a trusted playback pause;
+the last loaded cover remains visible during that interval. `Musik` can keep the
+panel open longer. Changing source or losing trusted observations clears retained
+media. Playing artwork can tint the dashboard; otherwise the palette is neutral.
 
 The compact Automatisk/Manuell buttons in the volume strip select temporary
 per-player authority. The highlight comes from backend ownership, with neither
@@ -128,12 +129,8 @@ commands remain separate from reported playback. When a Pause hold exists,
 `Spela` explicitly releases it even if the player still reports playing after
 a failed Pause; volume ownership stays independent.
 
-Details shows the selected player's newest eight typed decisions from the
-backend's bounded 128-entry process history. It records evaluated policy
-transitions, not every clock tick or device event, and is not persisted. The
-`music.getPolicy` read capability exposes current volume/playback reasons,
-reported volume-change attribution and that player's history. This implements
-the music portion of issue #14; lighting/prelight history remains follow-up work.
+The `music.getPolicy` capability exposes current volume and playback reasons
+and the selected player’s bounded process history.
 
 After command acceptance the Hub waits for a new status read started after
 acceptance before enabling the controls again. An earlier background poll is
@@ -148,14 +145,10 @@ listener on a trusted LAN and do not publish it to the internet.
 
 Bed prioritizes Helt släckt and Mysljus, followed by Sleep if that scene is
 configured, then the remaining available scenes. Desk prioritizes Fokus and
-Vardagsljus. With up to six scenes, the first two available scenes have larger
-full-width controls; larger sets use paired buttons to preserve space. All
-configured scenes remain available and require one touch. Missing preferred
-scenes are skipped rather than invented. Unknown roles retain the neutral scene
-order. Desk puts Optical before Spotify DJ in actual button and keyboard order;
-Bed and unknown roles keep Spotify DJ first. Playback, volume, Details and the
-same backend reasons remain available on both roles. The role adds no separate
-room state, PC capability, or inferred confirmed occupancy.
+Vardagsljus. Six non-off scenes fit on each page; additional scenes are paged.
+All-off remains separate. Missing preferred scenes are skipped rather than
+invented. Desk puts Optical before Spotify DJ; Bed keeps Spotify DJ first.
+Playback and volume controls remain available on both roles.
 The layout pages configured scenes to keep the primary interface within the Hub
 viewport, including larger custom scene sets. See
 [Hub design and simulated evidence](lugn-2/HUB-UI.md).

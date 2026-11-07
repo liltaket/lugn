@@ -12,7 +12,7 @@ const SUGGESTION_URL = `${BASE_PATH}display-api/suggestion`;
 const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
-const COMPUTER_MEDIA_PAUSE_GRACE_MS = 8_000;
+const MEDIA_PAUSE_GRACE_MS = 10_000;
 
 // Bolt optimization: Cache Intl instantiations to prevent O(N) object allocations during high-frequency render loops.
 const timeFormat = new Intl.DateTimeFormat('sv-SE', {
@@ -47,6 +47,14 @@ const environmentNumberFormatWithFractions = new Intl.NumberFormat('sv-SE', {
 
 const root = document.querySelector('#app-root');
 const refs = {
+  musicMenu: document.querySelector('#music-menu'),
+  contextPrevious: document.querySelector('#context-previous'),
+  contextNext: document.querySelector('#context-next'),
+  contextPageLabel: document.querySelector('#context-page-label'),
+  cameraPagination: document.querySelector('#camera-pagination'),
+  cameraPrevious: document.querySelector('#camera-previous'),
+  cameraNext: document.querySelector('#camera-next'),
+  cameraPageLabel: document.querySelector('#camera-page-label'),
   cameraMenu: document.querySelector('#camera-menu'),
   cameraChoices: document.querySelector('#camera-choices'),
   cameraPanel: document.querySelector('#camera-panel'),
@@ -97,6 +105,7 @@ const refs = {
   clockTime: document.querySelector('#clock-time'),
   clockDate: document.querySelector('#clock-date'),
   roomPresence: document.querySelector('#room-presence'),
+  presenceCountValue: document.querySelector('#presence-count-value'),
   presenceCountOne: document.querySelector('#presence-count-one'),
   presenceCountLabel: document.querySelector('#presence-count-label'),
   clockTop: document.querySelector('.clock-top'),
@@ -180,6 +189,8 @@ let cameraCloseHoldUntil = 0;
 let cameraPendingShow = null;
 let cameraChoicesOpen = false;
 let cameraChoicesKey;
+let cameraPage = 0;
+let cameraControlsDeferred = false;
 let cameraActionPending = false;
 let cameraActionRequests = 0;
 let cameraActionEpoch = 0;
@@ -190,11 +201,22 @@ let cameraImageTimer;
 let cameraMediaTimeout;
 let cameraObjectUrl;
 let contextDetailsOpen = false;
+let contextPage = 0;
+let contextItems = [];
+let musicMenuOpen = false;
+let volumeAuthorityNotice = false;
+let volumeCommandNotice = false;
+const interactionPointers = new Set();
+let heldPlaybackAction;
+let presentationTimer;
+let presenceAcknowledgedKey = null;
 let contextRenderKey;
 let contextListKey;
 let bedtimeDraft = null;
 let bedtimeReturnFocus;
 let artworkKey;
+let artworkTarget;
+let artworkContext;
 let latestPayload;
 let payloadReceivedAt = 0;
 let musicDetailsOpen = false;
@@ -218,6 +240,11 @@ let latestDeliveryRevision = -1;
 let currentInstanceId;
 let computerMediaDisplay = null;
 let computerMediaPauseTimer;
+let musicPauseTimer;
+let musicPauseKey = null;
+let musicPauseDeadline = null;
+let musicWasPlaying = false;
+let receiverMediaDisplay = null;
 let instanceGeneration = 0;
 const retiredInstances = new Set();
 
@@ -334,7 +361,7 @@ function setRole(role) {
       resolved === 'desk'
         ? [refs.musicPresetOptical, refs.musicPresetDj]
         : [refs.musicPresetDj, refs.musicPresetOptical];
-    refs.musicPresets.replaceChildren(...presets, refs.musicDetailsButton);
+    refs.musicPresets.replaceChildren(...presets);
     presetRoleKey = resolved;
   }
 }
@@ -360,6 +387,7 @@ function setConnection(state, message, retry = false) {
   renderScenes(latestPayload);
   renderPresenceCorrection(latestPayload);
   renderRoomPresence(latestPayload?.state);
+  renderEnvironment(latestPayload?.environment);
   renderMusic(latestPayload);
   renderCamera(latestPayload);
 }
@@ -370,6 +398,8 @@ function setClock() {
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
   const time = timeFormat.format(now);
   const date = dateFormat.format(now);
+  const hour = Number(timeFormat.format(now).split(':')[0]);
+  root.dataset.time = hour >= 23 || hour < 6 ? 'night' : 'day';
   setText(refs.clockTime, time);
   setText(refs.clockDate, date);
   const dateParts = datePartsFormat.formatToParts(now);
@@ -380,6 +410,7 @@ function setClock() {
   );
   refs.clockDate.dateTime = `${dateValue.year}-${dateValue.month}-${dateValue.day}`;
   if (latestPayload) {
+    renderEnvironment(latestPayload.environment);
     renderContext(latestPayload);
     renderScenes(latestPayload);
     renderMusicVolumePolicy(latestPayload, musicTarget);
@@ -515,7 +546,15 @@ function renderScenes(payload) {
   const pageSize = 6;
   const pages = Math.max(1, Math.ceil(presets.length / pageSize));
   scenePage = Math.min(scenePage, pages - 1);
-  refs.scenePagination.hidden = pages <= 1 || contextDetailsOpen;
+  // Grid and pagination resize together, and never under a finger.
+  if (!interactionPointers.size) {
+    refs.scenePagination.hidden =
+      pages <= 1 || contextDetailsOpen || musicDetailsOpen;
+    refs.sceneGrid.dataset.paged = String(pages > 1);
+    refs.sceneGrid.dataset.count = String(
+      Math.min(presets.length - scenePage * pageSize, pageSize),
+    );
+  }
   refs.scenePrevious.disabled = scenePage === 0;
   refs.sceneNext.disabled = scenePage === pages - 1;
   setText(refs.scenePageLabel, `${scenePage + 1} / ${pages}`);
@@ -527,8 +566,11 @@ function renderScenes(payload) {
   const ids = new Set(allScenes.map((scene) => scene.id));
   for (const [sceneId, button] of sceneButtons) {
     if (!ids.has(sceneId) && sceneId !== 'scene.all_off') {
-      button.remove();
-      sceneButtons.delete(sceneId);
+      button.disabled = true;
+      if (!presentationHeld(refs.sceneGrid)) {
+        button.remove();
+        sceneButtons.delete(sceneId);
+      }
     }
   }
   if (scenes.length === 0 && !off) {
@@ -621,8 +663,10 @@ function renderScenes(payload) {
     sceneOrderKey !== orderKey ||
     refs.sceneGrid.firstElementChild?.classList.contains('section-empty')
   ) {
-    refs.sceneGrid.replaceChildren(...ordered);
-    sceneOrderKey = orderKey;
+    if (!presentationHeld(refs.sceneGrid)) {
+      refs.sceneGrid.replaceChildren(...ordered);
+      sceneOrderKey = orderKey;
+    }
   }
 }
 
@@ -658,7 +702,7 @@ function bedtimeActionButton(label, action, available = true) {
   button.dataset.available = String(available);
   button.textContent = label;
   button.addEventListener('click', () => {
-    if (action === 'morning') void postBedtime('morning');
+    if (action === 'morning' || action === 'clear') void postBedtime(action);
     else openBedtime(action, button);
   });
   return button;
@@ -683,7 +727,11 @@ function renderBedtime(payload) {
     datePartsFormat.format(new Date(buttonPlan.at)) ===
       datePartsFormat.format(new Date(now));
   const plan = bedtime?.plan ?? (scheduledWindow ? ownedPlan : null);
-  refs.bedtimeDock.hidden = !bedtime || contextDetailsOpen;
+  refs.bedtimeDock.hidden =
+    !bedtime ||
+    contextDetailsOpen ||
+    musicDetailsOpen ||
+    !!refs.contextTitle.textContent;
   refs.bedtimeNight.hidden = !(hour >= 18 || hour < 4);
   refs.bedtimeMorning.hidden = !(
     scheduledWindow ||
@@ -764,7 +812,13 @@ function closeBedtime(confirmed = false) {
   refs.bedtimeDialog.hidden = true;
   root.inert = false;
   bedtimeDraft = null;
-  bedtimeReturnFocus?.focus?.();
+  const focusTarget =
+    confirmed ||
+    bedtimeReturnFocus?.disabled ||
+    bedtimeReturnFocus?.isConnected === false
+      ? refs.contextDetailsButton
+      : bedtimeReturnFocus;
+  focusTarget?.focus?.();
 }
 
 function bedtimeFormValue() {
@@ -985,6 +1039,8 @@ function contextAction(kind, id, action, label, minutes) {
   button.disabled = isUnavailable() || pending.has(pendingKey);
   button.setAttribute('aria-busy', String(pending.has(pendingKey)));
   button.addEventListener('click', () => {
+    syncContextButtons(button.parentElement ?? refs.contextList);
+    if (button.disabled) return;
     void runCommand(pendingKey, {
       id,
       action,
@@ -996,53 +1052,83 @@ function contextAction(kind, id, action, label, minutes) {
 }
 
 function routineActions(definition, run, occurrence) {
-  if (run?.status === 'running') {
-    const actions = [
-      contextAction('routine', definition.id, 'cancel', 'Avbryt'),
-    ];
-    if (definition.id === bedtimeData(latestPayload)?.morningRoutineId)
-      actions.push(
-        contextAction(
-          'routine',
-          definition.id,
-          'snooze',
-          'Skjut upp 10 min',
-          10,
-        ),
-      );
-    return actions;
-  }
-  const actions = [];
-  if (definition.enabled === true)
-    actions.push(contextAction('routine', definition.id, 'start', 'Starta'));
-  if (occurrence)
+  if (definition.enabled !== true && run?.status !== 'running') return [];
+  // Start and Cancel have separate, permanent identities in a routine row.
+  // A status update can enable Cancel without replacing a focused Start button.
+  const actions = [
+    contextAction('routine', definition.id, 'start', 'Starta'),
+    contextAction('routine', definition.id, 'cancel', 'Avbryt'),
+  ];
+  if (
+    occurrence ||
+    definition.id === bedtimeData(latestPayload)?.morningRoutineId
+  )
     actions.push(
       contextAction('routine', definition.id, 'snooze', 'Skjut upp 10 min', 10),
-      contextAction('routine', definition.id, 'skip', 'Hoppa över'),
     );
+  if (occurrence)
+    actions.push(contextAction('routine', definition.id, 'skip', 'Hoppa över'));
   return actions;
 }
 
+// Structural changes wait until the current gesture or keyboard focus leaves.
+// Sensor truth and camera permission/media revocation still update immediately.
+function presentationHeld(container) {
+  return (
+    interactionPointers.size > 0 ||
+    (document.activeElement && container?.contains?.(document.activeElement))
+  );
+}
+
 function setContextDetailsOpen(open) {
+  if (open && musicDetailsOpen) setMusicDetailsOpen(false);
+  if (open) {
+    // Open directly on the active routine so its stop/snooze controls remain
+    // one navigation away even while music or a camera occupies the window.
+    const runningIds = new Set(
+      contextData(latestPayload)
+        .runs.filter((run) => run?.status === 'running')
+        .map((run) => run.routineId),
+    );
+    const activePage = contextItems.findIndex((item) =>
+      Array.from(item.children[2]?.children ?? []).some(
+        (button) =>
+          button.dataset.kind === 'routine' &&
+          button.dataset.action === 'cancel' &&
+          runningIds.has(button.dataset.id),
+      ),
+    );
+    if (activePage >= 0) {
+      contextPage = activePage;
+      renderContextPage();
+    }
+  }
   contextDetailsOpen = open;
   refs.contextPanel.hidden = !open;
-  refs.sceneGrid.hidden = open;
-  refs.contextStrip.hidden = open || !refs.contextTitle.textContent;
+  refs.sceneGrid.hidden = open || musicDetailsOpen;
+  refs.contextStrip.hidden =
+    open || musicDetailsOpen || !refs.contextTitle.textContent;
   renderScenes(latestPayload);
   renderBedtime(latestPayload);
   refs.contextDetailsButton.setAttribute('aria-expanded', String(open));
-  setText(refs.contextDetailsButton, open ? 'Tillbaka' : 'Rutiner & förslag');
   if (open) refs.contextPanel.focus?.();
+}
+
+function renderContextPage() {
+  const pages = Math.max(1, contextItems.length);
+  contextPage = Math.min(contextPage, pages - 1);
+  for (const [index, item] of contextItems.entries())
+    item.hidden = index !== contextPage;
+  refs.contextPrevious.disabled = contextPage === 0;
+  refs.contextNext.disabled = contextPage === pages - 1;
+  setText(refs.contextPageLabel, `${contextPage + 1} / ${pages}`);
 }
 
 function renderContext(payload) {
   const data = contextData(payload);
   const { definitions, runs, next, suggestions } = data;
   const bedtimeProjection = bedtimeData(payload);
-  refs.contextDetailsButton.hidden =
-    !bedtimeProjection && definitions.length === 0 && suggestions.length === 0;
-  if (refs.contextDetailsButton.hidden && contextDetailsOpen)
-    setContextDetailsOpen(false);
+  refs.contextDetailsButton.hidden = false;
   const running = runs.find(
     (run) =>
       run?.status === 'running' &&
@@ -1115,8 +1201,19 @@ function renderContext(payload) {
     description = `Senast rapporterat · ${description}`;
   setText(refs.contextTitle, title);
   setText(refs.contextDescription, description);
+  const summary = running
+    ? 'Pågår'
+    : bedtimeProjection?.ready?.until > estimatedServerNow()
+      ? 'Morgon redo'
+      : next[0]
+        ? `Nästa ${timeFormat.format(new Date(next[0].at))}`
+        : '';
+  setText(
+    refs.contextDetailsButton,
+    `Rutiner${summary ? ` · ${summary}` : ''}`,
+  );
   const key = JSON.stringify(actions);
-  if (key !== contextRenderKey) {
+  if (key !== contextRenderKey && !presentationHeld(refs.contextActions)) {
     refs.contextActions.replaceChildren(
       ...actions.map((args) => contextAction(...args)),
     );
@@ -1130,7 +1227,6 @@ function renderContext(payload) {
     syncContextButtons(refs.contextList);
     return;
   }
-  contextListKey = listKey;
   const items = [];
   if (bedtimeProjection) {
     const projectedPlan = Object.hasOwn(bedtimeProjection, 'plan')
@@ -1253,6 +1349,7 @@ function renderContext(payload) {
             'plan',
             bedtimeProjection.morningAvailable === true,
           ),
+          ...(plan ? [bedtimeActionButton('Ta bort plan', 'clear')] : []),
         ],
       ),
     );
@@ -1300,16 +1397,22 @@ function renderContext(payload) {
         definition.name,
         `${status} ${result} ${last?.reason ?? ''}`.trim(),
         routineActions(definition, run, occurrence),
+        `routine:${definition.id}`,
       ),
     );
   }
   for (const suggestion of suggestions) {
     items.push(
-      contextItem(suggestion.title, suggestion.reason, [
-        contextAction('suggestion', suggestion.id, 'accept', 'Välj'),
-        contextAction('suggestion', suggestion.id, 'reject', 'Avvisa'),
-        contextAction('suggestion', suggestion.id, 'dismiss', 'Inte nu'),
-      ]),
+      contextItem(
+        suggestion.title,
+        suggestion.reason,
+        [
+          contextAction('suggestion', suggestion.id, 'accept', 'Välj'),
+          contextAction('suggestion', suggestion.id, 'reject', 'Avvisa'),
+          contextAction('suggestion', suggestion.id, 'dismiss', 'Inte nu'),
+        ],
+        `suggestion:${suggestion.id}`,
+      ),
     );
   }
   if (!items.length)
@@ -1320,11 +1423,34 @@ function renderContext(payload) {
         [],
       ),
     );
+  if (presentationHeld(refs.contextList)) {
+    // Keep the action nodes under the hand/focus, but never freeze factual text.
+    for (const current of contextItems) {
+      const fresh = items.find(
+        (item) => item.dataset.contextKey === current.dataset.contextKey,
+      );
+      if (fresh) {
+        setText(
+          current.querySelector('.context-item-title'),
+          fresh.querySelector('.context-item-title').textContent,
+        );
+        setText(
+          current.querySelector('.context-item-copy'),
+          fresh.querySelector('.context-item-copy').textContent,
+        );
+      }
+    }
+    syncContextButtons(refs.contextList);
+    return;
+  }
+  contextListKey = listKey;
+  contextItems = items;
   refs.contextList.replaceChildren(...items);
+  renderContextPage();
   syncContextButtons(refs.contextList);
 }
 
-function syncContextButtons(container) {
+function syncContextButtons(container, data = contextData(latestPayload)) {
   for (const child of container.children) {
     if (child.className === 'context-action') {
       if (child.dataset.bedtimeAction) {
@@ -1335,18 +1461,48 @@ function syncContextButtons(container) {
         continue;
       }
       const busy = pending.has(child.dataset.pendingKey);
-      child.disabled = isUnavailable() || busy;
+      const definition = data.definitions.find(
+        (item) => item.id === child.dataset.id,
+      );
+      const running = data.runs.some(
+        (item) =>
+          item.routineId === child.dataset.id && item.status === 'running',
+      );
+      const occurrence = data.next.some(
+        (item) => item.routineId === child.dataset.id,
+      );
+      const morning =
+        child.dataset.id === bedtimeData(latestPayload)?.morningRoutineId;
+      const ready =
+        morning &&
+        bedtimeData(latestPayload)?.ready?.until > estimatedServerNow();
+      const available =
+        child.dataset.kind === 'suggestion'
+          ? data.suggestions.some((item) => item.id === child.dataset.id)
+          : child.dataset.action === 'cancel'
+            ? running
+            : child.dataset.action === 'start'
+              ? definition?.enabled === true && !running
+              : child.dataset.action === 'snooze'
+                ? running
+                  ? morning
+                  : occurrence || ready
+                : !running && (occurrence || ready);
+      child.disabled = isUnavailable() || busy || !available;
       child.setAttribute('aria-busy', String(busy));
-    } else syncContextButtons(child);
+    } else syncContextButtons(child, data);
   }
 }
 
-function contextItem(title, description, actions) {
+function contextItem(title, description, actions, key = title) {
   const item = document.createElement('article');
   item.className = 'context-item';
+  item.dataset.contextKey = key;
   const heading = document.createElement('h3');
+  heading.className = 'context-item-title';
   heading.textContent = title;
   const copy = document.createElement('p');
+  copy.className = 'context-item-copy';
   copy.textContent = description;
   const controls = document.createElement('div');
   controls.className = 'context-actions';
@@ -1364,12 +1520,78 @@ function renderArtwork(payload, target) {
     !/[\\\x00-\x20]/.test(art.url);
   const url =
     target && art?.status === 'available' && safePath ? art.url : null;
+  // The server may withdraw its artwork as soon as playback pauses. Keep the
+  // already loaded image only while this same player's pause grace is active.
+  if (
+    !url &&
+    art?.status !== 'available' &&
+    target === artworkTarget &&
+    artworkContext === musicPauseKey &&
+    (musicPauseDeadline !== null ||
+      ((musicMenuOpen || musicDetailsOpen) &&
+        !isUnavailable() &&
+        musicObservationTrusted(payload, target) &&
+        payload?.state?.music?.devices?.[target]?.availability ===
+          'available' &&
+        ['paused', 'idle'].includes(
+          payload?.state?.music?.devices?.[target]?.observed?.playback,
+        ))) &&
+    refs.musicArtwork.dataset.state === 'available' &&
+    !refs.musicArtworkImage.hidden
+  )
+    return;
   const key = JSON.stringify([target, url, art?.status]);
-  if (key === artworkKey) return;
+  if (key === artworkKey) {
+    if (url) artworkContext = musicPauseKey;
+    return;
+  }
   artworkKey = key;
+  artworkTarget = target;
+  artworkContext = musicPauseKey;
+  root.dataset.artColor = 'false';
   refs.musicArtworkImage.hidden = true;
   refs.musicArtwork.dataset.state = url ? 'loading' : 'missing';
   if (url) refs.musicArtworkImage.setAttribute('src', url);
+}
+
+// Sample only the local, server-authorized artwork, once per image load. Keep
+// the colors dark enough for the existing light text and night-time palette.
+function updateArtworkColor(image) {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 16;
+    canvas.height = 16;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return;
+    context.drawImage(image, 0, 0, 16, 16);
+    const pixels = context.getImageData(0, 0, 16, 16).data;
+    const sum = [0, 0, 0];
+    let weight = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      const [r, g, b, a] = pixels.slice(i, i + 4);
+      if (a < 128) continue;
+      const brightness = (r + g + b) / 3;
+      if (brightness < 12 || brightness > 245) continue;
+      const w = 1 + (Math.max(r, g, b) - Math.min(r, g, b)) / 128;
+      sum[0] += r * w;
+      sum[1] += g * w;
+      sum[2] += b * w;
+      weight += w;
+    }
+    if (!weight) return;
+    const colors = sum.map((value) => value / weight);
+    const shade = (base, strength) =>
+      `rgb(${colors.map((value) => Math.round(base + value * strength)).join(', ')})`;
+    root.style.setProperty('--art-ground', shade(12, 0.09));
+    root.style.setProperty('--art-surface', shade(24, 0.12));
+    root.style.setProperty('--art-raised', shade(38, 0.15));
+    root.style.setProperty('--art-night-ground', shade(7, 0.05));
+    root.style.setProperty('--art-night-surface', shade(15, 0.07));
+    root.dataset.artColor = 'true';
+  } catch {
+    // Missing canvas support or inaccessible image: retain the neutral palette.
+    root.dataset.artColor = 'false';
+  }
 }
 
 function renderEnvironment(environment) {
@@ -1410,35 +1632,39 @@ function renderEnvironment(environment) {
         : 0;
     const stale =
       freshTime > 0 && Date.now() - freshTime > SENSOR_STALE_AFTER_MS;
-    elements.row.dataset.state = stale ? 'stale' : 'available';
+    elements.row.dataset.state =
+      isUnavailable() || stale ? 'stale' : 'available';
     setText(
       elements.state,
-      stale ? 'Gammalt värde' : freshTime > 0 ? '' : 'Mättid saknas',
+      isUnavailable()
+        ? 'Senast känt'
+        : stale
+          ? 'Gammalt värde'
+          : freshTime > 0
+            ? ''
+            : 'Mättid saknas',
     );
-    if (freshTime === 0) elements.row.dataset.state = 'unknown';
+    if (freshTime === 0 && !isUnavailable())
+      elements.row.dataset.state = 'unknown';
   }
 }
 
 function renderRoomPresence(state) {
   const presence = state?.presence;
-  const prefix = isUnavailable() ? 'Senast rapporterat: ' : '';
   if (presence?.state === 'confirmed_empty') {
-    setText(refs.roomPresence, `${prefix}Rummet är tomt`);
+    setText(refs.roomPresence, 'Rummet är tomt');
     return;
   }
   if (presence?.state !== 'occupied') {
-    setText(refs.roomPresence, `${prefix}Närvaro okänd`);
+    setText(refs.roomPresence, 'Närvaro okänd');
     return;
   }
   const count = presence.personCount;
   if (!Number.isInteger(count) || count < 1) {
-    setText(refs.roomPresence, `${prefix}I rummet · antal okänt`);
+    setText(refs.roomPresence, 'Antal okänt');
     return;
   }
-  setText(
-    refs.roomPresence,
-    `${prefix}I rummet · ${count} ${count === 1 ? 'person' : 'personer'}`,
-  );
+  setText(refs.roomPresence, `${count} ${count === 1 ? 'person' : 'personer'}`);
 }
 
 function musicDevices(payload) {
@@ -1515,6 +1741,17 @@ function renderVolumeAuthority(payload, target) {
                   : '';
   setText(refs.musicAuthorityState, reason);
   refs.musicAuthorityState.hidden = !reason;
+  // The selector itself shows the mode; only a blocked selector earns a line.
+  volumeAuthorityNotice =
+    Boolean(reason) && (unavailable || !policy || (!busy && Boolean(blocked)));
+  syncVolumeNotice();
+}
+
+function syncVolumeNotice() {
+  const authority = volumeAuthorityNotice && !volumeCommandNotice;
+  refs.musicCommandState.dataset.notice = String(volumeCommandNotice);
+  refs.musicAuthorityState.dataset.notice = String(authority);
+  root.dataset.volumeNotice = String(volumeCommandNotice || authority);
 }
 
 function musicObservationTrusted(payload, target) {
@@ -1528,6 +1765,52 @@ function clearComputerMediaDisplay() {
   computerMediaDisplay = null;
   window.clearTimeout(computerMediaPauseTimer);
   computerMediaPauseTimer = undefined;
+}
+
+function clearMusicPause() {
+  window.clearTimeout(musicPauseTimer);
+  musicPauseTimer = undefined;
+  musicPauseDeadline = null;
+  musicWasPlaying = false;
+  receiverMediaDisplay = null;
+}
+
+function updateMusicPause(payload, target, observed, isPlaying, reportedOnly) {
+  const key = JSON.stringify([
+    target,
+    observed.source ?? null,
+    payload?.instanceId ?? null,
+  ]);
+  if (
+    key !== musicPauseKey ||
+    reportedOnly ||
+    ['off', 'unknown'].includes(observed.playback)
+  ) {
+    clearMusicPause();
+    musicPauseKey = key;
+  }
+  if (reportedOnly || ['off', 'unknown'].includes(observed.playback)) return;
+  if (isPlaying) {
+    clearMusicPause();
+    musicWasPlaying = true;
+    if (
+      !payload?.computerNowPlaying?.[target] &&
+      typeof observed.title === 'string' &&
+      observed.title.trim()
+    )
+      receiverMediaDisplay = {
+        title: observed.title.trim(),
+        artist: observed.artist,
+      };
+    return;
+  }
+  if (musicWasPlaying && musicPauseDeadline === null) {
+    musicPauseDeadline = monotonicNow() + MEDIA_PAUSE_GRACE_MS;
+    musicPauseTimer = window.setTimeout(() => {
+      clearMusicPause();
+      if (!stopped && latestPayload) renderMusic(latestPayload);
+    }, MEDIA_PAUSE_GRACE_MS);
+  }
 }
 
 function compactMediaText(value, limit) {
@@ -1607,8 +1890,7 @@ function renderComputerNowPlaying(
   if (knownPause && computerMediaDisplay) {
     computerMediaDisplay.pausedAt ??= monotonicNow();
     const remaining =
-      COMPUTER_MEDIA_PAUSE_GRACE_MS -
-      (monotonicNow() - computerMediaDisplay.pausedAt);
+      MEDIA_PAUSE_GRACE_MS - (monotonicNow() - computerMediaDisplay.pausedAt);
     if (remaining > 0) {
       renderComputerMediaTitle(
         computerMediaDisplay,
@@ -1978,6 +2260,20 @@ function renderMusicExplanations(payload, target) {
       : '');
   setText(refs.musicCommandState, commandText);
   refs.musicCommandState.hidden = !commandText;
+  // This preset acknowledgement is not an actionable failure and the Hub
+  // deliberately keeps it out of the compact music surface.
+  const presetUnverified =
+    command?.requested?.property === 'preset' &&
+    command?.recovery?.stage === 'stopped' &&
+    command?.recovery?.stopReason === 'non_retryable';
+  volumeCommandNotice =
+    Boolean(commandText) &&
+    (!presetUnverified || Boolean(pendingResult)) &&
+    (Boolean(pendingResult) ||
+      (stale && Boolean(command?.recovery)) ||
+      Boolean(musicRecoveryText(command)) ||
+      ['failed', 'unconfirmed'].includes(command?.status));
+  syncVolumeNotice();
   setText(refs.musicAuthorityDetail, refs.musicAuthorityState.textContent);
   refs.musicAuthorityDetail.hidden = !refs.musicAuthorityState.textContent;
   setText(refs.musicCommandDetail, commandText);
@@ -2076,16 +2372,29 @@ function musicRecoveryText(command) {
 function setMusicDetailsOpen(open) {
   musicDetailsOpen = open;
   refs.musicDetails.hidden = !open;
-  refs.sceneSection.hidden = open;
+  refs.sceneSection.hidden = false;
+  refs.sceneGrid.hidden = open || contextDetailsOpen;
+  refs.scenePagination.hidden =
+    open ||
+    contextDetailsOpen ||
+    (refs.sceneNext.disabled && refs.scenePrevious.disabled);
+  refs.contextStrip.hidden =
+    open || contextDetailsOpen || !refs.contextTitle.textContent;
   if (open) setContextDetailsOpen(false);
   root.dataset.musicDetails = String(open);
   refs.musicDetailsButton.setAttribute('aria-expanded', String(open));
-  setText(refs.musicDetailsButton, open ? 'Tillbaka' : 'Detaljer');
+  setText(refs.musicDetailsButton, open ? 'Tillbaka' : 'Villkor');
+  syncMusicPresentation();
+  if (latestPayload) renderArtwork(latestPayload, musicTarget);
 }
 
 function renderMusic(payload) {
   const entries = musicDevices(payload);
   if (entries.length === 0) {
+    clearMusicPause();
+    root.dataset.musicPlaying = 'false';
+    setText(refs.musicMenu, 'Musik · saknas');
+    syncMusicPresentation();
     clearComputerMediaDisplay();
     musicTarget = '';
     renderArtwork(payload, null);
@@ -2098,6 +2407,7 @@ function renderMusic(payload) {
     setText(refs.musicPlayerStatus, 'Ingen musikspelare konfigurerad');
     setText(refs.musicTitle, 'Musikspelare saknas');
     setText(refs.musicSource, 'Lägg till en mediaspelare i Lugn');
+    refs.musicSource.dataset.spotify = 'false';
     refs.musicPlayback.disabled = true;
     refs.musicPresetDj.disabled = true;
     refs.musicPresetOptical.disabled = true;
@@ -2108,6 +2418,7 @@ function renderMusic(payload) {
     refs.musicVolumeDown.disabled = true;
     refs.musicVolumeUp.disabled = true;
     setText(refs.musicVolumeObservedLabel, 'Nu');
+    refs.musicVolumeObservedLabel.dataset.stale = 'false';
     refs.musicVolumeValue.value = '—';
     refs.musicVolumeValue.setAttribute(
       'aria-label',
@@ -2128,7 +2439,8 @@ function renderMusic(payload) {
   const isPlaying = desktopControl
     ? desktop.playback === 'playing'
     : observed.playback === 'playing';
-  const playbackAction = musicPlaybackAction(payload, musicTarget);
+  const playbackAction =
+    heldPlaybackAction ?? musicPlaybackAction(payload, musicTarget);
   const isPending =
     pending.has(`music:${musicTarget}`) ||
     pending.has(`music-preset:${musicTarget}`);
@@ -2152,7 +2464,7 @@ function renderMusic(payload) {
         !(playbackAction === 'paused' ? desktop.canPause : desktop.canResume)));
   refs.musicPlayback.setAttribute(
     'aria-busy',
-    String(desktopControl && desktop.pending),
+    String(isPending || (desktopControl && desktop.pending)),
   );
   refs.musicPresetDj.disabled = !canControl;
   refs.musicPresetOptical.disabled = !canControl;
@@ -2164,6 +2476,23 @@ function renderMusic(payload) {
       ? 'unavailable'
       : 'ready';
   refs.musicPresetOptical.dataset.state = refs.musicPresetDj.dataset.state;
+  const sourceName = String(observed.source ?? '').toLowerCase();
+  refs.musicPresetDj.setAttribute(
+    'aria-pressed',
+    String(
+      canControl &&
+        musicObservationTrusted(payload, musicTarget) &&
+        sourceName.includes('spotify'),
+    ),
+  );
+  refs.musicPresetOptical.setAttribute(
+    'aria-pressed',
+    String(
+      canControl &&
+        musicObservationTrusted(payload, musicTarget) &&
+        sourceName.includes('optical'),
+    ),
+  );
   refs.musicPlayback.setAttribute(
     'aria-label',
     playbackAction === 'paused'
@@ -2173,6 +2502,8 @@ function renderMusic(payload) {
         : 'Starta musik',
   );
   refs.musicPlayback.setAttribute('aria-pressed', String(isPlaying));
+  refs.musicPlayback.dataset.icon =
+    playbackAction === 'paused' ? 'pause' : 'play';
   setText(refs.musicPlaybackIcon, playbackAction === 'paused' ? 'Ⅱ' : '▶');
   setText(
     refs.musicPlaybackLabel,
@@ -2205,6 +2536,10 @@ function renderMusic(payload) {
       ? 'Nu'
       : 'Senast',
   );
+  // "Nu" is what a level already means; only an old value needs saying.
+  refs.musicVolumeObservedLabel.dataset.stale = String(
+    refs.musicVolumeObservedLabel.textContent === 'Senast',
+  );
   refs.musicVolumeValue.setAttribute(
     'aria-label',
     availability === 'available' &&
@@ -2234,6 +2569,15 @@ function renderMusic(payload) {
     availability !== 'available' ||
     !musicObservationTrusted(payload, musicTarget) ||
     newerPlaybackReport;
+  updateMusicPause(payload, musicTarget, observed, isPlaying, reportedOnly);
+  root.dataset.musicPlaying = String(isPlaying && !reportedOnly);
+  const manualPause =
+    payload?.musicPlaybackPolicies?.[musicTarget]?.manualPause;
+  setText(
+    refs.musicMenu,
+    `Musik${reportedOnly ? ' · okänd' : manualPause ? ' · din paus' : !isPlaying && observed.playback === 'paused' ? ' · pausad' : ''}`,
+  );
+  syncMusicPresentation();
   const title =
     typeof observed.title === 'string' && observed.title.trim()
       ? observed.title.trim()
@@ -2268,6 +2612,13 @@ function renderMusic(payload) {
     refs.musicPlayerStatus,
     reportedOnly ? `Senast rapporterat: ${playbackLabel}` : playbackLabel,
   );
+  const retainedReceiver =
+    musicPauseDeadline !== null &&
+    !payload?.computerNowPlaying?.[musicTarget] &&
+    !(typeof observed.title === 'string' && observed.title.trim())
+      ? receiverMediaDisplay
+      : null;
+  if (retainedReceiver) setText(refs.musicTitle, retainedReceiver.title);
   renderComputerNowPlaying(
     payload,
     musicTarget,
@@ -2276,9 +2627,14 @@ function renderMusic(payload) {
     reportedOnly,
     playbackLabel,
   );
+  refs.musicSource.dataset.spotify = String(
+    /^spotify\b/i.test(refs.musicSource.textContent.trim()),
+  );
   const computer = payload?.computerNowPlaying?.[musicTarget];
   // Computer media and receiver metadata must never be presented as one album.
-  const artist = computer ? computerMediaDisplay?.artist : observed.artist;
+  const artist = computer
+    ? computerMediaDisplay?.artist
+    : (retainedReceiver?.artist ?? observed.artist);
   setText(refs.musicArtist, typeof artist === 'string' ? artist.trim() : '');
   refs.musicArtist.hidden = !refs.musicArtist.textContent;
   renderArtwork(payload, musicTarget);
@@ -2303,11 +2659,47 @@ function render(payload) {
 function renderPresenceCorrection(payload) {
   const available = payload?.presenceCountCorrectionAvailable === true;
   const busy = pending.has('presence:one');
-  refs.presenceCountOne.hidden = !available;
-  refs.presenceCountOne.disabled = busy || isUnavailable();
+  const presence = payload?.state?.presence;
+  const count = presence?.personCount;
+  setText(
+    refs.presenceCountValue,
+    presence?.state === 'confirmed_empty'
+      ? '0'
+      : presence?.state === 'occupied' && Number.isInteger(count) && count > 0
+        ? String(count)
+        : '?',
+  );
+  refs.presenceCountOne.hidden = false;
+  refs.presenceCountOne.disabled = busy || isUnavailable() || !available;
   refs.presenceCountOne.setAttribute('aria-busy', String(busy));
+  const observed =
+    presence?.state === 'confirmed_empty'
+      ? 'Rummet är tomt'
+      : presence?.state === 'occupied' && Number.isInteger(count) && count > 0
+        ? `${count} ${count === 1 ? 'person' : 'personer'}`
+        : 'Närvaro okänd';
+  refs.presenceCountOne.setAttribute(
+    'aria-label',
+    `${observed}${available ? '. Tryck för att sätta till 1 person' : '. Korrigering ej tillgänglig'}`,
+  );
   refs.clockTop.dataset.correction = String(available);
-  setText(refs.presenceCountLabel, busy ? '…' : '1');
+  if (
+    presenceAcknowledgedKey !== null &&
+    JSON.stringify(presence) !== presenceAcknowledgedKey
+  )
+    presenceAcknowledgedKey = null;
+  setText(
+    refs.presenceCountLabel,
+    busy
+      ? 'Ställer till 1 …'
+      : isUnavailable()
+        ? 'Senast rapporterat'
+        : presenceAcknowledgedKey !== null
+          ? 'Kvittens · väntar på sensor'
+          : available
+            ? 'Tryck för 1'
+            : '',
+  );
 }
 
 async function getState() {
@@ -2468,11 +2860,13 @@ async function runCommand(key, body) {
                 ? VOLUME_AUTHORITY_URL
                 : MUSIC_URL;
     await postJson(url, body);
-    if (key === 'presence:one')
+    if (key === 'presence:one') {
+      presenceAcknowledgedKey = JSON.stringify(latestPayload?.state?.presence);
       showToast(
         'Räknaren har bekräftat 1 person. Väntar på sensorstatus.',
         'success',
       );
+    }
     await refresh(true);
   } catch (error) {
     if (error?.status === 401 || error?.status === 403) {
@@ -2522,6 +2916,98 @@ refs.scenePrevious.addEventListener('click', () => {
 refs.sceneNext.addEventListener('click', () => {
   scenePage += 1;
   renderScenes(latestPayload);
+});
+
+function syncMusicPresentation() {
+  if (interactionPointers.size) return;
+  const visible =
+    musicMenuOpen ||
+    musicDetailsOpen ||
+    root.dataset.musicPlaying === 'true' ||
+    musicPauseDeadline !== null;
+  root.dataset.musicVisible = String(visible);
+  root.dataset.musicMenu = String(musicMenuOpen);
+  refs.musicMenu.setAttribute('aria-expanded', String(musicMenuOpen));
+  const controls = [
+    refs.musicPlayback,
+    refs.musicVolumeDown,
+    refs.musicVolumeUp,
+    refs.musicVolumeAuto,
+    refs.musicVolumeManual,
+    refs.musicDetailsButton,
+  ];
+  if (!visible && controls.includes(document.activeElement))
+    refs.musicMenu.focus?.();
+  refs.musicPlayback.hidden = !visible;
+  refs.musicVolumePolicy.hidden = !visible;
+  refs.musicDetailsButton.hidden = !visible;
+  // The transport wrapper is fixed in CSS; each control leaves keyboard order too.
+  refs.musicVolumeDown.hidden = !visible;
+  refs.musicVolumeUp.hidden = !visible;
+  syncExpandedLighting();
+}
+
+// Reflow only between gestures: a state update must not move a target under a finger.
+function syncExpandedLighting() {
+  if (interactionPointers.size) return;
+  root.dataset.lightingExpanded = String(
+    root.dataset.musicVisible === 'false' &&
+      root.dataset.cameraVisible === 'false',
+  );
+}
+
+refs.musicMenu.addEventListener('click', () => {
+  musicMenuOpen = !musicMenuOpen;
+  if (!musicMenuOpen && musicDetailsOpen) setMusicDetailsOpen(false);
+  syncMusicPresentation();
+  renderArtwork(latestPayload, musicTarget);
+});
+refs.contextPrevious.addEventListener('click', () => {
+  contextPage = Math.max(0, contextPage - 1);
+  renderContextPage();
+});
+refs.contextNext.addEventListener('click', () => {
+  contextPage += 1;
+  renderContextPage();
+});
+refs.cameraPrevious.addEventListener('click', () => {
+  cameraPage = Math.max(0, cameraPage - 1);
+  renderCamera(latestPayload);
+});
+refs.cameraNext.addEventListener('click', () => {
+  cameraPage += 1;
+  renderCamera(latestPayload);
+});
+
+function flushPresentation() {
+  if (interactionPointers.size) return;
+  heldPlaybackAction = undefined;
+  if (!latestPayload) return;
+  renderContext(latestPayload);
+  renderScenes(latestPayload);
+  renderMusic(latestPayload);
+  renderCamera(latestPayload);
+}
+document.addEventListener('pointerdown', (event) => {
+  if (!root.contains?.(event.target)) return;
+  interactionPointers.add(event.pointerId);
+  if (refs.musicPlayback.contains?.(event.target))
+    heldPlaybackAction = musicPlaybackAction(latestPayload, musicTarget);
+});
+function releasePointer(event) {
+  interactionPointers.delete(event.pointerId);
+  window.clearTimeout(presentationTimer);
+  presentationTimer = window.setTimeout(flushPresentation, 0);
+}
+document.addEventListener('pointerup', releasePointer);
+document.addEventListener('pointercancel', releasePointer);
+document.addEventListener('focusout', () => {
+  window.clearTimeout(presentationTimer);
+  presentationTimer = window.setTimeout(flushPresentation, 0);
+});
+window.addEventListener('blur', () => {
+  interactionPointers.clear();
+  flushPresentation();
 });
 
 // Camera media is scoped to one server-issued view. No HA credentials enter the browser.
@@ -2647,12 +3133,29 @@ function renderCamera(payload) {
   const definitions = Array.isArray(camera?.definitions)
     ? camera.definitions.filter((item) => item.enabled && item.available)
     : [];
-  refs.cameraMenu.hidden = !allowed || !viewerAllowed || !definitions.length;
+  refs.cameraMenu.hidden = false;
+  refs.cameraMenu.setAttribute(
+    'aria-disabled',
+    String(!allowed || !viewerAllowed || !definitions.length),
+  );
   refs.cameraMenu.disabled = isUnavailable() || cameraActionRequests > 0;
-  if (cameraChoicesKey !== JSON.stringify(definitions)) {
-    cameraChoicesKey = JSON.stringify(definitions);
+  const cameraPages = Math.max(1, Math.ceil(definitions.length / 2));
+  cameraPage = Math.min(cameraPage, cameraPages - 1);
+  if (refs.cameraPagination) {
+    refs.cameraPagination.hidden = !cameraChoicesOpen || cameraPages <= 1;
+    refs.cameraPrevious.disabled = cameraPage === 0;
+    refs.cameraNext.disabled = cameraPage === cameraPages - 1;
+    setText(refs.cameraPageLabel, `${cameraPage + 1} / ${cameraPages}`);
+  }
+  const choicesKey = JSON.stringify([definitions, cameraPage]);
+  if (
+    cameraChoicesKey !== choicesKey &&
+    (typeof presentationHeld !== 'function' ||
+      !presentationHeld(refs.cameraChoices))
+  ) {
+    cameraChoicesKey = choicesKey;
     refs.cameraChoices.replaceChildren(
-      ...definitions.map((item) => {
+      ...definitions.slice(cameraPage * 2, cameraPage * 2 + 2).map((item) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.textContent = item.name;
@@ -2666,7 +3169,12 @@ function renderCamera(payload) {
   }
   for (const button of refs.cameraChoices.children)
     button.disabled =
-      cameraActionPending || cameraActionRequests > 0 || isUnavailable();
+      !allowed ||
+      !viewerAllowed ||
+      !definitions.some((item) => item.id === button.dataset.cameraId) ||
+      cameraActionPending ||
+      cameraActionRequests > 0 ||
+      isUnavailable();
   if (camera?.active?.id && cameraCloseHoldUntil > estimatedServerNow()) {
     cameraDismissedIds.add(camera.active.id);
     if (cameraDismissedIds.size > 32)
@@ -2681,14 +3189,26 @@ function renderCamera(payload) {
   const active =
     allowed &&
     viewerAllowed &&
+    camera?.definitions?.some(
+      (item) => item.id === camera?.active?.cameraId && item.enabled,
+    ) &&
     cameraCloseHoldUntil <= estimatedServerNow() &&
     !cameraDismissedIds.has(camera?.active?.id) &&
     camera?.active?.expiresAt > estimatedServerNow()
       ? camera.active
       : null;
+  if (typeof interactionPointers !== 'undefined') {
+    if (!interactionPointers.size) cameraControlsDeferred = false;
+    else if (!cameraActive && active) cameraControlsDeferred = true;
+    refs.cameraClose.disabled = cameraControlsDeferred;
+  }
+  if (cameraActive && !active && document.activeElement === refs.cameraClose)
+    refs.cameraMenu.focus?.();
   cameraActive = active;
   refs.cameraPanel.hidden = !active && !showingPending;
   if (!allowed || !viewerAllowed) cameraChoicesOpen = false;
+  if (refs.cameraPagination)
+    refs.cameraPagination.hidden = !cameraChoicesOpen || cameraPages <= 1;
   refs.cameraChoices.hidden = !cameraChoicesOpen;
   refs.cameraMenu.setAttribute('aria-expanded', String(cameraChoicesOpen));
   refs.cameraMenu.textContent =
@@ -2698,10 +3218,17 @@ function renderCamera(payload) {
         : 'Öppnar …'
       : active
         ? 'Byt kamera'
-        : 'Kameror';
+        : !allowed || !viewerAllowed || !definitions.length
+          ? 'Kamera · ej tillgänglig'
+          : 'Kamera';
+  if (typeof root !== 'undefined')
+    root.dataset.cameraVisible = String(
+      !!active || !!showingPending || cameraChoicesOpen,
+    );
   refs.musicSection.dataset.camera = String(
     !!active || !!showingPending || cameraChoicesOpen,
   );
+  syncExpandedLighting();
   setText(
     refs.musicHeading,
     active || showingPending ? 'Utanför rummet' : 'Musik',
@@ -2737,6 +3264,19 @@ function renderCamera(payload) {
 }
 
 async function cameraAction(action, cameraId) {
+  const currentCamera = latestPayload?.cameraDashboard;
+  if (
+    action === 'show' &&
+    (currentCamera?.settings?.enabled !== true ||
+      (Array.isArray(currentCamera.settings.viewers) &&
+        !currentCamera.settings.viewers.includes(
+          roleName(latestPayload?.role),
+        )) ||
+      !currentCamera.definitions?.some(
+        (item) => item.id === cameraId && item.enabled && item.available,
+      ))
+  )
+    return;
   if (
     action === 'show' &&
     (cameraActionPending || cameraActionRequests > 0 || isUnavailable())
@@ -2761,6 +3301,7 @@ async function cameraAction(action, cameraId) {
   }
   cameraActionPending = true;
   renderCamera(latestPayload);
+  if (action === 'show') refs.cameraClose.focus?.();
   try {
     const result = await postJson(`${BASE_PATH}display-api/camera`, {
       action,
@@ -2795,6 +3336,14 @@ async function cameraAction(action, cameraId) {
 }
 
 refs.cameraMenu.addEventListener('click', () => {
+  if (refs.cameraMenu.getAttribute('aria-disabled') === 'true') {
+    showToast(
+      'Kameran är inte tillgänglig för den här skärmen. Kontrollera kamerainställningarna i webbpanelen.',
+      'error',
+    );
+    return;
+  }
+  if (interactionPointers.size) return;
   cameraChoicesOpen = !cameraChoicesOpen;
   renderCamera(latestPayload);
 });
@@ -2885,13 +3434,21 @@ function bedtimeKeydown(event) {
 refs.musicArtworkImage.addEventListener('error', () => {
   refs.musicArtworkImage.hidden = true;
   refs.musicArtwork.dataset.state = 'unavailable';
+  root.dataset.artColor = 'false';
 });
 refs.musicArtworkImage.addEventListener('load', () => {
   if (refs.musicArtwork.dataset.state !== 'loading') return;
   refs.musicArtworkImage.hidden = false;
   refs.musicArtwork.dataset.state = 'available';
+  updateArtworkColor(refs.musicArtworkImage);
 });
 document.addEventListener('keydown', (event) => {
+  if (
+    !bedtimeDraft &&
+    event.target === refs.musicPlayback &&
+    ['Enter', ' '].includes(event.key)
+  )
+    heldPlaybackAction ??= musicPlaybackAction(latestPayload, musicTarget);
   if (bedtimeDraft) {
     bedtimeKeydown(event);
     return;
@@ -2909,7 +3466,18 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
+document.addEventListener('keyup', (event) => {
+  if (
+    event.target !== refs.musicPlayback ||
+    !['Enter', ' '].includes(event.key)
+  )
+    return;
+  window.clearTimeout(presentationTimer);
+  presentationTimer = window.setTimeout(flushPresentation, 0);
+});
+
 refs.presenceCountOne.addEventListener('click', () => {
+  if (refs.presenceCountOne.disabled) return;
   void runCommand('presence:one', {});
 });
 
@@ -2917,7 +3485,12 @@ refs.sceneGrid.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-scene]');
   if (!button || !refs.sceneGrid.contains(button)) return;
   const sceneId = button.dataset.scene;
-  if (!sceneId) return;
+  if (
+    !sceneId ||
+    button.disabled ||
+    !getSceneList(latestPayload).some((scene) => scene.id === sceneId)
+  )
+    return;
   void runCommand(`scene:${sceneId}`, { sceneId });
 });
 
@@ -2937,7 +3510,9 @@ for (const [button, mode] of [
 refs.musicPlayback.addEventListener('click', () => {
   const device = latestPayload?.state?.music?.devices?.[musicTarget];
   if (!device) return;
-  const value = musicPlaybackAction(latestPayload, musicTarget);
+  if (refs.musicPlayback.disabled) return;
+  const value =
+    heldPlaybackAction ?? musicPlaybackAction(latestPayload, musicTarget);
   void runCommand(`music:${musicTarget}`, {
     target: musicTarget,
     request: { property: 'playback', value },
@@ -3024,11 +3599,14 @@ window.addEventListener('pagehide', () => {
   stopped = true;
   stopCameraMedia();
   clearComputerMediaDisplay();
+  clearMusicPause();
   disconnectStream();
   window.clearTimeout(reconnectTimer);
   window.clearTimeout(timer);
   window.clearInterval(clockTimer);
   window.clearTimeout(toastTimer);
+  window.clearTimeout(presentationTimer);
+  interactionPointers.clear();
 });
 
 setMusicDetailsOpen(false);

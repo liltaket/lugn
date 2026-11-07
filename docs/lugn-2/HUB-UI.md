@@ -1,25 +1,13 @@
-# Hub display implementation (workstream A)
+# Hub display implementation
 
-## Refinements after physical-screen feedback
+The current Nest Hub design uses a clock and climate rail, paged lighting tiles,
+a separate all-off control, and a music panel with cover art. Bed keeps controls
+outside its top-right system overlay. Camera images retain their proportions.
 
-The one-person correction is now a quiet outlined person icon with `1`, retaining
-the explicit accessible name, one-tap action, pending lock and sensor-confirmation
-semantics. Its 56 × 44 px touch target remains comfortable without competing with
-the clock. The visible music Details button is removed from both Hub roles;
-advanced music information remains available in the desktop panel.
-
-Bed reserves the top-right system-overlay area: its climate rail omits PM2.5 and
-leaves 128 px clear at the right edge of the 1024 × 600 viewport. Desk continues
-to show all four climate metrics. There is no main-page scrolling at 1024 × 600
-or 1280 × 800. The subsequent sections include historical implementation evidence
-from before these refinements.
-
-The display uses the shared mineral palette, local humanist system fonts, warm
-Bed and cool Desk accents. The fixed clock/climate rail sits above asymmetric
-scene and music areas. The target CSS viewports are 1024×600 and 1280×800.
-Primary controls do not scroll; music explanations and the routines/suggestions
-pane scroll independently. Larger custom scene sets are paged (six per page
-with contextual content, eight otherwise).
+Trusted playback opens the music panel. After a pause it remains visible for ten
+seconds with its last loaded cover; the Musik button can hold it open longer.
+Source changes and untrusted observations clear retained media. Artwork can tint
+the playing view; otherwise the palette is neutral.
 
 ## Data and actions
 
@@ -49,10 +37,8 @@ It never creates a definition, enables automation, or sends commands on load.
 - `POST display-api/suggestion`: `{id,action:'accept'|'reject'|'dismiss'}`.
   There is no automatic acceptance, source switching or speculative PC control.
 - Artwork consumes `artwork[musicTarget]`. Only same-origin absolute paths are
-  loaded, including opaque token paths. The 100px (Hub) / 144px (Max) slot stays
-  fixed while loading or on error, with a quiet musical fallback. Failed URLs
-  are not retried every heartbeat; changed URLs are retried. Title, artist and
-  source have separate lines, including Optical computer media.
+  loaded. Failed URLs are not retried on every heartbeat; changed URLs are
+  retried. Title, artist and source are shown separately.
 
 The hub does not edit routines or enable settings; disabled templates explain
 that activation belongs in the web panel. Server-provided suggestion titles,
@@ -92,7 +78,13 @@ await fetch('/__fixture/actions').then((r) => r.json());
 The artwork is an original geometric SVG fixture, not an actual album cover.
 No external images, fonts or metadata requests are needed.
 
-## Validation evidence
+## Validation
+
+The Hub UI tests cover music, camera, routine, layout-state and interaction
+behavior using simulated state. Physical display behavior needs separate
+verification on a Hub.
+
+## Previous design validation (historical)
 
 - Initial baseline: 142 existing browser-logic tests and build passed. Nine
   stream tests initially hit sandbox `listen EPERM`; the unchanged stream suite
