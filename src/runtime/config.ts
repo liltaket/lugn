@@ -27,6 +27,10 @@ import {
   type LightingValues,
 } from '../core/schemas.js';
 import { ComputerDeviceIdSchema } from '../core/computer.js';
+import {
+  WindowLightingSchema,
+  type WindowLighting,
+} from '../core/window-lighting.js';
 
 const EnvironmentNameSchema = z.string().regex(/^[A-Z_][A-Z0-9_]*$/);
 const ClerkConfigSchema = z
@@ -295,6 +299,7 @@ const FileConfigSchema = z
       .default({ host: '127.0.0.1', port: 8787, trustedOrigins: [] }),
     homeAssistant: HomeAssistantConfigSchema,
     lightingControlModes: LightingControlModesSchema.default({}),
+    windowLighting: WindowLightingSchema.optional(),
     mqtt: MqttConfigSchema.optional(),
     presenceControl: PresenceControlConfigSchema.optional(),
     display: DisplayConfigSchema.optional(),
@@ -411,6 +416,26 @@ const FileConfigSchema = z
         message: `Lighting control target ${target} is not mapped in homeAssistant.entities`,
       });
     }
+    if (
+      config.windowLighting &&
+      !configuredLights.has(config.windowLighting.target)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['windowLighting', 'target'],
+        message: 'Window light must be mapped in homeAssistant.entities',
+      });
+    }
+    if (
+      config.windowLighting &&
+      config.windowLighting.target in config.homeAssistant.wledCct
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['windowLighting', 'target'],
+        message: 'Dedicated WLED CCT strips cannot be used as window lights',
+      });
+    }
   });
 
 /** Validates an in-memory configuration with the same strict schema as the runtime. */
@@ -425,6 +450,7 @@ export function validateRuntimeFileConfig(value: unknown): void {
 }
 
 export type RuntimeConfig = {
+  windowLighting?: WindowLighting;
   presenceControl?: z.output<typeof PresenceControlConfigSchema>;
   lightingControlModes?: LightingControlModes;
   http: {
@@ -633,6 +659,9 @@ export function loadRuntimeConfig(
       : { cameraDashboard: fileConfig.cameraDashboard }),
     prelight: fileConfig.prelight,
     lightingControlModes: fileConfig.lightingControlModes,
+    ...(fileConfig.windowLighting === undefined
+      ? {}
+      : { windowLighting: fileConfig.windowLighting }),
     ...(fileConfig.scenes === undefined ? {} : { scenes: fileConfig.scenes }),
     ...(fileConfig.defaultSceneId === undefined
       ? {}

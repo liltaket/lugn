@@ -61,6 +61,12 @@ type CommissioningConfig = {
     music: Record<string, never>;
     switches: Record<string, string>;
   };
+  windowLighting?: {
+    target: string;
+    presenceMode: 'room' | 'home' | 'always';
+    brightness: number;
+    maxSunElevation: number;
+  };
   mqtt: {
     url: string;
     baseTopic: string;
@@ -231,6 +237,9 @@ export async function runOnboardingCli(
     io.writeLine(`  ${index + 1}. ${semanticId} → ${entityId}`),
   );
 
+  const windowLighting = await configureWindowLighting(io, mappings);
+  if (windowLighting === null) return 2;
+
   const mqttUrl = await promptUrl(
     io,
     'MQTT broker URL (example: mqtt://192.168.1.20:1883)',
@@ -257,17 +266,22 @@ export async function runOnboardingCli(
     if (mqttPassword === undefined) return 2;
   }
 
-  const prelightEnabled = await confirm(
-    io,
-    'Configure the STL27L fast entry-light path?',
-    true,
+  const prelightMappings = mappings.filter(
+    ([target]) => target !== windowLighting?.target,
   );
+  const prelightEnabled =
+    prelightMappings.length > 0 &&
+    (await confirm(io, 'Configure the STL27L fast entry-light path?', true));
   const prelightTargets: CommissioningConfig['prelight']['targets'] = {};
   if (prelightEnabled) {
+    io.writeLine('Lights available for entry lighting:');
+    prelightMappings.forEach(([semanticId, entityId], index) =>
+      io.writeLine(`  ${index + 1}. ${semanticId} → ${entityId}`),
+    );
     const prelightIndices = await promptIndices(
       io,
       'Choose one or more mapped lights for brief entry lighting',
-      mappings.length,
+      prelightMappings.length,
     );
     if (!prelightIndices) return 2;
     const brightness = await promptInteger(
@@ -288,7 +302,7 @@ export async function runOnboardingCli(
     if (temperature === undefined) return 2;
 
     for (const index of prelightIndices) {
-      const target = mappings[index - 1]?.[0];
+      const target = prelightMappings[index - 1]?.[0];
       if (!target) return 2;
       prelightTargets[target] = {
         power: true,
@@ -313,6 +327,7 @@ export async function runOnboardingCli(
       music: {},
       switches: {},
     },
+    ...(windowLighting === undefined ? {} : { windowLighting }),
     mqtt: {
       url: mqttUrl,
       baseTopic,
@@ -377,7 +392,97 @@ export async function runOnboardingCli(
   io.writeLine(
     'Lugn adds its room presets at runtime; fast entry lighting uses the selected temporary brightness.',
   );
+  if (windowLighting)
+    io.writeLine(
+      `Special window light configured for ${windowLighting.target} (${windowLighting.presenceMode}, ${windowLighting.brightness}%).`,
+    );
   return 0;
+}
+
+async function configureWindowLighting(
+  io: OnboardingIO,
+  mappings: Array<[string, string]>,
+): Promise<CommissioningConfig['windowLighting'] | undefined | null> {
+  if (
+    !(await confirm(
+      io,
+      'Configure a special window-facing light? It follows room scenes, with its own daylight and presence rules.',
+      false,
+    ))
+  )
+    return undefined;
+
+  io.writeLine('Choose the mapped light that faces out through a window:');
+  mappings.forEach(([semanticId, entityId], index) =>
+    io.writeLine(`  ${index + 1}. ${semanticId} → ${entityId}`),
+  );
+  const selected = await promptSingleIndex(
+    io,
+    'Window-facing light',
+    mappings.length,
+  );
+  if (selected === undefined) return null;
+  const target = mappings[selected - 1]?.[0];
+  if (!target) return null;
+
+  const presenceMode = await promptWindowPresenceMode(io);
+  if (!presenceMode) return null;
+  const brightness = await promptInteger(
+    io,
+    'Window light brightness percent',
+    55,
+    1,
+    100,
+  );
+  if (brightness === undefined) return null;
+  const maxSunElevation = await promptInteger(
+    io,
+    'Maximum sun elevation in degrees (0 means only below the horizon)',
+    0,
+    -18,
+    30,
+  );
+  if (maxSunElevation === undefined) return null;
+
+  return { target, presenceMode, brightness, maxSunElevation };
+}
+
+async function promptWindowPresenceMode(
+  io: OnboardingIO,
+): Promise<'room' | 'home' | 'always' | undefined> {
+  const choices = [
+    'room (only while someone is in the room)',
+    'home (while someone is home; unknown home status counts as home)',
+    'always (independent of room and home presence)',
+  ];
+  io.writeLine('Window light presence rule:');
+  choices.forEach((choice, index) => io.writeLine(`  ${index + 1}. ${choice}`));
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const answer = (await io.prompt('Choose a presence rule [1]')).trim();
+    const choice = answer || '1';
+    if (choice === '1') return 'room';
+    if (choice === '2') return 'home';
+    if (choice === '3') return 'always';
+    io.writeLine('Choose 1, 2, or 3.');
+  }
+  io.writeLine('Too many invalid selections. No files were changed.');
+  return undefined;
+}
+
+async function promptSingleIndex(
+  io: OnboardingIO,
+  question: string,
+  maximum: number,
+): Promise<number | undefined> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const answer = (await io.prompt(`${question} (1-${maximum})`)).trim();
+    const index = Number(answer);
+    if (answer && Number.isInteger(index) && index >= 1 && index <= maximum)
+      return index;
+    io.writeLine('Choose one valid number from the displayed list.');
+  }
+  io.writeLine('Too many invalid selections. No files were changed.');
+  return undefined;
 }
 
 /** Writes both files through protected sibling temporaries and rolls back partial replacements. */
