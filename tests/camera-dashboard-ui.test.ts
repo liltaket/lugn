@@ -126,6 +126,7 @@ function setup(surface: 'hub' | 'web') {
     },
     postJson: post,
     isUnavailable: () => false,
+    syncExpandedLighting: vi.fn(),
     estimatedServerNow: () => Date.now(),
     roleName: (role: string) => role,
     setText: (element: Element, value: string) => {
@@ -634,3 +635,19 @@ it.each(['hub', 'web'] as const)(
     expect(ui.image.hidden).toBe(true);
   },
 );
+
+it('hub keeps the camera entry visible when unavailable and rejects a stale or unauthorized choice', async () => {
+  const ui = setup('hub');
+  ui.run('testCamera.settings.enabled = false');
+  ui.render();
+  expect(ui.refs['cameraMenu']!.hidden).toBe(false);
+  expect(ui.refs['cameraMenu']!.attributes.get('aria-disabled')).toBe('true');
+  await runInContext("cameraAction('show', 'entrance')", ui.context);
+  expect(ui.post).not.toHaveBeenCalled();
+  ui.run(
+    "testCamera.settings.enabled = true; testCamera.settings.viewers = ['desk']",
+  );
+  ui.render();
+  await runInContext("cameraAction('show', 'entrance')", ui.context);
+  expect(ui.post).not.toHaveBeenCalled();
+});

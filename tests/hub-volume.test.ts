@@ -899,6 +899,8 @@ describe('Hub music authority explanations', () => {
       expect(ui.get('#music-volume-controller').textContent).toBe(
         'Manuell volym',
       );
+      // The selector already shows Manual, so no status line claims the space.
+      expect(ui.get('#music-authority-state').dataset['notice']).toBe('false');
       expect(ui.get('#music-volume-last-change').textContent).toContain(
         'Matchar Lugn',
       );
@@ -984,7 +986,8 @@ describe('Hub music authority explanations', () => {
       await microtasks();
       ui.get('#music-details-button').click();
       expect(ui.get('#music-details').hidden).toBe(false);
-      expect(ui.get('#scene-section').hidden).toBe(true);
+      expect(ui.get('#scene-section').hidden).toBe(false);
+      expect(ui.get('#scene-grid').hidden).toBe(true);
       expect(
         ui.get('#music-details-button').getAttribute('aria-expanded'),
       ).toBe('true');
@@ -1602,17 +1605,13 @@ describe('truthful Hub music and presence labels', () => {
       ui.streams[0]!.fail();
       release();
       await microtasks();
-      expect(ui.get('#room-presence').textContent).toBe(
-        'Senast rapporterat: I rummet · 2 personer',
-      );
+      expect(ui.get('#room-presence').textContent).toBe('2 personer');
       expect(ui.get('#music-player-status').textContent).toBe(
         'Senast rapporterat: Spelar',
       );
       expect(ui.get('#music-playback').disabled).toBe(true);
       runInContext(`acceptPayload(${JSON.stringify(payload)})`, ui.context);
-      expect(ui.get('#room-presence').textContent).toBe(
-        'I rummet · 2 personer',
-      );
+      expect(ui.get('#room-presence').textContent).toBe('2 personer');
       expect(ui.get('#music-player-status').textContent).toBe('Spelar');
       expect(ui.get('#music-playback').disabled).toBe(false);
     } finally {
@@ -1884,6 +1883,8 @@ it.each(['bed', 'desk'] as const)(
         'Spelarstatus saknar kontakt',
       );
       expect(ui.get('#music-authority-state').hidden).toBe(false);
+      expect(ui.get('#music-authority-state').dataset['notice']).toBe('true');
+      expect(ui.get('#app-root').dataset['volumeNotice']).toBe('true');
       for (const restored of [
         { ...payload, musicObservationConnected: true },
         payload,
@@ -1938,7 +1939,7 @@ describe('Hub Optical computer media projection', () => {
     },
   );
 
-  it('keeps the last title for eight seconds without heartbeats extending the pause', async () => {
+  it('keeps the last title for ten seconds without heartbeats extending the pause', async () => {
     vi.useFakeTimers();
     const ui = dashboard();
     try {
@@ -1964,7 +1965,7 @@ describe('Hub Optical computer media projection', () => {
       runInContext(`render(${JSON.stringify(paused)})`, ui.context);
       expect(ui.get('#music-title').textContent).toBe('Last track');
       expect(ui.get('#music-player-status').textContent).toBe('Senast spelat');
-      await vi.advanceTimersByTimeAsync(7_000);
+      await vi.advanceTimersByTimeAsync(9_000);
       runInContext(`render(${JSON.stringify(paused)})`, ui.context);
       await vi.advanceTimersByTimeAsync(999);
       expect(ui.get('#music-title').textContent).toBe('Last track');
@@ -2012,7 +2013,7 @@ describe('Hub Optical computer media projection', () => {
       await vi.advanceTimersByTimeAsync(2_000);
       payload.computerNowPlaying!['music.room']!.status = 'idle';
       runInContext(`render(${JSON.stringify(payload)})`, ui.context);
-      await vi.advanceTimersByTimeAsync(6_000);
+      await vi.advanceTimersByTimeAsync(8_000);
       expect(ui.get('#music-title').textContent).toBe(
         'Inget media spelas på datorn',
       );
@@ -2654,6 +2655,8 @@ describe('Hub desktop playback command status', () => {
       expect(ui.get('#music-command-state').textContent).toContain(
         'Kvittens saknas',
       );
+      expect(ui.get('#music-command-state').dataset['notice']).toBe('true');
+      expect(ui.get('#app-root').dataset['volumeNotice']).toBe('true');
     } finally {
       ui.windowListeners.get('pagehide')?.();
       ui.engine.dispose();

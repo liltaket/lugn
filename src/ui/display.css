@@ -1363,3 +1363,1439 @@ h2 {
     flex-wrap: wrap;
   }
 }
+
+/* A Rutor: the live Hub keeps the established controls and state handling. */
+:root {
+  --ground: #121816;
+  --surface: #1c2522;
+  --surface-raised: #293630;
+  --ink: #eef1ea;
+  --quiet: #ccd8cc;
+  --muted: #9aa99f;
+  --line: #394c42;
+  --accent: #f0a05a;
+  --accent-contrast: #201b16;
+  font-family: 'IBM Plex Sans', 'Ubuntu Sans', system-ui, sans-serif;
+}
+.screen {
+  width: 100%;
+  max-width: none;
+  padding: 22px 30px;
+  grid-template-rows: 76px minmax(0, 1fr);
+  gap: 14px;
+}
+.screen[data-role='desk'] {
+  --accent: #f0a05a;
+}
+.screen[data-role='bed'] {
+  filter: brightness(0.75) saturate(0.8);
+}
+.glance {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+}
+.clock-block {
+  justify-content: center;
+}
+.clock-top {
+  gap: 12px;
+}
+.clock-time {
+  font-size: 58px;
+  letter-spacing: -0.02em;
+}
+.clock-meta {
+  margin-top: 4px;
+  gap: 3px 12px;
+}
+.clock-date {
+  font-size: 16px;
+}
+.room-presence {
+  font-size: 13px;
+}
+.environment-grid {
+  gap: 10px;
+}
+.environment-metric {
+  gap: 1px;
+  overflow: hidden;
+}
+.metric-label,
+.metric-state {
+  font-size: 11px;
+}
+.metric-value {
+  font-size: 21px;
+}
+.screen[data-role='bed'] .environment-grid {
+  padding-inline-end: 128px;
+}
+.control-layout {
+  grid-template-columns: minmax(0, 1.42fr) minmax(0, 1fr);
+  gap: 20px;
+}
+.scene-section {
+  gap: 8px;
+}
+.section-heading,
+.music-heading {
+  min-height: 38px;
+}
+.scene-section .light-off {
+  min-height: 44px;
+  padding: 6px 14px;
+}
+.scene-grid {
+  gap: 10px;
+  grid-auto-rows: minmax(48px, 1fr);
+}
+.scene-button,
+.scene-button[data-icon='true'] {
+  border-radius: 18px;
+  background: #1c2522;
+  border-color: #293a31;
+  padding: 8px 14px;
+}
+.scene-button[data-icon='true'] {
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 12px;
+}
+.scene-button[data-icon='true'] .scene-copy {
+  width: auto;
+  align-items: flex-start;
+  min-width: 0;
+}
+.scene-button[data-icon='true'] .scene-name,
+.scene-button[data-featured='true'] .scene-name {
+  font-size: 18px;
+  font-weight: 500;
+}
+.scene-button[data-featured='true'] {
+  grid-column: auto;
+}
+.scene-icon {
+  width: 32px;
+  height: 32px;
+}
+.scene-button[aria-pressed='true'] {
+  background: #4d3829;
+  color: #ffe0b5;
+  border-color: #f0a05a;
+}
+.scene-button[data-kind='off'] {
+  background: transparent;
+}
+.scene-pagination {
+  flex-shrink: 0;
+}
+.music-section {
+  border: 1px solid #394c42;
+  border-radius: 20px;
+  background: #1c2522;
+  padding: 14px;
+  gap: 8px;
+}
+.music-heading {
+  gap: 8px;
+}
+#music-player-status {
+  flex: 1;
+  text-align: right;
+}
+.music-feature {
+  min-height: 68px;
+  gap: 12px;
+}
+.music-artwork {
+  width: 88px;
+  height: 88px;
+  flex: 0 0 88px;
+}
+.artwork-fallback span {
+  width: 58px;
+  height: 58px;
+  font-size: 30px;
+}
+.music-now-playing strong {
+  font-size: 20px;
+}
+.music-now-playing span {
+  font-size: 14px;
+}
+.music-presets {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.music-preset-button,
+.music-details-button {
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px;
+  font-size: 13px;
+}
+.music-volume-policy {
+  padding-top: 7px;
+  gap: 4px;
+}
+.volume-policy-head {
+  min-width: 0;
+}
+#music-volume-controller {
+  min-width: 0;
+  font-size: 13px;
+}
+.volume-target {
+  font-size: 12px;
+}
+.volume-target strong {
+  font-size: 17px;
+}
+.volume-authority button {
+  min-height: 40px;
+}
+.music-transport {
+  margin-top: 0;
+}
+.play-button {
+  min-width: 78px;
+  padding: 6px 9px;
+}
+.volume-control {
+  grid-template-columns: auto 44px minmax(36px, 1fr) 44px;
+}
+.volume-step {
+  width: 44px;
+  min-height: 44px;
+}
+.screen[data-feedback='true'] {
+  grid-template-rows: 80px 44px minmax(0, 1fr);
+  gap: 8px;
+}
+.screen[data-feedback='true'] .music-feature {
+  min-height: 55px;
+}
+.screen[data-feedback='true'] .music-artwork {
+  width: 64px;
+  height: 64px;
+  flex-basis: 64px;
+}
+.screen[data-feedback='true'] .music-volume-policy {
+  padding-top: 5px;
+  gap: 3px;
+}
+.scene-section .context-strip {
+  padding: 0 12px;
+}
+
+/* Keep the music choices and authority controls, without transport clutter. */
+.music-section .music-transport,
+.music-section .volume-policy-head,
+.music-section #music-authority-state,
+.music-section .music-command-state,
+.music-section #music-player-status {
+  display: none;
+}
+
+/* The sleeve is the music panel: artwork bleeds to the panel edge and fades into the controls. */
+.music-section {
+  position: relative;
+  overflow: hidden;
+}
+.music-heading {
+  position: relative;
+  z-index: 1;
+  justify-content: flex-end;
+  min-height: 44px;
+}
+.music-section:not([data-camera='true']) #music-heading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.music-section[data-camera='true'] .music-heading {
+  justify-content: space-between;
+}
+.music-section:not([data-camera='true']) #camera-menu {
+  background: rgba(18, 24, 22, 0.78);
+  color: var(--ink);
+}
+.screen .music-section .music-feature {
+  position: relative;
+  flex: 1;
+  align-items: flex-end;
+  min-height: 150px;
+  margin: -66px -14px 0;
+  padding: 0 14px 6px;
+}
+.music-feature::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(28, 37, 34, 0) 28%,
+    rgba(28, 37, 34, 0.38) 45%,
+    rgba(28, 37, 34, 0.86) 62%,
+    #1c2522 100%
+  );
+  pointer-events: none;
+}
+.screen .music-section .music-artwork {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: var(--surface-raised);
+}
+.artwork-fallback {
+  align-items: start;
+  padding-top: 52px;
+}
+.artwork-fallback span {
+  width: 112px;
+  height: 112px;
+  font-size: 56px;
+}
+.screen[data-role='bed'] .music-artwork img {
+  filter: brightness(0.82);
+}
+.music-now-playing {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  gap: 3px;
+}
+.screen .music-section .music-now-playing strong {
+  font-size: 27px;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+.screen .music-section .music-now-playing span {
+  font-size: 15px;
+  color: var(--quiet);
+}
+.music-preset-button {
+  background: var(--surface-raised);
+}
+.volume-authority button {
+  min-height: 44px;
+}
+
+/* Opus dynamic: extend the installed Rutor palette/sleeve, retaining its base.
+   Fixed zones use the same coordinates for Bed, Desk and changing content.
+   All facts and commands still come from display.js and the existing API. */
+:root {
+  --ground: #141b18;
+  --surface: #1d2622;
+  --surface-raised: #293630;
+  --ink: #f1f4ed;
+  --quiet: #cdd8ce;
+  --muted: #a4b4a9;
+  --accent: #eadfb4;
+  --accent-contrast: #2a2a1e;
+}
+.screen,
+.screen[data-feedback='true'] {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  background: var(--ground);
+  font-variant-numeric: tabular-nums;
+}
+.screen[data-role='desk'] {
+  --accent: #eadfb4;
+}
+.screen[data-role='bed'] {
+  filter: none;
+}
+.screen[data-time='night'] {
+  --ground: #0f1412;
+  --surface: #171c19;
+  --ink: #e8dfcd;
+  --quiet: #cfc5b2;
+  --muted: #aba18f;
+  --accent: #c9b98c;
+}
+.screen[data-role='bed'][data-time='night'] {
+  --ground: #0a0d0b;
+  --surface: #121512;
+  --ink: #dcc9a8;
+  --quiet: #c4b395;
+  --muted: #a89980;
+  --accent: #a8966a;
+}
+.screen button {
+  min-width: 44px;
+  min-height: 44px;
+  filter: none;
+}
+.screen button:active:not(:disabled) {
+  background-color: var(--surface-raised);
+}
+.screen :focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+.glance,
+.clock-block,
+.clock-top,
+.clock-meta,
+.control-layout,
+.scene-section,
+.section-heading,
+.music-heading {
+  display: contents;
+}
+.clock-time {
+  position: absolute;
+  left: 1%;
+  top: 22px;
+  width: 48%;
+  font-size: 144px;
+  line-height: 120px;
+  font-weight: 200;
+  letter-spacing: -0.035em;
+}
+.clock-date {
+  position: absolute;
+  left: 1.95%;
+  top: 146px;
+  width: 48%;
+  font-size: 27px;
+  line-height: 36px;
+  color: var(--ink);
+}
+.presence-count-button {
+  position: absolute;
+  left: 1.95%;
+  top: 32%;
+  width: 16%;
+  height: 72px;
+  padding: 4px 10px;
+  border-radius: 16px;
+  justify-content: flex-start;
+  border: 2px solid var(--line);
+  color: var(--ink);
+  background: var(--surface);
+}
+.presence-count-button:disabled {
+  opacity: 1;
+  border-color: transparent;
+  background: transparent;
+}
+.presence-count-button svg {
+  width: 24px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.presence-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  gap: 3px;
+}
+.room-presence {
+  font-size: 18px;
+  line-height: 21px;
+  color: var(--ink);
+}
+#presence-count-label {
+  font-size: 12px;
+  line-height: 14px;
+  color: var(--quiet);
+}
+.environment-grid,
+.screen[data-role='bed'] .environment-grid {
+  position: absolute;
+  left: 10.16%;
+  top: 31.33%;
+  width: 51.95%;
+  height: 56px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0;
+  align-items: center;
+}
+.screen[data-role='bed'] [data-metric='pm25'] {
+  display: flex;
+}
+.environment-metric {
+  gap: 1px;
+  overflow: visible;
+}
+.metric-label {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+}
+.metric-value {
+  font-size: 24px;
+  line-height: 28px;
+  font-weight: 400;
+}
+.metric-unit {
+  font-size: 0.55em;
+}
+.metric-state {
+  font-size: 11px;
+  line-height: 13px;
+  min-height: 13px;
+}
+#scene-heading,
+#music-heading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.scene-grid {
+  position: absolute;
+  left: 1.95%;
+  top: 43.33%;
+  width: 47.85%;
+  height: 42%;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 8px;
+}
+.scene-grid[data-paged='true'] {
+  height: calc(42% - 52px);
+}
+.screen .scene-button,
+.screen .scene-button[data-icon='true'] {
+  --scene-color: #f0a05a;
+  position: relative;
+  min-width: 0;
+  min-height: 44px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 2px solid transparent;
+  background: var(--surface);
+  color: var(--ink);
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 4px;
+  grid-column: span 2;
+}
+/* Whole rows at every count, so no page leaves an empty tile-sized hole. */
+.screen .scene-grid[data-count='1'] .scene-button {
+  grid-column: span 6;
+}
+.screen .scene-grid[data-count='2'] .scene-button,
+.screen .scene-grid[data-count='4'] .scene-button,
+.screen .scene-grid[data-count='5'] .scene-button:nth-child(n + 4) {
+  grid-column: span 3;
+}
+.screen .scene-button[data-scene='scene.soft_light'] {
+  --scene-color: #f0a05a;
+}
+.screen .scene-button[data-scene='scene.everyday_light'] {
+  --scene-color: #ead3a1;
+}
+.screen .scene-button[data-scene='scene.focus_light'] {
+  --scene-color: #b5ced6;
+}
+.screen .scene-button[data-scene='scene.movie_light'] {
+  --scene-color: #bcafd2;
+}
+.screen .scene-button[data-scene='scene.party'] {
+  --scene-color: #d9a6bd;
+}
+.screen .scene-button[data-scene='scene.sleep'] {
+  --scene-color: #b3c4ad;
+}
+.screen .scene-icon {
+  width: 28px;
+  height: 28px;
+  color: var(--scene-color);
+}
+.screen .scene-button .scene-copy {
+  width: 100%;
+  margin-top: auto;
+  align-items: flex-start;
+  min-width: 0;
+}
+.screen .scene-button .scene-name {
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.screen .scene-button[aria-pressed='true'] {
+  border-color: var(--scene-color);
+  background: var(--scene-color);
+  color: #181b16;
+}
+.screen .scene-button[aria-pressed='true'] .scene-icon {
+  color: inherit;
+}
+.screen[data-time='night'] .scene-button[aria-pressed='true'] {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+.screen .scene-button .scene-current-mark {
+  top: 10px;
+  right: 10px;
+  animation: none;
+}
+.screen .scene-button .scene-status {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: auto;
+  height: auto;
+  max-width: calc(100% - 50px);
+  margin: 0;
+  clip: auto;
+  font-size: 12px;
+  line-height: 14px;
+  text-align: right;
+}
+.screen .scene-button .scene-current-mark {
+  display: none;
+}
+.screen .light-off {
+  position: absolute;
+  left: 51.37%;
+  top: 43.33%;
+  width: 10.74%;
+  height: 42%;
+  min-width: 0;
+  padding: 12px 14px;
+  border-color: var(--line);
+  background: #0d1210;
+}
+.screen .light-off .scene-icon {
+  width: 32px;
+  height: 32px;
+  color: var(--ink);
+}
+.screen .light-off[aria-pressed='true'] {
+  background: #000;
+  color: var(--ink);
+  border-color: var(--ink);
+}
+.screen .light-off .scene-status {
+  top: 54px;
+  left: 10px;
+  right: 10px;
+  max-width: none;
+  text-align: left;
+}
+.scene-pagination {
+  position: absolute;
+  left: 1.95%;
+  top: calc(85.33% - 44px);
+  width: 47.85%;
+  height: 44px;
+  font-size: 15px;
+}
+.scene-pagination button,
+.context-pagination button,
+.camera-pagination button {
+  padding: 6px 12px;
+  min-width: 90px;
+}
+.hub-sill {
+  display: contents;
+}
+.hub-sill button {
+  position: absolute;
+  top: 88%;
+  height: 8.67%;
+  width: 19.53%;
+  padding: 6px 10px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: #101713;
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 21px;
+}
+#context-details-button {
+  left: 1.95%;
+}
+#music-menu {
+  left: 22.27%;
+}
+#camera-menu {
+  left: 42.58%;
+}
+.hub-sill [aria-expanded='true'] {
+  border: 2px solid var(--accent);
+}
+.hub-sill [aria-disabled='true'] {
+  color: var(--muted);
+}
+/* The right-hand sleeve is absent until music actually plays or is requested. */
+.screen .music-section,
+.screen[data-music-details='true'] .music-section {
+  position: absolute;
+  left: 63.48%;
+  top: 0;
+  width: 36.52%;
+  height: 100%;
+  display: block;
+  border: 0;
+  border-radius: 26px 0 0 26px;
+  padding: 0;
+  overflow: visible;
+  background: transparent;
+  pointer-events: none;
+}
+.screen .music-section button {
+  pointer-events: auto;
+}
+.screen .music-section .music-feature,
+.screen[data-feedback='true'] .music-section .music-feature {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  display: block;
+  margin: 0;
+  padding: 0;
+  border-radius: 26px 0 0 26px;
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 160ms ease;
+  z-index: 0;
+}
+.screen[data-music-visible='true'] .music-section .music-feature {
+  opacity: 1;
+  visibility: visible;
+}
+.screen .music-section .music-artwork {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border-radius: 0;
+  background: var(--surface);
+}
+.screen .music-artwork img {
+  object-fit: cover;
+  filter: none;
+}
+.screen[data-role='bed'] .music-artwork img {
+  filter: none;
+}
+.music-artwork::after {
+  display: none;
+}
+.artwork-fallback {
+  display: none;
+}
+.screen .music-feature::after {
+  background: linear-gradient(
+    to bottom,
+    transparent 25%,
+    rgba(20, 27, 24, 0.85) 54%,
+    var(--ground) 76%
+  );
+  z-index: 0;
+}
+.screen[data-time='night'] .music-artwork {
+  opacity: 0.35;
+}
+.screen .music-section .music-now-playing {
+  position: absolute;
+  left: 16px;
+  top: 58.33%;
+  width: calc(100% - 136px);
+  height: 100px;
+  justify-content: flex-end;
+  gap: 2px;
+  z-index: 1;
+}
+.screen .music-section .music-now-playing strong {
+  font-size: 27px;
+  line-height: 30px;
+  max-height: 60px;
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+.screen .music-section .music-now-playing span {
+  font-size: 15px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.screen .music-section .music-transport {
+  display: contents;
+}
+.screen .play-button {
+  position: absolute;
+  top: 58.33%;
+  right: 20px;
+  width: 100px;
+  height: 100px;
+  min-width: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+#music-playback-icon {
+  font-size: 30px;
+}
+#music-playback-label {
+  font-size: 15px;
+}
+.screen .music-section .music-volume-policy {
+  position: absolute;
+  left: 16px;
+  top: 77.67%;
+  width: 48%;
+  padding: 0;
+  border: 0;
+  display: block;
+}
+.volume-authority {
+  display: flex;
+  gap: 2px;
+  height: 46px;
+  border-radius: 24px;
+  background: #101713;
+  padding: 1px;
+}
+.screen .volume-authority button {
+  flex: 1;
+  padding: 0 4px;
+  font-size: 15px;
+  min-height: 44px;
+  border-radius: 23px;
+  border-color: transparent;
+  color: var(--quiet);
+  background: transparent;
+}
+.screen .volume-authority button[aria-pressed='true'] {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: var(--surface-raised);
+}
+/* The selector and level already say who controls the volume and where it is. */
+.screen .music-section .volume-policy-head {
+  display: none;
+}
+.screen .volume-control {
+  position: absolute;
+  top: 77.67%;
+  right: 20px;
+  width: 146px;
+  display: grid;
+  grid-template-columns: 44px 50px 44px;
+  gap: 4px;
+  align-items: center;
+}
+.screen .volume-control .volume-label {
+  position: absolute;
+  top: -18px;
+  right: 0;
+  font-size: 12px;
+}
+.screen .volume-control .volume-label:not([data-stale='true']) {
+  display: none;
+}
+.screen .volume-step {
+  width: 44px;
+  min-width: 44px;
+  height: 46px;
+  border-radius: 50%;
+  padding: 0;
+  background: #101713;
+}
+.screen #music-volume-value {
+  font-size: 17px;
+}
+.screen[data-music-visible='false'] .volume-control {
+  display: none;
+}
+.screen .music-section #music-authority-state,
+.screen .music-section .music-command-state {
+  display: none;
+}
+.screen .music-section #music-authority-state[data-notice='true'],
+.screen .music-section .music-command-state[data-notice='true'] {
+  position: absolute;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  left: 0;
+  bottom: 50px;
+  width: calc(36.52vw - 148px);
+  max-height: 36px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--warn);
+}
+/* The title gives way to a volume notice; the play target stays put. */
+.screen[data-volume-notice='true'] .music-section .music-now-playing {
+  top: calc(58.33% - 24px);
+}
+/* State reads from the title and the Musik button; the live region stays for
+   assistive technology instead of ghosting through the artwork at night. */
+.screen .music-section #music-player-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.screen .music-presets,
+.screen .music-section[data-camera='true'] .music-presets {
+  position: absolute;
+  left: 16px;
+  right: 20px;
+  top: 88%;
+  height: 8.67%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.screen .music-preset-button {
+  height: 100%;
+  padding: 6px;
+  font-size: 16px;
+  border-radius: 28px;
+  background: #101713;
+}
+.music-preset-button[aria-pressed='true'] {
+  border: 2px solid var(--accent);
+  color: var(--ink);
+}
+.screen .music-details-button {
+  position: fixed;
+  left: 51.37%;
+  top: 38%;
+  width: 10.74%;
+  min-height: 48px;
+  padding: 5px;
+  font-size: 14px;
+  background: transparent;
+  border-color: var(--line);
+  color: var(--quiet);
+}
+/* Camera only occupies its granted view; these controls never displace music. */
+.screen .camera-panel {
+  position: absolute;
+  left: 16px;
+  right: 20px;
+  top: 84px;
+  height: calc(54.67% - 88px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: 12px;
+  padding: 0;
+  background: var(--ground);
+  z-index: 2;
+}
+.camera-caption {
+  flex: 0 0 48px;
+  min-height: 48px;
+  gap: 4px;
+}
+.screen .camera-caption strong {
+  font-size: 18px;
+  line-height: 21px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.camera-caption span:not(#camera-countdown) {
+  font-size: 12px;
+  line-height: 16px;
+}
+.screen .camera-caption button {
+  min-width: 110px;
+  padding: 4px 6px;
+  min-height: 44px;
+}
+.camera-frame {
+  min-height: 0;
+  border-radius: 6px;
+}
+.camera-status {
+  min-height: 16px;
+  font-size: 11px;
+  line-height: 14px;
+}
+.screen .camera-choices {
+  position: absolute;
+  left: 16px;
+  right: 20px;
+  top: 84px;
+  height: 180px;
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  background: var(--ground);
+  z-index: 3;
+}
+.camera-choices button {
+  overflow-wrap: anywhere;
+  font-size: 18px;
+}
+.camera-pagination {
+  position: absolute;
+  top: 272px;
+  left: 16px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 3;
+  background: var(--ground);
+}
+/* Routine shortcuts share the quiet upper window; full controls page on the left. */
+.screen .context-strip,
+.screen .bedtime-dock {
+  position: absolute;
+  left: 65.04%;
+  top: 84px;
+  width: 33.4%;
+  max-height: 236px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+.screen .context-strip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+.screen .context-copy strong {
+  font-size: 22px;
+  line-height: 28px;
+}
+.screen .context-copy span {
+  font-size: 16px;
+  line-height: 22px;
+  -webkit-line-clamp: 3;
+}
+.screen .context-strip .context-action {
+  font-size: 16px;
+}
+.screen .bedtime-dock {
+  top: 200px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.screen .bedtime-plan {
+  margin-left: 0;
+  width: 100%;
+  justify-content: space-between;
+}
+.screen .bedtime-dock button {
+  font-size: 16px;
+  min-height: 48px;
+}
+.screen[data-music-visible='true'] .context-strip,
+.screen[data-music-visible='true'] .bedtime-dock {
+  display: none;
+}
+/* Camera appears automatically even when music/routines are open. */
+.screen[data-camera-visible='true'] .context-strip,
+.screen[data-camera-visible='true'] .bedtime-dock {
+  display: none;
+}
+.screen .context-panel,
+.screen .music-details {
+  position: absolute;
+  left: 1.95%;
+  top: 43.33%;
+  width: 47.85%;
+  height: 42%;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  padding: 12px;
+  min-height: 0;
+  overflow: hidden;
+}
+.screen .context-panel {
+  display: block;
+}
+.context-list {
+  display: block;
+  height: calc(100% - 52px);
+  overflow: hidden;
+}
+.context-item {
+  padding: 0;
+  border: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.context-item h3 {
+  margin: 0 0 4px;
+  font-size: 21px;
+  line-height: 25px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.context-item p {
+  font-size: 15px;
+  line-height: 20px;
+  margin: 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+.context-item .context-actions {
+  margin-top: auto;
+  padding-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.screen .context-item .context-action {
+  font-size: 14px;
+  min-height: 44px;
+  padding: 5px 9px;
+}
+.context-pagination {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 8px;
+  height: 44px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 15px;
+}
+.screen .music-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.music-details-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  font-size: 15px;
+}
+.music-details-scroll p,
+.music-details-scroll dd {
+  font-size: 15px;
+  line-height: 21px;
+}
+/* Feedback owns its own band, without resizing or covering any action. */
+.screen .feedback-slot {
+  position: absolute;
+  left: 1.95%;
+  top: 90px;
+  width: 60.16%;
+  min-height: 44px;
+  z-index: 5;
+}
+.screen .connection-notice,
+.screen .toast {
+  min-height: 44px;
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 14px;
+  line-height: 18px;
+  border-radius: 12px;
+  background: #27392e;
+}
+.screen[data-feedback='true'] .clock-time {
+  top: 8px;
+  font-size: 84px;
+  line-height: 78px;
+}
+.screen .retry-button {
+  min-height: 44px;
+  padding: 4px 10px;
+}
+/* System overlay clearance: no text or touch target enters x896–1024,y0–72.
+   Cover art may run underneath; it carries nothing the overlay could hide. */
+.bedtime-overlay {
+  padding: 80px 24px 16px;
+}
+.bedtime-dialog {
+  width: 650px;
+  max-height: 100%;
+  padding: 14px 18px;
+}
+.bedtime-heading h2 {
+  font-size: 22px;
+}
+.bedtime-modes label,
+.bedtime-music {
+  min-height: 44px;
+}
+.bedtime-time-row {
+  margin: 6px 0;
+}
+.bedtime-music-hint {
+  font-size: 12px;
+}
+#bedtime-summary {
+  min-height: 0;
+  margin: 6px 0;
+}
+#bedtime-error {
+  margin: 6px 0;
+}
+.bedtime-footer button {
+  min-height: 48px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .screen *,
+  .screen *::before,
+  .screen *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* Use the full wall for lighting when neither music nor camera occupies it. */
+.screen[data-lighting-expanded='true'] .scene-grid,
+.screen[data-lighting-expanded='true'] .scene-pagination {
+  width: 83.2%;
+}
+.screen[data-lighting-expanded='true'] .light-off {
+  left: 87%;
+  width: 11%;
+}
+/* In the quiet view, room information fills the upper right while the clock
+   and light controls keep their place. The Bed overlay remains clear. */
+.screen[data-lighting-expanded='true'] .presence-count-button {
+  left: 65.04%;
+  top: 6%;
+  width: 19.5%;
+}
+.screen[data-lighting-expanded='true'] .environment-grid,
+.screen[data-role='bed'][data-lighting-expanded='true'] .environment-grid {
+  left: 65.04%;
+  top: 15.33%;
+  width: 33%;
+  height: 26%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 6px 16px;
+}
+.screen[data-lighting-expanded='true'] .metric-value {
+  font-size: 34px;
+  line-height: 38px;
+}
+/* Routine shortcuts occupy the space vacated by the room information. */
+.screen[data-lighting-expanded='true'] .context-strip,
+.screen[data-lighting-expanded='true'] .bedtime-dock {
+  left: 1.95%;
+  top: 31.33%;
+  width: 60%;
+  height: 56px;
+  max-height: 56px;
+  align-items: center;
+}
+.screen[data-lighting-expanded='true'] .context-strip {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.screen[data-lighting-expanded='true'] .context-copy {
+  flex: 1 1 auto;
+}
+.screen[data-lighting-expanded='true'] .context-copy strong,
+.screen[data-lighting-expanded='true'] .context-copy span {
+  -webkit-line-clamp: 1;
+}
+.screen[data-lighting-expanded='true'] .bedtime-dock {
+  flex-wrap: nowrap;
+}
+
+/* Fit each camera image in its own native proportions, without cropping. */
+.screen .camera-panel {
+  height: calc(88% - 92px);
+  overflow: hidden;
+}
+.screen .camera-frame {
+  flex: 0 1 auto;
+  width: 100%;
+  min-height: 100px;
+  align-self: center;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+.screen .camera-frame img {
+  position: static;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(88vh - 168px);
+  object-fit: contain;
+}
+.screen[data-camera-visible='true'] .music-section .music-feature,
+.screen[data-camera-visible='true'] .music-section .music-volume-policy,
+.screen[data-camera-visible='true'] .music-section .music-transport,
+.screen[data-camera-visible='true'] .music-section #music-player-status {
+  display: none;
+}
+
+/* An automatic camera must not cover an expanded light target during a touch. */
+.screen[data-lighting-expanded='true'][data-camera-visible='true']
+  .camera-panel,
+.screen[data-lighting-expanded='true'][data-camera-visible='true']
+  .camera-choices,
+.screen[data-lighting-expanded='true'][data-camera-visible='true']
+  .camera-pagination {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Compact room count and quiet music controls. The number is the observation;
+   tapping the same button still requests a correction to one person. */
+.screen .presence-count-button,
+.screen[data-lighting-expanded='true'] .presence-count-button {
+  width: 64px;
+  height: 48px;
+  padding: 4px 8px;
+  gap: 4px;
+  justify-content: center;
+  border-radius: 24px;
+}
+#presence-count-value {
+  font-size: 19px;
+  line-height: 24px;
+  font-variant-numeric: tabular-nums;
+}
+.presence-copy {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.screen .music-details-button,
+#music-playback-label {
+  display: none;
+}
+#music-playback-icon {
+  display: block;
+  position: relative;
+  width: 32px;
+  height: 34px;
+  font-size: 0;
+}
+#music-playback-icon::before,
+#music-playback-icon::after {
+  content: '';
+  position: absolute;
+}
+.play-button[data-icon='pause'] #music-playback-icon::before,
+.play-button[data-icon='pause'] #music-playback-icon::after {
+  top: 2px;
+  width: 7px;
+  height: 30px;
+  border-radius: 3px;
+  background: currentColor;
+}
+.play-button[data-icon='pause'] #music-playback-icon::before {
+  left: 6px;
+}
+.play-button[data-icon='pause'] #music-playback-icon::after {
+  right: 6px;
+}
+.play-button[data-icon='play'] #music-playback-icon::before {
+  left: 7px;
+  top: 1px;
+  border-top: 16px solid transparent;
+  border-bottom: 16px solid transparent;
+  border-left: 23px solid currentColor;
+}
+
+/* A quiet neutral wall becomes a restrained echo of the current cover. */
+.screen {
+  --ground: #151515;
+  --surface: #232323;
+  --surface-raised: #323232;
+  --ink: #f1f1ee;
+  --quiet: #d1d1cc;
+  --muted: #ababaa;
+}
+.screen[data-time='night'] {
+  --ground: #101010;
+  --surface: #1a1a1a;
+  --ink: #e8dfcd;
+  --quiet: #cfc5b2;
+  --muted: #aba18f;
+}
+.screen[data-role='bed'][data-time='night'] {
+  --ground: #0b0b0b;
+  --surface: #141414;
+}
+.screen[data-music-playing='true'][data-art-color='true'] {
+  --ground: var(--art-ground);
+  --surface: var(--art-surface);
+  --surface-raised: var(--art-raised);
+}
+.screen[data-time='night'][data-music-playing='true'][data-art-color='true'] {
+  --ground: var(--art-night-ground);
+  --surface: var(--art-night-surface);
+}
+.screen .hub-sill button,
+.screen .music-preset-button,
+.screen .volume-step,
+.screen .volume-authority {
+  background: var(--ground);
+}
+.screen .light-off {
+  background: #101010;
+}
+
+/* Spotify's mark replaces only the reported Spotify source label. */
+#music-source[data-spotify='true'] {
+  font-size: 0;
+  line-height: 0;
+  height: 20px;
+}
+#music-source[data-spotify='true']::before {
+  content: '';
+  display: block;
+  width: 20px;
+  height: 20px;
+  background: center / contain no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='12' fill='%231ed760'/%3E%3Cpath d='M5.3 9.1c4.4-1.3 9.3-.9 13 1.3M6.2 12.1c3.7-1.1 7.9-.7 11.1 1.2M7 15c3.1-.8 6.2-.5 8.9 1' fill='none' stroke='%23151515' stroke-linecap='round' stroke-width='1.5'/%3E%3C/svg%3E");
+}
