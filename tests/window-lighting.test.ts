@@ -57,6 +57,11 @@ function setup(
           [desk]: { power: true, brightness: 60 },
         },
       },
+      {
+        id: 'scene.omitted_rgb',
+        name: 'Red',
+        lighting: { [desk]: { power: true, brightness: 60, rgb: [200, 0, 0] } },
+      },
     ],
     defaultSceneId: 'scene.white',
     windowLighting: {
@@ -134,6 +139,20 @@ describe('outward-facing window lighting', () => {
     await engine.handlePresence(occupied);
     expect(power()).toBe(true);
   });
+  it('room mode follows occupancy even when home presence reports away', async () => {
+    const { engine, power } = setup('room');
+    await engine.handleSunElevation(-5);
+    await engine.handlePresence(occupied);
+    await engine.handleHomePresence('away');
+    expect(power()).toBe(true);
+  });
+  it('follows scene colour when the scene omits the window', async () => {
+    const { engine, adapter } = setup('always');
+    await engine.handleSunElevation(-5);
+    await engine.activateScene('scene.white', { type: 'user' });
+    await engine.activateScene('scene.omitted_rgb', { type: 'user' });
+    expect(adapter.observed.get(windowTarget)?.rgb).toEqual([200, 0, 0]);
+  });
   it.each(['home', 'always'] as const)(
     '%s mode applies its home-presence rule and retains daylight through brief outages',
     async (mode) => {
@@ -201,5 +220,35 @@ describe('outward-facing window lighting', () => {
     await engine.handleSunElevation(-5);
     expect(power()).toBe(true);
     expect(adapter.observed.get(desk)?.power).not.toBe(true);
+  });
+  it('preserves a window-only zero brightness override across restart', async () => {
+    const first = setup('always');
+    await first.engine.handleSunElevation(-5);
+    await first.engine.setLighting(
+      windowTarget,
+      { brightness: 0 },
+      { actor: { type: 'user' } },
+    );
+    const restarted = setup('always', {
+      restoredLightingIntent: first.engine.getLightingIntentSnapshot(),
+    });
+    await restarted.engine.handleSunElevation(-5);
+    expect(restarted.power()).toBe(false);
+    await restarted.engine.handlePresence(occupied);
+    expect(restarted.adapter.observed.get(desk)?.power).toBe(true);
+  });
+  it('applies daylight after a routine guard expires', async () => {
+    const { engine, adapter } = setup('always');
+    let current = true;
+    await engine.handleSunElevation(-5);
+    await engine.setLighting(
+      windowTarget,
+      { brightness: 20 },
+      { actor: { type: 'routine', id: 'fade' } },
+      () => current,
+    );
+    current = false;
+    await engine.handleSunElevation(10);
+    expect(adapter.observed.get(windowTarget)?.power).toBe(false);
   });
 });

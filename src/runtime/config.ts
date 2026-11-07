@@ -426,6 +426,16 @@ const FileConfigSchema = z
         message: 'Window light must be mapped in homeAssistant.entities',
       });
     }
+    if (
+      config.windowLighting &&
+      config.windowLighting.target in config.homeAssistant.wledCct
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['windowLighting', 'target'],
+        message: 'Dedicated WLED CCT strips cannot be used as window lights',
+      });
+    }
   });
 
 /** Validates an in-memory configuration with the same strict schema as the runtime. */

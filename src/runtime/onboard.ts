@@ -266,17 +266,22 @@ export async function runOnboardingCli(
     if (mqttPassword === undefined) return 2;
   }
 
-  const prelightEnabled = await confirm(
-    io,
-    'Configure the STL27L fast entry-light path?',
-    true,
+  const prelightMappings = mappings.filter(
+    ([target]) => target !== windowLighting?.target,
   );
+  const prelightEnabled =
+    prelightMappings.length > 0 &&
+    (await confirm(io, 'Configure the STL27L fast entry-light path?', true));
   const prelightTargets: CommissioningConfig['prelight']['targets'] = {};
   if (prelightEnabled) {
+    io.writeLine('Lights available for entry lighting:');
+    prelightMappings.forEach(([semanticId, entityId], index) =>
+      io.writeLine(`  ${index + 1}. ${semanticId} → ${entityId}`),
+    );
     const prelightIndices = await promptIndices(
       io,
       'Choose one or more mapped lights for brief entry lighting',
-      mappings.length,
+      prelightMappings.length,
     );
     if (!prelightIndices) return 2;
     const brightness = await promptInteger(
@@ -297,7 +302,7 @@ export async function runOnboardingCli(
     if (temperature === undefined) return 2;
 
     for (const index of prelightIndices) {
-      const target = mappings[index - 1]?.[0];
+      const target = prelightMappings[index - 1]?.[0];
       if (!target) return 2;
       prelightTargets[target] = {
         power: true,

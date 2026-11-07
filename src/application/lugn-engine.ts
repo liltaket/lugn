@@ -204,14 +204,11 @@ export class LugnEngine {
     const settings = this.windowLighting;
     if (!settings) return false;
     const device = this.requireDevice(settings.target);
+    const scene = this.activeSceneDefinition ?? this.defaultSceneOnOccupancy;
     // The default can supply just the window's intent before first room entry.
     // Other targets still wait for occupancy through the ordinary entry path.
-    if (
-      Object.keys(device.baselineDesired).length === 0 &&
-      this.state.lighting.currentScene === null &&
-      this.defaultSceneOnOccupancy
-    ) {
-      const values = this.defaultSceneOnOccupancy.lighting[settings.target];
+    if (Object.keys(device.baselineDesired).length === 0 && scene) {
+      const values = scene.lighting[settings.target];
       if (values) {
         device.baselineDesired = { ...values };
         device.effectiveDesired = { ...values };
@@ -221,9 +218,7 @@ export class LugnEngine {
       device.effectiveDesired.rgb === undefined &&
       device.effectiveDesired.colorTemperature === undefined
     ) {
-      const colour = Object.values(
-        this.activeSceneDefinition?.lighting ?? {},
-      ).find(
+      const colour = Object.values(scene?.lighting ?? {}).find(
         (values) =>
           values.power !== false &&
           (values.rgb !== undefined || values.colorTemperature !== undefined),
@@ -237,25 +232,36 @@ export class LugnEngine {
       settings.presenceMode === 'always' ||
       (settings.presenceMode === 'home'
         ? this.state.presence.home.state !== 'away'
-        : this.lastConfirmedPresence === 'occupied' &&
-          this.state.presence.home.state !== 'away');
+        : this.lastConfirmedPresence === 'occupied');
     const power =
       !this.hasExplicitAllLightsOffScene() &&
       this.state.lighting.currentScene !== 'scene.all_off' &&
       this.state.lighting.currentScene !== 'scene.sleep' &&
+      !this.holds.blocks('lighting.activation', settings.target) &&
+      !(
+        device.ownership.brightness?.kind === 'override' &&
+        device.effectiveDesired.brightness === 0
+      ) &&
       this.sunElevation !== undefined &&
       this.sunElevation <= settings.maxSunElevation &&
       presenceAllows;
+    const brightness =
+      device.ownership.brightness?.kind === 'override'
+        ? (device.effectiveDesired.brightness ?? settings.brightness)
+        : settings.brightness;
     const changed =
       device.effectiveDesired.power !== power ||
-      device.effectiveDesired.brightness !== settings.brightness;
+      device.effectiveDesired.brightness !== brightness;
     device.effectiveDesired.power = power;
-    device.effectiveDesired.brightness = settings.brightness;
+    device.effectiveDesired.brightness = brightness;
     return changed;
   }
 
   private async reconcileWindowLighting(force = false): Promise<void> {
     if (!this.windowLighting) return;
+    const guard = this.lightingExecutionGuards.get(this.windowLighting.target);
+    if (guard && !guard())
+      this.lightingExecutionGuards.delete(this.windowLighting.target);
     const changed = this.applyWindowLightingPolicy();
     if (!changed && !force) return;
     const target = this.windowLighting.target;
@@ -586,11 +592,12 @@ export class LugnEngine {
       !restoredContinuityExpired &&
       ((restoredIntent.sceneRevision > 0 &&
         restoredIntent.currentScene !== null) ||
-        Object.values(restoredIntent.devices).some(
-          (device) =>
-            Object.keys(device.baselineDesired).length > 0 ||
-            Object.keys(device.effectiveDesired).length > 0 ||
-            Object.keys(device.ownership).length > 0,
+        Object.entries(restoredIntent.devices).some(
+          ([target, device]) =>
+            target !== this.windowLighting?.target &&
+            (Object.keys(device.baselineDesired).length > 0 ||
+              Object.keys(device.effectiveDesired).length > 0 ||
+              Object.keys(device.ownership).length > 0),
         ));
     if (hasRestoredIntent || expiredRestoredSceneHasPositiveOutput)
       this.restoredIntentAwaitingOccupancy = true;
@@ -612,7 +619,13 @@ export class LugnEngine {
           )
         )
           throw new Error('Restored ownership exceeds its scene revision');
-        if (hasRestoredIntent) {
+        if (
+          hasRestoredIntent ||
+          (target === this.windowLighting?.target &&
+            Object.values(intent.ownership).some(
+              (owner) => owner.kind === 'override',
+            ))
+        ) {
           device.baselineDesired = { ...intent.baselineDesired };
           device.effectiveDesired = { ...intent.effectiveDesired };
           device.ownership = structuredClone(intent.ownership);
@@ -1684,10 +1697,13 @@ export class LugnEngine {
     this.assertExecution(isCurrent);
     const scene = this.scenes.get(sceneId);
     if (!scene) throw new Error(`Unknown scene: ${sceneId}`);
-    // beginScene replaces intent only for included targets; omitted targets
-    // retain their intent and guards even when reconciliation retries them.
+    // The window follows scene changes even when omitted; other omitted targets
+    // retain their intent and guards when reconciliation retries them.
     if (isHumanActor(actor) && !isCurrent)
-      for (const target of Object.keys(scene.lighting))
+      for (const target of new Set([
+        ...Object.keys(scene.lighting),
+        ...(this.windowLighting ? [this.windowLighting.target] : []),
+      ]))
         this.noteIntervention({ domain: 'lighting', target });
     if (
       !isHumanActor(actor) &&
@@ -1813,15 +1829,27 @@ export class LugnEngine {
         : Object.entries(scene?.lighting ?? {})
             .filter(
               ([sceneTarget, sceneValues]) =>
-                sceneValues.power !== false &&
-                sceneValues.colorTemperature !== undefined &&
+                (sceneValues.power !== false ||
+                  (sceneTarget === this.windowLighting?.target &&
+                    this.requireDevice(sceneTarget).effectiveDesired.power ===
+                      true)) &&
+                (sceneValues.colorTemperature !== undefined ||
+                  (sceneTarget === this.windowLighting?.target &&
+                    this.requireDevice(sceneTarget).effectiveDesired
+                      .colorTemperature !== undefined)) &&
                 (!physicallyEmpty ||
+                  this.windowCanRunWhileEmpty(sceneTarget) ||
                   this.manualLightingWhileEmpty.has(sceneTarget)),
             )
             .map(([sceneTarget]) => sceneTarget);
     const targets = synchronizedTemperatureTargets.includes(target)
       ? synchronizedTemperatureTargets
-      : [target];
+      : this.windowLighting &&
+          synchronizedTemperatureTargets.includes(this.windowLighting.target) &&
+          scene?.lighting[target]?.power !== false &&
+          scene?.lighting[target]?.colorTemperature !== undefined
+        ? [...new Set([target, ...synchronizedTemperatureTargets])]
+        : [target];
     // Attribute every affected target before yielding, so pending and running routines
     // cannot overwrite a human temperature adjustment expanded through the scene.
     if (isHumanActor(provenance.actor) && !isCurrent)
@@ -1869,6 +1897,16 @@ export class LugnEngine {
     }
     const now = this.clock.now();
     const deviceBeforeUpdate = this.requireDevice(target);
+    if (
+      target === this.windowLighting?.target &&
+      values.power === true &&
+      values.brightness === undefined &&
+      deviceBeforeUpdate.effectiveDesired.brightness === 0
+    ) {
+      delete deviceBeforeUpdate.ownership.brightness;
+      deviceBeforeUpdate.effectiveDesired.brightness =
+        this.windowLighting.brightness;
+    }
     if (
       values.power === true &&
       values.rgb === undefined &&
@@ -1923,6 +1961,25 @@ export class LugnEngine {
       } else if (confirmedMorning() && targetValues.power === true)
         this.holds.clear('lighting.activation', lightingTarget);
       const device = this.requireDevice(lightingTarget);
+      if (
+        lightingTarget === this.windowLighting?.target &&
+        targetValues.power !== undefined
+      ) {
+        // Persist explicit OFF through the existing activation-hold mechanism.
+        // Policy-owned power must not be published as a property override after
+        // daylight changes it.
+        if (targetValues.power === false)
+          this.holds.set('lighting.activation', lightingTarget, {
+            actor: provenance.actor,
+            source,
+            reason,
+            ...(provenance.requestId === undefined
+              ? {}
+              : { requestId: provenance.requestId }),
+          });
+        else this.holds.clear('lighting.activation', lightingTarget);
+        delete device.ownership.power;
+      }
       if (targetValues.rgb !== undefined) {
         delete device.effectiveDesired.colorTemperature;
         delete device.ownership.colorTemperature;
@@ -1935,6 +1992,11 @@ export class LugnEngine {
         const value = targetValues[property];
         if (value === undefined) continue;
         Object.assign(device.effectiveDesired, { [property]: value });
+        if (
+          lightingTarget === this.windowLighting?.target &&
+          property === 'power'
+        )
+          continue;
         device.ownership[property] = {
           kind: 'override',
           actor: provenance.actor,
@@ -1958,11 +2020,24 @@ export class LugnEngine {
       },
     );
     const revision = this.state.lighting.sceneRevision;
+    if (this.windowLighting && updates.has(this.windowLighting.target)) {
+      this.applyWindowLightingPolicy();
+      const windowValues = updates.get(this.windowLighting.target)!;
+      const desired = this.requireDevice(
+        this.windowLighting.target,
+      ).effectiveDesired;
+      if (desired.power === false) {
+        updates.set(this.windowLighting.target, { power: false });
+      } else if (windowValues.brightness !== undefined) {
+        windowValues.brightness = desired.brightness;
+      }
+    }
     this.publish(['lighting', 'commands', 'diagnostics']);
     await Promise.all(
       [...updates].map(([lightingTarget, targetValues]) =>
         !this.shouldRemainPhysicallyEmpty() ||
         targetValues.power === false ||
+        this.windowCanRunWhileEmpty(lightingTarget) ||
         (isHumanActor(provenance.actor) &&
           (targetValues.power === true ||
             (targetValues.power === undefined &&
@@ -2929,7 +3004,10 @@ export class LugnEngine {
     intent: IntentProvenance,
     isCurrent?: ExecutionGuard,
   ): number {
-    const includedTargets = new Set(Object.keys(scene.lighting));
+    const includedTargets = new Set([
+      ...Object.keys(scene.lighting),
+      ...(this.windowLighting ? [this.windowLighting.target] : []),
+    ]);
     for (const target of includedTargets) {
       if (isCurrent) this.lightingExecutionGuards.set(target, isCurrent);
       else this.lightingExecutionGuards.delete(target);
@@ -2939,6 +3017,14 @@ export class LugnEngine {
     if (isHumanActor(intent.actor)) {
       for (const target of includedTargets)
         this.holds.clear('lighting.activation', target);
+      if (this.windowLighting) {
+        const target = this.windowLighting.target;
+        this.holds.clear('lighting.activation', target);
+        const device = this.requireDevice(target);
+        delete device.ownership.power;
+        delete device.ownership.brightness;
+        device.effectiveDesired.brightness = this.windowLighting.brightness;
+      }
       if (scene.id === 'scene.all_off' || scene.id === 'scene.sleep')
         for (const [target, values] of Object.entries(scene.lighting))
           if (values.power === false)
@@ -3007,6 +3093,26 @@ export class LugnEngine {
       for (const property of LightingProperties) {
         if (values[property] !== undefined)
           device.ownership[property] = { kind: 'scene', revision };
+      }
+    }
+    if (this.windowLighting) {
+      const target = this.windowLighting.target;
+      const windowValues = scene.lighting[target];
+      if (!windowValues?.rgb && windowValues?.colorTemperature === undefined) {
+        const color = Object.entries(scene.lighting).find(
+          ([other, values]) =>
+            other !== target &&
+            values.power !== false &&
+            (values.rgb !== undefined || values.colorTemperature !== undefined),
+        )?.[1];
+        if (color) {
+          const device = this.requireDevice(target);
+          delete device.effectiveDesired.rgb;
+          delete device.effectiveDesired.colorTemperature;
+          if (color.rgb) device.effectiveDesired.rgb = [...color.rgb];
+          else
+            device.effectiveDesired.colorTemperature = color.colorTemperature;
+        }
       }
     }
     this.activeSceneDefinition = {
@@ -3591,6 +3697,22 @@ export class LugnEngine {
       );
     this.publish(['lighting', 'commands', 'diagnostics', 'timings']);
     if (
+      observation.target === this.windowLighting?.target &&
+      this.restoredIntentAwaitingOccupancy &&
+      !this.shouldRemainPhysicallyEmpty() &&
+      this.sunElevation === undefined &&
+      device.observed.power === true
+    ) {
+      // Restored ON intent has no daylight permission until the first sun
+      // reading. OFF is safe before occupancy, including in room mode.
+      this.applyWindowLightingPolicy();
+      void this.reconcileScene(
+        this.state.lighting.sceneRevision,
+        undefined,
+        new Set(),
+        { onlyTargets: new Set([observation.target]) },
+      );
+    } else if (
       (!this.shouldRemainPhysicallyEmpty() ||
         this.targetIntentCanRunWhileEmpty(
           this.state.lighting.sceneRevision,
@@ -3684,11 +3806,7 @@ export class LugnEngine {
       this.defaultSceneOnOccupancy = this.normalDefaultScene;
       this.lastNonOffSceneId = null;
     }
-    for (const [target, device] of Object.entries(
-      this.state.lighting.devices,
-    )) {
-      if (this.windowCanRunWhileEmpty(target) && !retainedExplicitScene)
-        continue;
+    for (const device of Object.values(this.state.lighting.devices)) {
       device.baselineDesired = {};
       device.effectiveDesired = {};
       device.ownership = {};
@@ -3708,6 +3826,7 @@ export class LugnEngine {
         }
       }
     }
+    this.applyWindowLightingPolicy();
     this.state.presence.continuityExpiresAt = null;
     this.addDiagnostic(
       'continuity.expired',

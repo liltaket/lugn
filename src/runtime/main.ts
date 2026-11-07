@@ -871,7 +871,6 @@ async function seedHomeAssistantObservations(
       );
       return false;
     }
-    onStates?.(states);
     for (const state of states) {
       if (typeof state !== 'object' || state === null) continue;
       const candidate = state as Record<string, unknown>;
@@ -885,6 +884,7 @@ async function seedHomeAssistantObservations(
       environmentAdapter?.acceptState(candidate);
       homePresenceAdapter?.acceptState(candidate);
     }
+    onStates?.(states);
     return true;
   } catch {
     console.warn(

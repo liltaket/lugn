@@ -416,4 +416,4 @@ first valid sun observation it stays off; a temporary loss retains the last
 valid elevation. Helt släckt and the sleep scene still switch it off.
 Existing RGB and white scene modes apply; simultaneous
 independent RGB and white channels are not provided. Restart after changing
-configuration.
+configuration. Dedicated WLED CCT mappings cannot be used as window lights.
