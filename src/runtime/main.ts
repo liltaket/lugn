@@ -16,6 +16,7 @@ import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
 import { HomeAssistantHomePresenceAdapter } from '../adapters/home-assistant-home-presence.js';
+import { HomeAssistantSunAdapter } from '../adapters/home-assistant-sun.js';
 import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -262,6 +263,9 @@ export async function startRuntime(
       ? {}
       : { musicVolumeSettingsGeneration: volumeSettingsStore.generation }),
     prelight: config.prelight,
+    ...(config.windowLighting === undefined
+      ? {}
+      : { windowLighting: config.windowLighting }),
     ...(config.lightingControlModes === undefined
       ? {}
       : { lightingControlModes: config.lightingControlModes }),
@@ -286,6 +290,9 @@ export async function startRuntime(
         }),
   });
   engineRef.current = engine;
+  const homeAssistantSun = new HomeAssistantSunAdapter((elevation) => {
+    void engine.handleSunElevation(elevation);
+  });
   const homeAssistantHomePresence = new HomeAssistantHomePresenceAdapter(
     config.homeAssistant.homePresence ?? {
       entity: 'device_tracker.lustigkurre',
@@ -485,6 +492,7 @@ export async function startRuntime(
     homeAssistantMusic?.acceptStateChangedEvent(event);
     homeAssistantEnvironment.acceptStateChangedEvent(event);
     homeAssistantHomePresence.acceptStateChangedEvent(event);
+    homeAssistantSun.acceptEvent(event);
     homeAssistantBilresa.acceptStateChangedFrame(event);
   };
   const refreshHomeAssistantStates = async (
@@ -510,6 +518,7 @@ export async function startRuntime(
       () => connection.isCurrent(),
       (states) => {
         cameraSeed = states;
+        for (const state of states) homeAssistantSun.acceptState(state);
       },
     );
     if (homeAssistantConnection !== connection || !connection.isCurrent())
@@ -759,6 +768,10 @@ export async function startRuntime(
       homeAssistantEnvironment,
       homeAssistantHomePresence,
       homeAssistantFetch,
+      undefined,
+      (states) => {
+        for (const state of states) homeAssistantSun.acceptState(state);
+      },
     );
     if (mqttSubscriber) mqttSubscriber.start();
     homeAssistantSocket.start();

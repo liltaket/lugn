@@ -392,3 +392,28 @@ Example color entry in a manually selected configured scene:
   }
 }
 ```
+
+## Outward-facing window light
+
+An optional window light follows the selected scene's colour but uses its own
+fixed brightness and daylight and presence rules. Configure it with the
+onboarding wizard or in `config.json`:
+
+```json
+"windowLighting": {
+  "target": "lighting.window_strip",
+  "presenceMode": "home",
+  "brightness": 55,
+  "maxSunElevation": 0
+}
+```
+
+The target must be mapped in `homeAssistant.entities`. `presenceMode` is
+`room`, `home`, or `always`. Unknown home presence is treated as home. The
+light is permitted when Home Assistant's `sun.sun` elevation is at or below
+`maxSunElevation` (degrees); lower values wait for a darker sky. Until the
+first valid sun observation it stays off; a temporary loss retains the last
+valid elevation. Helt släckt and the sleep scene still switch it off.
+Existing RGB and white scene modes apply; simultaneous
+independent RGB and white channels are not provided. Restart after changing
+configuration.

@@ -79,6 +79,7 @@ describe('interactive commissioning wizard', () => {
       '1,2',
       'ceiling',
       'desk',
+      '',
       'mqtt://broker.test:1883',
       '',
       'y',
@@ -184,6 +185,57 @@ describe('interactive commissioning wizard', () => {
     expect(output.join('\n')).toContain('Ceiling');
     expect(output.join('\n')).not.toContain('\u001b');
     expect(output.join('\n')).not.toContain('\u202e');
+  });
+
+  it('marks a mapped outward-facing strip as a special window light', async () => {
+    const directory = createDirectory();
+    const configPath = join(directory, 'config.json');
+    const environmentPath = join(directory, 'lugn.env');
+    const { io, output } = fakeIO([
+      'http://ha.test:8123',
+      'private-ha-token',
+      '1',
+      'govee_window',
+      'y',
+      '1',
+      '2',
+      '24',
+      '-6',
+      'mqtt://broker.test:1883',
+      '',
+      'n',
+      'n',
+    ]);
+
+    const exitCode = await runOnboardingCli([configPath, environmentPath], {
+      io,
+      fetcher: async () => Response.json([discoveredStates[1]]),
+      createToken: () => 'generated-local-api-token',
+    });
+
+    expect(exitCode).toBe(0);
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      homeAssistant: { entities: Record<string, string> };
+      windowLighting?: {
+        target: string;
+        presenceMode: string;
+        brightness: number;
+        maxSunElevation: number;
+      };
+    };
+    expect(config.homeAssistant.entities).toEqual({
+      'lighting.govee_window': 'light.desk',
+    });
+    expect(config.windowLighting).toEqual({
+      target: 'lighting.govee_window',
+      presenceMode: 'home',
+      brightness: 24,
+      maxSunElevation: -6,
+    });
+    expect(output.join('\n')).toContain('Special window light configured');
+    expect(output.join('\n')).toContain(
+      'Choose the mapped light that faces out through a window',
+    );
   });
 
   it('requires confirmation before replacing either existing file', async () => {
