@@ -5,6 +5,7 @@ import { lightingFeedbackBrowserScript } from '../src/runtime/lighting-feedback-
 
 type Listener = (event?: {
   target?: Element;
+  pointerId?: number;
   key?: string;
   shiftKey?: boolean;
   preventDefault?: () => void;
@@ -235,7 +236,7 @@ describe('Hub optional Lugn 2 presentation', () => {
     delete legacy.artwork;
     ui.render(legacy);
     expect(ui.get('#context-strip').hidden).toBe(true);
-    expect(ui.get('#context-details-button').hidden).toBe(true);
+    expect(ui.get('#context-details-button').hidden).toBe(false);
     expect(
       ui
         .get('#scene-grid')
@@ -497,6 +498,24 @@ describe('Hub optional Lugn 2 presentation', () => {
     expect(ui.get('#music-details').hidden).toBe(false);
     expect(ui.get('#music-volume-up').disabled).toBe(false);
   });
+  it('keeps the unverified preset acknowledgement off the compact music view', () => {
+    const data = ui.payload();
+    data.state.music.commands = [
+      {
+        id: 'preset-report',
+        target: 'music.room',
+        issuedAt: data.generatedAt,
+        status: 'unconfirmed',
+        requested: { property: 'preset', value: 1 },
+        recovery: { stage: 'stopped', stopReason: 'non_retryable' },
+      },
+    ];
+    ui.render(data);
+    expect(ui.get('#music-command-state').textContent).toContain(
+      'vald preset kan inte verifieras',
+    );
+    expect(ui.get('#music-command-state').dataset['notice']).toBe('false');
+  });
   it('keeps the action DOM stable during pending requests so keyboard focus is retained', async () => {
     const button = actions(ui.get('#context-actions'))[0]!;
     const release = ui.holdPost();
@@ -690,6 +709,28 @@ function selectMode(mode: 'auto' | 'button' | 'none') {
 }
 
 describe('Hub bedtime and morning flow (simulated DOM and network)', () => {
+  it('opens the running routine directly when its shortcut is obscured by music or camera', () => {
+    const data = withBedtime();
+    data.routines.runs = [
+      { routineId: 'night', status: 'running', stepIndex: 0 },
+    ];
+    data.state.music.devices['music.room'].observed.playback = 'playing';
+    ui.render(data);
+    ui.get('#context-details-button').click();
+    const visible = ui
+      .get('#context-list')
+      .children.filter((item) => !item.hidden);
+    expect(visible).toHaveLength(1);
+    expect(visible[0]!.querySelector('.context-item-title')?.textContent).toBe(
+      'Kvällsrutin',
+    );
+    expect(
+      actions(visible[0]!).some(
+        (button) => button.dataset['action'] === 'cancel' && !button.disabled,
+      ),
+    ).toBe(true);
+  });
+
   it('shows the owned one-off morning state instead of disabled generic templates', () => {
     const data = withBedtime();
     const [templateNight, templateMorning] = data.routines.definitions;
@@ -1221,5 +1262,345 @@ describe('Hub bedtime and morning flow (simulated DOM and network)', () => {
     await settle();
     expect(ui.calls.at(-1)?.body).toEqual({ id: 'focus', action: 'accept' });
     expect(ui.calls.every((call) => !call.url.includes('settings'))).toBe(true);
+  });
+});
+
+describe('Opus Hub presentation with real display handlers', () => {
+  it('marks only the actual Spotify source for the Spotify icon', () => {
+    const data = ui.payload();
+    const player = data.state.music.devices['music.room'];
+    player.observed.source = 'Spotify';
+    ui.render(data);
+    expect(ui.get('#music-source').dataset['spotify']).toBe('true');
+    player.observed.source = 'Optical In';
+    ui.render(data);
+    expect(ui.get('#music-source').dataset['spotify']).toBe('false');
+  });
+
+  it('lets cover art reach the Bed overlay and keeps routine volume text off screen', () => {
+    const css = readFileSync(
+      new URL('../src/ui/display.css', import.meta.url),
+      'utf8',
+    );
+    expect(css).not.toMatch(/data-role='bed'\]::after/);
+    expect(css).toMatch(
+      /\.screen \.music-section \.volume-policy-head \{\s*display: none;/,
+    );
+  });
+
+  it('sizes the light grid for its real scene count and only reserves a pagination row when paged', () => {
+    const data = ui.payload();
+    const grid = ui.get('#scene-grid');
+    ui.render(data);
+    expect(grid.dataset['paged']).toBe('false');
+    expect(grid.dataset['count']).toBe(String(grid.children.length));
+    data.scenes.push(
+      ...Array.from({ length: 8 }, (_, index) => ({
+        id: `scene.extra${index}`,
+        name: `Extra ${index}`,
+      })),
+    );
+    ui.render(data);
+    expect(grid.dataset['paged']).toBe('true');
+    expect(grid.dataset['count']).toBe('6');
+    expect(ui.get('#scene-pagination').hidden).toBe(false);
+  });
+
+  it('expands lighting when the sleeve is gone and waits for a held touch', async () => {
+    const data = ui.payload();
+    const root = ui.get('#app-root');
+    const grid = ui.get('#scene-grid');
+    root.append(grid);
+    expect(root.dataset['lightingExpanded']).toBe('false');
+    ui.documentListeners.get('pointerdown')?.({
+      target: grid.children[0]!,
+      pointerId: 9,
+    });
+    data.state.music.devices['music.room'].observed.playback = 'paused';
+    ui.render(data);
+    expect(root.dataset['lightingExpanded']).toBe('false');
+    ui.documentListeners.get('pointerup')?.({
+      target: grid.children[0]!,
+      pointerId: 9,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(root.dataset['lightingExpanded']).toBe('true');
+    ui.get('#music-menu').click();
+    expect(root.dataset['lightingExpanded']).toBe('false');
+  });
+
+  it('shows the sleeve only for trusted playing, keeping source choices and a permanent restart entry', async () => {
+    const data = ui.payload();
+    const player = data.state.music.devices['music.room'];
+    const root = ui.get('#app-root');
+    expect(root.dataset['musicVisible']).toBe('true');
+    expect(ui.get('#music-playback').dataset['icon']).toBe('pause');
+    player.observed.playback = 'paused';
+    ui.render();
+    expect(root.dataset['musicVisible']).toBe('true');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(root.dataset['musicVisible']).toBe('false');
+    expect(ui.get('#music-playback').hidden).toBe(true);
+    ui.get('#music-menu').click();
+    expect(root.dataset['musicVisible']).toBe('true');
+    expect(ui.get('#music-playback').dataset['icon']).toBe('play');
+    expect(ui.get('#music-playback-label').textContent).toBe('Spela');
+    ui.get('#music-playback').click();
+    await settle();
+    expect(ui.calls.at(-1)?.body).toEqual({
+      target: 'music.room',
+      request: { property: 'playback', value: 'playing' },
+    });
+    ui.get('#music-menu').click();
+    for (const playback of ['off', 'idle', 'unknown']) {
+      player.observed.playback = playback;
+      ui.render();
+      expect(root.dataset['musicVisible']).toBe('false');
+      expect(
+        ui.get('#music-presets').children.map((item) => item.disabled),
+      ).toEqual([false, false]);
+    }
+    player.observed.playback = 'playing';
+    data.musicObservationConnected = false;
+    ui.render();
+    expect(root.dataset['musicVisible']).toBe('false');
+    expect(ui.get('#music-menu').textContent).toContain('okänd');
+  });
+
+  it.each(['Spotify', 'Optical In'])(
+    'keeps the %s panel for ten seconds after pause',
+    async (source) => {
+      const data = ui.payload();
+      const player = data.state.music.devices['music.room'];
+      player.observed.source = source;
+      player.observed.playback = 'playing';
+      player.observed.title = 'Last song';
+      ui.render(data);
+      player.observed.playback = 'paused';
+      player.observed.title = null;
+      ui.render(data);
+      expect(ui.get('#music-title').textContent).toBe('Last song');
+      await vi.advanceTimersByTimeAsync(9_999);
+      ui.render(data);
+      expect(ui.get('#app-root').dataset['musicVisible']).toBe('true');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ui.get('#app-root').dataset['musicVisible']).toBe('false');
+    },
+  );
+
+  it('clears retained artwork immediately if the source changes during the pause', () => {
+    const data = ui.payload();
+    const player = data.state.music.devices['music.room'];
+    const image = ui.get('#music-artwork-image');
+    player.observed.source = 'Spotify';
+    player.observed.playback = 'playing';
+    ui.render(data);
+    image.listeners.get('load')?.();
+    player.observed.playback = 'paused';
+    data.artwork['music.room'] = { status: 'unavailable', url: null };
+    ui.render(data);
+    expect(image.hidden).toBe(false);
+    player.observed.source = 'Bluetooth';
+    ui.render(data);
+    expect(image.hidden).toBe(true);
+  });
+
+  it('keeps the cover when the music menu is pinned open and clears it when closed', async () => {
+    const data = ui.payload();
+    const player = data.state.music.devices['music.room'];
+    const image = ui.get('#music-artwork-image');
+    player.observed.source = 'Spotify';
+    player.observed.playback = 'playing';
+    ui.render(data);
+    image.listeners.get('load')?.();
+    ui.get('#music-menu').click();
+    player.observed.playback = 'paused';
+    data.artwork['music.room'] = { status: 'unavailable', url: null };
+    ui.render(data);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(ui.get('#app-root').dataset['musicVisible']).toBe('true');
+    expect(image.hidden).toBe(false);
+    ui.get('#music-menu').click();
+    expect(ui.get('#app-root').dataset['musicVisible']).toBe('false');
+    expect(image.hidden).toBe(true);
+  });
+
+  it.each(['Spotify', 'Optical In'])(
+    'keeps the loaded %s cover while the paused panel is visible',
+    async (source) => {
+      const data = ui.payload();
+      const player = data.state.music.devices['music.room'];
+      const image = ui.get('#music-artwork-image');
+      player.observed.source = source;
+      player.observed.playback = 'playing';
+      ui.render(data);
+      image.listeners.get('load')?.();
+      expect(image.hidden).toBe(false);
+      player.observed.playback = 'paused';
+      data.artwork['music.room'] = { status: 'unavailable', url: null };
+      ui.render(data);
+      expect(image.hidden).toBe(false);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(image.hidden).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(image.hidden).toBe(true);
+    },
+  );
+
+  it('does not treat Optical metadata as playback and shows real playing without a made-up title', () => {
+    const data = ui.payload();
+    const player = data.state.music.devices['music.room'];
+    player.observed.source = 'Optical In';
+    player.observed.title = null;
+    player.observed.artist = null;
+    player.observed.playback = 'off';
+    ui.render();
+    expect(ui.get('#app-root').dataset['musicVisible']).toBe('false');
+    player.observed.playback = 'playing';
+    ui.render();
+    expect(ui.get('#app-root').dataset['musicVisible']).toBe('true');
+    expect(ui.get('#music-title').textContent).toBe('Musik spelas');
+    expect(ui.get('#music-source').textContent).toBe('Optical In');
+  });
+
+  it('retains all-off when music explanations or paged routines replace lighting', () => {
+    ui.get('#music-details-button').click();
+    expect(ui.get('#scene-off').hidden).toBe(false);
+    expect(ui.get('#scene-section').hidden).toBe(false);
+    expect(ui.get('#scene-grid').hidden).toBe(true);
+    ui.get('#context-details-button').click();
+    expect(ui.get('#music-details').hidden).toBe(true);
+    expect(ui.get('#context-panel').hidden).toBe(false);
+    expect(ui.get('#scene-off').hidden).toBe(false);
+    const items = ui.get('#context-list').children;
+    const visited = new Set<Element>();
+    for (let page = 0; page < items.length; page++) {
+      const visible = items.filter((item) => !item.hidden);
+      expect(visible).toHaveLength(1);
+      visited.add(visible[0]!);
+      ui.get('#context-next').click();
+    }
+    expect(visited.size).toBe(items.length);
+    expect(ui.get('#context-next').disabled).toBe(true);
+  });
+
+  it('makes the observed count the only correction action and keeps unknown presence visible', async () => {
+    expect(ui.get('#room-presence').textContent).toBe('2 personer');
+    expect(ui.get('#presence-count-value').textContent).toBe('2');
+    ui.get('#presence-count-one').click();
+    ui.get('#presence-count-one').click();
+    await settle();
+    expect(
+      ui.calls.filter((call) => call.url.endsWith('presence-count-one')),
+    ).toHaveLength(1);
+    expect(ui.get('#room-presence').textContent).toBe('2 personer');
+    expect(ui.get('#presence-count-label').textContent).toContain(
+      'väntar på sensor',
+    );
+    const data = ui.payload();
+    data.presenceCountCorrectionAvailable = false;
+    data.state.presence = { state: 'unknown', personCount: null };
+    ui.render();
+    expect(ui.get('#room-presence').textContent).toBe('Närvaro okänd');
+    expect(ui.get('#presence-count-value').textContent).toBe('?');
+    expect(ui.get('#presence-count-one').hidden).toBe(false);
+    expect(ui.get('#presence-count-one').disabled).toBe(true);
+    expect(ui.get('#presence-count-label').textContent).toBe('');
+  });
+
+  it('keeps the playback action fixed from pointer-down through a changing observation', async () => {
+    const button = ui.get('#music-playback');
+    ui.get('#app-root').append(button);
+    ui.documentListeners.get('pointerdown')?.({ target: button, pointerId: 1 });
+    ui.payload().state.music.devices['music.room'].observed.playback = 'paused';
+    ui.render();
+    expect(ui.get('#music-playback-label').textContent).toBe('Pausa');
+    ui.documentListeners.get('pointerup')?.({ target: button, pointerId: 1 });
+    button.click();
+    await settle();
+    expect(ui.calls.at(-1)?.body).toEqual({
+      target: 'music.room',
+      request: { property: 'playback', value: 'paused' },
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ui.get('#app-root').dataset['musicVisible']).toBe('true');
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(ui.get('#app-root').dataset['musicVisible']).toBe('false');
+  });
+
+  it('defers a scene reorder until pointer cancellation and sends no action for cancellation', async () => {
+    const grid = ui.get('#scene-grid');
+    ui.get('#app-root').append(grid);
+    const original = [...grid.children];
+    ui.documentListeners.get('pointerdown')?.({
+      target: grid.children[0]!,
+      pointerId: 2,
+    });
+    ui.payload().scenes.push({ id: 'scene.extra', name: 'Annat ljus' });
+    ui.render();
+    expect(grid.children).toEqual(original);
+    ui.documentListeners.get('pointercancel')?.({ target: grid, pointerId: 2 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(grid.children).toHaveLength(original.length + 1);
+    expect(ui.calls).toEqual([]);
+  });
+});
+
+it('keeps a keyboard playback gesture bound to its original action and clears it after keyup', async () => {
+  const button = ui.get('#music-playback');
+  ui.documentListeners.get('keydown')?.({ target: button, key: ' ' });
+  ui.payload().state.music.devices['music.room'].observed.playback = 'paused';
+  ui.render();
+  button.click();
+  await settle();
+  expect(ui.calls.at(-1)?.body).toEqual({
+    target: 'music.room',
+    request: { property: 'playback', value: 'paused' },
+  });
+  ui.documentListeners.get('keyup')?.({ target: button, key: ' ' });
+  await vi.advanceTimersByTimeAsync(1);
+  expect(ui.get('#app-root').dataset['musicVisible']).toBe('true');
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(ui.get('#app-root').dataset['musicVisible']).toBe('false');
+});
+
+it('updates routine facts and enables a separate Cancel while Start retains keyboard focus', async () => {
+  ui.get('#context-details-button').click();
+  const item = ui.get('#context-list').children[0]!;
+  const buttons = actions(item);
+  const start = buttons.find((button) => button.dataset['action'] === 'start')!;
+  const cancel = buttons.find(
+    (button) => button.dataset['action'] === 'cancel',
+  )!;
+  expect(cancel.disabled).toBe(true);
+  runInContext(
+    "document.activeElement = document.querySelector('#context-list').children[0].children[2].children[0]",
+    ui.context,
+  );
+  const data = ui.payload();
+  data.routines.runs.push({
+    id: 'new-run',
+    routineId: data.routines.definitions[0].id,
+    status: 'running',
+    stepIndex: 0,
+    startedAt: data.generatedAt,
+    updatedAt: data.generatedAt,
+    reason: null,
+  });
+  ui.render();
+  expect(
+    actions(item).find((button) => button.dataset['action'] === 'start'),
+  ).toBe(start);
+  expect(start.textContent).toBe('Starta');
+  expect(start.disabled).toBe(true);
+  expect(item.querySelector('.context-item-copy')?.textContent).toContain(
+    'Pågår',
+  );
+  expect(cancel.disabled).toBe(false);
+  cancel.click();
+  await settle();
+  expect(ui.calls.at(-1)?.body).toMatchObject({
+    id: data.routines.definitions[0].id,
+    action: 'cancel',
   });
 });
