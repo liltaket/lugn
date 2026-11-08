@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#06090d" />
+    <title>Lugn · Inte ansluten</title>
+    <link
+      rel="icon"
+      href="/ui/icons/favicon-32.png"
+      sizes="32x32"
+      type="image/png"
+    />
+    <link
+      rel="icon"
+      href="/ui/icons/icon-192.png"
+      sizes="192x192"
+      type="image/png"
+    />
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <div class="sky" aria-hidden="true"><div class="sky-shade"></div></div>
+    <main class="page-shell">
+      <section
+        class="login-view"
+        id="login-view"
+        aria-labelledby="offline-title"
+      >
+        <div class="login-brand">
+          <img
+            class="login-mark"
+            src="/ui/icons/mark-128.png"
+            alt=""
+            width="72"
+            height="72"
+          />
+          <p class="login-wordmark">Lugn</p>
+        </div>
+        <div class="login-card">
+          <div class="login-copy">
+            <h1 id="offline-title">Lugn går inte att nå</h1>
+            <p>
+              Kontrollera att du är på samma nätverk som rummet och att Lugn är
+              igång.
+            </p>
+          </div>
+          <a class="button button-primary login-submit" href="/ui/"
+            >Försök igen</a
+          >
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

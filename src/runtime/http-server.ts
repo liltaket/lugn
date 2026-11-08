@@ -255,6 +255,50 @@ export class LugnHttpServer {
         name: 'styles.css',
         contentType: 'text/css; charset=utf-8',
       },
+      '/ui/fonts/familjen-grotesk.woff2': {
+        name: 'fonts/familjen-grotesk.woff2',
+        contentType: 'font/woff2',
+      },
+      '/ui/fonts/newsreader.woff2': {
+        name: 'fonts/newsreader.woff2',
+        contentType: 'font/woff2',
+      },
+      '/ui/manifest.webmanifest': {
+        name: 'manifest.webmanifest',
+        contentType: 'application/manifest+json; charset=utf-8',
+      },
+      '/ui/sw.js': {
+        name: 'sw.js',
+        contentType: 'text/javascript; charset=utf-8',
+      },
+      '/ui/offline.html': {
+        name: 'offline.html',
+        contentType: 'text/html; charset=utf-8',
+      },
+      '/ui/icons/icon-192.png': {
+        name: 'icons/icon-192.png',
+        contentType: 'image/png',
+      },
+      '/ui/icons/icon-512.png': {
+        name: 'icons/icon-512.png',
+        contentType: 'image/png',
+      },
+      '/ui/icons/maskable-512.png': {
+        name: 'icons/maskable-512.png',
+        contentType: 'image/png',
+      },
+      '/ui/icons/apple-touch-icon.png': {
+        name: 'icons/apple-touch-icon.png',
+        contentType: 'image/png',
+      },
+      '/ui/icons/favicon-32.png': {
+        name: 'icons/favicon-32.png',
+        contentType: 'image/png',
+      },
+      '/ui/icons/mark-128.png': {
+        name: 'icons/mark-128.png',
+        contentType: 'image/png',
+      },
     };
     const asset = assets[pathname];
     if (!asset) return false;

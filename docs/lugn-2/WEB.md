@@ -6,18 +6,39 @@ configuration, adapters or shared contracts are changed.
 
 ## Experience
 
-The responsive web panel has six stable hash destinations: Översikt, Belysning,
-Musik, Rutiner, Intelligens and System. The overview keeps the room's presence,
-light presets, music and next known routine together. Existing lighting preset
+The responsive web panel has five tabs: Hem (`#oversikt`), Ljus (`#belysning`),
+Musik, Rutiner and Inställningar (`#installningar`). Hem works like a home app:
+the active scene, status chips for presence, lamps, music and connections, the
+scene tiles, a compact player and the next known routine. Presets are edited on
+Ljus, which also lists the individual lamps. Inställningar is a grouped list
+leading to Musikautomatik, Intelligens, Kameror, Datorer, Anslutningar and
+System, each its own hash page (`#musikautomatik`, `#intelligens`, `#kameror`,
+`#datorer`, `#anslutningar`, `#system`). The list is a sticky sidebar on
+desktop and its own page with a back link on phones; a row disappears when the
+server has not enabled that part. Existing lighting preset
 editing, music modes/settings, authentication and SSE ordering remain intact.
 The navigation stays reachable while editing; section changes and live snapshots
 retain local drafts. Native labels, visible focus, reduced motion, weekday
 checkboxes and large controls support keyboard and touch use.
 
-The delivery palette is used directly: mineral charcoal `#18201f`, deep surface
-`#222d2a`, ivory `#edf1e7`, sage `#aebdb0`, amber `#e7bc78` and mist blue
-`#a4c7d2`, with local Segoe UI/Cantarell. The layout keeps room actions prominent
-and technical evidence behind disclosure rather than making every item a card.
+The panel is an ordinary, calm interface under one image: a WebGL aurora over
+a mountain lake heads every page (most of the first screen on Hem, a strip on
+other pages, the whole screen behind sign-in). Without WebGL, or when the first frame
+renders slowly, a CSS night gradient or a single still frame stays instead, and
+reduced motion keeps the frame still. Colours: page `#06090d`, raised surfaces
+`#0d1319`, ink `#ecf0f2`, muted `#aab5be`, and mint `#8ff0c4` as the only accent.
+Newsreader (serif headings) and Familjen Grotesk (controls and text), both OFL,
+are served locally from `/ui/fonts/`. Desktop has a glass sidebar with the
+navigation, live status and sign-out; phones and tablets get a top bar and a
+bottom tab bar. Technical evidence stays behind disclosure.
+
+Sign-in is a centred card under the logo on desktop and sits within thumb reach
+on phones. The panel installs as an app: `/ui/manifest.webmanifest` (standalone,
+start and scope `/ui/`), icons in `/ui/icons/` (192/512, maskable 512, Apple
+touch 180, favicon 32 and the 128 px mark used in the page), iOS meta tags and
+safe-area padding. `/ui/sw.js` never caches the panel or the API; it only
+answers a failed navigation with `/ui/offline.html`. The icon art is a generated
+image (aurora ribbon over a fell and lake) rendered to each size.
 
 ## Routine authoring
 

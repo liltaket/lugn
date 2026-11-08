@@ -274,6 +274,39 @@ describe('local capability HTTP API', () => {
     const frontendCode = await frontend.text();
     expect(frontendCode).not.toContain('local-test-token');
     expect(frontendCode).toContain('const lightingFeedbackMatches =');
+    const font = await fetch(`${baseUrl}/ui/fonts/familjen-grotesk.woff2`);
+    expect(font.status).toBe(200);
+    expect(font.headers.get('content-type')).toBe('font/woff2');
+    expect((await font.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    const serif = await fetch(`${baseUrl}/ui/fonts/newsreader.woff2`);
+    expect(serif.status).toBe(200);
+    expect(serif.headers.get('content-type')).toBe('font/woff2');
+    await serif.arrayBuffer();
+    const manifest = await fetch(`${baseUrl}/ui/manifest.webmanifest`);
+    expect(manifest.headers.get('content-type')).toBe(
+      'application/manifest+json; charset=utf-8',
+    );
+    const app = (await manifest.json()) as {
+      icons: { src: string; type: string }[];
+    };
+    expect(app).toMatchObject({ start_url: '/ui/', scope: '/ui/' });
+    for (const icon of app.icons) {
+      const image = await fetch(`${baseUrl}${icon.src}`);
+      expect(image.status).toBe(200);
+      expect(image.headers.get('content-type')).toBe(icon.type);
+      expect((await image.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    }
+    for (const path of [
+      '/ui/sw.js',
+      '/ui/offline.html',
+      '/ui/icons/apple-touch-icon.png',
+      '/ui/icons/favicon-32.png',
+      '/ui/icons/mark-128.png',
+    ]) {
+      const asset = await fetch(`${baseUrl}${path}`);
+      expect(asset.status).toBe(200);
+      await asset.arrayBuffer();
+    }
 
     const sessionStatus = await fetch(`${baseUrl}/ui/api/session`);
     expect(await sessionStatus.json()).toEqual({

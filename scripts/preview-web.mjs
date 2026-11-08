@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { lightingFeedbackMatches } from '../src/core/lighting-feedback.ts';
+import { defaultMusicVolumeSettings } from '../src/core/music-volume-settings.ts';
 
 export function webFixtureSnapshot() {
   const now = Date.UTC(2026, 9, 21, 20, 15);
@@ -10,6 +11,34 @@ export function webFixtureSnapshot() {
     instanceId: 'web-fixture-only',
     deliveryRevision: 1,
     presetsEnabled: true,
+    musicSettingsEnabled: true,
+    musicSettings: structuredClone(defaultMusicVolumeSettings),
+    musicSettingsDefaults: structuredClone(defaultMusicVolumeSettings),
+    musicVolumePolicies: {},
+    cameraDashboard: {
+      generation: 'c1',
+      settings: {
+        enabled: true,
+        automaticEnabled: false,
+        durationSeconds: 30,
+        cameras: { entrance: true },
+        triggers: { person: false },
+        viewers: ['web'],
+      },
+      definitions: [
+        { id: 'entrance', name: 'Entré', enabled: true, available: true },
+      ],
+      triggers: [
+        {
+          id: 'person',
+          name: 'Person vid entrén',
+          cameraId: 'entrance',
+          kind: 'state',
+          enabled: false,
+        },
+      ],
+      active: null,
+    },
     health: {
       status: 'ok',
       integrations: {
@@ -19,7 +48,7 @@ export function webFixtureSnapshot() {
     },
     scenes: [
       {
-        id: 'scene.cozy',
+        id: 'scene.soft_light',
         name: 'Mysljus',
         canEdit: true,
         lighting: {
@@ -28,14 +57,32 @@ export function webFixtureSnapshot() {
         },
       },
       {
-        id: 'scene.focus',
-        name: 'Arbetsljus',
+        id: 'scene.focus_light',
+        name: 'Fokus',
         canEdit: true,
         lighting: { 'lighting.desk': { power: true, brightness: 70 } },
       },
       {
-        id: 'scene.off',
-        name: 'Släck rummet',
+        id: 'scene.everyday_light',
+        name: 'Vardagsljus',
+        canEdit: true,
+        lighting: {
+          'lighting.bed': { power: true, brightness: 60 },
+          'lighting.desk': { power: true, brightness: 60 },
+        },
+      },
+      {
+        id: 'scene.movie_light',
+        name: 'Filmkväll',
+        canEdit: true,
+        lighting: {
+          'lighting.bed': { power: true, brightness: 10 },
+          'lighting.desk': { power: false },
+        },
+      },
+      {
+        id: 'scene.all_off',
+        name: 'Helt släckt',
         canEdit: false,
         lighting: {
           'lighting.bed': { power: false },
@@ -48,14 +95,18 @@ export function webFixtureSnapshot() {
       updatedAt: now,
       presence: { state: 'occupied', personCount: 1 },
       lighting: {
-        currentScene: 'scene.cozy',
+        currentScene: 'scene.soft_light',
         devices: Object.fromEntries(
           ['bed', 'desk'].map((name) => [
             `lighting.${name}`,
             {
               availability: 'available',
-              observed: { power: true, brightness: 25 },
-              effectiveDesired: { power: true, brightness: 25 },
+              observed: { power: true, brightness: 25, colorTemperature: 2400 },
+              effectiveDesired: {
+                power: true,
+                brightness: 25,
+                colorTemperature: 2400,
+              },
               ownership: {},
             },
           ]),
@@ -100,7 +151,7 @@ export function webFixtureSnapshot() {
           enabled: false,
           schedule: { time: '22:30', weekdays: [1, 2, 3, 4, 5, 6, 7] },
           steps: [
-            { type: 'scene', sceneId: 'scene.cozy' },
+            { type: 'scene', sceneId: 'scene.soft_light' },
             {
               type: 'light',
               targets: ['lighting.bed', 'lighting.desk'],
@@ -131,7 +182,7 @@ export function webFixtureSnapshot() {
         suggestions: {
           enabled: false,
           cooldownMs: 600000,
-          sceneMappings: { gaming: 'scene.focus' },
+          sceneMappings: { gaming: 'scene.focus_light' },
         },
       },
       suggestions: [],
@@ -181,9 +232,10 @@ export function createWebFixture() {
     if (req.method === 'GET') {
       const data = {
         '/ui/api/auth-config': { provider: 'token' },
+        // LUGN_FIXTURE_LOGIN=1 shows the sign-in screen instead.
         '/ui/api/session': {
-          authenticated: true,
-          tokenRequired: false,
+          authenticated: process.env.LUGN_FIXTURE_LOGIN !== '1',
+          tokenRequired: process.env.LUGN_FIXTURE_LOGIN === '1',
           csrfToken: 'fixture-csrf',
         },
         '/ui/api/overview': snapshot,
@@ -196,7 +248,31 @@ export function createWebFixture() {
         '/ui/index.html': 'index.html',
         '/ui/styles.css': 'styles.css',
         '/ui/app.js': 'app.js',
+        '/ui/fonts/familjen-grotesk.woff2': 'fonts/familjen-grotesk.woff2',
+        '/ui/fonts/newsreader.woff2': 'fonts/newsreader.woff2',
+        '/ui/manifest.webmanifest': 'manifest.webmanifest',
+        '/ui/sw.js': 'sw.js',
+        '/ui/offline.html': 'offline.html',
+        '/ui/icons/mark-128.png': 'icons/mark-128.png',
+        '/ui/icons/icon-192.png': 'icons/icon-192.png',
+        '/ui/icons/icon-512.png': 'icons/icon-512.png',
+        '/ui/icons/maskable-512.png': 'icons/maskable-512.png',
+        '/ui/icons/apple-touch-icon.png': 'icons/apple-touch-icon.png',
+        '/ui/icons/favicon-32.png': 'icons/favicon-32.png',
       }[url.pathname];
+      const binary = {
+        woff2: 'font/woff2',
+        png: 'image/png',
+        webmanifest: 'application/manifest+json',
+      }[asset?.split('.').pop()];
+      if (binary) {
+        res.writeHead(200, {
+          'content-type': binary,
+          'cache-control': 'no-store',
+        });
+        res.end(await readFile(new URL(`../web/${asset}`, import.meta.url)));
+        return;
+      }
       if (asset) {
         res.writeHead(200, {
           'content-type': asset.endsWith('.css')

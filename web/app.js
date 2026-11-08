@@ -7,6 +7,17 @@ const timeFormat = new Intl.DateTimeFormat('sv-SE', {
   second: '2-digit',
 });
 
+const heroClockFormat = new Intl.DateTimeFormat('sv-SE', {
+  hour: '2-digit',
+  minute: '2-digit',
+  timeZone: 'Europe/Stockholm',
+});
+const heroDateFormat = new Intl.DateTimeFormat('sv-SE', {
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+  timeZone: 'Europe/Stockholm',
+});
 // Bolt optimization: Cache Intl.DateTimeFormat instead of recreating inside render function
 const routineDateFormat = new Intl.DateTimeFormat('sv-SE', {
   weekday: 'short',
@@ -66,6 +77,10 @@ const computerSection = document.getElementById('computer-section');
 const computerList = document.getElementById('computer-list');
 const lightList = document.getElementById('light-list');
 const actionStatus = document.getElementById('action-status');
+const heroTime = document.getElementById('hero-time');
+const heroDate = document.getElementById('hero-date');
+const heroScene = document.getElementById('hero-scene');
+const heroLight = document.getElementById('hero-light');
 
 let csrfToken = null;
 let tokenRequired = true;
@@ -203,6 +218,7 @@ document.addEventListener('keydown', (event) => {
 
 initializeLugn2();
 initializeCameraWeb();
+initializeAmbience();
 void restoreSessionOnStartup();
 
 function node(tag, className, text) {
@@ -570,14 +586,17 @@ function mountClerkSignIn() {
       signUpForceRedirectUrl: '/ui/',
       appearance: {
         variables: {
-          colorPrimary: '#d2d59a',
-          colorBackground: '#222f2a',
-          colorText: '#f1f4ef',
-          colorTextSecondary: '#c0ccc4',
-          colorInputBackground: '#18221e',
-          colorInputText: '#f1f4ef',
-          colorDanger: '#edb4a8',
-          borderRadius: '8px',
+          colorPrimary: '#8ff0c4',
+          colorTextOnPrimaryBackground: '#032015',
+          colorBackground: '#0d1319',
+          colorText: '#ecf0f2',
+          colorTextSecondary: '#aab5be',
+          colorInputBackground: '#06090d',
+          colorInputText: '#ecf0f2',
+          colorDanger: '#ff9d94',
+          colorNeutral: '#ecf0f2',
+          fontFamily: "'Familjen Grotesk', system-ui, sans-serif",
+          borderRadius: '12px',
         },
         elements: {
           rootBox: 'clerk-root-box',
@@ -1232,6 +1251,9 @@ function render() {
   const presenceState = overview.state?.presence?.state ?? 'unknown';
   renderLights(devices, presenceState);
   renderMappingSummary(devices, presenceState);
+  renderHeroLight(devices);
+  renderHeroStatus(overview);
+  renderSettingsIndex(overview);
   renderUpdatedAt(overview.state?.updatedAt);
   actionStatus.textContent = actionMessage;
   actionStatus.dataset.tone = actionTone;
@@ -1331,6 +1353,9 @@ function renderScenes(data) {
   const scenes = Array.isArray(data.scenes) ? data.scenes : [];
   const currentScene = data.state.lighting.currentScene;
   const currentSceneInfo = scenes.find((scene) => scene.id === currentScene);
+  heroScene.textContent = currentSceneInfo
+    ? currentSceneInfo.name
+    : 'Ingen scen vald';
   sceneSummary.textContent = currentSceneInfo
     ? `Vald scen: ${currentSceneInfo.name}`
     : currentScene
@@ -1360,6 +1385,8 @@ function renderScenes(data) {
     button.disabled = pendingActions.has('scene') || presetBusy;
     button.setAttribute('aria-pressed', String(selected));
     button.dataset.focusKey = `scene:${scene.id}`;
+    const icon = sceneIcon(scene.id);
+    if (icon) button.append(icon);
     const name = node('span', 'scene-name', scene.name);
     button.append(name);
     if (selected) button.append(node('span', 'scene-selected', 'Vald'));
@@ -2058,6 +2085,8 @@ function renderMusicPlayer(target, device, commands, fade) {
   article.append(identity);
 
   const observed = device.observed ?? {};
+  article.dataset.playback =
+    typeof observed.playback === 'string' ? observed.playback : 'unknown';
   const newerPlaybackReport = commands.some(
     (command) =>
       command.target === target &&
@@ -2459,6 +2488,12 @@ function renderLights(devices, presenceState) {
 
 function renderLight(target, device, presenceState) {
   const article = node('article', 'light-row');
+  const glow = lampGlow(device);
+  article.dataset.power = glow ? 'on' : 'off';
+  if (glow) {
+    article.style.setProperty('--lamp-color', glow.color);
+    article.style.setProperty('--lamp-level', String(glow.level));
+  }
   const identity = node('div', 'light-identity');
   identity.append(node('h3', '', displayTarget(target)));
   identity.append(node('code', '', target));
@@ -2922,6 +2957,350 @@ function renderMusicArtwork(target) {
   }
   return frame;
 }
+// Only established scene IDs get pictograms, matching the Hub. User presets
+// keep their names; user-controlled strings never enter SVG markup.
+function sceneIcon(sceneId) {
+  const paths = {
+    'scene.all_off': '<path d="M12 3v9"/><path d="M6.3 5.7a8 8 0 1 0 11.4 0"/>',
+    'scene.soft_light':
+      '<path d="M20.2 15.6A8.6 8.6 0 0 1 8.4 3.8 8.6 8.6 0 1 0 20.2 15.6Z"/>',
+    'scene.everyday_light':
+      '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    'scene.focus_light':
+      '<path d="M7 21h11M12.5 21v-4L7 11l4-5"/><circle cx="7" cy="11" r="1.5"/><path d="m11 6 4-3 6 6-3 4Z"/><path d="m15 10 2 2"/>',
+    'scene.party':
+      '<path d="M12 1.5V4"/><circle cx="12" cy="11" r="7"/><path d="M5.5 8.5h13m-13 5h13M12 4c-4 4-4 10 0 14m0-14c4 4 4 10 0 14M3 20l1-1m16 0 1 1m-9 0v2"/>',
+    'scene.movie_light':
+      '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/><path d="m10 8 5 2.5-5 2.5Z"/>',
+  };
+  if (!Object.hasOwn(paths, sceneId)) return null;
+  const icon = node('span', 'scene-icon');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = `<svg viewBox="0 0 24 24" focusable="false">${paths[sceneId]}</svg>`;
+  return icon;
+}
+
+// Approximate lamp colour for a colour temperature, warm amber to cool white.
+function kelvinColor(kelvin) {
+  const stops = [
+    [1800, [255, 138, 52]],
+    [2700, [255, 178, 104]],
+    [3500, [255, 210, 160]],
+    [4500, [255, 233, 210]],
+    [6500, [226, 236, 255]],
+  ];
+  const k = Math.min(6500, Math.max(1800, kelvin));
+  let index = 1;
+  while (index < stops.length - 1 && stops[index][0] < k) index += 1;
+  const [k0, c0] = stops[index - 1];
+  const [k1, c1] = stops[index];
+  const t = (k - k0) / (k1 - k0);
+  const [r, g, b] = c0.map((value, channel) =>
+    Math.round(value + (c1[channel] - value) * t),
+  );
+  return `rgb(${r} ${g} ${b})`;
+}
+
+// Prefer the device's own report; fall back to Lugn's desired state.
+function lampGlow(device) {
+  const observedPower = device.observed?.power;
+  const state =
+    observedPower === undefined ? device.effectiveDesired : device.observed;
+  if (state?.power !== true) return null;
+  const brightness = Number.isInteger(state.brightness)
+    ? state.brightness
+    : 100;
+  const kelvin = Number.isInteger(state.colorTemperature)
+    ? state.colorTemperature
+    : 2700;
+  return {
+    level: Math.max(0.08, brightness / 100),
+    kelvin,
+    color: kelvinColor(kelvin),
+  };
+}
+
+function renderHeroLight(devices) {
+  const lamps = Object.values(devices);
+  const lit = lamps.filter((device) => lampGlow(device)).length;
+  heroLight.textContent =
+    lamps.length === 0
+      ? 'Inga lampor är mappade'
+      : lit === 0
+        ? 'Alla lampor är släckta'
+        : `${lit} av ${lamps.length} ${lamps.length === 1 ? 'lampa' : 'lampor'} tända`;
+}
+
+function renderHeroStatus(data) {
+  const players = Object.values(data.state?.music?.devices ?? {});
+  const music = document.getElementById('hero-music');
+  music.hidden = players.length === 0;
+  const playing = players.find(
+    (device) => device.observed?.playback === 'playing',
+  );
+  const title = playing?.observed?.title?.trim();
+  document.getElementById('hero-music-label').textContent = playing
+    ? title
+      ? `Spelar ${title}`
+      : 'Musik spelas'
+    : 'Ingen musik spelas';
+  const status = data.health?.status;
+  const health = document.getElementById('hero-health');
+  health.dataset.tone =
+    status === 'ok' ? 'good' : status === 'degraded' ? 'warn' : 'neutral';
+  document.getElementById('hero-health-label').textContent =
+    status === 'ok'
+      ? 'Allt anslutet'
+      : status === 'degraded'
+        ? 'Begränsad drift'
+        : 'Okänd status';
+}
+
+// Rows in the settings list show a short state and disappear when the
+// server has not enabled that part.
+function renderSettingsIndex(data) {
+  const sections = {
+    musikautomatik: 'music-settings-section',
+    kameror: 'cameras-section',
+    datorer: 'computer-section',
+  };
+  const values = {
+    musikautomatik: data.musicSettings?.enabled ? 'På' : 'Av',
+    intelligens:
+      data.intelligence?.settings?.optical?.enabled === true ? 'På' : 'Av',
+    kameror: data.cameraDashboard?.settings?.enabled ? 'På' : 'Av',
+    datorer: String(Object.keys(data.state?.computer?.devices ?? {}).length),
+    anslutningar: healthChip.textContent,
+  };
+  for (const [page, value] of Object.entries(values)) {
+    const element = document.getElementById(`settings-value-${page}`);
+    element.textContent = value;
+    const section = sections[page] && document.getElementById(sections[page]);
+    element.closest('li').hidden = section ? section.hidden : false;
+  }
+}
+
+function renderHeroClock() {
+  const now = new Date();
+  heroTime.textContent = heroClockFormat.format(now);
+  heroTime.dateTime = now.toISOString();
+  heroDate.textContent = heroDateFormat.format(now);
+}
+
+// Paint the filled part of every range track from its current value.
+function syncRangeFill(input) {
+  const min = Number(input.min || 0);
+  const max = Number(input.max || 100);
+  const ratio = max > min ? (Number(input.value) - min) / (max - min) : 0;
+  input.style.setProperty('--fill', `${Math.round(ratio * 1000) / 10}%`);
+}
+
+// The header image: aurora curtains over a mountain lake, drawn in WebGL.
+// Without WebGL the CSS night gradient behind the canvas stays.
+function skyShader() {
+  return `
+    #ifdef GL_FRAGMENT_PRECISION_HIGH
+    precision highp float;
+    #else
+    precision mediump float;
+    #endif
+    uniform vec2 uRes;
+    uniform float uTime;
+
+    float hash(vec2 p) {
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
+    }
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+    }
+    float fbm(vec2 p) {
+      float v = 0.5 * noise(p);
+      v += 0.25 * noise(p * 2.03 + 17.0);
+      v += 0.125 * noise(p * 4.1 + 41.0);
+      return v / 0.875;
+    }
+    vec3 aurora(vec2 uv, float aspect) {
+      vec3 col = vec3(0.0);
+      float slow = uTime * 0.01;
+      float x = uv.x * aspect;
+      for (int i = 0; i < 3; i++) {
+        float fi = float(i);
+        float fold = fbm(vec2(x * 0.6 + fi * 5.3 + slow, slow * 0.3 + fi));
+        float swirl = sin(x * 2.3 + fold * 6.0 + fi * 2.0 + slow * 4.0);
+        float edge = 0.48 + fi * 0.1 + (fold - 0.5) * 0.7 + 0.06 * swirl;
+        float d = uv.y - edge;
+        if (d < -0.05) continue;
+        // Bright lower rim, then a curtain that fades upwards.
+        float body = smoothstep(-0.006, 0.01, d) * exp(-max(d, 0.0) * (7.0 + fi * 3.0));
+        float rim = exp(-abs(d) * 55.0);
+        float rays = mix(0.5, 1.3, noise(vec2(x * 46.0 + fold * 14.0, uTime * 0.05 + fi * 7.0)));
+        float along = smoothstep(0.3, 0.75, fbm(vec2(x * 0.8 - slow * 2.0, fi * 3.1)));
+        vec3 c = mix(vec3(0.6, 1.0, 0.75), vec3(0.15, 0.95, 0.5), smoothstep(0.0, 0.05, d));
+        c = mix(c, vec3(0.2, 0.6, 0.85), smoothstep(0.08, 0.22, d));
+        c = mix(c, vec3(0.55, 0.25, 0.75), smoothstep(0.18, 0.4, d));
+        col += c * (body * rays + rim * 0.18) * along * (1.0 - fi * 0.3);
+      }
+      return col;
+    }
+    vec3 sky(vec2 uv, float aspect) {
+      vec3 col = mix(vec3(0.025, 0.06, 0.09), vec3(0.004, 0.01, 0.028), smoothstep(0.1, 0.95, uv.y));
+      // Stars live on a pixel grid so they stay pin-sharp at any size.
+      vec2 cell = floor(uv * uRes / 1.5);
+      float star = hash(fract(cell * 0.0131) * 97.0 + floor(cell / 761.0));
+      float twinkle = 0.55 + 0.45 * sin(uTime * 0.9 + star * 60.0);
+      col += vec3(0.85, 0.9, 1.0) * step(0.9988, star) * twinkle * smoothstep(0.3, 0.7, uv.y);
+      return col + aurora(uv, aspect) * 1.1;
+    }
+    float ridged(float x, float seed) {
+      return 1.0 - abs(fbm(vec2(x, seed)) * 2.0 - 1.0);
+    }
+    // A distant range of peaks, then a near ridge with a fringe of spruce tops.
+    vec3 scene(vec2 uv, float aspect) {
+      float x = uv.x * aspect;
+      float near = 0.15 + 0.035 * fbm(vec2(x * 2.5, 9.0)) + 0.024 * pow(noise(vec2(x * 90.0, 2.0)), 3.0);
+      vec3 ground = vec3(0.004, 0.008, 0.012);
+      if (uv.y < near - 0.002) return ground;
+      float far = 0.19 + 0.16 * pow(ridged(x * 1.1, 4.0), 1.8);
+      vec3 range = mix(vec3(0.02, 0.045, 0.06), vec3(0.04, 0.09, 0.1), smoothstep(far - 0.1, far, uv.y));
+      vec3 col = uv.y < far - 0.002 ? range : sky(uv, aspect);
+      col = mix(col, range, 1.0 - smoothstep(far - 0.002, far + 0.002, uv.y));
+      return mix(col, ground, 1.0 - smoothstep(near - 0.0015, near + 0.0015, uv.y));
+    }
+    void main() {
+      vec2 uv = gl_FragCoord.xy / uRes;
+      float aspect = uRes.x / uRes.y;
+      float lake = 0.12;
+      vec3 col;
+      if (uv.y > lake) {
+        col = scene(uv, aspect);
+      } else {
+        float ripple = (noise(vec2(uv.x * aspect * 40.0, uv.y * 300.0 - uTime * 0.6)) - 0.5) * 0.006;
+        vec2 mirror = vec2(uv.x + ripple, 2.0 * lake - uv.y);
+        // The far shore hides the sky, so the lake borrows a faint aurora glow.
+        vec3 glow = aurora(vec2(mirror.x, 0.5 + (lake - uv.y) * 1.5), aspect);
+        col = scene(mirror, aspect) * 0.42 + glow * 0.22 * smoothstep(0.0, lake, uv.y);
+      }
+      col = 1.0 - exp(-col * 1.6);
+      col += (hash(fract(gl_FragCoord.xy * 0.0173) * 61.0 + fract(uTime)) - 0.5) * 0.012;
+      gl_FragColor = vec4(col, 1.0);
+    }`;
+}
+
+function initializeSky() {
+  const canvas = document.getElementById('sky-canvas');
+  const gl = canvas?.getContext('webgl', { antialias: false, alpha: false });
+  if (!gl) return;
+  const shader = (type, source) => {
+    const result = gl.createShader(type);
+    gl.shaderSource(result, source);
+    gl.compileShader(result);
+    return result;
+  };
+  const program = gl.createProgram();
+  gl.attachShader(
+    program,
+    shader(
+      gl.VERTEX_SHADER,
+      'attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }',
+    ),
+  );
+  gl.attachShader(program, shader(gl.FRAGMENT_SHADER, skyShader()));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return;
+  gl.useProgram(program);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(
+    gl.ARRAY_BUFFER,
+    new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
+    gl.STATIC_DRAW,
+  );
+  const position = gl.getAttribLocation(program, 'p');
+  gl.enableVertexAttribArray(position);
+  gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+  const resolution = gl.getUniformLocation(program, 'uRes');
+  const time = gl.getUniformLocation(program, 'uTime');
+  const offset = 300 + Math.random() * 600;
+  const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let slow = false;
+  const draw = (now) => {
+    gl.uniform2f(resolution, canvas.width, canvas.height);
+    gl.uniform1f(time, offset + now / 1000);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    canvas.dataset.ready = 'true';
+  };
+  // The aurora is soft, so it renders below device resolution.
+  const resize = () => {
+    const scale = Math.min(window.devicePixelRatio || 1, 2) * 0.5;
+    canvas.width = Math.max(1, Math.round(canvas.clientWidth * scale));
+    canvas.height = Math.max(1, Math.round(canvas.clientHeight * scale));
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    draw(performance.now());
+  };
+  // A slow first frame means software rendering: keep the still image.
+  const started = performance.now();
+  resize();
+  gl.finish();
+  slow = performance.now() - started > 60;
+  new ResizeObserver(resize).observe(canvas);
+  if (still || slow) return;
+  let onScreen = true;
+  new IntersectionObserver(([entry]) => {
+    onScreen = entry.isIntersecting;
+  }).observe(canvas);
+  let last = 0;
+  const loop = (now) => {
+    if (onScreen && !document.hidden && now - last > 50) {
+      last = now;
+      draw(now);
+    }
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+}
+
+function initializeAmbience() {
+  // Installed as an app, Lugn can then say when the server is out of reach.
+  navigator.serviceWorker
+    ?.register('/ui/sw.js', { scope: '/ui/' })
+    .catch(() => {});
+  renderHeroClock();
+  window.setInterval(renderHeroClock, 15000);
+  // The image is decoration; the panel must start without it.
+  try {
+    initializeSky();
+  } catch {
+    /* The CSS night gradient behind the canvas stays. */
+  }
+  const markScrolled = () => {
+    document.documentElement.dataset.scrolled = String(window.scrollY > 24);
+  };
+  window.addEventListener('scroll', markScrolled, { passive: true });
+  markScrolled();
+  document.addEventListener('input', (event) => {
+    if (
+      event.target instanceof HTMLInputElement &&
+      event.target.type === 'range'
+    )
+      syncRangeFill(event.target);
+  });
+  let pending = false;
+  new MutationObserver(() => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      pending = false;
+      for (const input of document.querySelectorAll('input[type="range"]'))
+        syncRangeFill(input);
+    });
+  }).observe(document.body, { childList: true, subtree: true });
+}
+
 function l2(id) {
   return document.getElementById(id);
 }
@@ -2948,21 +3327,47 @@ function intelligenceDirty() {
 }
 function initializeLugn2() {
   const pages = {
-    oversikt: 'Översikt',
-    belysning: 'Belysning',
+    oversikt: 'Hem',
+    belysning: 'Ljus',
     musik: 'Musik',
     rutiner: 'Rutiner',
+    installningar: 'Inställningar',
+    musikautomatik: 'Musikautomatik',
     intelligens: 'Intelligens',
+    kameror: 'Kameror',
+    datorer: 'Datorer',
+    anslutningar: 'Anslutningar',
     system: 'System',
   };
+  // Settings sub pages keep the Inställningar tab highlighted.
+  const settingsPages = [
+    'installningar',
+    'musikautomatik',
+    'intelligens',
+    'kameror',
+    'datorer',
+    'anslutningar',
+    'system',
+  ];
   const navigate = (focus = false) => {
     const page = Object.hasOwn(pages, location.hash.slice(1))
       ? location.hash.slice(1)
       : 'oversikt';
+    const settings = settingsPages.includes(page);
     dashboardView.dataset.page = page;
+    dashboardView.dataset.section = settings ? 'settings' : page;
     l2('page-title').textContent = pages[page];
     for (const link of document.querySelectorAll('.section-nav a')) {
-      if (link.dataset.page === page) link.setAttribute('aria-current', 'page');
+      if (
+        link.dataset.page === page ||
+        (settings && link.dataset.page === 'installningar')
+      )
+        link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    }
+    for (const link of document.querySelectorAll('.settings-row')) {
+      if (link.dataset.settingsPage === page)
+        link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     }
     for (const section of document.querySelectorAll('[data-pages]'))
@@ -4804,7 +5209,7 @@ function cameraWebCanRun(epoch) {
     !dashboardView.hidden &&
     document.visibilityState !== 'hidden' &&
     !l2('camera-web-panel').hidden &&
-    ['oversikt', 'intelligens'].includes(dashboardView.dataset.page) &&
+    ['oversikt', 'kameror'].includes(dashboardView.dataset.page) &&
     overview?.cameraDashboard?.active?.expiresAt > cameraWebNow()
   );
 }
