@@ -1,0 +1,38 @@
+{
+  "id": "/ui/",
+  "name": "Lugn",
+  "short_name": "Lugn",
+  "description": "Ljus, musik och rutiner för rummet.",
+  "lang": "sv",
+  "dir": "ltr",
+  "start_url": "/ui/",
+  "scope": "/ui/",
+  "display": "standalone",
+  "background_color": "#06090d",
+  "theme_color": "#06090d",
+  "icons": [
+    {
+      "src": "/ui/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/ui/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/ui/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Ljus", "url": "/ui/#belysning" },
+    { "name": "Musik", "url": "/ui/#musik" },
+    { "name": "Inställningar", "url": "/ui/#installningar" }
+  ]
+}
