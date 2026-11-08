@@ -1618,7 +1618,15 @@ function setPresetBusy(busy) {
   closePresetButton.disabled = busy;
   presetConfirmYes.disabled = busy;
   presetConfirmNo.disabled = busy;
+  savePresetButton.disabled = busy;
+  saveActivatePresetButton.disabled = busy;
+  deletePresetButton.disabled = busy;
   savePresetButton.textContent = busy ? 'Sparar…' : 'Spara';
+  if (busy) {
+    savePresetButton.setAttribute('aria-busy', 'true');
+  } else {
+    savePresetButton.removeAttribute('aria-busy');
+  }
   presetForm.setAttribute('aria-busy', String(busy));
   if (overview) renderScenes(overview);
 }
