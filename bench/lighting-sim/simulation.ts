@@ -133,6 +133,8 @@ export type SimulationOptions = {
   serializingStreamListeners?: number;
   /** 'rest' skips attaching the HA WebSocket for light commands. */
   commandTransport?: 'websocket' | 'rest';
+  /** Keep raw HA calls and engine diagnostics in this monotonic window. */
+  traceWindow?: { from: number; to: number };
   /** Experiment: group identical same-tick commands into one HA call. */
   groupIdenticalCommands?: boolean;
   /** Extra options forwarded to HomeAssistantLightingAdapter, if supported. */
@@ -196,6 +198,7 @@ export type SimulationResult = {
     unhandledRejections: number;
   };
   checkpoints: CheckpointState[];
+  trace?: { calls: unknown[]; diagnostics: unknown[] };
   /** Adapter commands by engine source/reason, and how many were HA no-ops. */
   commandReasons: Record<string, { sent: number; noop: number }>;
   wallMs: number;
@@ -416,6 +419,22 @@ export async function runSimulation(
     }
   };
   const checkpoints: CheckpointState[] = [];
+  const traceDiagnostics: unknown[] = [];
+  if (options.traceWindow) {
+    let lastDiagnostic = 0;
+    engine.stream.subscribe(() =>
+      clock.excluded(() => {
+        const at = clock.monotonicNow();
+        if (at < options.traceWindow!.from || at > options.traceWindow!.to)
+          return;
+        for (const entry of engine.state.diagnostics)
+          if (entry.id > lastDiagnostic) {
+            lastDiagnostic = entry.id;
+            traceDiagnostics.push({ ...entry, simAt: Math.round(at) });
+          }
+      }),
+    );
+  }
 
   const settle = async (): Promise<void> => {
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -704,6 +723,18 @@ export async function runSimulation(
     },
     checkpoints,
     commandReasons: Object.fromEntries(commandReasons),
+    ...(options.traceWindow
+      ? {
+          trace: {
+            calls: ha.calls.filter(
+              (call) =>
+                call.invokedAt >= options.traceWindow!.from &&
+                call.invokedAt <= options.traceWindow!.to,
+            ),
+            diagnostics: traceDiagnostics,
+          },
+        }
+      : {}),
     wallMs: performance.now() - started,
   };
 }
