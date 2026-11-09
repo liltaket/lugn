@@ -12,6 +12,30 @@ import {
   type LightingCommand,
   type LightingObservation,
 } from './simulated-lighting.js';
+import {
+  HomeAssistantServiceCallError,
+  type HomeAssistantServiceCall,
+} from './home-assistant-websocket.js';
+
+/** The command surface of HomeAssistantWebSocketTransport. */
+export type HomeAssistantServiceCaller = {
+  callService(call: HomeAssistantServiceCall): Promise<void> | undefined;
+};
+
+/** HA WebSocket error codes that REST reports as 4xx: HA did not execute. */
+const rejectedServiceCallCodes = new Set([
+  'invalid_format',
+  'not_found',
+  'service_validation_error',
+  'unauthorized',
+]);
+
+type ServiceCallResult =
+  | { kind: 'accepted' }
+  /** No response at all: the device may have received the command. */
+  | { kind: 'no_response'; error: LightingDeliveryUnknownError }
+  /** An ambiguous HA error status (timeouts, 5xx-equivalents). */
+  | { kind: 'uncertain_status'; error: LightingDeliveryUnknownError };
 
 const HomeAssistantEntityIdSchema = z.string().regex(/^light\.[a-z0-9_]+$/);
 
@@ -114,6 +138,7 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
   private readonly lastUpdatedByTarget = new Map<string, number>();
   private readonly wledCct: WledCctController;
   private wledPollTimer: ReturnType<Clock['setTimeout']> | undefined;
+  private serviceCaller: HomeAssistantServiceCaller | undefined;
 
   constructor(
     config: HomeAssistantLightingConfig,
@@ -136,6 +161,14 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
         semanticId,
       ]),
     );
+  }
+
+  /**
+   * Send light services on HA's authenticated WebSocket while it is connected.
+   * REST remains the transport whenever the socket is not connected.
+   */
+  attachWebSocket(caller: HomeAssistantServiceCaller): void {
+    this.serviceCaller = caller;
   }
 
   async dispatch(command: LightingCommand): Promise<void> {
@@ -180,46 +213,20 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
     let lastUncertainFailure: LightingDeliveryUnknownError | undefined;
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      let response: Response;
-      try {
-        response = await this.transport(
-          `${this.baseUrl}/api/services/light/${service}`,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${this.token}`,
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(data),
-          },
-        );
-      } catch {
+      const result = await this.callLightService(
+        service,
+        data,
+        command.target,
+        entityId,
+      );
+      if (result.kind === 'accepted') {
+        accepted = true;
+      } else {
+        lastUncertainFailure = result.error;
+        if (!isUnreliableCleverioOff) throw result.error;
         // A timeout can happen after the device received the command. For the
         // unreliable Cleverio, send the remaining bounded off attempts anyway.
-        lastUncertainFailure = new LightingDeliveryUnknownError(
-          `Home Assistant light.${service} response was not received for ${command.target} (${entityId})`,
-        );
-        if (!isUnreliableCleverioOff) throw lastUncertainFailure;
-        continue;
-      }
-
-      if (response.ok) {
-        accepted = true;
-      } else if (
-        response.status === 408 ||
-        response.status === 425 ||
-        response.status === 429 ||
-        response.status >= 500
-      ) {
-        lastUncertainFailure = new LightingDeliveryUnknownError(
-          `Home Assistant light.${service} returned HTTP ${response.status} for ${command.target} (${entityId})`,
-        );
-        if (!isUnreliableCleverioOff) throw lastUncertainFailure;
-      } else {
-        throw new Error(
-          `Home Assistant light.${service} failed for ${command.target} (${entityId}): HTTP ${response.status}`,
-        );
+        if (result.kind === 'no_response') continue;
       }
 
       if (isUnreliableCleverioOff && attempt + 1 < attempts)
@@ -233,6 +240,87 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
     // fire-and-forget when all responses are ambiguous.
     if (!accepted && lastUncertainFailure && !isUnreliableCleverioOff)
       throw lastUncertainFailure;
+  }
+
+  private async callLightService(
+    service: 'turn_on' | 'turn_off',
+    data: Record<string, string | number | number[]>,
+    target: string,
+    entityId: string,
+  ): Promise<ServiceCallResult> {
+    const serviceData: Record<string, unknown> = { ...data };
+    delete serviceData['entity_id'];
+    const call = this.serviceCaller?.callService({
+      domain: 'light',
+      service,
+      serviceData,
+      target: { entity_id: entityId },
+    });
+    if (call) {
+      try {
+        await call;
+        return { kind: 'accepted' };
+      } catch (error) {
+        if (
+          error instanceof HomeAssistantServiceCallError &&
+          error.outcome === 'rejected' &&
+          error.code !== undefined &&
+          rejectedServiceCallCodes.has(error.code)
+        )
+          throw new Error(
+            `Home Assistant light.${service} failed for ${target} (${entityId}): ${error.code}`,
+          );
+        const unknown = new LightingDeliveryUnknownError(
+          error instanceof HomeAssistantServiceCallError &&
+            error.outcome === 'rejected'
+            ? `Home Assistant light.${service} returned ${error.code ?? 'an error'} for ${target} (${entityId})`
+            : `Home Assistant light.${service} response was not received for ${target} (${entityId})`,
+        );
+        return error instanceof HomeAssistantServiceCallError &&
+          error.outcome === 'rejected'
+          ? { kind: 'uncertain_status', error: unknown }
+          : { kind: 'no_response', error: unknown };
+      }
+    }
+
+    let response: Response;
+    try {
+      response = await this.transport(
+        `${this.baseUrl}/api/services/light/${service}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(data),
+        },
+      );
+    } catch {
+      return {
+        kind: 'no_response',
+        error: new LightingDeliveryUnknownError(
+          `Home Assistant light.${service} response was not received for ${target} (${entityId})`,
+        ),
+      };
+    }
+    if (response.ok) return { kind: 'accepted' };
+    if (
+      response.status === 408 ||
+      response.status === 425 ||
+      response.status === 429 ||
+      response.status >= 500
+    )
+      return {
+        kind: 'uncertain_status',
+        error: new LightingDeliveryUnknownError(
+          `Home Assistant light.${service} returned HTTP ${response.status} for ${target} (${entityId})`,
+        ),
+      };
+    throw new Error(
+      `Home Assistant light.${service} failed for ${target} (${entityId}): HTTP ${response.status}`,
+    );
   }
 
   subscribe(listener: (observation: LightingObservation) => void): () => void {

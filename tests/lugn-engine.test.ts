@@ -637,6 +637,62 @@ describe('Lugn deterministic lighting slice', () => {
     },
   );
 
+  it('dispatches every entry and confirmed-empty command before publishing the event', async () => {
+    const targets = ['lighting.a', 'lighting.b', 'lighting.c', 'lighting.d'];
+    const { clock, adapter, engine } = setup({
+      deviceIds: targets,
+      scenes: [
+        {
+          id: 'scene.entry',
+          name: 'Entry',
+          lighting: Object.fromEntries(
+            targets.map((target) => [target, { power: true, brightness: 40 }]),
+          ),
+        },
+      ],
+      defaultSceneId: 'scene.entry',
+    });
+    adapter.feedbackDelayMs = 50;
+    let replayed = structuredClone(engine.state);
+    const dispatchCountsAtPublication: number[] = [];
+    const unsubscribe = engine.stream.subscribe((update) => {
+      dispatchCountsAtPublication.push(adapter.dispatched.length);
+      replayed = applyStateUpdate(replayed, update);
+    });
+
+    const entry = engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+    });
+    expect(adapter.dispatched.map(({ target }) => target)).toEqual(targets);
+    expect(dispatchCountsAtPublication.length).toBeGreaterThan(0);
+    expect(dispatchCountsAtPublication.every((count) => count === 4)).toBe(
+      true,
+    );
+    clock.advanceBy(50);
+    await entry;
+
+    adapter.dispatched.length = 0;
+    dispatchCountsAtPublication.length = 0;
+    const exit = engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+    });
+    expect(adapter.dispatched.map(({ target }) => target)).toEqual(targets);
+    expect(
+      adapter.dispatched.every(({ values }) => values.power === false),
+    ).toBe(true);
+    expect(dispatchCountsAtPublication.length).toBeGreaterThan(0);
+    expect(dispatchCountsAtPublication.every((count) => count === 4)).toBe(
+      true,
+    );
+    clock.advanceBy(50);
+    await exit;
+    expect(replayed).toEqual(engine.state);
+    unsubscribe();
+    engine.dispose();
+  });
+
   it('finishes prelight initialization before a subscriber confirms occupancy', async () => {
     const scene = {
       id: 'scene.entry',
@@ -3256,10 +3312,12 @@ describe('Lugn deterministic lighting slice', () => {
         (revision, index) => index === 0 || revision > deliveries[index - 1]!,
       ),
     ).toBe(true);
+    // Updates stay partial; a fast-path entry publishes its presence/session
+    // change together with the commands it dispatched.
     expect(
       updates.every(
         (update) =>
-          update.domains.length > 0 && Object.keys(update.patch).length < 5,
+          update.domains.length > 0 && Object.keys(update.patch).length <= 6,
       ),
     ).toBe(true);
     if (snapshot.kind === 'snapshot') {

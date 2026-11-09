@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { HomeAssistantLightingAdapter } from '../src/adapters/home-assistant-lighting.js';
-import type { LightingCommand } from '../src/adapters/simulated-lighting.js';
+import { HomeAssistantServiceCallError } from '../src/adapters/home-assistant-websocket.js';
+import {
+  isLightingDeliveryUnknownError,
+  type LightingCommand,
+} from '../src/adapters/simulated-lighting.js';
 import { FakeClock } from '../src/core/clock.js';
 
 const token = 'fake-home-assistant-token';
@@ -189,3 +193,118 @@ function requestBody(body: unknown): string {
   if (typeof body !== 'string') throw new Error('Expected a JSON string body');
   return body;
 }
+
+describe('Home Assistant lighting over the WebSocket', () => {
+  function withSocket(
+    answer: (call: unknown) => Promise<void> | undefined = () =>
+      Promise.resolve(),
+  ) {
+    const context = setup();
+    const calls: unknown[] = [];
+    context.adapter.attachWebSocket({
+      callService: (call) => {
+        calls.push(call);
+        return answer(call);
+      },
+    });
+    return { ...context, calls };
+  }
+
+  it('sends light services on the connected socket instead of REST', async () => {
+    const { adapter, calls, requests } = withSocket();
+    await adapter.dispatch(
+      command({ power: true, brightness: 37, colorTemperature: 2_700 }),
+    );
+    await adapter.dispatch(command({ power: false }));
+    expect(requests).toEqual([]);
+    expect(calls).toEqual([
+      {
+        domain: 'light',
+        service: 'turn_on',
+        serviceData: { brightness_pct: 37, color_temp_kelvin: 2_700 },
+        target: { entity_id: 'light.study_desk' },
+      },
+      {
+        domain: 'light',
+        service: 'turn_off',
+        serviceData: {},
+        target: { entity_id: 'light.study_desk' },
+      },
+    ]);
+  });
+
+  it('falls back to REST when the socket is not connected', async () => {
+    const { adapter, calls, requests } = withSocket(() => undefined);
+    await adapter.dispatch(command({ power: true, brightness: 20 }));
+    expect(calls).toHaveLength(1);
+    expect(requests.map(({ url }) => url)).toEqual([
+      'http://home-assistant.test:8123/api/services/light/turn_on',
+    ]);
+  });
+
+  it('keeps REST delivery semantics for WebSocket failures', async () => {
+    for (const [error, unknown] of [
+      [new HomeAssistantServiceCallError('no_response'), true],
+      [
+        new HomeAssistantServiceCallError('rejected', 'home_assistant_error'),
+        true,
+      ],
+      [new HomeAssistantServiceCallError('rejected', 'unknown_error'), true],
+      [new HomeAssistantServiceCallError('rejected'), true],
+      [
+        new HomeAssistantServiceCallError(
+          'rejected',
+          'service_validation_error',
+        ),
+        false,
+      ],
+      [new HomeAssistantServiceCallError('rejected', 'invalid_format'), false],
+      [new HomeAssistantServiceCallError('rejected', 'not_found'), false],
+    ] as const) {
+      const { adapter, requests } = withSocket(() => Promise.reject(error));
+      const failure = await adapter.dispatch(command({ power: true })).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect(isLightingDeliveryUnknownError(failure)).toBe(unknown);
+      // A sent frame is never repeated over REST: HA may have executed it.
+      expect(requests).toEqual([]);
+    }
+  });
+
+  it('keeps the bounded Cleverio off repeats on the socket', async () => {
+    const clock = new FakeClock(0);
+    const calls: unknown[] = [];
+    const adapter = new HomeAssistantLightingAdapter(
+      {
+        baseUrl: 'http://home-assistant.test:8123/',
+        token,
+        entities: { 'lighting.cleverio_bar': 'light.cleverio_lb100' },
+      },
+      () => Promise.reject(new Error('REST must not be used')),
+      clock,
+    );
+    adapter.attachWebSocket({
+      callService: (call) => {
+        calls.push(call);
+        return calls.length === 2
+          ? Promise.reject(new HomeAssistantServiceCallError('no_response'))
+          : Promise.resolve();
+      },
+    });
+    const work = adapter.dispatch({
+      id: 'off-cleverio',
+      target: 'lighting.cleverio_bar',
+      values: { power: false },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toHaveLength(1);
+    clock.advanceBy(150);
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    // The unanswered second send is followed immediately, like REST timeouts.
+    expect(calls).toHaveLength(3);
+    await work;
+  });
+});

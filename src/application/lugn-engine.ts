@@ -2126,7 +2126,15 @@ export class LugnEngine {
       await this.reconcileScene(this.state.lighting.sceneRevision);
   }
 
-  async handlePresence(event: PresenceEvent): Promise<void> {
+  /**
+   * Publications from the handler's synchronous prefix (through starting its
+   * lighting transports) are flushed together after those transports start.
+   */
+  handlePresence(event: PresenceEvent): Promise<void> {
+    return this.batchPublications(() => this.applyPresence(event));
+  }
+
+  private async applyPresence(event: PresenceEvent): Promise<void> {
     const normalizedEvent = PresenceEventSchema.parse(event);
     const transitionGeneration =
       normalizedEvent.presence === 'occupied' ||
@@ -2233,42 +2241,45 @@ export class LugnEngine {
           sessionId: this.state.session?.id ?? null,
         },
       );
-      this.publish(['presence', 'commands', 'diagnostics', 'timings']);
-      this.applyWindowLightingPolicy();
-      await Promise.all(
-        Object.entries(this.state.lighting.devices).map(
-          async ([target, device]) => {
-            if (this.windowCanRunWhileEmpty(target)) {
-              await this.reconcileScene(
+      // Physical-off commands start before this event's publication runs.
+      await this.batchPublications(() => {
+        this.publish(['presence', 'commands', 'diagnostics', 'timings']);
+        this.applyWindowLightingPolicy();
+        return Promise.all(
+          Object.entries(this.state.lighting.devices).map(
+            async ([target, device]) => {
+              if (this.windowCanRunWhileEmpty(target)) {
+                await this.reconcileScene(
+                  this.state.lighting.sceneRevision,
+                  undefined,
+                  new Set(),
+                  {
+                    onlyTargets: new Set([target]),
+                  },
+                );
+                return;
+              }
+              if (
+                device.observed.power === false &&
+                !prelightWasActive &&
+                !pendingOnTargets.has(target)
+              )
+                return;
+              await this.dispatch(
+                target,
+                { power: false },
                 this.state.lighting.sceneRevision,
+                'presence',
+                'Confirmed empty: physical off',
+                systemActor,
                 undefined,
-                new Set(),
-                {
-                  onlyTargets: new Set([target]),
-                },
+                fastPathEventId,
+                'confirmed_empty_off',
               );
-              return;
-            }
-            if (
-              device.observed.power === false &&
-              !prelightWasActive &&
-              !pendingOnTargets.has(target)
-            )
-              return;
-            await this.dispatch(
-              target,
-              { power: false },
-              this.state.lighting.sceneRevision,
-              'presence',
-              'Confirmed empty: physical off',
-              systemActor,
-              undefined,
-              fastPathEventId,
-              'confirmed_empty_off',
-            );
-          },
-        ),
-      );
+            },
+          ),
+        );
+      });
       if (transitionGeneration !== this.presenceTransitionGeneration) return;
       this.tryCompleteConfirmedEmptyFastPath();
       this.publish(['commands', 'diagnostics', 'timings']);
@@ -3307,6 +3318,16 @@ export class LugnEngine {
     this.inFlightLightingCommandIds.delete(command.id);
     this.lightingTransportsInFlight.delete(command.id);
     this.reassertAfterStalePrelightRestore(command);
+    // An off in a room that must stay dark (for example a prelight restore,
+    // which also carries remembered values) gets the bounded confirmed-empty
+    // retry, whichever path sent it; scene retries do not run while empty.
+    if (
+      retryMode === 'scene' &&
+      values.power === false &&
+      this.shouldRemainPhysicallyEmpty() &&
+      !this.windowCanRunWhileEmpty(target)
+    )
+      retryMode = 'confirmed_empty_off';
     if (dispatchFailed && isLightingDeliveryUnknownError(dispatchError)) {
       this.acceptedLightingCommandIds.delete(command.id);
       if (command.status === 'pending')
@@ -4205,6 +4226,12 @@ export class LugnEngine {
       | 'timings'
     >,
   ): void {
+    // Batched publications defer all bookkeeping to the flush, so a fast-path
+    // dispatch loop reaches every adapter before any history/UI work runs.
+    if (this.publicationBatchDepth > 0) {
+      for (const domain of domains) this.pendingPublicationDomains.add(domain);
+      return;
+    }
     if (domains.length === 1 && domains[0] === 'computer') {
       this.state.revision += 1;
       this.state.updatedAt = this.clock.now();
@@ -4317,18 +4344,14 @@ export class LugnEngine {
       !domains.includes('music')
     )
       domains.push('music');
-    if (this.publicationBatchDepth > 0) {
-      for (const domain of domains) this.pendingPublicationDomains.add(domain);
-      return;
-    }
     this.publishUpdate(domains);
   }
 
-  /** Start every prelight transport before serializing history or notifying UI. */
-  private batchPublications(work: () => void): void {
+  /** Start every fast-path transport before serializing history or notifying UI. */
+  private batchPublications<T>(work: () => T): T {
     this.publicationBatchDepth += 1;
     try {
-      work();
+      return work();
     } finally {
       this.publicationBatchDepth -= 1;
       if (
@@ -4338,7 +4361,7 @@ export class LugnEngine {
         const domains = [...this.pendingPublicationDomains];
         // A subscriber can synchronously publish again during the flush.
         this.pendingPublicationDomains.clear();
-        this.publishUpdate(domains);
+        this.publish(domains);
       }
     }
   }
@@ -4769,7 +4792,6 @@ export class LugnEngine {
         this.shouldRemainPhysicallyEmpty() &&
         !this.windowCanRunWhileEmpty(command.target) &&
         command.desired.power === false &&
-        Object.keys(command.desired).length === 1 &&
         device.observed.power !== false
       );
     if (

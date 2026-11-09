@@ -573,6 +573,8 @@ export async function startRuntime(
       },
     },
   );
+  // Light services reuse the authenticated socket; REST covers reconnects.
+  homeAssistantLighting.attachWebSocket(homeAssistantSocket);
   let mqttSubscriber: RuntimeMqttSubscriber | undefined;
   let sensorAdapter: Stl27lMqttPresenceAdapter | undefined;
   const computerAdapters: ComputerMqttAdapter[] = [];
