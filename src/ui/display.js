@@ -403,11 +403,14 @@ function setClock() {
   setText(refs.clockTime, time);
   setText(refs.clockDate, date);
   const dateParts = datePartsFormat.formatToParts(now);
-  const dateValue = Object.fromEntries(
-    dateParts
-      .filter((part) => part.type !== 'literal')
-      .map((part) => [part.type, part.value]),
-  );
+  const dateValue = {};
+  // Bolt optimization: Replaced chained .filter().map() and Object.fromEntries() with a single loop
+  // to avoid creating intermediate arrays and reduce memory allocation overhead on hot paths.
+  for (const part of dateParts) {
+    if (part.type !== 'literal') {
+      dateValue[part.type] = part.value;
+    }
+  }
   refs.clockDate.dateTime = `${dateValue.year}-${dateValue.month}-${dateValue.day}`;
   if (latestPayload) {
     renderEnvironment(latestPayload.environment);
