@@ -4,13 +4,27 @@ import type { Clock, TimerHandle } from '../../src/core/clock.js';
 type Timer = { id: number; at: number; callback: () => void };
 
 /**
- * A clock whose elapsed time is real CPU/event-loop time plus skipped idle
- * time. Synchronous work is therefore measured as it really runs (optionally
- * scaled to model a slower CPU), while modeled network/device delays and idle
- * gaps between workload steps cost no wall time.
+ * Main-thread CPU time in ms. Unlike wall time it does not advance while the
+ * thread waits for a core, so measurements survive a loaded machine (other
+ * benchmarks, simulators). Falls back to wall time on older runtimes.
+ */
+function threadCpuMs(): number {
+  const usage = process.threadCpuUsage();
+  return (usage.user + usage.system) / 1000;
+}
+
+/**
+ * A clock whose elapsed time is the CPU time Lugn's thread really spends plus
+ * skipped idle time. Synchronous work is therefore measured as it runs
+ * (optionally scaled to model a slower CPU), while modeled network/device
+ * delays and idle gaps between workload steps cost no wall time.
  */
 export class SimClock implements Clock {
-  private readonly realOrigin = performance.now();
+  private readonly source: () => number =
+    typeof process.threadCpuUsage === 'function'
+      ? threadCpuMs
+      : () => performance.now();
+  private readonly realOrigin = this.source();
   private skippedMs = 0;
   private excludedMs = 0;
   private nextId = 1;
@@ -18,7 +32,7 @@ export class SimClock implements Clock {
 
   constructor(
     private readonly wallOrigin = Date.parse('2026-11-09T18:00:00+01:00'),
-    /** Multiplies measured real time, e.g. ~15 for a Raspberry Pi 3. */
+    /** Multiplies measured CPU time, e.g. ~12 for a Raspberry Pi 3. */
     readonly cpuScale = 1,
   ) {
     if (!Number.isFinite(cpuScale) || cpuScale <= 0)
@@ -36,7 +50,7 @@ export class SimClock implements Clock {
 
   monotonicNow(): number {
     return (
-      (performance.now() - this.realOrigin - this.excludedMs) * this.cpuScale +
+      (this.source() - this.realOrigin - this.excludedMs) * this.cpuScale +
       this.skippedMs
     );
   }
@@ -54,11 +68,11 @@ export class SimClock implements Clock {
 
   /** Run simulator-side work (mock HA, broker) without charging it to Lugn. */
   excluded<T>(work: () => T): T {
-    const started = performance.now();
+    const started = this.source();
     try {
       return work();
     } finally {
-      this.excludedMs += performance.now() - started;
+      this.excludedMs += this.source() - started;
     }
   }
 
