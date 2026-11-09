@@ -130,8 +130,8 @@ const VOLUME_ROUNDING_TOLERANCE = 0.005;
 // Whether a device that truncates to whole percent would report `observed` for
 // a request between two percent steps. Only the exact lower step qualifies.
 function truncatesTo(observed: number, requested: number): boolean {
-  const lower = Math.floor(requested / VOLUME_STEP + 1e-6) * VOLUME_STEP;
-  return requested - lower > 1e-6 && Math.abs(observed - lower) <= 1e-9;
+  const lower = Math.floor(requested / VOLUME_STEP + 1e-9) * VOLUME_STEP;
+  return requested - lower > 1e-9 && Math.abs(observed - lower) <= 1e-9;
 }
 
 /**
