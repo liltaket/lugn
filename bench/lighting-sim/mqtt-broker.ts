@@ -28,7 +28,16 @@ export class SimMqttBroker implements Stl27lPresenceMqttSubscriber {
   private connected = true;
   private lastDeliveryAt = 0;
   /** Monotonic receive time of every delivered message, by sequence. */
-  readonly deliveries: Array<{ topic: string; text: string; at: number }> = [];
+  /**
+   * Every delivered message: `scheduledAt` is when it reached Lugn's socket,
+   * `at` is when the (possibly busy) event loop ran the MQTT callback.
+   */
+  readonly deliveries: Array<{
+    topic: string;
+    text: string;
+    at: number;
+    scheduledAt: number;
+  }> = [];
 
   constructor(
     private readonly clock: SimClock,
@@ -61,13 +70,18 @@ export class SimMqttBroker implements Stl27lPresenceMqttSubscriber {
   publish(
     topic: string,
     text: string,
-    options: { retain?: boolean; extraDelayMs?: number } = {},
+    options: {
+      retain?: boolean;
+      extraDelayMs?: number;
+      publishedAt?: number;
+    } = {},
   ): void {
     const payload = new TextEncoder().encode(text);
     if (options.retain) this.retained.set(topic, payload);
     if (!this.connected) return;
+    // The sensor publishes on its own schedule even while Lugn is busy.
     const due =
-      this.clock.monotonicNow() +
+      (options.publishedAt ?? this.clock.monotonicNow()) +
       this.deliveryDelayMs() +
       (options.extraDelayMs ?? 0);
     const at =
@@ -76,7 +90,7 @@ export class SimMqttBroker implements Stl27lPresenceMqttSubscriber {
         : due;
     if (options.extraDelayMs === undefined) this.lastDeliveryAt = at;
     this.clock.setTimeout(
-      () => this.deliver(topic, payload, false),
+      () => this.deliver(topic, payload, false, at),
       at - this.clock.monotonicNow(),
     );
   }
@@ -93,7 +107,12 @@ export class SimMqttBroker implements Stl27lPresenceMqttSubscriber {
         );
   }
 
-  private deliver(topic: string, payload: Uint8Array, retain: boolean): void {
+  private deliver(
+    topic: string,
+    payload: Uint8Array,
+    retain: boolean,
+    scheduledAt?: number,
+  ): void {
     if (!this.connected) return;
     const at = this.clock.monotonicNow();
     this.clock.excluded(() =>
@@ -101,6 +120,7 @@ export class SimMqttBroker implements Stl27lPresenceMqttSubscriber {
         topic,
         text: new TextDecoder().decode(payload),
         at,
+        scheduledAt: Math.min(scheduledAt ?? at, at),
       }),
     );
     for (const { topic: subscribed, handler } of [

@@ -205,8 +205,9 @@ export class MockHomeAssistant {
         // once the event loop is free again (after SSE/setImmediate work).
         const send = (): void => {
           record.wireAt = this.clock.monotonicNow();
-          this.at(record.wireAt + this.lan(`rest-out:${record.seq}`), () =>
-            this.execute(record, this.profile.haCpuMs.rest, respondTo),
+          const arrival = record.wireAt + this.lan(`rest-out:${record.seq}`);
+          this.at(arrival, () =>
+            this.execute(record, this.profile.haCpuMs.rest, respondTo, arrival),
           );
         };
         if (connectMs > 0) this.at(readyAt + connectMs, send);
@@ -306,32 +307,37 @@ export class MockHomeAssistant {
       );
       record.wireAt = invokedAt;
       this.at(arrival, () =>
-        this.execute(record, this.profile.haCpuMs.websocket, (outcome) => {
-          if (outcome === 'timeout') return;
-          this.clock.setTimeout(
-            () =>
-              this.sendFrame(
-                session,
-                outcome === 'ok'
-                  ? {
-                      id,
-                      type: 'result',
-                      success: true,
-                      result: { context: { id: `ctx-${record.seq}` } },
-                    }
-                  : {
-                      id,
-                      type: 'result',
-                      success: false,
-                      error: {
-                        code: 'home_assistant_error',
-                        message: 'Integration error',
+        this.execute(
+          record,
+          this.profile.haCpuMs.websocket,
+          (outcome) => {
+            if (outcome === 'timeout') return;
+            this.clock.setTimeout(
+              () =>
+                this.sendFrame(
+                  session,
+                  outcome === 'ok'
+                    ? {
+                        id,
+                        type: 'result',
+                        success: true,
+                        result: { context: { id: `ctx-${record.seq}` } },
+                      }
+                    : {
+                        id,
+                        type: 'result',
+                        success: false,
+                        error: {
+                          code: 'home_assistant_error',
+                          message: 'Integration error',
+                        },
                       },
-                    },
-              ),
-            this.lan(`ws-in:${record.seq}`),
-          );
-        }),
+                ),
+              this.lan(`ws-in:${record.seq}`),
+            );
+          },
+          arrival,
+        ),
       );
       return;
     }
@@ -391,9 +397,10 @@ export class MockHomeAssistant {
     record: ServiceCallRecord,
     requestCpuMs: number,
     done: (outcome: 'ok' | 'error' | 'timeout') => void,
+    /** Scheduled arrival: HA runs elsewhere, so Lugn's busy loop cannot delay it. */
+    arrivedAt: number,
   ): void {
     this.clock.excluded(() => {
-      const arrivedAt = this.clock.monotonicNow();
       record.arrivedAt = arrivedAt;
       const startedAt = Math.max(arrivedAt, this.haBusyUntil);
       const dispatchedAt =

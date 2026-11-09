@@ -26,6 +26,7 @@ const { values } = parseArgs({
     'cpu-scale': { type: 'string', default: '1' },
     'adapter-options': { type: 'string' },
     transport: { type: 'string', default: 'websocket' },
+    group: { type: 'boolean', default: false },
     out: { type: 'string' },
   },
 });
@@ -64,6 +65,7 @@ for (const spec of specs) {
     profile: spec.profile,
     cpuScale,
     commandTransport: values.transport === 'rest' ? 'rest' : 'websocket',
+    groupIdenticalCommands: values.group,
     ...(adapterOptions ? { adapterOptions } : {}),
   });
   results.push(result);
