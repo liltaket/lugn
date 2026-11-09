@@ -21,9 +21,19 @@ export class StateEventStream {
     this.history.push(validUpdate);
     if (this.history.length > this.maxHistory) this.history.shift();
     if (this.listeners.size === 0) return;
-    // One copy for every listener: a publication runs on the lighting event
-    // loop, and per-listener deep clones of the command ledger dominate it.
-    const delivered = structuredClone(validUpdate);
+    // One lazily made copy for every listener: a publication runs on the
+    // lighting event loop, and deep clones of the command ledger dominate it.
+    // Most listeners only read `domains` or reserialize engine state.
+    let patch: StateUpdate['patch'] | undefined;
+    const delivered: StateUpdate = {
+      revision: validUpdate.revision,
+      at: validUpdate.at,
+      domains: [...validUpdate.domains],
+      get patch() {
+        patch ??= structuredClone(validUpdate.patch);
+        return patch;
+      },
+    };
     for (const listener of this.listeners) listener(delivered);
   }
 
