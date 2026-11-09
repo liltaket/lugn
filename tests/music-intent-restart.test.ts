@@ -72,7 +72,7 @@ it('restores manual intent before observations without replaying state, commands
 });
 
 it.each([-1, 0, 1])(
-  'retains manual authority at playback absence boundary %+d without startup commands',
+  'expires manual authority at playback absence boundary %+d without startup commands',
   async (delta) => {
     const s = setup();
     let r: ReturnType<typeof setup> | undefined;
@@ -88,7 +88,7 @@ it.each([-1, 0, 1])(
       await s.presence('confirmed_empty');
       const expiry = start + continuity;
       r = setup(expiry + delta, s.engine.getMusicIntentSnapshot());
-      expect(r.policy().manualHold).not.toBeNull();
+      expect(r.policy().mode).toBe(delta < 0 ? 'manual' : 'auto');
       expect(r.adapter.dispatched).toEqual([]);
       await r.presence('unknown');
       await r.presence('confirmed_empty');
@@ -98,7 +98,7 @@ it.each([-1, 0, 1])(
       expect(again.policy().manualHold?.expiresAt ?? null).toBe(null);
       if (delta < 0) {
         again.clock.advanceBy(1);
-        expect(again.policy().manualHold).not.toBeNull();
+        expect(again.policy().mode).toBe('auto');
       }
     } finally {
       s.engine.dispose();
@@ -108,7 +108,7 @@ it.each([-1, 0, 1])(
   },
 );
 
-it('migrates a legacy volume deadline to durable manual authority without expiry timers', async () => {
+it('expires legacy manual volume after the saved room absence deadline', async () => {
   const s = setup();
   let restored: ReturnType<typeof setup> | undefined;
   try {
@@ -124,8 +124,8 @@ it('migrates a legacy volume deadline to durable manual authority without expiry
     delete snapshot.targets['music.room']!.volumeMode;
     restored = setup(start + continuity + 1, snapshot);
     expect(restored.policy()).toMatchObject({
-      mode: 'manual',
-      manualHold: { volume: 0.4, expiresAt: null },
+      mode: 'auto',
+      manualHold: null,
       baseline: 0.3,
     });
     expect(restored.clock.pendingTimers()).toBe(0);
@@ -235,7 +235,7 @@ it('saves failed human request intent independently from adapter confirmation', 
 });
 
 it.each([-1, 0, 1])(
-  'short Optical restart resumes and expiry %s starts a fresh preset after confirmed entry',
+  'restart without pause proof suppresses short resume and expiry %s starts a fresh preset',
   async (delta) => {
     const s = setup();
     let r: ReturnType<typeof setup> | undefined;
@@ -268,11 +268,12 @@ it.each([-1, 0, 1])(
       const requests = r.adapter.dispatched
         .slice(before)
         .map((c) => c.requested);
-      expect(requests).toContainEqual(
-        delta < 0
-          ? { property: 'playback', value: 'playing' }
-          : { property: 'preset', value: 'spotify_dj' },
-      );
+      if (delta < 0) expect(requests).toEqual([]);
+      else
+        expect(requests).toContainEqual({
+          property: 'preset',
+          value: 'spotify_dj',
+        });
       expect(
         requests.some(
           (c) => c.property === (delta < 0 ? 'preset' : 'playback'),

@@ -175,9 +175,12 @@ HA/WiiM timing and physical behavior remain subject to the protocol below and
 1. A confirmed room-empty transition pauses each configured player and records
    whether it was playing so a short return can preserve continuity.
 2. A confirmed room-entry transition from `confirmed_empty`, from 06:00 until 23:00
-   Europe/Stockholm time, resumes the recent playing context when it is still
-   within 20 minutes. Otherwise, if nothing is playing, it starts Spotify DJ
-   preset 1.
+   Europe/Stockholm time, resumes only an eligible Lugn-owned pause within 20
+   minutes. A silent or uncertain short return does not start DJ. Receiver
+   resume requires confirmed pause feedback and the same known source; a pending
+   pause can resume when its confirmation arrives after a rapid return. Computer
+   playback requires its existing matching pause lease. After 20 minutes, a fresh
+   entry starts Spotify DJ preset 1 if nothing is playing.
 3. From 23:00 until 06:00 (Europe/Stockholm), including after midnight, Lugn
    does not automatically start or resume playback. Reaching 06:00 alone
    does not start music; a new eligible entry is required.
@@ -240,8 +243,11 @@ to configured preferences.
 A dashboard/user volume request, human fade, physical remote or attributed
 external WiiM/HA volume change selects persistent **Manual** mode for that player.
 The latest human volume is kept separately as its manual reference. Manual mode
-survives person-count changes, unknown presence, home/away changes, long room
-absence and restart. Playback Pause and its room-session expiry remain separate.
+survives person-count changes, unknown presence, home/away changes and short
+absences. After 20 minutes of confirmed room absence, Manual returns to Auto;
+a volume adjustment during the absence starts a new 20-minute interval. The
+absolute deadline survives restart, and expiry sends no volume command while the
+room is empty. Playback Pause and its room-session expiry remain separate.
 Human volume commands and fades remain usable while away or unknown, or with
 automatic volume disabled. Service acceptance does not prove that the player
 reached the requested level.
@@ -359,14 +365,14 @@ player. A fade interrupted by restart keeps its saved human destination and the
 manual reference; it does not continue fading or claim completion, and the
 configured automatic base remains unchanged.
 
-Short confirmed absences preserve absolute playback resume eligibility, including
-the existing Optical context. After fresh confirmed occupancy, a freshly available
-player may resume within that original window; at its exact expiry a new eligible
+Short confirmed absences preserve the absolute playback window across restart,
+but receiver pause command proof is process-local: after restart a short return
+will not automatically resume receiver playback. At its exact expiry a new eligible
 entry may start the normal preset. Startup, HA seeding/recovery and unknown
 presence alone send no restored music commands. The first confirmed-empty
 heartbeat may pause playback for safety but does not renew saved deadlines or
-resume eligibility. Manual volume mode has no absence deadline and remains
-selected across downtime. Repeated restarts cannot extend playback continuity.
+resume eligibility. The manual volume absence deadline survives downtime.
+Repeated restarts cannot extend playback continuity.
 
 Visit-scoped Pause persists a safe session boundary (`sessionBoundary`, with
 absolute `suspendedAt`/`expiresAt`; both null until confirmed empty). RoomSessions
@@ -482,8 +488,8 @@ coverage, reset policies and the unperformed physical-device protocol. Daily
 offsets and automatic-start gates use Stockholm wall time at minute resolution;
 the curve follows skipped/repeated local hours at DST. Confirmed-absence
 deadlines use absolute elapsed milliseconds and retain the same 20-minute
-boundary across DST. Manual mode persists across those boundaries. Automatic
-volume commands remain suppressed unless passive person reduction is enabled;
+boundary across DST. Manual mode resets after 20 minutes of room absence.
+While Manual remains selected, automatic volume commands remain suppressed unless passive person reduction is enabled;
 that feature uses its own occupied/known-count/available guards.
 
 - Music control depends on Home Assistant exposing and supporting the needed
@@ -501,7 +507,7 @@ that feature uses its own occupied/known-count/available guards.
   tolerances remain unverified. On a test instance, change volume physically
   while occupied, cross 22:00/23:00/midnight/06:00, leave for less than 20 minutes,
   then leave beyond the exact 20-minute boundary and restart. Verify Manual mode
-  persists and the automatic base stays unchanged. With passive reduction off,
+  resets to Auto and the automatic base stays unchanged. With passive reduction off,
   verify no automatic volume commands occur in Manual; with it on, verify one
   reversible reduction for multiple people, restoration for one person, and no
   correction during unknown count, absence or unavailable feedback. Return volume

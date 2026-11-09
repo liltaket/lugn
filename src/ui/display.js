@@ -2146,6 +2146,7 @@ function playbackReason(reason) {
       player_unavailable: 'Autostart väntar · spelaren frånkopplad',
       already_playing: 'Spelaren spelar · ingen ny autostart',
       computer_not_resumable: 'Ingen datorpaus att återuppta',
+      short_return_silent: 'Ingen musik att återuppta efter kort frånvaro',
       awaiting_new_entry: 'Autostart först vid en ny entré',
     }[reason] ?? 'Autostartvillkor okända'
   );

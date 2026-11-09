@@ -49,6 +49,7 @@ async function setup() {
             last_updated: new Date(clock.now()).toISOString(),
             attributes: {
               volume_level: volume,
+              source: 'Spotify',
               media_title: `Metadata update at ${clock.now()}`,
             },
           },

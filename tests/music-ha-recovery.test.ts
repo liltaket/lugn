@@ -426,9 +426,9 @@ it.each([false, true])(
       expect(s.policy().manualHold?.expiresAt).toBeNull();
       s.clock.advanceBy(1);
       expect(s.policy()).toMatchObject({
-        activeOwner: 'manual',
-        mode: 'manual',
-        manualHold: { expiresAt: null },
+        activeOwner: 'none',
+        mode: 'auto',
+        manualHold: null,
         activityReason: 'confirmed_empty',
       });
       expect(s.services).toHaveLength(commands);
@@ -440,13 +440,12 @@ it.each([false, true])(
       await settle();
       expect(
         s.services.filter((call) => call.url.endsWith('/volume_set')),
-      ).toHaveLength(volumeRequests);
+      ).toHaveLength(volumeRequests + 1);
       expect(s.policy()).toMatchObject({
-        activeOwner: 'manual',
-        mode: 'manual',
+        activeOwner: 'lugn',
+        mode: 'auto',
         baseline: 0.3,
-        manualReference: 0.4,
-        effectiveTarget: 0.4,
+        manualReference: null,
       });
       // Service acceptance is not a new player observation.
       expect(s.engine.getMusicState('music.room').observed.volume).toBe(0.4);

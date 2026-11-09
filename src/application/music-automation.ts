@@ -122,6 +122,7 @@ export type MusicAutomationOptions = {
   clock: Clock;
   holds?: AutomationHolds;
   getState: (target: string) => DeviceMusicState;
+  getCommands: () => readonly MusicCommandRecord[];
   sourceForVolumeTrim?: (
     target: string,
     allowSettling?: boolean,
@@ -173,6 +174,11 @@ export class MusicAutomation {
   private readonly passiveManaged = new Map<string, boolean>();
   private readonly volumeControllers = new Map<string, 'you' | 'lugn'>();
   private readonly resumeUntil = new Map<string, number>();
+  private readonly receiverPauses = new Map<
+    string,
+    { source: string; commandId: string; deadline: number }
+  >();
+  private readonly pendingReturns = new Set<string>();
   private readonly deferredComputerPauses = new Map<string, number>();
   private readonly activeFades = new Map<string, ActiveFade>();
   private readonly manualVolumeHolds = new Map<string, ManualVolumeHold>();
@@ -185,6 +191,7 @@ export class MusicAutomation {
   private absenceExpiresAt: number | null = null;
   private readonly holds: AutomationHolds;
   private timer: TimerHandle | undefined;
+  private volumeAbsenceTimer: TimerHandle | undefined;
   private presence: Presence = 'unknown';
   private homePresence: HomePresence = 'unknown';
   private personCount: number | null = null;
@@ -228,7 +235,10 @@ export class MusicAutomation {
       const newConfirmedAbsence =
         lastConfirmedBeforeEvent !== 'confirmed_empty';
       if (newConfirmedAbsence) {
+        this.receiverPauses.clear();
+        this.pendingReturns.clear();
         this.absenceExpiresAt = this.options.clock.now() + musicContinuityMs;
+        this.armVolumeAbsenceExpiry();
       }
       if (newConfirmedAbsence || this.restoredAbsenceAwaitingPresence) {
         this.restoredAbsenceAwaitingPresence = false;
@@ -265,6 +275,8 @@ export class MusicAutomation {
     }
 
     if (presence === 'occupied') {
+      this.expireManualVolumeForAbsence();
+      this.cancelVolumeAbsenceTimer();
       this.deferredComputerPauses.clear();
       this.restoredAbsenceAwaitingPresence = false;
       this.lastConfirmedPresence = 'occupied';
@@ -279,6 +291,12 @@ export class MusicAutomation {
               { property: 'playback', value: 'playing' },
               'resume',
             );
+          } else if (
+            action === null &&
+            this.automaticPlaybackAllowed(target) &&
+            this.receiverPausePending(target)
+          ) {
+            this.pendingReturns.add(target);
           } else if (action === 'preset') {
             this.send(
               target,
@@ -344,6 +362,13 @@ export class MusicAutomation {
     request: MusicRequest,
     provenance: Provenance,
   ): void {
+    if (
+      isHumanActor(provenance.actor) &&
+      ['source', 'preset', 'playback'].includes(request.property)
+    ) {
+      this.receiverPauses.delete(target);
+      this.pendingReturns.delete(target);
+    }
     if (
       request.property === 'source' ||
       request.property === 'preset' ||
@@ -453,6 +478,8 @@ export class MusicAutomation {
     changedAt?: number,
   ): void {
     if (this.disposed) return;
+    this.receiverPauses.delete(target);
+    this.pendingReturns.delete(target);
     if (playback === 'playing') {
       this.clearManualPause(target);
       return;
@@ -668,6 +695,8 @@ export class MusicAutomation {
     if (request.mode === 'manual') {
       // Selecting Manual again must not weaken an actual volume adjustment.
       const adjustment = this.manualVolumeHolds.get(request.target);
+      if (adjustment && this.absenceExpiresAt !== null)
+        adjustment.createdAt = this.options.clock.now();
       if (
         !adjustment ||
         (adjustment.expiresAt !== null &&
@@ -696,6 +725,7 @@ export class MusicAutomation {
       this.passiveManaged.delete(request.target);
       this.applyVolumePolicy(request.target);
     }
+    this.armVolumeAbsenceExpiry();
   }
 
   get isVolumeAutomationEnabled(): boolean {
@@ -724,7 +754,9 @@ export class MusicAutomation {
               : this.presence === 'confirmed_empty' && action === null
                 ? this.options.computerPlayback?.handles(target)
                   ? 'computer_not_resumable'
-                  : 'already_playing'
+                  : this.isPlaying(target)
+                    ? 'already_playing'
+                    : 'short_return_silent'
                 : this.presence === 'confirmed_empty'
                   ? 'confirmed_empty'
                   : 'awaiting_new_entry';
@@ -784,6 +816,7 @@ export class MusicAutomation {
       // A short return only restores observed playback that Lugn paused.
       // Pending/failed pauses and unresolved sources grant no permission to play.
       return (this.resumeUntil.get(target) ?? 0) > this.options.clock.now() &&
+        this.receiverPauseConfirmed(target) &&
         device.availability === 'available' &&
         device.observed.source !== null &&
         device.observed.playback === 'paused' &&
@@ -792,6 +825,64 @@ export class MusicAutomation {
         : null;
     }
     return this.isPlaying(target) ? null : 'preset';
+  }
+
+  private receiverPausePending(target: string): boolean {
+    const proof = this.receiverPauses.get(target);
+    if (!proof || proof.deadline <= this.options.clock.now()) return false;
+    const device = this.options.getState(target);
+    const command = this.options
+      .getCommands()
+      .find((item) => item.id === proof.commandId);
+    return (
+      device.availability === 'available' &&
+      device.observed.source === proof.source &&
+      command?.status === 'pending'
+    );
+  }
+
+  private receiverPauseConfirmed(target: string): boolean {
+    const proof = this.receiverPauses.get(target);
+    if (!proof || proof.deadline <= this.options.clock.now()) return false;
+    const device = this.options.getState(target);
+    const command = this.options
+      .getCommands()
+      .find((item) => item.id === proof.commandId);
+    return (
+      device.observed.source === proof.source && command?.status === 'confirmed'
+    );
+  }
+
+  reconcileReceiverPlayback(): void {
+    if (this.disposed) return;
+    for (const [target, proof] of this.receiverPauses) {
+      const device = this.options.getState(target);
+      const command = this.options
+        .getCommands()
+        .find((item) => item.id === proof.commandId);
+      if (
+        (device.observed.source !== null &&
+          device.observed.source !== proof.source) ||
+        !command ||
+        ['failed', 'superseded', 'unconfirmed'].includes(command.status) ||
+        proof.deadline <= this.options.clock.now()
+      ) {
+        this.receiverPauses.delete(target);
+        this.pendingReturns.delete(target);
+        continue;
+      }
+      if (
+        !this.pendingReturns.has(target) ||
+        !this.receiverPauseConfirmed(target) ||
+        device.observed.playback !== 'paused' ||
+        device.requested.playback !== undefined ||
+        !this.automaticPlaybackAllowed(target)
+      )
+        continue;
+      this.pendingReturns.delete(target);
+      this.receiverPauses.delete(target);
+      this.send(target, { property: 'playback', value: 'playing' }, 'resume');
+    }
   }
 
   getIntentSnapshot(
@@ -941,6 +1032,8 @@ export class MusicAutomation {
       if (snapshot.confirmedAbsence)
         this.restoredPlaybackContinuityTargets.add(target);
     }
+    this.expireManualVolumeForAbsence();
+    this.armVolumeAbsenceExpiry();
     return restoreEnable;
   }
 
@@ -1084,6 +1177,7 @@ export class MusicAutomation {
     this.manualReferences.set(target, volume - offset);
     this.passiveManaged.set(target, this.manualPersonOffset(target) !== 0);
     this.volumeControllers.set(target, 'you');
+    this.armVolumeAbsenceExpiry();
   }
 
   private volumeActivityReason(
@@ -1120,8 +1214,58 @@ export class MusicAutomation {
     );
   }
 
+  private cancelVolumeAbsenceTimer(): void {
+    if (this.volumeAbsenceTimer !== undefined)
+      this.options.clock.clearTimeout(this.volumeAbsenceTimer);
+    this.volumeAbsenceTimer = undefined;
+  }
+
+  private manualVolumeDeadline(hold: ManualVolumeHold): number | null {
+    if (this.absenceExpiresAt === null) return null;
+    return Math.max(this.absenceExpiresAt, hold.createdAt + musicContinuityMs);
+  }
+
+  private armVolumeAbsenceExpiry(): void {
+    this.cancelVolumeAbsenceTimer();
+    const deadlines = this.options.targets.flatMap((target) => {
+      const hold = this.getManualVolumeHold(target);
+      const deadline = hold ? this.manualVolumeDeadline(hold) : null;
+      return deadline === null ? [] : [deadline];
+    });
+    if (deadlines.length === 0) return;
+    const delay = Math.max(
+      0,
+      Math.min(...deadlines) - this.options.clock.now(),
+    );
+    this.volumeAbsenceTimer = this.options.clock.setTimeout(() => {
+      this.volumeAbsenceTimer = undefined;
+      if (this.expireManualVolumeForAbsence()) this.options.onChange?.();
+      this.armVolumeAbsenceExpiry();
+    }, delay);
+  }
+
+  private expireManualVolumeForAbsence(): boolean {
+    let changed = false;
+    for (const target of this.options.targets) {
+      const hold = this.getManualVolumeHold(target);
+      const deadline = hold ? this.manualVolumeDeadline(hold) : null;
+      if (deadline === null || this.options.clock.now() < deadline) continue;
+      this.selectorIntents.delete(target);
+      this.manualVolumeHolds.delete(target);
+      this.manualReferences.delete(target);
+      this.passiveManaged.delete(target);
+      this.manualRevisions.set(
+        target,
+        (this.manualRevisions.get(target) ?? 0) + 1,
+      );
+      changed = true;
+    }
+    return changed;
+  }
+
   dispose(): void {
     this.disposed = true;
+    this.cancelVolumeAbsenceTimer();
     this.deferredComputerPauses.clear();
     this.cancelTimer();
   }
@@ -1466,20 +1610,38 @@ export class MusicAutomation {
     )
       return;
     const revision = this.recoveryRevision.playback;
-    void this.options
-      .request(target, request, {
-        actor: automationActor,
-        source: 'presence_music_automation',
-        reason: operation,
-      })
-      .catch(() => {
-        if (
-          operation === 'pause' &&
-          revision === this.recoveryRevision.playback
-        )
-          this.resumeUntil.set(target, 0);
-        this.options.onError?.(target, operation);
-      });
+    const receiverSource =
+      operation === 'pause' &&
+      !this.options.computerPlayback?.handles(target) &&
+      this.isPlaying(target)
+        ? this.options.getState(target).observed.source
+        : null;
+    const previousCommandId = this.options.getCommands().at(-1)?.id;
+    const result = this.options.request(target, request, {
+      actor: automationActor,
+      source: 'presence_music_automation',
+      reason: operation,
+    });
+    if (receiverSource !== null && this.absenceExpiresAt !== null) {
+      const command = this.options.getCommands().at(-1);
+      if (
+        command?.id !== previousCommandId &&
+        command?.target === target &&
+        command.provenance.reason === 'pause' &&
+        command.requested.property === 'playback' &&
+        command.requested.value === 'paused'
+      )
+        this.receiverPauses.set(target, {
+          source: receiverSource,
+          commandId: command.id,
+          deadline: this.absenceExpiresAt,
+        });
+    }
+    void result.catch(() => {
+      if (operation === 'pause' && revision === this.recoveryRevision.playback)
+        this.resumeUntil.set(target, 0);
+      this.options.onError?.(target, operation);
+    });
   }
 
   private calculateVolume(baseline: number | null, target?: string) {

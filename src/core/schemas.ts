@@ -306,6 +306,7 @@ export const MusicPlaybackActivityReasonSchema = z.enum([
   'player_unavailable',
   'already_playing',
   'computer_not_resumable',
+  'short_return_silent',
   'awaiting_new_entry',
 ]);
 export type MusicPlaybackActivityReason = z.infer<

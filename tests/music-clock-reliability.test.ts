@@ -110,12 +110,10 @@ it('opens the 06:00 gate without starting an already occupied room, then permits
     await s.presence('confirmed_empty');
     expect(
       s.engine.getMusicPlaybackPolicySnapshots()[target]?.entryEligible,
-    ).toBe(true);
+    ).toBe(false);
     await s.presence('occupied');
     await flush();
-    expect(positive().map((c) => c.requested)).toEqual([
-      { property: 'preset', value: 'spotify_dj' },
-    ]);
+    expect(positive()).toEqual([]);
     expect(s.policy()).toMatchObject({
       activeOwner: 'manual',
       effectiveTarget: 0.4,
@@ -141,7 +139,7 @@ it.each(clockCases)(
       await s.presence('confirmed_empty');
       expect(s.engine.getMusicPlaybackPolicySnapshots()[target]).toMatchObject({
         quietHours: quiet,
-        entryEligible: !quiet,
+        entryEligible: false,
       });
       expect(s.policy().dailyOffset).toBeCloseTo(offset, 10);
       const before = s.adapter.dispatched.length;
@@ -155,9 +153,7 @@ it.each(clockCases)(
             (c.requested.property === 'playback' &&
               c.requested.value === 'playing'),
         );
-      expect(positive.map((c) => c.requested)).toEqual(
-        quiet ? [] : [{ property: 'preset', value: 'spotify_dj' }],
-      );
+      expect(positive).toEqual([]);
       expect(s.policy().target).toBeCloseTo(0.5 + offset, 10);
     } finally {
       s.engine.dispose();
@@ -232,7 +228,7 @@ it.each([
   ['spring', '2026-03-29T00:50:00Z'],
   ['autumn', '2026-10-25T00:50:00Z'],
 ] as const)(
-  'keeps manual volume authority after twenty minutes of confirmed absence across %s DST',
+  'resets manual volume authority after twenty minutes of confirmed absence across %s DST',
   async (_name, start) => {
     const s = setup(start);
     try {
@@ -257,19 +253,19 @@ it.each([
       s.clock.advanceBy(1);
       expect(s.clock.now()).toBe(deadline);
       expect(s.policy()).toMatchObject({
-        activeOwner: 'manual',
-        mode: 'manual',
-        manualHold: { expiresAt: null },
+        activeOwner: 'none',
+        mode: 'auto',
+        manualHold: null,
       });
       expect(s.volumeCommands()).toHaveLength(count);
       await s.presence('occupied');
       await flush();
       expect(s.policy()).toMatchObject({
-        activeOwner: 'manual',
-        manualReference: 0.4,
-        effectiveTarget: 0.4,
+        activeOwner: 'lugn',
+        mode: 'auto',
+        manualReference: null,
       });
-      expect(s.volumeCommands()).toHaveLength(count);
+      expect(s.volumeCommands().length).toBeGreaterThan(count);
       // Volume may regain authority at night, but automatic positive playback may not.
       expect(
         s.adapter.dispatched.some(

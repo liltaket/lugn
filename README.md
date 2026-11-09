@@ -30,7 +30,9 @@ safe to use alongside physical controls and Home Assistant.
 ### Automatic behavior
 
 - A confirmed empty room turns configured lights off and pauses configured
-  music while retaining room intent for a short return.
+  music while retaining room intent for a short return. A short return does not
+  start DJ if no owned pause can be resumed. Manual volume returns to Auto after
+  20 minutes of confirmed absence.
 - A confirmed occupied event restores the current light scene, including at
   night. **Helt släckt** remains off, and Home Assistant **Borta** blocks
   automatic activation.
@@ -193,9 +195,3 @@ is separate from this agent.
 
 Lugn is source-available under the [PolyForm Small Business License 1.0.0](LICENSE).
 This is not an OSI-approved open-source license.
-
-Short room returns (under 20 minutes) only resume previously observed playback
-that Lugn paused. Silent or uncertain playback does not start Spotify DJ on a
-short return. Receiver resume also requires available, paused feedback with a
-known source and no pending playback request; computer playback retains its
-source-aware pause lease checks. Longer absences retain fresh-entry DJ behavior.

@@ -142,14 +142,14 @@ it('defines next-entry eligibility separately from volume enable, room state and
     });
     await s.presence('confirmed_empty');
     expect(s.playback()).toMatchObject({
-      activityReason: 'confirmed_empty',
-      entryEligible: true,
+      activityReason: 'short_return_silent',
+      entryEligible: false,
     });
     await s.engine.handleBilresaPress('2', 'multi_press_1');
     expect(
       s.engine.getMusicVolumePolicySnapshots()['music.room']!.policyEnabled,
     ).toBe(false);
-    expect(s.playback().entryEligible).toBe(true);
+    expect(s.playback().entryEligible).toBe(false);
     await s.engine.requestMusic(
       'music.room',
       { property: 'playback', value: 'paused' },
@@ -207,8 +207,8 @@ it('matches restored and ordinary availability guards without inventing a genera
   try {
     await s.presence('confirmed_empty');
     expect(s.playback()).toMatchObject({
-      activityReason: 'confirmed_empty',
-      entryEligible: true,
+      activityReason: 'short_return_silent',
+      entryEligible: false,
     });
     restored = new LugnEngine(s.clock, {
       deviceIds: [],
@@ -231,7 +231,7 @@ it('matches restored and ordinary availability guards without inventing a genera
     await s.presence('occupied');
     expect(
       s.adapter.dispatched.slice(before).map((c) => c.requested),
-    ).toContainEqual({ property: 'preset', value: 'spotify_dj' });
+    ).not.toContainEqual({ property: 'preset', value: 'spotify_dj' });
     await restored.handlePresence({
       type: 'presence.changed',
       presence: 'occupied',
@@ -328,10 +328,10 @@ it('records persistent manual ownership and enable context without disabling pla
     expect(
       s.engine.getMusicVolumePolicySnapshots()['music.room'],
     ).toMatchObject({
-      activeOwner: 'manual',
-      mode: 'manual',
-      manualReference: 0.6,
-      manualHold: { expiresAt: null },
+      activeOwner: 'none',
+      mode: 'auto',
+      manualReference: null,
+      manualHold: null,
       policyEnabled: false,
     });
     expect(s.playback().entryEligible).toBe(true);
@@ -413,7 +413,7 @@ it('keeps typed decision history bounded, deduplicated and independent from quer
       manualHold: { expiresAt: null },
     });
     expect(result.playback).toMatchObject({
-      activityReason: 'confirmed_empty',
+      activityReason: 'short_return_silent',
     });
     expect(result.decisions).toEqual(
       s.engine.state.music.decisions?.filter((d) => d.target === 'music.room'),
