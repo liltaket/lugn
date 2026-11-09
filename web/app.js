@@ -982,6 +982,7 @@ async function signOutOfClerk() {
 
 async function switchClerkAccount() {
   clerkRetry.disabled = true;
+  clerkRetry.setAttribute('aria-busy', 'true');
   clerkRetry.textContent = 'Byter konto…';
   try {
     clerkSessionExchangeSuppressed = true;
@@ -998,6 +999,7 @@ async function switchClerkAccount() {
     clerkRetry.hidden = false;
   } finally {
     clerkRetry.disabled = false;
+    clerkRetry.removeAttribute('aria-busy');
     if (clerkRetry.textContent === 'Byter konto…')
       clerkRetry.textContent = 'Byt Clerk-konto';
   }
@@ -1006,6 +1008,7 @@ async function switchClerkAccount() {
 async function retryClerkSignOut() {
   if (!clerkSignOutPending) return;
   clerkRetry.disabled = true;
+  clerkRetry.setAttribute('aria-busy', 'true');
   clerkRetry.textContent = 'Loggar ut…';
   setLoginError('');
   clerkStatus.textContent = 'Loggar ut från Clerk…';
@@ -1023,6 +1026,7 @@ async function retryClerkSignOut() {
     clerkRetry.hidden = false;
   } finally {
     clerkRetry.disabled = false;
+    clerkRetry.removeAttribute('aria-busy');
     clerkRetry.textContent = 'Försök igen';
   }
 }

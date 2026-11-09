@@ -17,3 +17,8 @@
 
 **Learning:** During async operations, setting disabled properties on trigger buttons is not enough. Screen readers need `aria-busy="true"` on the element to announce the state correctly to the user.
 **Action:** Always add `aria-busy="true"` logic when applying `disabled` and loading text states to buttons that trigger asynchronous operations.
+
+## 2025-02-18 - Missing ARIA busy state on Clerk retry buttons
+
+**Learning:** Found that the Clerk retry/switch account button disabled itself and changed text during loading but failed to announce to screen readers via the `aria-busy` attribute, leaving them without context on the background loading status.
+**Action:** Always add `aria-busy="true"` logic when applying `disabled` and loading text states to buttons that trigger asynchronous operations, such as login flows or account switching.
