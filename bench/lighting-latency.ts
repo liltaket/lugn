@@ -27,6 +27,8 @@ const { values } = parseArgs({
     'adapter-options': { type: 'string' },
     transport: { type: 'string', default: 'websocket' },
     group: { type: 'boolean', default: false },
+    'display-streams': { type: 'string', default: '2' },
+    'passive-listeners': { type: 'string', default: '4' },
     out: { type: 'string' },
   },
 });
@@ -66,6 +68,8 @@ for (const spec of specs) {
     cpuScale,
     commandTransport: values.transport === 'rest' ? 'rest' : 'websocket',
     groupIdenticalCommands: values.group,
+    serializingStreamListeners: Number(values['display-streams']),
+    passiveStreamListeners: Number(values['passive-listeners']),
     ...(adapterOptions ? { adapterOptions } : {}),
   });
   results.push(result);
