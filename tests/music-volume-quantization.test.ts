@@ -48,7 +48,7 @@ function setup() {
     adapter.observe('music.room', { ...values, volume });
     await flush();
   };
-  return { clock, engine, policy, presence, lastRequested, feedback };
+  return { clock, adapter, engine, policy, presence, lastRequested, feedback };
 }
 
 it('keeps Auto when the receiver truncates an automatic volume to whole percent', async () => {
@@ -80,5 +80,34 @@ it('still treats a real adjustment after an automatic volume as manual', async (
   expect(s.policy().mode).toBe('auto');
 
   await s.feedback(wiim(s.lastRequested()) - 0.03);
+  expect(s.policy().mode).toBe('manual');
+});
+
+it('does not resend an automatic volume the receiver already truncated to', async () => {
+  const s = setup();
+  await s.presence(1);
+  const requested = s.lastRequested();
+  await s.feedback(wiim(requested));
+  const sent = () =>
+    s.adapter.dispatched.filter((c) => c.requested.property === 'volume')
+      .length;
+  const before = sent();
+
+  await s.presence(1);
+  s.clock.advanceBy(30_000);
+  await flush();
+  await s.presence(1);
+
+  expect(sent()).toBe(before);
+  expect(s.policy().mode).toBe('auto');
+});
+
+it('does not treat a value below the truncated step as feedback', async () => {
+  const s = setup();
+  await s.presence(1);
+  const requested = s.lastRequested();
+  // 0.206 is within 0.005 of the truncated 0.21 but is not what a truncating
+  // receiver reports for ~0.216, so a human did it.
+  await s.feedback(wiim(requested) - 0.004);
   expect(s.policy().mode).toBe('manual');
 });
