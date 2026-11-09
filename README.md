@@ -36,9 +36,11 @@ safe to use alongside physical controls and Home Assistant.
 - A confirmed occupied event restores the current light scene, including at
   night. **Helt släckt** remains off, and Home Assistant **Borta** blocks
   automatic activation.
-- Prelight is temporary and is suppressed if the room is already lit, the
-  selected scene is fully off, quiet hours are active, or Home Assistant
-  reports **Borta**.
+- Prelight is temporary and works at any hour when the room is dark because
+  nobody is there. It is suppressed if someone is in the room, the room is
+  already lit, the selected scene is fully off (**Helt släckt**, sleep), every
+  light it would turn on was switched off by hand, or Home Assistant reports
+  **Borta**. Lights switched off by hand stay dark, as they do on entry.
 - An explicit Home Assistant `away` state pauses playing music and blocks
   presence-driven music starts and automatic volume adjustments. Home status
   `unknown` is shown separately and does not itself block room automation.

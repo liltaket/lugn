@@ -282,13 +282,6 @@ export class LugnEngine {
     );
   }
 
-  // Bolt optimization: Cache Intl object to avoid expensive recreation during class lifecycle
-  private readonly timeFormat = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Stockholm',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  });
   readonly stream: StateEventStream;
   readonly ledger: CommandLedger;
   readonly adapter: LightingAdapter;
@@ -2497,12 +2490,25 @@ export class LugnEngine {
     const allLightsOffScene =
       this.hasExplicitAllLightsOffScene() ||
       (scene !== undefined && Object.keys(targetValues).length === 0);
-    const quietHours = this.isPrelightQuietHours();
+    // Prelight lights what a confirmed entry would light, at any hour. Lamps
+    // the resident switched off by hand (a retained activation hold or an
+    // external OFF override) stay dark, like they do on entry.
+    for (const target of Object.keys(targetValues)) {
+      const device = this.state.lighting.devices[target];
+      if (
+        this.holds.blocks('lighting.activation', target) ||
+        (device?.ownership.power?.kind === 'override' &&
+          device.effectiveDesired.power === false)
+      )
+        delete targetValues[target];
+    }
+    const explicitlyOff =
+      !allLightsOffScene && Object.keys(targetValues).length === 0;
     const roomAlreadyLit = this.hasAnyLightOn();
     const homeAway = this.state.presence.home.state === 'away';
     if (
       allLightsOffScene ||
-      quietHours ||
+      explicitlyOff ||
       roomAlreadyLit ||
       homeAway ||
       this.state.presence.state === 'occupied'
@@ -2514,8 +2520,8 @@ export class LugnEngine {
           currentScene: this.state.lighting.currentScene,
           reason: allLightsOffScene
             ? 'all_lights_off_scene'
-            : quietHours
-              ? 'quiet_hours'
+            : explicitlyOff
+              ? 'explicitly_off'
               : roomAlreadyLit
                 ? 'room_already_lit'
                 : homeAway
@@ -4145,12 +4151,6 @@ export class LugnEngine {
         target !== this.windowLighting?.target &&
         device.observed.power === true,
     );
-  }
-
-  private isPrelightQuietHours(): boolean {
-    const parts = this.timeFormat.formatToParts(new Date(this.clock.now()));
-    const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
-    return hour >= 23 || hour < 6;
   }
 
   private addDiagnostic(

@@ -78,8 +78,9 @@ still needs work before Lugn is a broadly configurable, finished product.
   suppresses automatic room activation.
 - Away never suppresses confirmed-empty shutoff or explicitly requested
   dashboard actions.
-- Prelight is suppressed when the room is already lit, the current scene is
-  fully off, quiet hours are active, or the resident is away.
+- Prelight is suppressed when the room is occupied or already lit, the
+  current scene is fully off, every light it would turn on was switched off
+  by hand, or the resident is away. It is not limited by the time of day.
 - The dashboard is self-contained and does not route users into Home Assistant
   dashboards.
 - Music stays silent from automatic start/resume between 23:00 and 06:00; user-selected
