@@ -123,3 +123,34 @@ export function calculateMusicVolume(
           ),
   };
 }
+
+const VOLUME_STEP = 0.01;
+const VOLUME_ROUNDING_TOLERANCE = 0.005;
+
+/**
+ * Whether device-reported volume is feedback for a requested volume. The WiiM
+ * stores whole percent and truncates, so an off-grid policy request such as
+ * 0.2088 is reported as 0.20, which is not a human adjustment. A request already
+ * on a whole percent, and every fade step, keep the tight tolerance: a fade
+ * step cannot be told apart from a human landing on the truncated value.
+ */
+export function volumeFeedbackMatches(
+  observed: number,
+  command: {
+    requested: { value: unknown };
+    provenance: { reason?: string | undefined };
+  },
+): boolean {
+  const requested = Number(command.requested.value);
+  if (
+    Math.abs(observed - requested) <=
+    VOLUME_ROUNDING_TOLERANCE + Number.EPSILON
+  )
+    return true;
+  if (command.provenance.reason?.startsWith('Volume fade step ')) return false;
+  const lower = Math.floor(requested / VOLUME_STEP + 1e-6) * VOLUME_STEP;
+  return (
+    requested - lower > 1e-6 &&
+    Math.abs(observed - lower) < VOLUME_ROUNDING_TOLERANCE
+  );
+}
