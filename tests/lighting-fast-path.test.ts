@@ -121,3 +121,47 @@ describe('presence lighting fast path', () => {
     engine.dispose();
   });
 });
+
+describe('dark-room off delivery', () => {
+  it('retries a failed prelight restore off while the room stays empty', async () => {
+    const clock = new FakeClock(Date.parse('2026-09-28T12:00:00+02:00'));
+    const inner = new SimulatedLightingAdapter(clock);
+    let failNextDeskOff = false;
+    const adapter = {
+      subscribe: inner.subscribe.bind(inner),
+      dispatch: async (command: Parameters<typeof inner.dispatch>[0]) => {
+        if (
+          failNextDeskOff &&
+          command.target === 'lighting.desk' &&
+          command.values.power === false
+        ) {
+          failNextDeskOff = false;
+          throw new Error('Home Assistant integration error');
+        }
+        return inner.dispatch(command);
+      },
+    };
+    const engine = new LugnEngine(clock, {
+      adapter,
+      defaultSceneId: 'scene.cozy',
+    });
+    inner.externalChange('lighting.ceiling', { power: false });
+    inner.externalChange('lighting.desk', { power: false });
+    await engine.handlePresence(empty);
+
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    expect(inner.observed.get('lighting.desk')?.power).toBe(true);
+    await engine.handlePrelight({ type: 'presence.prelight', active: false });
+    failNextDeskOff = true;
+    clock.advanceBy(5_000);
+    for (let i = 0; i < 12; i += 1) await Promise.resolve();
+    expect(inner.observed.get('lighting.ceiling')?.power).toBe(false);
+    expect(inner.observed.get('lighting.desk')?.power).toBe(true);
+
+    clock.advanceBy(2_000);
+    for (let i = 0; i < 12; i += 1) await Promise.resolve();
+    expect(inner.observed.get('lighting.desk')?.power).toBe(false);
+    expect(engine.state.presence.state).toBe('confirmed_empty');
+    engine.dispose();
+  });
+});
