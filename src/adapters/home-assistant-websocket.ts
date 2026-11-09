@@ -29,6 +29,7 @@ const ServerMessageSchema = z.object({
   type: z.string(),
   id: z.number().int().positive().optional(),
   success: z.boolean().optional(),
+  error: z.object({ code: z.string().optional() }).optional().catch(undefined),
 });
 const EventFrameSchema = z.object({
   type: z.literal('event'),
@@ -72,6 +73,33 @@ export type HomeAssistantConnectionStatus =
 /** Valid only for this authenticated subscription; invalidated on loss or stop. */
 export type HomeAssistantConnection = { isCurrent(): boolean };
 
+/** An HA `call_service` command sent on the authenticated socket. */
+export type HomeAssistantServiceCall = {
+  domain: string;
+  service: string;
+  serviceData: Record<string, unknown>;
+  target: { entity_id: string | string[] };
+};
+
+/**
+ * `no_response`: the frame was sent but no result arrived (timeout or lost
+ * socket), so HA may still have executed it. `rejected`: HA answered with an
+ * error result carrying its WebSocket error code.
+ */
+export class HomeAssistantServiceCallError extends Error {
+  constructor(
+    readonly outcome: 'no_response' | 'rejected',
+    readonly code?: string,
+  ) {
+    super(
+      outcome === 'rejected'
+        ? `Home Assistant rejected the service call (${code ?? 'unknown'})`
+        : 'Home Assistant did not answer the service call',
+    );
+    this.name = 'HomeAssistantServiceCallError';
+  }
+}
+
 export type HomeAssistantWebSocketOptions = {
   createSocket?: HomeAssistantSocketFactory;
   clock?: Clock;
@@ -108,6 +136,14 @@ export class HomeAssistantWebSocketTransport {
   private reconnectTimer: TimerHandle | undefined;
   private subscriptionId: number | undefined;
   private _status: HomeAssistantConnectionStatus = 'stopped';
+  private readonly pendingCalls = new Map<
+    number,
+    {
+      resolve: () => void;
+      reject: (error: HomeAssistantServiceCallError) => void;
+      timer: TimerHandle;
+    }
+  >();
 
   constructor(
     config: { baseUrl: string; token: string },
@@ -157,8 +193,45 @@ export class HomeAssistantWebSocketTransport {
     this.socket = undefined;
     this.subscriptionId = undefined;
     this._status = 'stopped';
+    this.abandonPendingCalls();
     this.notifyDisconnected();
     if (socket) this.closeSocket(socket);
+  }
+
+  /**
+   * Sends a service call on the connected socket, which avoids a REST request
+   * (and often a TCP connect) per light. Returns undefined when no
+   * authenticated subscription exists; nothing was sent and the caller may
+   * use another transport. The promise resolves on HA's success result.
+   */
+  callService(
+    call: HomeAssistantServiceCall,
+    timeoutMs = 10_000,
+  ): Promise<void> | undefined {
+    const socket = this.socket;
+    if (!socket || this._status !== 'connected') return undefined;
+    const id = this.nextCommandId++;
+    const frame = JSON.stringify({
+      id,
+      type: 'call_service',
+      domain: call.domain,
+      service: call.service,
+      service_data: call.serviceData,
+      target: call.target,
+    });
+    try {
+      socket.send(frame);
+    } catch {
+      this.connectionLost(socket, this.generation);
+      return undefined;
+    }
+    return new Promise<void>((resolve, reject) => {
+      const timer = this.clock.setTimeout(() => {
+        this.pendingCalls.delete(id);
+        reject(new HomeAssistantServiceCallError('no_response'));
+      }, timeoutMs);
+      this.pendingCalls.set(id, { resolve, reject, timer });
+    });
   }
 
   private openSocket(): void {
@@ -252,6 +325,20 @@ export class HomeAssistantWebSocketTransport {
       return;
     }
 
+    if (message.type === 'result' && message.id !== undefined) {
+      const pending = this.pendingCalls.get(message.id);
+      if (pending) {
+        this.pendingCalls.delete(message.id);
+        this.clock.clearTimeout(pending.timer);
+        if (message.success === true) pending.resolve();
+        else
+          pending.reject(
+            new HomeAssistantServiceCallError('rejected', message.error?.code),
+          );
+        return;
+      }
+    }
+
     if (
       message.type === 'event' &&
       message.id === this.subscriptionId &&
@@ -279,6 +366,16 @@ export class HomeAssistantWebSocketTransport {
     }
   }
 
+  /** Sent frames without a result may still have executed in HA. */
+  private abandonPendingCalls(): void {
+    const pending = [...this.pendingCalls.values()];
+    this.pendingCalls.clear();
+    for (const call of pending) {
+      this.clock.clearTimeout(call.timer);
+      call.reject(new HomeAssistantServiceCallError('no_response'));
+    }
+  }
+
   private failAuthentication(socket: HomeAssistantSocket): void {
     if (socket !== this.socket) return;
     this.active = false;
@@ -295,6 +392,7 @@ export class HomeAssistantWebSocketTransport {
     generation: number,
   ): void {
     if (!this.isCurrent(socket, generation)) return;
+    this.abandonPendingCalls();
     this.notifyDisconnected();
     this.reportError('socket');
     this.socket = undefined;
