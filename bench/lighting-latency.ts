@@ -25,6 +25,7 @@ const { values } = parseArgs({
     episodes: { type: 'string', default: '120' },
     'cpu-scale': { type: 'string', default: '1' },
     'adapter-options': { type: 'string' },
+    transport: { type: 'string', default: 'websocket' },
     out: { type: 'string' },
   },
 });
@@ -62,6 +63,7 @@ for (const spec of specs) {
   const result = await runSimulation(workload, {
     profile: spec.profile,
     cpuScale,
+    commandTransport: values.transport === 'rest' ? 'rest' : 'websocket',
     ...(adapterOptions ? { adapterOptions } : {}),
   });
   results.push(result);

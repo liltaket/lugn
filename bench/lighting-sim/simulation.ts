@@ -127,6 +127,8 @@ export type SimulationOptions = {
   passiveStreamListeners?: number;
   /** SSE-like listeners that serialize full state on setImmediate. */
   serializingStreamListeners?: number;
+  /** 'rest' skips attaching the HA WebSocket for light commands. */
+  commandTransport?: 'websocket' | 'rest';
   /** Extra options forwarded to HomeAssistantLightingAdapter, if supported. */
   adapterOptions?: Record<string, unknown>;
 };
@@ -184,6 +186,8 @@ export type SimulationResult = {
     unhandledRejections: number;
   };
   checkpoints: CheckpointState[];
+  /** Adapter commands by engine source/reason, and how many were HA no-ops. */
+  commandReasons: Record<string, { sent: number; noop: number }>;
   wallMs: number;
 };
 
@@ -228,6 +232,37 @@ export async function runSimulation(
     ha.fetch,
     clock,
   );
+  // Classify each adapter command against HA's scheduled state, keyed by the
+  // engine's command reason, to find redundant sends.
+  const commandReasons = new Map<string, { sent: number; noop: number }>();
+  const dispatchLighting = lighting.dispatch.bind(lighting);
+  lighting.dispatch = (command) => {
+    clock.excluded(() => {
+      const record = engine.ledger.records.find(
+        (entry) => entry.id === command.id,
+      );
+      const key = `${record?.source ?? '?'}: ${record?.reason ?? '?'}`;
+      const entity = liveEntities[command.target];
+      const service = command.values.power === false ? 'turn_off' : 'turn_on';
+      const data: Record<string, unknown> = {};
+      if (command.values.brightness !== undefined)
+        data['brightness_pct'] = command.values.brightness;
+      if (command.values.colorTemperature !== undefined)
+        data['color_temp_kelvin'] = command.values.colorTemperature;
+      if (command.values.rgb !== undefined)
+        data['rgb_color'] = command.values.rgb;
+      const counts = commandReasons.get(key) ?? { sent: 0, noop: 0 };
+      counts.sent += 1;
+      if (
+        entity &&
+        entity !== 'light.brunos_rum_wled' &&
+        ha.isNoop(entity, service, data)
+      )
+        counts.noop += 1;
+      commandReasons.set(key, counts);
+    });
+    return dispatchLighting(command);
+  };
   const deviceIds = Object.keys(liveEntities);
   const engine = new LugnEngine(clock, {
     adapter: lighting,
@@ -287,9 +322,11 @@ export async function runSimulation(
       },
     },
   );
-  (
-    lighting as { attachWebSocket?: (transport: unknown) => void }
-  ).attachWebSocket?.(socket);
+  // Older trees (baseline) have no attachWebSocket; they always use REST.
+  if (options.commandTransport !== 'rest')
+    (
+      lighting as { attachWebSocket?: (transport: unknown) => void }
+    ).attachWebSocket?.(socket);
   let brokerSeq = 0;
   const broker = new SimMqttBroker(clock, () =>
     Math.max(
@@ -602,6 +639,7 @@ export async function runSimulation(
       unhandledRejections,
     },
     checkpoints,
+    commandReasons: Object.fromEntries(commandReasons),
     wallMs: performance.now() - started,
   };
 }

@@ -134,6 +134,19 @@ export class MockHomeAssistant {
     return this.states.get(entity);
   }
 
+  /** Would this service call leave the entity's scheduled HA state unchanged? */
+  isNoop(
+    entity: string,
+    service: 'turn_on' | 'turn_off',
+    data: Record<string, unknown>,
+  ): boolean {
+    const current = this.scheduled.get(entity);
+    return (
+      current !== undefined &&
+      sameLightState(current, applyService(current, service, data))
+    );
+  }
+
   /** A person changes a light in the HA app or on the device. */
   manualChange(entity: string, values: Record<string, unknown>): void {
     const current = this.scheduled.get(entity);
