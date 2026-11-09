@@ -1,7 +1,15 @@
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'agents/linux/target/**'] },
+  {
+    ignores: [
+      'dist/**',
+      'dist-bench/**',
+      'bench/results/**',
+      'node_modules/**',
+      'agents/linux/target/**',
+    ],
+  },
   ...tseslint.configs.recommended,
   {
     files: ['**/*.ts'],

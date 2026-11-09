@@ -24,7 +24,8 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run && bash tests/install-user-service.test.sh"
+    "test": "vitest run && bash tests/install-user-service.test.sh",
+    "bench:lighting": "tsc -p tsconfig.bench.json && node dist-bench/bench/lighting-latency.js"
   },
   "engines": {
     "node": ">=22"
