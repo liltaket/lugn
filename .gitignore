@@ -4,3 +4,5 @@ coverage/
 .DS_Store
 config.json
 lugn.env
+dist-bench/
+bench/results/

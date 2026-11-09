@@ -2,3 +2,5 @@ node_modules
 dist
 coverage
 agents/linux/target
+dist-bench
+bench/results
