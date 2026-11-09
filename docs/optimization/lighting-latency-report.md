@@ -372,19 +372,19 @@ recommended as a separate, UI-owned change.
 Decision support only; nothing was moved. Lugn runs on **brunocam** today; the
 STL27L service (`doorway-intelligence`, USB serial) stays there in both
 options. The measured facts below were read on 2026-11-09 with pings,
-`/proc`, `ps`, `docker ps`, `virsh list` and the CPU microbenchmark above; no
+`/proc`, `ps`, service listings and the CPU microbenchmark above; no
 configuration was changed.
 
 ### What was found
 
-|                                                    | brunocam (today)                                                                                                                                      | putte (candidate)                                                                                                                |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| hardware (measured)                                | Raspberry Pi 3B, 4× Cortex-A53, 905 MB RAM                                                                                                            | Intel i5-6600K, 4 cores, 15 GB RAM                                                                                               |
-| network (measured)                                 | **Wi-Fi only** (`wlan0`, 192.168.10.132)                                                                                                              | wired (`enp0s31f6`, 192.168.10.42)                                                                                               |
-| RTT to HA + MQTT broker (192.168.10.40), 200 pings | P50 4.19 / P95 8.88 / P99 12.4 ms                                                                                                                     | P50 0.26 / P95 0.33 / P99 0.80 ms                                                                                                |
-| RTT brunocam ↔ putte                               | P50 4.3 / P95 10.0 / P99 13.8 ms                                                                                                                      |                                                                                                                                  |
-| load (measured snapshot)                           | `doorway-intelligence` ~92 % of one core; Lugn ~8 %, RSS 140 MB; throttling flag `0x60000` (capping/throttling occurred since boot); 612 MB available | load ~2.3 of 4 cores (26 containers incl. Plex, BirdNET, Scrypted, one libvirt VM); 6.6 GB available, **swap 3.6 / 4 GB in use** |
-| clone / JSON microbenchmark, Node 22               | 16.7 / 6.8 ms                                                                                                                                         | 2.0 / 0.86 ms (≈ 8× faster)                                                                                                      |
+|                                                    | brunocam (today)                                                                                                                                      | putte (candidate)                                                                            |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| hardware (measured)                                | Raspberry Pi 3B, 4× Cortex-A53, 905 MB RAM                                                                                                            | Intel i5-6600K, 4 cores, 15 GB RAM                                                           |
+| network (measured)                                 | **Wi-Fi only** (`wlan0`, 192.168.10.132)                                                                                                              | wired, same LAN                                                                              |
+| RTT to HA + MQTT broker (192.168.10.40), 200 pings | P50 4.19 / P95 8.88 / P99 12.4 ms                                                                                                                     | P50 0.26 / P95 0.33 / P99 0.80 ms                                                            |
+| RTT brunocam ↔ putte                               | P50 4.3 / P95 10.0 / P99 13.8 ms                                                                                                                      |                                                                                              |
+| load (measured snapshot)                           | `doorway-intelligence` ~92 % of one core; Lugn ~8 %, RSS 140 MB; throttling flag `0x60000` (capping/throttling occurred since boot); 612 MB available | load ~2.3 of 4 cores (busy multi-service host); 6.6 GB available, **swap 3.6 / 4 GB in use** |
+| clone / JSON microbenchmark, Node 22               | 16.7 / 6.8 ms                                                                                                                                         | 2.0 / 0.86 ms (≈ 8× faster)                                                                  |
 
 HA and the Mosquitto broker both run on 192.168.10.40 (Raspberry Pi MAC
 prefix), not on putte. All traffic stays on the LAN; neither placement needs
