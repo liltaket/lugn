@@ -325,6 +325,7 @@ export class MusicAutomation {
       return;
     }
 
+    this.pendingReturns.clear();
     this.cancelTimer();
     this.cancelAutomaticFades();
   }
@@ -332,6 +333,7 @@ export class MusicAutomation {
   handleHomePresence(homePresence: HomePresence): void {
     if (this.disposed) return;
     if (this.homePresence !== homePresence) {
+      this.pendingReturns.clear();
       this.deferredComputerPauses.clear();
       this.recoveryRevision.volume++;
       this.recoveryRevision.playback++;

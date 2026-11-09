@@ -151,3 +151,23 @@ it('does not resume a late pause after the user returns while away', async () =>
     s.engine.dispose();
   }
 });
+
+it('cancels a pending return when home presence changes before confirmation', async () => {
+  const s = setup();
+  try {
+    const command = await pause(s);
+    await s.presence('occupied');
+    await s.engine.handleHomePresence('away');
+    await s.engine.handleHomePresence('home');
+    s.clock.advanceBy(1);
+    s.adapter.observe(
+      'music.room',
+      { ...values, playback: 'paused' },
+      true,
+      command.id,
+    );
+    expect(starts(s)).toHaveLength(0);
+  } finally {
+    s.engine.dispose();
+  }
+});

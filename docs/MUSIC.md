@@ -180,7 +180,9 @@ HA/WiiM timing and physical behavior remain subject to the protocol below and
    resume requires confirmed pause feedback and the same known source; a pending
    pause can resume when its confirmation arrives after a rapid return. Computer
    playback requires its existing matching pause lease. After 20 minutes, a fresh
-   entry starts Spotify DJ preset 1 if nothing is playing.
+   entry can start Spotify DJ preset 1 for receiver playback if nothing is
+   playing. A computer-routed input retains its separate lease-based behavior
+   and does not fall back to DJ.
 3. From 23:00 until 06:00 (Europe/Stockholm), including after midnight, Lugn
    does not automatically start or resume playback. Reaching 06:00 alone
    does not start music; a new eligible entry is required.
