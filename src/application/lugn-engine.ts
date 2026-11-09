@@ -3245,13 +3245,12 @@ export class LugnEngine {
     this.inFlightLightingCommandIds.delete(command.id);
     this.lightingTransportsInFlight.delete(command.id);
     this.reassertAfterStalePrelightRestore(command);
-    // A plain off in a room that must stay dark (for example a prelight
-    // restore) gets the bounded confirmed-empty retry, whichever path sent it;
-    // scene retries do not run while the room is empty.
+    // An off in a room that must stay dark (for example a prelight restore,
+    // which also carries remembered values) gets the bounded confirmed-empty
+    // retry, whichever path sent it; scene retries do not run while empty.
     if (
       retryMode === 'scene' &&
       values.power === false &&
-      Object.keys(values).length === 1 &&
       this.shouldRemainPhysicallyEmpty() &&
       !this.windowCanRunWhileEmpty(target)
     )
@@ -4720,7 +4719,6 @@ export class LugnEngine {
         this.shouldRemainPhysicallyEmpty() &&
         !this.windowCanRunWhileEmpty(command.target) &&
         command.desired.power === false &&
-        Object.keys(command.desired).length === 1 &&
         device.observed.power !== false
       );
     if (
