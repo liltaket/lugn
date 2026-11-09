@@ -251,7 +251,12 @@ export class MusicAutomation {
               this.deferredComputerPauses.set(target, this.absenceExpiresAt);
             if (playback !== 'playing') continue;
           }
-          this.send(target, { property: 'playback', value: 'paused' }, 'pause');
+          if (wasPlaying || !this.restoredPlaybackContinuityTargets.has(target))
+            this.send(
+              target,
+              { property: 'playback', value: 'paused' },
+              'pause',
+            );
         }
       }
       this.cancelTimer();
@@ -262,7 +267,6 @@ export class MusicAutomation {
     if (presence === 'occupied') {
       this.deferredComputerPauses.clear();
       this.restoredAbsenceAwaitingPresence = false;
-      this.absenceExpiresAt = null;
       this.lastConfirmedPresence = 'occupied';
       // Unknown samples do not erase the last confirmed room transition.
       const returningFromEmpty = lastConfirmedBeforeEvent === 'confirmed_empty';
@@ -294,6 +298,7 @@ export class MusicAutomation {
           }
         }
       }
+      this.absenceExpiresAt = null;
       this.restoredPlaybackContinuityTargets.clear();
       this.applyVolumePolicy();
       if (this.homePresence === 'away' || !this.volumeAutomationEnabled)
@@ -774,8 +779,18 @@ export class MusicAutomation {
         ? 'open_input'
         : null;
     }
-    if ((this.resumeUntil.get(target) ?? 0) > this.options.clock.now())
-      return 'resume';
+    const device = this.options.getState(target);
+    if ((this.absenceExpiresAt ?? 0) > this.options.clock.now()) {
+      // A short return only restores observed playback that Lugn paused.
+      // Pending/failed pauses and unresolved sources grant no permission to play.
+      return (this.resumeUntil.get(target) ?? 0) > this.options.clock.now() &&
+        device.availability === 'available' &&
+        device.observed.source !== null &&
+        device.observed.playback === 'paused' &&
+        device.requested.playback === undefined
+        ? 'resume'
+        : null;
+    }
     return this.isPlaying(target) ? null : 'preset';
   }
 
@@ -1438,8 +1453,8 @@ export class MusicAutomation {
       return this.options.computerPlayback.getPlayback(target) === 'playing';
     const device = this.options.getState(target);
     return (
-      device.observed.playback === 'playing' ||
-      device.requested.playback === 'playing'
+      device.availability === 'available' &&
+      device.observed.playback === 'playing'
     );
   }
 
@@ -1450,13 +1465,21 @@ export class MusicAutomation {
         (request.property === 'playback' && request.value === 'playing'))
     )
       return;
+    const revision = this.recoveryRevision.playback;
     void this.options
       .request(target, request, {
         actor: automationActor,
         source: 'presence_music_automation',
         reason: operation,
       })
-      .catch(() => this.options.onError?.(target, operation));
+      .catch(() => {
+        if (
+          operation === 'pause' &&
+          revision === this.recoveryRevision.playback
+        )
+          this.resumeUntil.set(target, 0);
+        this.options.onError?.(target, operation);
+      });
   }
 
   private calculateVolume(baseline: number | null, target?: string) {

@@ -434,3 +434,28 @@ it.each([true, false])(
     }
   },
 );
+
+it.each(['paused', 'unknown'] as const)(
+  'does not start DJ on a short return from %s playback',
+  async (playback) => {
+    const s = setup();
+    try {
+      s.adapter.observe('music.room', { ...playing, playback });
+      await s.presence('occupied');
+      await s.presence('confirmed_empty');
+      s.clock.advanceBy(60_000);
+      await s.presence('unknown');
+      await s.presence('occupied');
+      expect(
+        s.adapter.dispatched.filter(
+          (command) =>
+            command.requested.property === 'preset' ||
+            (command.requested.property === 'playback' &&
+              command.requested.value === 'playing'),
+        ),
+      ).toEqual([]);
+    } finally {
+      s.engine.dispose();
+    }
+  },
+);

@@ -193,3 +193,9 @@ is separate from this agent.
 
 Lugn is source-available under the [PolyForm Small Business License 1.0.0](LICENSE).
 This is not an OSI-approved open-source license.
+
+Short room returns (under 20 minutes) only resume previously observed playback
+that Lugn paused. Silent or uncertain playback does not start Spotify DJ on a
+short return. Receiver resume also requires available, paused feedback with a
+known source and no pending playback request; computer playback retains its
+source-aware pause lease checks. Longer absences retain fresh-entry DJ behavior.
