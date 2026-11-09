@@ -1,8 +1,8 @@
 # Running Lugn
 
 Lugn runs as a local Node.js service. The runtime controls configured Home
-Assistant lights through the REST API, observes their state over Home Assistant
-WebSocket, and can consume normalized STL27L events from MQTT. It does not read
+Assistant lights over the Home Assistant WebSocket (REST while it reconnects),
+observes their state over the same WebSocket, and can consume normalized STL27L events from MQTT. It does not read
 the sensor's serial port or implement another LiDAR tracker.
 
 ## Requirements and configuration
