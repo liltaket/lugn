@@ -116,6 +116,7 @@ export type EngineOptions = {
   prelight?: {
     targets: Record<string, LightingValues>;
     maxDurationMs?: number;
+    maxHoldMs?: number | undefined;
   };
 };
 
@@ -176,6 +177,8 @@ const prelightCommandReason = 'Possible entry: temporary prelight';
 const prelightRestoreReason =
   'Prelight ended before confirmed entry; restoring prior observed intent';
 const prelightHandoffGraceMs = 1_000;
+// An OFF after the normal window still leaves time for the sensor's ENTRY.
+const prelightPreviewOffGraceMs = 2_000;
 
 const runtimeHistoryLimit = 256;
 
@@ -316,6 +319,7 @@ export class LugnEngine {
   private nextSwitchCommandId = 0;
   private readonly prelightTargets: Readonly<Record<string, LightingValues>>;
   private readonly prelightMaxDurationMs: number;
+  private readonly prelightMaxHoldMs: number;
   private normalDefaultScene: LightingScene | undefined;
   private activeSceneDefinition: LightingScene | undefined;
   private defaultSceneOnOccupancy: LightingScene | undefined;
@@ -377,6 +381,7 @@ export class LugnEngine {
   private prelightActive = false;
   private prelightPreviewActive = false;
   private prelightTimer: TimerHandle | undefined;
+  private prelightStartedAt = 0;
   private prelightFinishPromise: Promise<Set<string>> | undefined;
   private prelightFinishTargets = new Set<string>();
   private prelightSnapshot = new Map<string, LightingValues>();
@@ -416,6 +421,17 @@ export class LugnEngine {
       this.prelightMaxDurationMs > 30_000
     )
       throw new Error('prelight.maxDurationMs must be between 1000 and 30000');
+    this.prelightMaxHoldMs =
+      options.prelight?.maxHoldMs ??
+      Math.max(15_000, this.prelightMaxDurationMs);
+    if (
+      !Number.isFinite(this.prelightMaxHoldMs) ||
+      this.prelightMaxHoldMs < this.prelightMaxDurationMs ||
+      this.prelightMaxHoldMs > 60_000
+    )
+      throw new Error(
+        'prelight.maxHoldMs must be between prelight.maxDurationMs and 60000',
+      );
     this.adapter = options.adapter ?? new SimulatedLightingAdapter(clock);
     this.switchAdapter =
       options.switchAdapter ?? new SimulatedSwitchAdapter(clock);
@@ -2403,6 +2419,15 @@ export class LugnEngine {
         await this.finishPrelight(false);
         return;
       }
+      const now = this.clock.now();
+      if (now - this.prelightStartedAt >= this.prelightMaxDurationMs)
+        // The normal window already passed while the approach continued.
+        this.schedulePrelightDeadline(
+          Math.min(
+            now + prelightPreviewOffGraceMs,
+            this.prelightStartedAt + this.prelightMaxHoldMs,
+          ),
+        );
       this.addDiagnostic(
         'presence.prelight_waiting_for_confirmation',
         'Preview ended; holding temporary lighting until entry is confirmed or its existing maximum duration expires',
@@ -2420,6 +2445,20 @@ export class LugnEngine {
         { reason: 'prelight_restore_pending' },
       );
       this.publish(['diagnostics']);
+      // The sensor reports level changes only, so a still-active preview
+      // would otherwise never light the approach that arrived mid-restore.
+      const finishing = this.prelightFinishPromise;
+      void finishing.then(async () => {
+        if (
+          this.disposed ||
+          !this.prelightPreviewActive ||
+          this.prelightActive ||
+          this.prelightFinishPromise
+        )
+          return;
+        this.prelightPreviewActive = false;
+        await this.handlePrelight(normalizedEvent);
+      });
       return;
     }
 
@@ -2504,9 +2543,8 @@ export class LugnEngine {
     }
     // Initialize restoration and its deadline before adapters or subscribers
     // can synchronously report feedback or confirm occupancy.
-    this.prelightTimer = this.clock.setTimeout(() => {
-      void this.finishPrelight(this.state.presence.state !== 'occupied');
-    }, this.prelightMaxDurationMs);
+    this.prelightStartedAt = receivedAt;
+    this.schedulePrelightDeadline(receivedAt + this.prelightMaxDurationMs);
     const dispatches: Promise<void>[] = [];
     this.batchPublications(() => {
       for (const [target, values] of Object.entries(targetValues)) {
@@ -2887,6 +2925,41 @@ export class LugnEngine {
       );
     }
     this.publish(['switches', 'diagnostics']);
+  }
+
+  private schedulePrelightDeadline(at: number): void {
+    if (this.prelightTimer !== undefined)
+      this.clock.clearTimeout(this.prelightTimer);
+    this.prelightTimer = this.clock.setTimeout(
+      () => {
+        this.prelightTimer = undefined;
+        this.onPrelightDeadline();
+      },
+      Math.max(0, at - this.clock.now()),
+    );
+  }
+
+  private onPrelightDeadline(): void {
+    if (!this.prelightActive) return;
+    const occupied = this.state.presence.state === 'occupied';
+    const holdEndsAt = this.prelightStartedAt + this.prelightMaxHoldMs;
+    if (
+      !occupied &&
+      this.prelightPreviewActive &&
+      this.clock.now() < holdEndsAt
+    ) {
+      // A slow or pausing approach keeps the preview active; restoring now
+      // would switch off just before the confirmed entry switches back on.
+      this.schedulePrelightDeadline(holdEndsAt);
+      this.addDiagnostic(
+        'presence.prelight_extended',
+        'Preview still active at the maximum duration; holding temporary lighting until the approach ends',
+        { maximumHoldMs: this.prelightMaxHoldMs },
+      );
+      this.publish(['diagnostics']);
+      return;
+    }
+    void this.finishPrelight(!occupied);
   }
 
   private clearPrelight(): void {
@@ -4752,6 +4825,9 @@ export class LugnEngine {
         device.observed.power === false ||
         this.targetIntentCanRunWhileEmpty(revision, target) ||
         this.hasEnforcedLightingTransport(target) ||
+        // An active prelight owns its lamps until handoff or restore; an
+        // older empty-room retry must not switch them off mid-approach.
+        (this.prelightActive && this.prelightAppliedValues.has(target)) ||
         (device.availability === 'unavailable' &&
           mode !== 'confirmed_empty_off')
       )

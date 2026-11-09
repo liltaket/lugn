@@ -833,6 +833,7 @@ describe('Lugn deterministic lighting slice', () => {
     adapter.ignoreNextForTargets.add('lighting.desk');
 
     await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    await engine.handlePrelight({ type: 'presence.prelight', active: false });
     clock.advanceBy(1_000);
     await flushMicrotasks();
 
@@ -841,6 +842,216 @@ describe('Lugn deterministic lighting slice', () => {
       values: { power: false },
     });
     engine.dispose();
+  });
+
+  it('holds prelight while the preview stays active and bounds the hold', async () => {
+    const { clock, adapter, engine } = setup({
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: { 'lighting.desk': { power: true, brightness: 24 } },
+        },
+      ],
+      prelight: {
+        targets: { 'lighting.desk': { power: true } },
+        maxDurationMs: 1_000,
+        maxHoldMs: 4_000,
+      },
+    });
+    await engine.activateScene('scene.cozy', user);
+    adapter.externalChange('lighting.desk', { power: false });
+    adapter.dispatched.length = 0;
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    const prelightDispatches = adapter.dispatched.length;
+    expect(prelightDispatches).toBeGreaterThan(0);
+
+    clock.advanceBy(3_999);
+    await flushMicrotasks();
+    // A slow approach must not switch off just before its confirmed entry.
+    expect(adapter.dispatched).toHaveLength(prelightDispatches);
+    expect(
+      engine.state.diagnostics.some(
+        ({ kind }) => kind === 'presence.prelight_extended',
+      ),
+    ).toBe(true);
+
+    clock.advanceBy(1);
+    await flushMicrotasks();
+    expect(adapter.dispatched.at(-1)).toMatchObject({
+      target: 'lighting.desk',
+      values: { power: false },
+    });
+    engine.dispose();
+  });
+
+  it('restores shortly after an extended preview ends without entry', async () => {
+    const { clock, adapter, engine } = setup({
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: { 'lighting.desk': { power: true, brightness: 24 } },
+        },
+      ],
+      prelight: {
+        targets: { 'lighting.desk': { power: true } },
+        maxDurationMs: 1_000,
+        maxHoldMs: 10_000,
+      },
+    });
+    await engine.activateScene('scene.cozy', user);
+    adapter.externalChange('lighting.desk', { power: false });
+    adapter.dispatched.length = 0;
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    const prelightDispatches = adapter.dispatched.length;
+    clock.advanceBy(3_000);
+    await flushMicrotasks();
+    await engine.handlePrelight({ type: 'presence.prelight', active: false });
+
+    clock.advanceBy(1_999);
+    await flushMicrotasks();
+    expect(adapter.dispatched).toHaveLength(prelightDispatches);
+    clock.advanceBy(1);
+    await flushMicrotasks();
+    expect(adapter.dispatched.at(-1)).toMatchObject({
+      target: 'lighting.desk',
+      values: { power: false },
+    });
+    engine.dispose();
+  });
+
+  it('hands an extended prelight to confirmed occupancy without switching off', async () => {
+    const { clock, adapter, engine } = setup({
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: { 'lighting.desk': { power: true, brightness: 24 } },
+        },
+      ],
+      prelight: {
+        targets: { 'lighting.desk': { power: true } },
+        maxDurationMs: 1_000,
+      },
+    });
+    await engine.activateScene('scene.cozy', user);
+    adapter.externalChange('lighting.desk', { power: false });
+    adapter.ignoreNextForTargets.add('lighting.desk');
+    adapter.dispatched.length = 0;
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    clock.advanceBy(6_000);
+    await flushMicrotasks();
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    clock.advanceBy(20_000);
+    await flushMicrotasks();
+
+    expect(
+      engine.state.commands.some(
+        ({ reason }) =>
+          reason ===
+          'Prelight ended before confirmed entry; restoring prior observed intent',
+      ),
+    ).toBe(false);
+    engine.dispose();
+  });
+
+  it('lights an approach that started while the previous prelight was restoring', async () => {
+    const { clock, adapter, engine } = setup({
+      scenes: [
+        {
+          id: 'scene.cozy',
+          name: 'Cozy',
+          lighting: { 'lighting.desk': { power: true, brightness: 24 } },
+        },
+      ],
+      prelight: {
+        targets: { 'lighting.desk': { power: true } },
+        maxDurationMs: 1_000,
+      },
+    });
+    await engine.activateScene('scene.cozy', user);
+    adapter.externalChange('lighting.desk', { power: false });
+    adapter.dispatched.length = 0;
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    await engine.handlePrelight({ type: 'presence.prelight', active: false });
+    adapter.feedbackDelayMs = 500;
+    clock.advanceBy(1_000);
+    await flushMicrotasks();
+    expect(adapter.dispatched.at(-1)).toMatchObject({
+      target: 'lighting.desk',
+      values: { power: false },
+    });
+
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    expect(
+      engine.state.diagnostics.some(
+        ({ details }) => details['reason'] === 'prelight_restore_pending',
+      ),
+    ).toBe(true);
+    adapter.feedbackDelayMs = 0;
+    clock.advanceBy(500);
+    await flushMicrotasks();
+
+    const prelightCommands = engine.state.commands.filter(
+      ({ reason }) => reason === 'Possible entry: temporary prelight',
+    );
+    expect(prelightCommands).toHaveLength(2);
+    expect(prelightCommands[1]).toMatchObject({
+      target: 'lighting.desk',
+      issuedAt: clock.now(),
+    });
+    engine.dispose();
+  });
+
+  it('keeps prelit lamps on when an older empty-room off retry fires', async () => {
+    const { clock, adapter, engine } = setup({
+      prelight: {
+        targets: { 'lighting.desk': { power: true } },
+        maxDurationMs: 5_000,
+      },
+    });
+    const dispatch = adapter.dispatch.bind(adapter);
+    adapter.dispatch = async (command) => {
+      if (command.target !== 'lighting.ceiling') return dispatch(command);
+      adapter.dispatched.push(structuredClone(command));
+      throw new LightingDeliveryUnknownError('No reply from the lamp');
+    };
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    const prelit = engine.state.commands
+      .filter(({ reason }) => reason === 'Possible entry: temporary prelight')
+      .map(({ target }) => target);
+    expect(prelit).toContain('lighting.desk');
+
+    clock.advanceBy(2_000);
+    await flushMicrotasks();
+
+    expect(
+      engine.state.commands.filter(
+        ({ reason, target }) =>
+          reason ===
+            'Confirmed empty: retry physical off after uncertain delivery' &&
+          prelit.includes(target),
+      ),
+    ).toEqual([]);
+    engine.dispose();
+  });
+
+  it('rejects a prelight hold shorter than its maximum duration', () => {
+    expect(() =>
+      setup({
+        prelight: { targets: {}, maxDurationMs: 5_000, maxHoldMs: 4_000 },
+      }),
+    ).toThrow('prelight.maxHoldMs');
   });
 
   it('terminalizes unresolved prelight commands at their feedback deadline and clears timers on dispose', async () => {

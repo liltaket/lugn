@@ -228,6 +228,15 @@ describe('STL27L MQTT presence adapter', () => {
       events
         .filter((event) => event.type === 'presence.prelight')
         .map((event) => event.active),
-    ).toEqual([true, true, true]);
+      // Losing the sensor ends an active preview so its hold cannot outlive it.
+    ).toEqual([true, false, true, false, true]);
+  });
+
+  it('does not invent a preview end when no preview was active', () => {
+    const { adapter, events } = setup();
+    adapter.setBrokerConnected(false);
+    expect(
+      events.filter((event) => event.type === 'presence.prelight'),
+    ).toEqual([]);
   });
 });

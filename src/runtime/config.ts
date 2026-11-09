@@ -310,8 +310,18 @@ const FileConfigSchema = z
           .record(SemanticLightingIdSchema, LightingValuesSchema)
           .default({}),
         maxDurationMs: z.number().int().min(1_000).max(30_000).default(5_000),
+        maxHoldMs: z.number().int().min(1_000).max(60_000).optional(),
       })
       .strict()
+      .refine(
+        (prelight) =>
+          prelight.maxHoldMs === undefined ||
+          prelight.maxHoldMs >= prelight.maxDurationMs,
+        {
+          path: ['maxHoldMs'],
+          message: 'prelight.maxHoldMs must not be shorter than maxDurationMs',
+        },
+      )
       .default({ targets: {}, maxDurationMs: 5_000 }),
     scenes: z.array(SceneSchema).optional(),
     defaultSceneId: z.string().min(1).optional(),
@@ -510,6 +520,7 @@ export type RuntimeConfig = {
   prelight: {
     targets: Record<string, LightingValues>;
     maxDurationMs: number;
+    maxHoldMs?: number | undefined;
   };
   scenes?: LightingScene[];
   defaultSceneId?: string;

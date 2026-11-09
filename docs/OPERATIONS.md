@@ -582,8 +582,9 @@ fact used to gate automatic lighting and music. See [Home and room presence](#ho
 
 Set `prelight.targets` to the lights and values useful for a fast approach
 response. The preview may arrive before the full occupancy event. Its temporary
-lighting is bounded by `maxDurationMs` and then yields to a confirmed presence
-or later explicit capability request. To disable prelight, use an empty
+lighting is bounded by `maxDurationMs`, held up to `maxHoldMs` while the
+preview remains active, and then yields to a confirmed presence or later
+explicit capability request. To disable prelight, use an empty
 `targets` object.
 
 Home Assistant's `/api/states` endpoint seeds initial observations at startup;
