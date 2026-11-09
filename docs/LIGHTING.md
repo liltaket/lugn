@@ -243,7 +243,8 @@ before; during a pending command, unidentified external changes to its requested
 properties cannot be distinguished from partial device feedback. Home Assistant's
 `context.user_id` is not sufficient to resolve this ambiguity, because its
 [REST service calls](https://github.com/home-assistant/core/blob/dev/homeassistant/components/api/__init__.py)
-also use the authenticated request's context. Partial
+and WebSocket `call_service` frames also use the authenticated connection's
+context. Partial
 feedback from the final delivery attempt does not reset the retry budget;
 complete feedback can still confirm that attempt and clear degraded status.
 
@@ -346,6 +347,14 @@ Instrumentation should distinguish:
 - full observed convergence
 
 This makes perceived delay diagnosable instead of anecdotal.
+
+Presence entry, confirmed-empty off and prelight dispatch every lighting command
+before the event's state publication runs, so history cloning and UI
+notification never delay the first or last lamp. Scene, routine and retry
+paths still publish each command before its transport, which lets a newer
+intent veto it. `npm run bench:lighting` replays seeded workloads through the
+real engine and adapters against simulated MQTT and Home Assistant; see
+[the latency report](optimization/lighting-latency-report.md).
 
 After `npm run build`, `node scripts/benchmark-prelight.mjs` measures the first
 and last request starts for seven scene lights with populated runtime history.

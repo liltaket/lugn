@@ -16,7 +16,11 @@ Expected uses include:
 Core decisions should live in Lugn rather than being duplicated in a large set of Home Assistant automations.
 
 The runtime maps Lugn semantic light IDs to Home Assistant light entities and
-dispatches through the REST API. `HomeAssistantWebSocketTransport` handles
+sends light services as `call_service` frames on the authenticated Home
+Assistant WebSocket, falling back to the REST API whenever that socket is not
+connected. A frame that was sent but not answered (timeout or lost socket) is
+delivery-unknown and is never repeated over REST; HA error codes keep the REST
+4xx/5xx meaning. `HomeAssistantWebSocketTransport` handles
 authentication, `state_changed` subscription and bounded reconnects; the host
 supplies credentials and forwards events to the adapters. Startup also makes
 one read-only `/api/states` query to seed configured observations. Transport
