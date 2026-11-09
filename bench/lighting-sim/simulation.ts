@@ -6,7 +6,10 @@ import { withRoomPresets } from '../../src/application/dashboard-scenes.js';
 import { LugnEngine } from '../../src/application/lugn-engine.js';
 import type { FastPathTiming, LightingScene } from '../../src/core/schemas.js';
 import { latencyProfiles, type LatencyProfile } from './latency-profiles.js';
-import { GroupingLightingAdapter } from './grouping-adapter.js';
+import {
+  GroupingLightingAdapter,
+  type ServiceCallSocket,
+} from './grouping-adapter.js';
 import { MockHomeAssistant } from './mock-home-assistant.js';
 import { SimMqttBroker } from './mqtt-broker.js';
 import { keyedLatency } from './random.js';
@@ -272,15 +275,11 @@ export async function runSimulation(
   };
   const deviceIds = Object.keys(liveEntities);
   // Constructed before the socket below; the experiment reads it lazily.
-  const grouping: { socket?: HomeAssistantWebSocketTransport } = {};
+  const grouping: { socket?: ServiceCallSocket } = {};
   const engineAdapter = options.groupIdenticalCommands
     ? new GroupingLightingAdapter(
         lighting,
-        {
-          callService: (
-            call: Parameters<HomeAssistantWebSocketTransport['callService']>[0],
-          ) => grouping.socket?.callService(call),
-        } as HomeAssistantWebSocketTransport,
+        { callService: (call) => grouping.socket?.callService?.(call) },
         liveEntities,
         (command) =>
           command.target === 'lighting.wled_cct' ||
@@ -346,7 +345,7 @@ export async function runSimulation(
       },
     },
   );
-  grouping.socket = socket;
+  grouping.socket = socket as unknown as ServiceCallSocket;
   // Older trees (baseline) have no attachWebSocket; they always use REST.
   if (options.commandTransport !== 'rest')
     (
