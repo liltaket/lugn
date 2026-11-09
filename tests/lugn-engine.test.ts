@@ -1008,6 +1008,44 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
+  it('keeps prelit lamps on when an older empty-room off retry fires', async () => {
+    const { clock, adapter, engine } = setup({
+      prelight: {
+        targets: { 'lighting.desk': { power: true } },
+        maxDurationMs: 5_000,
+      },
+    });
+    const dispatch = adapter.dispatch.bind(adapter);
+    adapter.dispatch = async (command) => {
+      if (command.target !== 'lighting.ceiling') return dispatch(command);
+      adapter.dispatched.push(structuredClone(command));
+      throw new LightingDeliveryUnknownError('No reply from the lamp');
+    };
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'confirmed_empty',
+      personCount: 0,
+    });
+    await engine.handlePrelight({ type: 'presence.prelight', active: true });
+    const prelit = engine.state.commands
+      .filter(({ reason }) => reason === 'Possible entry: temporary prelight')
+      .map(({ target }) => target);
+    expect(prelit).toContain('lighting.desk');
+
+    clock.advanceBy(2_000);
+    await flushMicrotasks();
+
+    expect(
+      engine.state.commands.filter(
+        ({ reason, target }) =>
+          reason ===
+            'Confirmed empty: retry physical off after uncertain delivery' &&
+          prelit.includes(target),
+      ),
+    ).toEqual([]);
+    engine.dispose();
+  });
+
   it('rejects a prelight hold shorter than its maximum duration', () => {
     expect(() =>
       setup({
