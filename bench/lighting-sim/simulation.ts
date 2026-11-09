@@ -129,7 +129,7 @@ export type SimulationOptions = {
   cpuScale?: number;
   /** Stream listeners that only receive the cloned update. */
   passiveStreamListeners?: number;
-  /** SSE-like listeners that serialize full state on setImmediate. */
+  /** Display-hub SSE emulations (live: 2) serializing full state. */
   serializingStreamListeners?: number;
   /** 'rest' skips attaching the HA WebSocket for light commands. */
   commandTransport?: 'websocket' | 'rest';
@@ -316,19 +316,30 @@ export async function runSimulation(
   });
   for (let index = 0; index < (options.passiveStreamListeners ?? 4); index += 1)
     engine.stream.subscribe(() => undefined);
+  // Display hubs (DisplayServer): full-state SSE on setImmediate after any
+  // update, plus a 5 s heartbeat that serializes the same snapshot.
+  const heartbeats: Array<ReturnType<SimClock['setTimeout']>> = [];
   for (
     let index = 0;
-    index < (options.serializingStreamListeners ?? 3);
+    index < (options.serializingStreamListeners ?? 2);
     index += 1
   ) {
     let pending: NodeJS.Immediate | undefined;
+    const send = (): void => {
+      JSON.stringify(engine.state);
+    };
     engine.stream.subscribe(() => {
       if (pending) return;
       pending = setImmediate(() => {
         pending = undefined;
-        JSON.stringify(engine.state);
+        send();
       });
     });
+    const heartbeat = (): void => {
+      send();
+      heartbeats[index] = clock.setTimeout(heartbeat, 5_000);
+    };
+    heartbeats[index] = clock.setTimeout(heartbeat, 5_000 + index * 1_700);
   }
   const socket = new HomeAssistantWebSocketTransport(
     { baseUrl: 'http://192.168.10.40:8123', token: 'simulated-token' },
@@ -517,6 +528,7 @@ export async function runSimulation(
   sensor.stop();
   socket.stop();
   engine.dispose();
+  for (const heartbeat of heartbeats) clock.clearTimeout(heartbeat);
 
   const deliveries = broker.deliveries;
   const latestDeliveryAtOrBefore = (
