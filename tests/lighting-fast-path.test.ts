@@ -145,9 +145,11 @@ describe('dark-room off delivery', () => {
       adapter,
       defaultSceneId: 'scene.cozy',
     });
-    inner.externalChange('lighting.ceiling', { power: false });
-    inner.externalChange('lighting.desk', { power: false });
+    // Leaving after an active scene keeps its remembered values, so the later
+    // restore off carries brightness/Kelvin and is not a bare power-off.
+    await engine.handlePresence(occupied);
     await engine.handlePresence(empty);
+    expect(inner.observed.get('lighting.desk')?.power).toBe(false);
 
     await engine.handlePrelight({ type: 'presence.prelight', active: true });
     expect(inner.observed.get('lighting.desk')?.power).toBe(true);
@@ -162,6 +164,9 @@ describe('dark-room off delivery', () => {
     for (let i = 0; i < 12; i += 1) await Promise.resolve();
     expect(inner.observed.get('lighting.desk')?.power).toBe(false);
     expect(engine.state.presence.state).toBe('confirmed_empty');
+    expect(
+      engine.state.lighting.devices['lighting.desk']?.effectiveDesired,
+    ).toMatchObject({ brightness: 30 });
     engine.dispose();
   });
 });
