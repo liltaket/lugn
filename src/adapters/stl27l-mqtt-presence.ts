@@ -128,7 +128,7 @@ export class Stl27lMqttPresenceAdapter {
       this.sensorOnline = false;
       this.snapshotReceivedAt = undefined;
       this.clearExpiryTimer();
-      this.lastPreviewActive = undefined;
+      this.endPreview();
       this.emitPresence({ presence: 'unknown', personCount: null });
       return;
     }
@@ -187,7 +187,7 @@ export class Stl27lMqttPresenceAdapter {
     if (state !== 'online' && state !== 'offline') {
       this.sensorOnline = false;
       this.invalidateSnapshotFreshness();
-      this.lastPreviewActive = undefined;
+      this.endPreview(localReceivedMonotonicAt);
       this.recomputePresence(localReceivedMonotonicAt);
       return;
     }
@@ -195,7 +195,7 @@ export class Stl27lMqttPresenceAdapter {
     this.sensorOnline = state === 'online';
     if (!this.sensorOnline) {
       this.invalidateSnapshotFreshness();
-      this.lastPreviewActive = undefined;
+      this.endPreview(localReceivedMonotonicAt);
     }
     this.recomputePresence(localReceivedMonotonicAt);
   }
@@ -223,6 +223,25 @@ export class Stl27lMqttPresenceAdapter {
       occurredAt: this.clock.now(),
       source: 'stl27l',
       localReceivedMonotonicAt,
+    });
+  }
+
+  /**
+   * The non-retained preview cannot report OFF while the sensor is gone, so
+   * an active preview ends here instead of holding temporary lighting.
+   */
+  private endPreview(localReceivedMonotonicAt?: number): void {
+    const wasActive = this.lastPreviewActive === true;
+    this.lastPreviewActive = undefined;
+    if (!wasActive) return;
+    this.onEvent({
+      type: 'presence.prelight',
+      active: false,
+      occurredAt: this.clock.now(),
+      source: 'stl27l',
+      ...(localReceivedMonotonicAt === undefined
+        ? {}
+        : { localReceivedMonotonicAt }),
     });
   }
 
