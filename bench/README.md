@@ -18,11 +18,23 @@ npm run bench:lighting -- --label baseline --set all --episodes 100 \
 - `--cpu-scale`: multiplies measured Lugn CPU time. `12` approximates the
   Raspberry Pi 3 that runs Lugn live (see the report's calibration section).
 - `--adapter-options '<json>'`: extra `HomeAssistantLightingAdapter` options.
+- `--transport rest`: do not attach the HA WebSocket for light commands.
+- `--group`: experiment that groups identical same-tick commands.
+- `--profile <name>`: use one latency profile for every run, e.g.
+  `placement-brunocam` (Wi-Fi RTTs, with `--cpu-scale 12`) or
+  `placement-putte` (wired RTTs, with `--cpu-scale 2`).
+
+`bench/run-commits.sh <out> <label>=<commit> ... -- <args>` replays the current
+harness against Lugn source at several commits, and
+`node dist-bench/bench/compare-results.js [--runs=train|test] a.json b.json`
+prints comparison tables. Results and method are in
+[the latency report](../docs/optimization/lighting-latency-report.md).
 
 ## Pieces (`bench/lighting-sim/`)
 
-- `SimClock`: elapsed time is real CPU time (optionally scaled) plus skipped
-  idle time, so synchronous work is measured while modeled network/device
+- `SimClock`: elapsed time is the time Lugn's thread runs (wall time bounded
+  by main-thread CPU time, so a loaded machine does not inflate it; optionally
+  scaled) plus skipped idle time, so synchronous work is measured while modeled network/device
   delays cost no wall time. Simulator-side work runs in `clock.excluded()`.
 - `SimMqttBroker`: in-process broker with delivery delay, retained messages,
   reordering (`extraDelayMs`) and connect/disconnect.
