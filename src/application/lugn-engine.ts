@@ -4825,6 +4825,9 @@ export class LugnEngine {
         device.observed.power === false ||
         this.targetIntentCanRunWhileEmpty(revision, target) ||
         this.hasEnforcedLightingTransport(target) ||
+        // An active prelight owns its lamps until handoff or restore; an
+        // older empty-room retry must not switch them off mid-approach.
+        (this.prelightActive && this.prelightAppliedValues.has(target)) ||
         (device.availability === 'unavailable' &&
           mode !== 'confirmed_empty_off')
       )
