@@ -1,10 +1,19 @@
-import type { HomeAssistantWebSocketTransport } from '../../src/adapters/home-assistant-websocket.js';
 import {
   LightingDeliveryUnknownError,
   type LightingAdapter,
   type LightingCommand,
   type LightingObservation,
 } from '../../src/adapters/simulated-lighting.js';
+
+/** Structural so the harness still compiles against trees without it. */
+export type ServiceCallSocket = {
+  callService?(call: {
+    domain: string;
+    service: string;
+    serviceData: Record<string, unknown>;
+    target: { entity_id: string | string[] };
+  }): Promise<void> | undefined;
+};
 
 type Queued = {
   command: LightingCommand;
@@ -22,7 +31,7 @@ export class GroupingLightingAdapter implements LightingAdapter {
 
   constructor(
     private readonly inner: LightingAdapter,
-    private readonly socket: HomeAssistantWebSocketTransport,
+    private readonly socket: ServiceCallSocket,
     private readonly entities: Record<string, string>,
     private readonly individual: (command: LightingCommand) => boolean,
   ) {}
@@ -54,7 +63,7 @@ export class GroupingLightingAdapter implements LightingAdapter {
         continue;
       }
       const { service, serviceData } = serviceFor(group[0]!.command);
-      const call = this.socket.callService({
+      const call = this.socket.callService?.({
         domain: 'light',
         service,
         serviceData,
