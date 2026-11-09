@@ -29,6 +29,8 @@ const { values } = parseArgs({
     group: { type: 'boolean', default: false },
     'display-streams': { type: 'string', default: '2' },
     'passive-listeners': { type: 'string', default: '4' },
+    /** Replace every run's latency profile (placement experiments). */
+    profile: { type: 'string' },
     out: { type: 'string' },
   },
 });
@@ -64,7 +66,7 @@ const results: SimulationResult[] = [];
 for (const spec of specs) {
   const workload = generateWorkload(spec.workload);
   const result = await runSimulation(workload, {
-    profile: spec.profile,
+    profile: values.profile ?? spec.profile,
     cpuScale,
     commandTransport: values.transport === 'rest' ? 'rest' : 'websocket',
     groupIdenticalCommands: values.group,

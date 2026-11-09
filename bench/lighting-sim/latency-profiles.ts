@@ -163,8 +163,42 @@ export const unseenJitterProfile: LatencyProfile = {
   },
 };
 
+/**
+ * Placement experiment. Network hops use RTT/2 from 200 pings measured
+ * 2026-11-09 (brunocam is on Wi-Fi: RTT to HA/broker P50 4.2, P95 8.9, P99
+ * 12.4 ms; putte is wired: P50 0.26, P95 0.33, P99 0.8 ms). The STL27L stays
+ * on brunocam, so its publish to the broker crosses Wi-Fi in both cases.
+ */
+const wifiOneWay: LatencyDistribution = {
+  kind: 'lognormal',
+  medianMs: 2.1,
+  p95Ms: 4.5,
+  maxMs: 7.5,
+};
+
+export const placementBrunocamProfile: LatencyProfile = {
+  ...fittedTransport,
+  name: 'placement-brunocam',
+  derivedFrom:
+    'measured brunocam (Wi-Fi) RTTs; integrations as brunocam-fitted',
+  // sensor -> broker (Wi-Fi) + broker -> Lugn on the same Pi (Wi-Fi).
+  mqttDeliveryMs: { kind: 'lognormal', medianMs: 4.8, p95Ms: 8.8, maxMs: 15 },
+  lanOneWayMs: wifiOneWay,
+};
+
+export const placementPutteProfile: LatencyProfile = {
+  ...fittedTransport,
+  name: 'placement-putte',
+  derivedFrom: 'measured putte (wired) RTTs; integrations as brunocam-fitted',
+  // sensor -> broker (Wi-Fi) + broker -> putte (wired).
+  mqttDeliveryMs: { kind: 'lognormal', medianMs: 2.6, p95Ms: 4.9, maxMs: 8.5 },
+  lanOneWayMs: { kind: 'lognormal', medianMs: 0.13, p95Ms: 0.17, maxMs: 0.6 },
+};
+
 export const latencyProfiles: Record<string, LatencyProfile> = {
   [brunocamProfile.name]: brunocamProfile,
+  [placementBrunocamProfile.name]: placementBrunocamProfile,
+  [placementPutteProfile.name]: placementPutteProfile,
   [unseenSlowHaProfile.name]: unseenSlowHaProfile,
   [unseenJitterProfile.name]: unseenJitterProfile,
 };
