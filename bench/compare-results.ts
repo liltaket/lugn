@@ -1,20 +1,32 @@
 /**
  * Compares benchmark result files (from bench/lighting-latency.ts --out).
  *
- *   node dist-bench/bench/compare-results.js baseline.json candidate.json ...
+ *   node dist-bench/bench/compare-results.js [--runs=train|test] baseline.json candidate.json ...
+ *
+ * `--runs` keeps only workloads whose name starts with that prefix.
  */
 import { readFileSync } from 'node:fs';
 import {
   checkpointDifferences,
   segments,
+  summarize,
   type SimulationResult,
   type Summary,
 } from './lighting-sim/index.js';
 
 type ResultFile = { summary: Summary; results: SimulationResult[] };
-const files = process.argv
-  .slice(2)
-  .map((path) => JSON.parse(readFileSync(path, 'utf8')) as ResultFile);
+const args = process.argv.slice(2);
+const runs = args.find((arg) => arg.startsWith('--runs='))?.slice(7);
+const files = args
+  .filter((arg) => !arg.startsWith('--'))
+  .map((path) => {
+    const file = JSON.parse(readFileSync(path, 'utf8')) as ResultFile;
+    if (!runs) return file;
+    const results = file.results.filter((result) =>
+      result.workload.startsWith(runs),
+    );
+    return { summary: summarize(file.summary.label, results), results };
+  });
 if (files.length < 2)
   throw new Error('Pass a baseline and at least one candidate');
 const [baseline] = files as [ResultFile, ...ResultFile[]];
