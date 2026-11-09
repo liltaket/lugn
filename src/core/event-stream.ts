@@ -10,7 +10,9 @@ export type StateDelivery =
 
 export class StateEventStream {
   private readonly history: StateUpdate[] = [];
-  private readonly listeners = new Set<(update: StateUpdate) => void>();
+  private readonly listeners = new Set<
+    (update: Readonly<StateUpdate>) => void
+  >();
 
   constructor(private readonly maxHistory = 128) {}
 
@@ -18,11 +20,15 @@ export class StateEventStream {
     const validUpdate = StateUpdateSchema.parse(update);
     this.history.push(validUpdate);
     if (this.history.length > this.maxHistory) this.history.shift();
-    for (const listener of this.listeners)
-      listener(structuredClone(validUpdate));
+    if (this.listeners.size === 0) return;
+    // One copy for every listener: a publication runs on the lighting event
+    // loop, and per-listener deep clones of the command ledger dominate it.
+    const delivered = structuredClone(validUpdate);
+    for (const listener of this.listeners) listener(delivered);
   }
 
-  subscribe(listener: (update: StateUpdate) => void): () => void {
+  /** Listeners share each delivered update and must treat it as read-only. */
+  subscribe(listener: (update: Readonly<StateUpdate>) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
