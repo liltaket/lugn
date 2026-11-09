@@ -161,6 +161,7 @@ older settings documents. Enabling it applies the configured person offset to
 the manual reference while occupied, home and available; it does not apply the
 daily curve. Repeated count samples do not accumulate discounts. Unknown/empty
 presence, away and unavailable players suppress volume corrections while
-retaining Manual mode. Mode and manual reference persist separately from
-automatic preferences. Legacy inferred/user baselines are never promoted into
+retaining Manual mode for a short absence. Manual resets after 20 minutes of
+confirmed room absence, or 20 minutes after a newer manual adjustment made while
+absent. Mode and manual reference persist separately from automatic preferences. Legacy inferred/user baselines are never promoted into
 the configured Auto settings during upgrade; review the fixed base in the editor.

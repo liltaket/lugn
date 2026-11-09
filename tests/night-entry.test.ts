@@ -91,8 +91,11 @@ describe('Stockholm night entry', () => {
     '2026-10-04T22:59:59+02:00',
     '2026-12-04T06:00:00+01:00',
   ])('allows a new automatic start at %s', async (at) => {
-    const { engine, music } = setup(at);
+    const { engine, music, clock } = setup(
+      new Date(Date.parse(at) - 20 * 60_000).toISOString(),
+    );
     await engine.handlePresence(presence('confirmed_empty'));
+    clock.advanceBy(20 * 60_000);
     await engine.handlePresence(presence('occupied'));
     await flush();
     expect(
@@ -121,6 +124,7 @@ describe('Stockholm night entry', () => {
         ),
     ).toEqual([]);
     await engine.handlePresence(presence('confirmed_empty'));
+    clock.advanceBy(20 * 60_000);
     await engine.handlePresence(presence('occupied'));
     await flush();
     expect(music.dispatched.at(-1)?.requested).toEqual({

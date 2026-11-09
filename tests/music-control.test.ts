@@ -52,6 +52,7 @@ function automationSetup(startAt = 0, feedbackTimeoutMs = 100) {
     targets: ['music.room'],
     clock,
     getState: (target) => controller.getState(target),
+    getCommands: () => controller.state.commands,
     request: (target, request, provenance) =>
       controller.request(target, request, provenance),
   });
@@ -536,6 +537,11 @@ describe('semantic music control', () => {
     expect(oldPause?.status).toBe('unconfirmed');
 
     automation.handlePresence('confirmed_empty', 'occupied', 1);
+    await controller.request(
+      'music.room',
+      { property: 'playback', value: 'playing' },
+      actor,
+    );
     await flushMicrotasks();
     const resume = controller.state.commands.at(-1);
     expect(resume?.requested).toEqual({

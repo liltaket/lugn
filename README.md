@@ -30,7 +30,9 @@ safe to use alongside physical controls and Home Assistant.
 ### Automatic behavior
 
 - A confirmed empty room turns configured lights off and pauses configured
-  music while retaining room intent for a short return.
+  music while retaining room intent for a short return. A short return does not
+  start DJ if no owned pause can be resumed. Manual volume returns to Auto after
+  20 minutes of confirmed absence.
 - A confirmed occupied event restores the current light scene, including at
   night. **Helt släckt** remains off, and Home Assistant **Borta** blocks
   automatic activation.

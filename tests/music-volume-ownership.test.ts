@@ -126,7 +126,7 @@ it('keeps ownership across a short confirmed absence and home/unknown transition
   }
 });
 
-it('preserves manual mode past the absence boundary without sending until explicit handback', async () => {
+it('resets manual mode at the absence boundary without sending until eligible', async () => {
   const s = setup();
   try {
     await s.presence('occupied');
@@ -137,7 +137,7 @@ it('preserves manual mode past the absence boundary without sending until explic
     s.clock.advanceBy(continuityMs - 1);
     expect(s.policy().activeOwner).toBe('manual');
     s.clock.advanceBy(1);
-    expect(s.policy().manualHold).not.toBeNull();
+    expect(s.policy().manualHold).toBeNull();
     expect(s.policy().policyActive).toBe(false);
     expect(s.volumeCommands()).toHaveLength(count);
     await s.engine.handleHomePresence('away');
@@ -145,8 +145,8 @@ it('preserves manual mode past the absence boundary without sending until explic
     expect(s.volumeCommands()).toHaveLength(count);
     await s.engine.handleHomePresence('unknown');
     await flush();
-    expect(s.volumeCommands()).toHaveLength(count);
-    expect(s.policy().activeOwner).toBe('manual');
+    expect(s.policy().activeOwner).toBe('lugn');
+    expect(s.volumeCommands().length).toBeGreaterThan(count);
   } finally {
     s.engine.dispose();
   }
@@ -167,7 +167,7 @@ it('does not start an absence clock from unknown presence alone', async () => {
 });
 
 it.each(['confirmed_empty', 'unknown'] as const)(
-  'new human intent after absence stays manual while %s, without renewing playback',
+  'new human intent while %s delays volume reset without renewing playback',
   async (presence) => {
     const s = setup('2026-10-04T12:00:00+02:00');
     try {
@@ -186,8 +186,10 @@ it.each(['confirmed_empty', 'unknown'] as const)(
       s.clock.advanceBy(60_000);
       await s.presence('confirmed_empty', 0);
       expect(s.policy().manualHold?.expiresAt).toBeNull();
-      s.clock.advanceBy(continuityMs - 60_000);
+      s.clock.advanceBy(continuityMs - 60_001);
       expect(s.policy().manualHold).not.toBeNull();
+      s.clock.advanceBy(1);
+      expect(s.policy().manualHold).toBeNull();
       const before = s.adapter.dispatched.length;
       // Manual helper reported playing; reset playback before the long return.
       s.adapter.observe('music.room', {
@@ -595,10 +597,7 @@ it('keeps Pause through absence and explicit volume hand-back while the visit re
     await s.presence('occupied');
     await s.engine.handleBilresaPress('2', 'multi_press_1');
     await s.engine.handleBilresaPress('2', 'multi_press_1');
-    s.engine.setMusicVolumeAuthority(
-      { target: 'music.room', mode: 'auto' },
-      user,
-    );
+    expect(s.policy().mode).toBe('auto');
     expect(s.policy().manualHold).toBeNull();
     expect(() =>
       s.engine.requestMusic(

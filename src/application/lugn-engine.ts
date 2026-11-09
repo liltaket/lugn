@@ -791,6 +791,7 @@ export class LugnEngine {
       () => {
         this.computerPlayback?.observe();
         this.musicAutomation?.reconcileComputerPlayback();
+        this.musicAutomation?.reconcileReceiverPlayback();
         this.musicAutomation?.reconcilePassiveRestoration();
         this.musicAutomation?.reconcileSourceVolume();
         this.publish(['music']);
@@ -809,6 +810,7 @@ export class LugnEngine {
       authorityControlBlocked: (target) =>
         this.musicController.volumeAuthorityBlocked(target),
       getState: (target) => this.musicController.getState(target),
+      getCommands: () => this.musicController.state.commands,
       sourceForVolumeTrim: (target, allowSettling) =>
         this.musicController.sourceForVolumeTrim(target, allowSettling),
       ...(options.computerPlayback === undefined

@@ -153,10 +153,9 @@ it.each([5 * minute, 20 * minute - 1, 20 * minute, 20 * minute + 1])(
       retained ? [] : [{ property: 'preset', value: 'spotify_dj' }],
     );
     expect(s.volume()).toMatchObject({
-      mode: 'manual',
+      mode: retained ? 'manual' : 'auto',
       baseline: 0.3,
-      manualReference: 0.4,
-      manualHold: { expiresAt: null },
+      manualReference: retained ? 0.4 : null,
     });
   },
 );
@@ -170,15 +169,15 @@ it.each([5 * minute, 25 * minute])(
     s.time.advanceBy(20 * minute);
     expect(s.playback().manualPause !== null).toBe(sessionMs > 20 * minute);
     expect(s.volume()).toMatchObject({
-      mode: 'manual',
+      mode: 'auto',
       baseline: 0.3,
-      manualReference: 0.4,
-      manualHold: { expiresAt: null },
+      manualReference: null,
+      manualHold: null,
     });
     expect(s.volume().policyEnabled).toBe(enabled);
     if (sessionMs > 20 * minute) s.time.advanceBy(5 * minute);
     expect(s.playback().manualPause).toBeNull();
-    expect(s.volume().manualHold?.expiresAt).toBeNull();
+    expect(s.volume().manualHold).toBeNull();
   },
 );
 
@@ -196,8 +195,8 @@ it('releases only playback at a short session boundary and publishes policy/hist
   unsubscribe();
   expect(s.playback()).toMatchObject({
     manualPause: null,
-    activityReason: 'confirmed_empty',
-    entryEligible: true,
+    activityReason: 'short_return_silent',
+    entryEligible: false,
   });
   expect(volumeOwnership(s.volume())).toEqual(volumeOwnership(beforeVolume));
   expect(
@@ -210,7 +209,7 @@ it('releases only playback at a short session boundary and publishes policy/hist
   expect(updates.reduce(applyStateUpdate, beforeState)).toEqual(s.engine.state);
   expect(s.engine.state.music.decisions).toContainEqual(
     expect.objectContaining({
-      reason: { kind: 'playback', value: 'confirmed_empty' },
+      reason: { kind: 'playback', value: 'short_return_silent' },
     }),
   );
 });
@@ -299,7 +298,7 @@ it.each([-1, 0, 1])(
     expect(again.playback().manualPause !== null).toBe(delta < 0);
     const before = r.adapter.dispatched.length;
     await r.presence('occupied');
-    expect(r.positives(before).length).toBe(delta < 0 ? 0 : 1);
+    expect(r.positives(before)).toEqual([]);
     if (delta < 0) {
       expect(
         r.engine.getMusicIntentSnapshot().targets[target]!.pause

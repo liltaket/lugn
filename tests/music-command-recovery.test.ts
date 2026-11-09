@@ -158,8 +158,8 @@ it('source supersession stops recovery without inventing a manual Pause from acc
     });
     await flush();
     expect(s.adapter.dispatched.at(-1)?.requested).toEqual({
-      property: 'playback',
-      value: 'playing',
+      property: 'source',
+      value: 'Optical',
     });
     expect(
       s.adapter.dispatched.filter((command) => command.id === pause.id),
@@ -823,7 +823,7 @@ it.each(['unknown', 'occupied', 'unknown_then_empty'] as const)(
       ).toHaveLength(1);
       expect(s.record(pause.id).recovery).toMatchObject({
         stage: 'stopped',
-        stopReason: state === 'occupied' ? 'superseded' : 'policy_changed',
+        stopReason: 'policy_changed',
       });
     } finally {
       s.engine.dispose();

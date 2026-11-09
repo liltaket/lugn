@@ -356,7 +356,7 @@ describe('room session lifecycle', () => {
     expect(engine.state.session!.id).not.toBe(id);
     expect(
       adapter.dispatched.slice(beforeReturn).map((c) => c.requested),
-    ).toEqual([{ property: 'preset', value: 'spotify_dj' }]);
+    ).toEqual([]);
   });
 
   it('clears the independent session timer on engine disposal', async () => {

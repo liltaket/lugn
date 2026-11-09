@@ -215,7 +215,7 @@ it('keeps independently configured automatic bases separate from human adjustmen
   expect(s.policy('music.other').mode).toBe('manual');
 });
 
-it('defaults passive reduction off and retains explicit Manual through counts, home, long absence and restart', async () => {
+it('resets explicit Manual after a long absence and restart', async () => {
   const s = setup();
   await s.presence(1);
   s.engine.setMusicVolumeAuthority(
@@ -229,18 +229,21 @@ it('defaults passive reduction off and retains explicit Manual through counts, h
   await s.presence(null, 'unknown');
   const intent = s.engine.getMusicIntentSnapshot();
   expect(intent.targets['music.room']).toMatchObject({
-    volumeMode: 'manual',
-    selectorIntent: { volume: 0.3, expiresAt: null },
+    volumeMode: 'auto',
+    selectorIntent: null,
   });
   const r = setup(s.engine.getMusicVolumeSettings(), intent);
   await r.presence(2);
   expect(r.policy()).toMatchObject({
-    mode: 'manual',
-    manualReference: 0.3,
+    mode: 'auto',
+    manualReference: null,
     configuredBaseline: 0.3,
     passiveReductionActive: false,
   });
-  expect(r.commands()).toHaveLength(0);
+  expect(r.commands().at(-1)?.requested).toEqual({
+    property: 'volume',
+    value: expect.closeTo(0.2),
+  });
 });
 
 it('reduces manual reference once and restores it without applying the daily curve or changing mode', async () => {
