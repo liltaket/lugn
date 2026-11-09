@@ -580,7 +580,7 @@ export class MockHomeAssistant {
               seg: [
                 {
                   id: 0,
-                  lc: 1,
+                  lc: 6,
                   on: this.wled.on,
                   bri: 255,
                   cct: this.wled.cct,
