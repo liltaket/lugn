@@ -349,3 +349,82 @@ it('notifies trust loss on socket failure, authentication rejection and stop', (
   expect(lost).toBe(3);
   transport.stop();
 });
+
+describe('Home Assistant WebSocket service calls', () => {
+  function connected() {
+    const context = setup();
+    context.transport.start();
+    const socket = context.sockets[0]!;
+    const subscriptionId = authenticate(socket);
+    socket.receive({ type: 'result', id: subscriptionId, success: true });
+    expect(context.transport.status).toBe('connected');
+    return { ...context, socket };
+  }
+  const call = {
+    domain: 'light',
+    service: 'turn_on',
+    serviceData: { brightness_pct: 40 },
+    target: { entity_id: 'light.desk' },
+  };
+
+  it('returns undefined without sending until the subscription is connected', () => {
+    const { sockets, transport } = setup();
+    expect(transport.callService(call)).toBeUndefined();
+    transport.start();
+    authenticate(sockets[0]!);
+    expect(transport.callService(call)).toBeUndefined();
+    expect(sockets[0]!.sent).toHaveLength(2);
+  });
+
+  it('sends call_service synchronously and settles on its own result id', async () => {
+    const { socket, transport } = connected();
+    const first = transport.callService(call)!;
+    const second = transport.callService({ ...call, service: 'turn_off' })!;
+    const frames = socket.sent
+      .slice(2)
+      .map((frame) => JSON.parse(frame) as Record<string, unknown>);
+    expect(frames[0]).toEqual({
+      id: frames[0]!['id'],
+      type: 'call_service',
+      domain: 'light',
+      service: 'turn_on',
+      service_data: { brightness_pct: 40 },
+      target: { entity_id: 'light.desk' },
+    });
+    expect(frames[0]!['id']).not.toBe(frames[1]!['id']);
+    socket.receive({
+      type: 'result',
+      id: frames[1]!['id'],
+      success: false,
+      error: { code: 'service_validation_error', message: 'Invalid' },
+    });
+    await expect(second).rejects.toMatchObject({
+      outcome: 'rejected',
+      code: 'service_validation_error',
+    });
+    socket.receive({ type: 'result', id: frames[0]!['id'], success: true });
+    await expect(first).resolves.toBeUndefined();
+  });
+
+  it('reports sent calls without a result as no_response on timeout, loss and stop', async () => {
+    const { clock, socket, sockets, transport } = connected();
+    const timedOut = transport.callService(call)!;
+    clock.advanceBy(10_000);
+    await expect(timedOut).rejects.toMatchObject({ outcome: 'no_response' });
+
+    const lost = transport.callService(call)!;
+    socket.fail();
+    await expect(lost).rejects.toMatchObject({ outcome: 'no_response' });
+    expect(transport.callService(call)).toBeUndefined();
+
+    clock.advanceBy(1_000);
+    const next = sockets[1]!;
+    next.receive({ type: 'auth_required' });
+    next.receive({ type: 'auth_ok' });
+    const subscription = JSON.parse(next.sent.at(-1)!) as { id: number };
+    next.receive({ type: 'result', id: subscription.id, success: true });
+    const stopped = transport.callService(call)!;
+    transport.stop();
+    await expect(stopped).rejects.toMatchObject({ outcome: 'no_response' });
+  });
+});
