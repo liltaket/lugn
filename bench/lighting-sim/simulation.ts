@@ -6,6 +6,7 @@ import { withRoomPresets } from '../../src/application/dashboard-scenes.js';
 import { LugnEngine } from '../../src/application/lugn-engine.js';
 import type { FastPathTiming, LightingScene } from '../../src/core/schemas.js';
 import { latencyProfiles, type LatencyProfile } from './latency-profiles.js';
+import { GroupingLightingAdapter } from './grouping-adapter.js';
 import { MockHomeAssistant } from './mock-home-assistant.js';
 import { SimMqttBroker } from './mqtt-broker.js';
 import { keyedLatency } from './random.js';
@@ -129,6 +130,8 @@ export type SimulationOptions = {
   serializingStreamListeners?: number;
   /** 'rest' skips attaching the HA WebSocket for light commands. */
   commandTransport?: 'websocket' | 'rest';
+  /** Experiment: group identical same-tick commands into one HA call. */
+  groupIdenticalCommands?: boolean;
   /** Extra options forwarded to HomeAssistantLightingAdapter, if supported. */
   adapterOptions?: Record<string, unknown>;
 };
@@ -139,7 +142,11 @@ export type EventMeasurement = {
   /** prelight, occupied (entry/return) or empty (confirmed-empty off). */
   kind: string;
   episodeKind: string;
+  /** MQTT message arrival at Lugn's host (scheduled broker delivery). */
   originAt: number;
+  /** Arrival -> MQTT callback: time queued behind a busy event loop. */
+  ingressQueueMs: number;
+  /** Engine-instrumented MQTT callback -> decision. */
   eventToDecisionMs: number | undefined;
   /** Decision -> first/last HA service request on the wire. */
   decisionToFirstSentMs: number | undefined;
@@ -264,8 +271,25 @@ export async function runSimulation(
     return dispatchLighting(command);
   };
   const deviceIds = Object.keys(liveEntities);
+  // Constructed before the socket below; the experiment reads it lazily.
+  const grouping: { socket?: HomeAssistantWebSocketTransport } = {};
+  const engineAdapter = options.groupIdenticalCommands
+    ? new GroupingLightingAdapter(
+        lighting,
+        {
+          callService: (
+            call: Parameters<HomeAssistantWebSocketTransport['callService']>[0],
+          ) => grouping.socket?.callService(call),
+        } as HomeAssistantWebSocketTransport,
+        liveEntities,
+        (command) =>
+          command.target === 'lighting.wled_cct' ||
+          (command.target === 'lighting.cleverio_bar' &&
+            command.values.power === false),
+      )
+    : lighting;
   const engine = new LugnEngine(clock, {
-    adapter: lighting,
+    adapter: engineAdapter,
     deviceIds,
     // Mirrors main.ts: configured scenes + room presets, the saved preset
     // overlay, and scene.everyday resolving to scene.everyday_light.
@@ -322,6 +346,7 @@ export async function runSimulation(
       },
     },
   );
+  grouping.socket = socket;
   // Older trees (baseline) have no attachWebSocket; they always use REST.
   if (options.commandTransport !== 'rest')
     (
@@ -405,6 +430,7 @@ export async function runSimulation(
     switch (step.kind) {
       case 'mqtt':
         broker.publish(`bruno/doorway/${step.topic}`, step.text, {
+          publishedAt: step.at,
           ...(step.retain === undefined ? {} : { retain: step.retain }),
           ...(step.extraDelayMs === undefined
             ? {}
@@ -493,6 +519,22 @@ export async function runSimulation(
   socket.stop();
   engine.dispose();
 
+  const deliveries = broker.deliveries;
+  const latestDeliveryAtOrBefore = (
+    at: number,
+  ): (typeof deliveries)[number] | undefined => {
+    let low = 0;
+    let high = deliveries.length - 1;
+    let found: (typeof deliveries)[number] | undefined;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      if (deliveries[middle]!.at <= at + 1e-6) {
+        found = deliveries[middle];
+        low = middle + 1;
+      } else high = middle - 1;
+    }
+    return found;
+  };
   // Attribute each HA request to the newest preceding fast-path event.
   const origins = [...timings.values()]
     .map((timing) => ({
@@ -504,8 +546,18 @@ export async function runSimulation(
     .map(({ timing, decisionAt }) => ({
       timing,
       decisionAt,
-      originAt: decisionAt - (timing.eventToDecisionMs ?? 0),
+      callbackAt: decisionAt - (timing.eventToDecisionMs ?? 0),
     }))
+    .map((origin) => {
+      // End-to-end segments start when the MQTT message reached Lugn's host,
+      // so time queued behind a busy event loop is counted.
+      const delivery = latestDeliveryAtOrBefore(origin.callbackAt);
+      const arrivalAt =
+        delivery && origin.callbackAt - delivery.at < 1
+          ? delivery.scheduledAt
+          : origin.callbackAt;
+      return { ...origin, originAt: arrivalAt };
+    })
     .sort((a, b) => a.originAt - b.originAt);
   // One row per entity command: a group call contributes one row per entity.
   const wireCommands = [
@@ -581,6 +633,7 @@ export async function runSimulation(
       kind: meta.kind,
       episodeKind: meta.episodeKind,
       originAt: origin.originAt,
+      ingressQueueMs: origin.callbackAt - origin.originAt,
       eventToDecisionMs: origin.timing.eventToDecisionMs,
       decisionToFirstSentMs: sent.length
         ? Math.min(...sent) - origin.decisionAt

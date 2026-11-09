@@ -30,6 +30,7 @@ export function percentiles(values: readonly number[]): Percentiles {
 }
 
 export const segments = [
+  'ingressQueueMs',
   'eventToDecisionMs',
   'decisionToFirstSentMs',
   'decisionToLastSentMs',

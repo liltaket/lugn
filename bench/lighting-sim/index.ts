@@ -1,3 +1,4 @@
+export * from './grouping-adapter.js';
 export * from './latency-profiles.js';
 export * from './metrics.js';
 export * from './mock-home-assistant.js';
