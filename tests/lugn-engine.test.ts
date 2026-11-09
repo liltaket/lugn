@@ -22,6 +22,19 @@ async function flushMicrotasks(): Promise<void> {
   for (let i = 0; i < 12; i += 1) await Promise.resolve();
 }
 
+/** The room goes dark the way it does in production: Lugn's own off on empty. */
+async function leaveRoom(engine: LugnEngine): Promise<void> {
+  await engine.handlePresence({
+    type: 'presence.changed',
+    presence: 'occupied',
+  });
+  await engine.handlePresence({
+    type: 'presence.changed',
+    presence: 'confirmed_empty',
+  });
+  await flushMicrotasks();
+}
+
 describe('Lugn deterministic lighting slice', () => {
   it('publishes prelight without traversing unchanged music state', async () => {
     const { engine } = setup({ defaultSceneId: 'scene.cozy' });
@@ -884,7 +897,7 @@ describe('Lugn deterministic lighting slice', () => {
     });
 
     await engine.activateScene('scene.cozy', user);
-    adapter.externalChange('lighting.desk', { power: false });
+    await leaveRoom(engine);
     adapter.dispatched.length = 0;
     adapter.ignoreNextForTargets.add('lighting.desk');
 
@@ -916,7 +929,7 @@ describe('Lugn deterministic lighting slice', () => {
       },
     });
     await engine.activateScene('scene.cozy', user);
-    adapter.externalChange('lighting.desk', { power: false });
+    await leaveRoom(engine);
     adapter.dispatched.length = 0;
     await engine.handlePrelight({ type: 'presence.prelight', active: true });
     const prelightDispatches = adapter.dispatched.length;
@@ -957,7 +970,7 @@ describe('Lugn deterministic lighting slice', () => {
       },
     });
     await engine.activateScene('scene.cozy', user);
-    adapter.externalChange('lighting.desk', { power: false });
+    await leaveRoom(engine);
     adapter.dispatched.length = 0;
     await engine.handlePrelight({ type: 'presence.prelight', active: true });
     const prelightDispatches = adapter.dispatched.length;
@@ -1031,7 +1044,7 @@ describe('Lugn deterministic lighting slice', () => {
       },
     });
     await engine.activateScene('scene.cozy', user);
-    adapter.externalChange('lighting.desk', { power: false });
+    await leaveRoom(engine);
     adapter.dispatched.length = 0;
     await engine.handlePrelight({ type: 'presence.prelight', active: true });
     await engine.handlePrelight({ type: 'presence.prelight', active: false });

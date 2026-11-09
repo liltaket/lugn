@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SimulatedLightingAdapter } from '../src/adapters/simulated-lighting.js';
-import { LugnEngine } from '../src/application/lugn-engine.js';
+import { LugnEngine, defaultScenes } from '../src/application/lugn-engine.js';
 import { FakeClock } from '../src/core/clock.js';
 
 const user = { type: 'user' as const, id: 'test-user' };
@@ -167,6 +167,100 @@ describe('dark-room off delivery', () => {
     expect(
       engine.state.lighting.devices['lighting.desk']?.effectiveDesired,
     ).toMatchObject({ brightness: 30 });
+    engine.dispose();
+  });
+});
+
+/** Prelight lights a room that is dark because nobody is there, at any hour. */
+describe('prelight policy', () => {
+  const prelight = { type: 'presence.prelight', active: true } as const;
+  const suppressedReason = (engine: LugnEngine): unknown =>
+    engine.state.diagnostics
+      .filter(({ kind }) => kind === 'presence.prelight_suppressed')
+      .at(-1)?.details['reason'];
+
+  function nightSetup() {
+    const clock = new FakeClock(Date.parse('2026-11-09T23:20:00+01:00'));
+    const adapter = new SimulatedLightingAdapter(clock);
+    const engine = new LugnEngine(clock, {
+      adapter,
+      defaultSceneId: 'scene.cozy',
+      scenes: [
+        ...defaultScenes,
+        {
+          id: 'scene.all_off',
+          name: 'Helt släckt',
+          lighting: {
+            'lighting.ceiling': { power: false },
+            'lighting.desk': { power: false },
+          },
+        },
+      ],
+    });
+    return { clock, adapter, engine };
+  }
+
+  it('prelights an empty dark room late at night', async () => {
+    const { adapter, engine } = nightSetup();
+    await engine.handlePresence(occupied);
+    await engine.handlePresence(empty);
+    adapter.dispatched.length = 0;
+    await engine.handlePrelight(prelight);
+    expect(
+      adapter.dispatched
+        .filter(({ values }) => values.power === true)
+        .map(({ target }) => target)
+        .sort(),
+    ).toEqual(['lighting.ceiling', 'lighting.desk']);
+    engine.dispose();
+  });
+
+  it('leaves a lamp the resident switched off by hand dark', async () => {
+    const { adapter, engine } = nightSetup();
+    await engine.handlePresence(occupied);
+    adapter.externalChange('lighting.desk', { power: false });
+    await engine.handlePresence(empty);
+    adapter.dispatched.length = 0;
+    await engine.handlePrelight(prelight);
+    expect(adapter.dispatched.map(({ target }) => target)).toEqual([
+      'lighting.ceiling',
+    ]);
+    engine.dispose();
+  });
+
+  it('does not prelight when the resident switched every lamp off', async () => {
+    const { adapter, engine } = nightSetup();
+    await engine.handlePresence(occupied);
+    adapter.externalChange('lighting.desk', { power: false });
+    adapter.externalChange('lighting.ceiling', { power: false });
+    await engine.handlePresence(empty);
+    adapter.dispatched.length = 0;
+    await engine.handlePrelight(prelight);
+    expect(adapter.dispatched).toEqual([]);
+    expect(suppressedReason(engine)).toBe('explicitly_off');
+    engine.dispose();
+  });
+
+  it('does not prelight after the room was switched off from a remote or bedtime scene', async () => {
+    const { adapter, engine } = nightSetup();
+    await engine.handlePresence(occupied);
+    await engine.activateScene('scene.all_off', user, 'bed-hub');
+    await engine.handlePresence(empty);
+    adapter.dispatched.length = 0;
+    await engine.handlePrelight(prelight);
+    expect(adapter.dispatched).toEqual([]);
+    expect(suppressedReason(engine)).toBe('all_lights_off_scene');
+    engine.dispose();
+  });
+
+  it('does not prelight while the resident is in the room', async () => {
+    const { adapter, engine } = nightSetup();
+    await engine.handlePresence(occupied);
+    adapter.externalChange('lighting.desk', { power: false });
+    adapter.externalChange('lighting.ceiling', { power: false });
+    adapter.dispatched.length = 0;
+    await engine.handlePrelight(prelight);
+    expect(adapter.dispatched).toEqual([]);
     engine.dispose();
   });
 });

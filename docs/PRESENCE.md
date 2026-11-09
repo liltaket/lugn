@@ -191,9 +191,10 @@ Prelight must not:
 - pretend occupancy is confirmed
 
 In addition, prelight is suppressed when Home Assistant explicitly reports
-away, during lighting quiet hours (23:00–06:00), when the active scene requests
-all configured lights off, or when a configured room light is already on. The
-exact gate is reported in the runtime diagnostics.
+away, when the room is occupied, when the active scene requests all
+configured lights off, when every light it would turn on was switched off by
+hand, or when a configured room light is already on. Prelight is not limited
+by the time of day. The exact gate is reported in the runtime diagnostics.
 
 ## Future computer-intent inference
 

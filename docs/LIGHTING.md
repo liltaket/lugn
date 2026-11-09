@@ -137,10 +137,14 @@ change from the room sensor. An explicitly selected all-off or sleep scene
 continues to apply its configured values on entry. Nighttime does not block
 confirmed-entry lighting, device recovery or convergence retries.
 
-Temporary prelight is suppressed when any configured light is already on, the
-current scene requests every configured light off, quiet hours are active, or
-the home-presence entity reports away. This prevents an entry hint from
-turning on additional lights when the room already has a usable scene.
+Temporary prelight lights what a confirmed entry would light, at any hour.
+It is suppressed when the room is occupied, any configured light is already
+on, the current scene requests every configured light off (all-off or sleep),
+or the home-presence entity reports away. Lights the resident switched off by
+hand (a retained activation hold or an external OFF override) are left out
+of the prelight, and when nothing is left the prelight is suppressed as
+`explicitly_off`. This prevents an entry hint from turning on additional
+lights when the room already has a usable scene or was darkened on purpose.
 
 ## Lighting control modes
 
