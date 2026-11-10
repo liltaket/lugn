@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import type { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
-import type { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
+import {
+  SensorConfigChangesSchema,
+  SensorConfigDocumentSchema,
+  SensorRejectedError,
+  type Stl27lPresenceControlAdapter,
+} from '../adapters/stl27l-presence-control.js';
 import {
   DeviceLightingStateSchema,
   DeviceSwitchStateSchema,
@@ -78,6 +83,7 @@ export class CapabilityInputError extends Error {
       | 'volume_unavailable'
       | 'volume_pending'
       | 'fade_active'
+      | 'sensor_rejected_change'
       | 'human_actor_required',
   ) {
     super(code);
@@ -105,6 +111,25 @@ export const CapabilitySchemas = {
   'presence.setCountOne': {
     input: z.object({}).strict(),
     output: z.object({ accepted: z.literal(true), count: z.literal(1) }),
+  },
+  'presence.setCount': {
+    input: z.object({ count: z.number().int().min(0).max(10) }).strict(),
+    output: z.object({ accepted: z.literal(true), count: z.number() }),
+  },
+  'presence.recalibrate': {
+    input: z.object({}).strict(),
+    output: z.object({ accepted: z.literal(true) }),
+  },
+  'presence.getSensorConfig': {
+    input: z.object({}).strict(),
+    output: SensorConfigDocumentSchema,
+  },
+  'presence.updateSensorConfig': {
+    input: z.object({ changes: SensorConfigChangesSchema }).strict(),
+    output: SensorConfigDocumentSchema.extend({
+      accepted: z.literal(true),
+      backgroundReset: z.boolean(),
+    }),
   },
   'music.getState': {
     input: GetMusicInput,
@@ -198,6 +223,20 @@ export class CapabilityRegistry {
     } = {},
   ) {}
 
+  private async sensorCall<T>(
+    call: (adapter: Stl27lPresenceControlAdapter) => Promise<T>,
+  ): Promise<T> {
+    const adapter = this.adapters.presenceCountAdapter;
+    if (!adapter) throw new CapabilityInputError('target_not_configured');
+    try {
+      return await call(adapter);
+    } catch (error) {
+      if (error instanceof SensorRejectedError)
+        throw new CapabilityInputError('sensor_rejected_change');
+      throw error;
+    }
+  }
+
   async invoke<Name extends CapabilityName>(
     name: Name,
     rawInput: unknown,
@@ -236,6 +275,37 @@ export class CapabilityRegistry {
         if (!adapter) throw new CapabilityInputError('target_not_configured');
         await adapter.setCountOne();
         output = { accepted: true, count: 1 };
+        break;
+      }
+      case 'presence.setCount': {
+        const input =
+          CapabilitySchemas['presence.setCount'].input.parse(rawInput);
+        await this.sensorCall((adapter) => adapter.setCount(input.count));
+        output = { accepted: true, count: input.count };
+        break;
+      }
+      case 'presence.recalibrate': {
+        CapabilitySchemas[name].input.parse(rawInput);
+        await this.sensorCall((adapter) => adapter.recalibrate());
+        output = { accepted: true };
+        break;
+      }
+      case 'presence.getSensorConfig': {
+        CapabilitySchemas[name].input.parse(rawInput);
+        output = await this.sensorCall((adapter) => adapter.getConfig());
+        break;
+      }
+      case 'presence.updateSensorConfig': {
+        const input =
+          CapabilitySchemas['presence.updateSensorConfig'].input.parse(
+            rawInput,
+          );
+        output = {
+          accepted: true,
+          ...(await this.sensorCall((adapter) =>
+            adapter.updateConfig(input.changes),
+          )),
+        };
         break;
       }
       case 'music.getState': {
