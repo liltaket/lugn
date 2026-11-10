@@ -287,6 +287,50 @@ describe('web music observation labels', () => {
       vi.useRealTimers();
     }
   });
+  it('says the room looks empty and counts the exit grace down on the server clock', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    try {
+      const ui = webPanel();
+      const data = {
+        // The server's clock is a minute off the browser's; only elapsed time may matter.
+        generatedAt: 5_000_000,
+        state: {
+          revision: 1,
+          presence: {
+            state: 'occupied',
+            personCount: 1,
+            exitPending: { startedAt: 5_000_000 - 6_000, until: 5_014_000 },
+          },
+          lighting: { devices: {} },
+        },
+        health: {},
+      };
+      Object.assign(ui.context, { data });
+      runInContext(
+        'overview = data; overviewReceivedAt = Date.now(); renderRoomStatus(overview)',
+        ui.context,
+      );
+      expect(ui.get('presenceTitle').textContent).toBe('Rummet verkar tomt');
+      expect(ui.get('presenceDetail').textContent).toContain('om 14 s');
+      expect(ui.get('roomPresence').dataset['tone']).toBe('warn');
+      vi.advanceTimersByTime(4_000);
+      runInContext('renderRoomStatus(overview)', ui.context);
+      expect(ui.get('presenceDetail').textContent).toContain('om 10 s');
+      vi.advanceTimersByTime(20_000);
+      runInContext('renderRoomStatus(overview)', ui.context);
+      expect(ui.get('presenceDetail').textContent).toContain('släcks nu');
+      // Without a wait, or once the room is no longer occupied, nothing changes.
+      runInContext(
+        'delete overview.state.presence.exitPending; renderRoomStatus(overview)',
+        ui.context,
+      );
+      expect(ui.get('presenceTitle').textContent).toBe('Någon i rummet');
+      expect(ui.get('roomPresence').dataset['tone']).toBe('good');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it.each(['http-first', 'sse-first'])(
     'orders HTTP and SSE snapshots regardless of arrival order: %s',
     async (order) => {

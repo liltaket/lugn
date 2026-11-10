@@ -285,6 +285,16 @@ const DisplayConfigSchema = z
     }
   });
 
+const PresenceFeedbackConfigSchema = z
+  .object({
+    /** ALSA device for the presence chime, as listed by `aplay -L`. */
+    audioDevice: z
+      .string()
+      .regex(/^[A-Za-z0-9_:.,=-]{1,64}$/)
+      .optional(),
+  })
+  .strict();
+
 const FileConfigSchema = z
   .object({
     http: z
@@ -302,6 +312,7 @@ const FileConfigSchema = z
     windowLighting: WindowLightingSchema.optional(),
     mqtt: MqttConfigSchema.optional(),
     presenceControl: PresenceControlConfigSchema.optional(),
+    presenceFeedback: PresenceFeedbackConfigSchema.optional(),
     display: DisplayConfigSchema.optional(),
     cameraDashboard: CameraDashboardConfigSchema.optional(),
     prelight: z
@@ -462,6 +473,7 @@ export function validateRuntimeFileConfig(value: unknown): void {
 export type RuntimeConfig = {
   windowLighting?: WindowLighting;
   presenceControl?: z.output<typeof PresenceControlConfigSchema>;
+  presenceFeedback?: z.output<typeof PresenceFeedbackConfigSchema>;
   lightingControlModes?: LightingControlModes;
   http: {
     host: string;
@@ -664,6 +676,9 @@ export function loadRuntimeConfig(
     ...(fileConfig.presenceControl === undefined
       ? {}
       : { presenceControl: fileConfig.presenceControl }),
+    ...(fileConfig.presenceFeedback === undefined
+      ? {}
+      : { presenceFeedback: fileConfig.presenceFeedback }),
     ...(display === undefined ? {} : { display }),
     ...(fileConfig.cameraDashboard === undefined
       ? {}

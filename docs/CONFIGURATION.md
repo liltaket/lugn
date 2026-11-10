@@ -120,6 +120,12 @@ binaries reject version 2. Lighting-only installations retain version 1.
 Configuration remains separate. See [Lighting intent
 persistence](OPERATIONS.md#lighting-intent-persistence) for service setup.
 
+Presence feedback (exit grace and chime) is a separate small file next to it,
+`<state file>.presence-feedback.json`, written the same way and edited from the
+Närvaro page. An unreadable file keeps the defaults (no grace, no chime) and
+blocks saving instead of being overwritten. The only file configuration is the
+optional `presenceFeedback.audioDevice`, an ALSA device name for the chime.
+
 ## Later persistence needs
 
 If the runtime grows, likely candidates include configuration versions,

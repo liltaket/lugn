@@ -1659,6 +1659,10 @@ function renderRoomPresence(state) {
     setText(refs.roomPresence, 'Närvaro okänd');
     return;
   }
+  if (presence.exitPending) {
+    setText(refs.roomPresence, 'Rummet verkar tomt · släcker snart');
+    return;
+  }
   const count = presence.personCount;
   if (!Number.isInteger(count) || count < 1) {
     setText(refs.roomPresence, 'Antal okänt');

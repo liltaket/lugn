@@ -138,6 +138,49 @@ Confirmed transition to empty can trigger immediate physical actions:
 - music pause
 
 There should not be a long grace period before the room visibly shuts down.
+By default there is none. An optional short exit grace (below) lets a quick
+trip out of the room pass without lights and music following it.
+
+## Exit grace and chime
+
+Both live in **Inställningar → Närvaro → Utgång och ljud** (the page appears
+with `presenceControl.baseUrl`), are saved next to
+the lighting intent (`<state>.presence-feedback.json`) and apply without a
+restart. They sit between the sensor's MQTT adapter and the engine.
+
+- **Exit grace** (`exitGraceSeconds`, 0–600, default 0). When the sensor
+  reports confirmed empty after a confirmed occupied, the engine is told only
+  after this many seconds. If the sensor reports occupied first, the engine
+  never hears about the exit, so lights do not flicker and music does not
+  pause and resume. A repeated empty report does not extend the wait. `unknown`
+  cancels it and is forwarded: unknown never shuts a room down, and the next
+  confirmed empty starts a new wait. Entry, prelight, count corrections and the
+  first report after a restart are never delayed. Changing the setting re-times
+  a wait that is already running from its original start. Presence itself
+  therefore still reads occupied during the wait. The wait is its own state,
+  `presence.exitPending` (`startedAt`, `until`), set when the wait starts or is
+  re-timed and cleared by the next presence report. The control panel shows it
+  as "Rummet verkar tomt" with a countdown (on the server's clock, so a wrong
+  browser clock does not matter), a banner with a progress bar on the Närvaro
+  page, and "släcker snart" on the Hub displays. Engine diagnostics record
+  `presence.exit_pending`.
+- **Chime** (`chime.enabled`, `entry`, `exit`, `volume`, `style`). A short,
+  quiet two-note blip (rising for entry, falling for exit) played from
+  BrunoCAM. Three styles: `glass` (soft bell-like blip, the default), `soft`
+  (rounder, more muted) and `tick` (short and dry). Every style is scaled to the
+  same peak, so a style change does not change the loudness, and moving the
+  volume or picking a style on the page plays it at once.
+  It follows what the sensor reported, not the grace, so it still confirms an
+  exit that Lugn has not acted on yet. It is silent for `unknown`, for the
+  first report after a restart, and for repeats. The audition buttons play the
+  volume currently on screen, saved or not.
+
+The chime runs in its own `aplay` process, started after the engine has been
+given the event, so playback cannot delay lighting. Blips closer than 1.5 s
+apart are dropped, never queued. Optional
+`presenceFeedback.audioDevice` in `config.json` names the ALSA device
+(`aplay -L`); without it the system default is used. A failing player is
+logged at most once every five minutes and never affects presence.
 
 ## Continuity after leaving
 

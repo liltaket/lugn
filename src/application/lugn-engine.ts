@@ -2129,8 +2129,25 @@ export class LugnEngine {
     return this.batchPublications(() => this.applyPresence(event));
   }
 
+  /**
+   * The sensor reports the room empty and the exit grace is holding the
+   * decision. Presence itself is unchanged; every presence report clears the
+   * marker again, so there is no separate cancel path.
+   */
+  setPresenceExitPending(pending: { startedAt: number; until: number }): void {
+    this.state.presence.exitPending = { ...pending };
+    this.addDiagnostic(
+      'presence.exit_pending',
+      'The sensor reports the room empty; lights and music wait for the exit grace',
+      { until: pending.until },
+    );
+    this.publish(['presence', 'diagnostics']);
+  }
+
   private async applyPresence(event: PresenceEvent): Promise<void> {
     const normalizedEvent = PresenceEventSchema.parse(event);
+    // Every branch below publishes presence, which carries this removal.
+    delete this.state.presence.exitPending;
     const transitionGeneration =
       normalizedEvent.presence === 'occupied' ||
       normalizedEvent.presence === 'confirmed_empty'

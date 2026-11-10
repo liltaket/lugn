@@ -1008,6 +1008,18 @@
               >Ansluter …</span
             >
           </div>
+          <div
+            class="presence-exit"
+            id="presence-exit"
+            role="status"
+            aria-live="polite"
+            hidden
+          >
+            <p id="presence-exit-text"></p>
+            <div class="presence-exit-bar" aria-hidden="true">
+              <span id="presence-exit-fill"></span>
+            </div>
+          </div>
           <div class="presence-layout">
             <figure class="presence-radar">
               <canvas
@@ -1123,6 +1135,107 @@
           <p id="presence-settings-unavailable" class="empty-note" hidden>
             Sensorns inställningar kunde inte hämtas.
           </p>
+          <form id="feedback-form" class="editor-surface" novalidate hidden>
+            <fieldset id="feedback-fields">
+              <legend>Utgång och ljud</legend>
+              <div class="presence-group">
+                <h3>När rummet töms</h3>
+                <p class="field-help">
+                  Sensorn ser direkt att du gått. Lugn väntar så här länge innan
+                  ljus och musik följer med, så att ett snabbt ärende i
+                  badrummet inte släcker och tänder om. Kommer du tillbaka innan
+                  dess händer ingenting. 0 betyder direkt.
+                </p>
+                <div class="presence-grid">
+                  <label class="presence-field">
+                    <span>Fördröjning innan Lugn släcker (sekunder)</span>
+                    <input
+                      id="feedback-grace"
+                      type="number"
+                      inputmode="numeric"
+                      min="0"
+                      max="600"
+                      step="1"
+                    />
+                  </label>
+                </div>
+              </div>
+              <div class="presence-group">
+                <h3>Ljudsignal</h3>
+                <p class="field-help">
+                  Ett kort, lågt pip från sensorns högtalare när sensorn ser dig
+                  komma eller gå. Det följer sensorn, inte fördröjningen, så du
+                  hör direkt att utgången registrerades.
+                </p>
+                <label class="settings-toggle">
+                  <input id="feedback-chime-enabled" type="checkbox" />
+                  <span>Spela ljudsignal</span>
+                </label>
+                <label class="settings-toggle">
+                  <input id="feedback-chime-entry" type="checkbox" />
+                  <span>När någon kommer in</span>
+                </label>
+                <label class="settings-toggle">
+                  <input id="feedback-chime-exit" type="checkbox" />
+                  <span>När rummet töms</span>
+                </label>
+                <label class="presence-field">
+                  <span>Ljud</span>
+                  <select id="feedback-chime-style">
+                    <option value="glass">Glas – mjukt klockspel</option>
+                    <option value="soft">Mjuk – rund och dämpad</option>
+                    <option value="tick">Tick – kort och torr</option>
+                  </select>
+                </label>
+                <label class="presence-field">
+                  <span
+                    >Volym
+                    <output id="feedback-volume-value">30</output> %</span
+                  >
+                  <input
+                    id="feedback-chime-volume"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                  />
+                </label>
+                <div class="button-row" role="group" aria-label="Provlyssna">
+                  <button
+                    id="feedback-test-entry"
+                    class="button button-quiet"
+                    type="button"
+                  >
+                    Provlyssna: in</button
+                  ><button
+                    id="feedback-test-exit"
+                    class="button button-quiet"
+                    type="button"
+                  >
+                    Provlyssna: ut
+                  </button>
+                </div>
+              </div>
+              <div class="button-row">
+                <button
+                  id="feedback-save"
+                  class="button button-primary"
+                  type="submit"
+                  disabled
+                >
+                  Spara</button
+                ><button
+                  id="feedback-discard"
+                  class="button button-quiet"
+                  type="button"
+                  disabled
+                >
+                  Ångra ändringar
+                </button>
+              </div>
+              <p id="feedback-status" role="status"></p>
+            </fieldset>
+          </form>
         </section>
 
         <section
