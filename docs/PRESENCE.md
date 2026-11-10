@@ -178,7 +178,9 @@ restart. They sit between the sensor's MQTT adapter and the engine.
   volume currently on screen, saved or not.
 
 The chime runs in its own `aplay` process, started after the engine has been
-given the event, so playback cannot delay lighting. Blips closer than 1.5 s
+given the event, so playback cannot delay lighting. All voices are rendered at
+startup, so an event only scales one to the volume (about 2 ms on the Pi) and
+starts `aplay`; the sound begins 20 ms of silence after the device opens. Blips closer than 1.5 s
 apart are dropped, never queued. Optional
 `presenceFeedback.audioDevice` in `config.json` names the ALSA device
 (`aplay -L`); without it the system default is used. A failing player is

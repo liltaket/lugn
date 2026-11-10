@@ -29,7 +29,7 @@ import {
   type HomeAssistantConnection,
 } from '../adapters/home-assistant-websocket.js';
 import { PresenceEventIngress } from '../adapters/presence-event-ingress.js';
-import { ChimePlayer } from '../adapters/chime-player.js';
+import { ChimePlayer, warmChimes } from '../adapters/chime-player.js';
 import { PresenceFeedback } from '../application/presence-feedback.js';
 import { PresenceFeedbackSettingsStore } from './presence-feedback-settings-store.js';
 import {
@@ -326,6 +326,8 @@ export async function startRuntime(
   const presenceIngress = new PresenceEventIngress((event) =>
     engine.handleEvent(event),
   );
+  // Render the chimes now, so a sensor event never waits for one.
+  warmChimes();
   const presenceFeedbackStore = new PresenceFeedbackSettingsStore(
     `${lightingIntentPath}.presence-feedback.json`,
     (message) => console.warn(`[lugn] ${message}`),
