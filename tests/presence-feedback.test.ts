@@ -29,10 +29,15 @@ import { PresenceFeedbackSettingsStore } from '../src/runtime/presence-feedback-
 
 const changed = (
   presence: 'occupied' | 'confirmed_empty' | 'unknown',
+  personCount: number | null = presence === 'occupied'
+    ? 1
+    : presence === 'unknown'
+      ? null
+      : 0,
 ): PresenceInputEvent => ({
   type: 'presence.changed',
   presence,
-  personCount: presence === 'occupied' ? 1 : presence === 'unknown' ? null : 0,
+  personCount,
   source: 'stl27l',
 });
 
@@ -117,6 +122,30 @@ describe('presence feedback', () => {
     feedback.accept(changed('unknown'));
     feedback.accept(changed('occupied'));
     expect(log.filter((line) => line.startsWith('chime'))).toHaveLength(1);
+  });
+
+  it('chimes on a change in the count while the room stays occupied', () => {
+    const { log, feedback } = feedbackFixture(
+      settings({ exitGraceSeconds: 0 }),
+    );
+    feedback.accept(changed('occupied', 1));
+    feedback.accept(changed('occupied', 2));
+    feedback.accept(changed('occupied', 1));
+    feedback.accept(changed('occupied', 1));
+    expect(log.filter((line) => line.startsWith('chime'))).toEqual([
+      'chime:entry:0.3:glass',
+      'chime:exit:0.3:glass',
+    ]);
+  });
+
+  it('does not compare counts across a dropout', () => {
+    const { log, feedback } = feedbackFixture(
+      settings({ exitGraceSeconds: 0 }),
+    );
+    feedback.accept(changed('occupied', 2));
+    feedback.accept(changed('unknown'));
+    feedback.accept(changed('occupied', 1));
+    expect(log.filter((line) => line.startsWith('chime'))).toEqual([]);
   });
 
   it('honours the master switch and the per-direction switches', () => {

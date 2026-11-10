@@ -171,8 +171,10 @@ restart. They sit between the sensor's MQTT adapter and the engine.
   same peak, so a style change does not change the loudness, and moving the
   volume or picking a style on the page plays it at once.
   It follows what the sensor reported, not the grace, so it still confirms an
-  exit that Lugn has not acted on yet. It is silent for `unknown`, for the
-  first report after a restart, and for repeats. The audition buttons play the
+  exit that Lugn has not acted on yet. A higher person count is an entry and a
+  lower one an exit, so it also answers when the room stays occupied. It is
+  silent for `unknown` (the count is not compared across one), for the first
+  report after a restart, and for repeats. The audition buttons play the
   volume currently on screen, saved or not.
 
 The chime runs in its own `aplay` process, started after the engine has been

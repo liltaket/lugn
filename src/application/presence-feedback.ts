@@ -25,6 +25,7 @@ export class PresenceFeedback {
   private settings: PresenceFeedbackSettings;
   private readonly grace: PresenceExitGrace;
   private lastSensorConfirmed: 'occupied' | 'confirmed_empty' | undefined;
+  private lastSensorCount: number | undefined;
 
   constructor(
     private readonly options: {
@@ -62,15 +63,21 @@ export class PresenceFeedback {
   accept(event: PresenceInputEvent): void {
     // Lighting first: the chime is scheduled after the engine has the event.
     this.grace.accept(event);
-    if (event.type !== 'presence.changed' || event.presence === 'unknown')
+    if (event.type !== 'presence.changed') return;
+    if (event.presence === 'unknown') {
+      // After a dropout the next count has nothing trustworthy to compare with.
+      this.lastSensorCount = undefined;
       return;
+    }
     const previous = this.lastSensorConfirmed;
+    const previousCount = this.lastSensorCount;
     this.lastSensorConfirmed = event.presence;
+    this.lastSensorCount = event.personCount ?? undefined;
     const { chime } = this.settings;
     if (!this.options.chime || !chime.enabled || previous === undefined) return;
-    if (previous === event.presence) return;
-    const kind = event.presence === 'occupied' ? 'entry' : 'exit';
-    if (chime[kind]) this.options.chime.play(kind, chime.volume, chime.style);
+    const kind = chimeKind(previous, previousCount, event);
+    if (kind && chime[kind])
+      this.options.chime.play(kind, chime.volume, chime.style);
   }
 
   async updateSettings(
@@ -100,4 +107,22 @@ export class PresenceFeedback {
   dispose(): void {
     this.grace.dispose();
   }
+}
+
+/**
+ * A room that never empties still has people coming and going, so a change in
+ * the count answers the person just like a change between occupied and empty.
+ */
+function chimeKind(
+  previous: 'occupied' | 'confirmed_empty',
+  previousCount: number | undefined,
+  event: Extract<PresenceInputEvent, { type: 'presence.changed' }>,
+): ChimeKind | undefined {
+  if (previous !== event.presence)
+    return event.presence === 'occupied' ? 'entry' : 'exit';
+  const count = event.personCount;
+  if (previousCount === undefined || count === null || count === undefined)
+    return undefined;
+  if (count > previousCount) return 'entry';
+  return count < previousCount ? 'exit' : undefined;
 }
