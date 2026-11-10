@@ -3,6 +3,7 @@ import type {
   MusicAdapter,
   MusicObservation,
 } from '../adapters/simulated-music.js';
+import { volumeFeedbackMatches } from '../core/music-volume-settings.js';
 import type {
   MusicCommandRecord,
   MusicRecoveryStopReason,
@@ -206,8 +207,7 @@ export class MusicCommandRecovery {
     }
     const matches =
       property === 'volume'
-        ? typeof actual === 'number' &&
-          Math.abs(actual - Number(value)) <= 0.005 + Number.EPSILON
+        ? typeof actual === 'number' && volumeFeedbackMatches(actual, command)
         : actual === value;
     if (matches) {
       this.stop(command.id, 'non_retryable', false);

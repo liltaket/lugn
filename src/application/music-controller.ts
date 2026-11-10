@@ -20,6 +20,7 @@ import {
   type Provenance,
   type MusicRecoveryStopReason,
 } from '../core/schemas.js';
+import { volumeFeedbackMatches } from '../core/music-volume-settings.js';
 import { MusicCommandRecovery } from './music-command-recovery.js';
 
 const MAX_RETAINED_TERMINAL_COMMANDS = 128;
@@ -1292,8 +1293,7 @@ export class MusicController {
                 (candidate.acceptedAt !== undefined ||
                   this.dispatchingCommands.has(candidate.id)) &&
                 observation.observedAt >= candidate.issuedAt &&
-                Math.abs(candidate.requested.value - observedVolume!) <=
-                  0.005 + Number.EPSILON,
+                volumeFeedbackMatches(observedVolume!, candidate),
             );
       const command =
         correlated ??
@@ -1483,8 +1483,7 @@ export class MusicController {
         this.clock.now() -
           (command.recovery?.lastAttemptAt ?? command.issuedAt) <
           this.timeoutMs &&
-        Math.abs(observedVolume - command.requested.value) <=
-          0.005 + Number.EPSILON
+        volumeFeedbackMatches(observedVolume, command)
       ) {
         return command;
       }
@@ -1516,7 +1515,7 @@ export class MusicController {
       command.acceptedAt !== undefined &&
       (command.status === 'pending' || command.status === 'confirmed') &&
       observation.observedAt >= command.issuedAt &&
-      Math.abs(volume - command.requested.value) <= 0.005 + Number.EPSILON &&
+      volumeFeedbackMatches(volume, command) &&
       !(
         intent !== undefined &&
         this.volumeCommandPredatesIntent(command, intent.sequence)
@@ -1566,8 +1565,7 @@ export class MusicController {
         candidate.requested.property === 'volume' &&
         (candidate.acceptedAt !== undefined ||
           this.dispatchingCommands.has(candidate.id)) &&
-        Math.abs(observedVolume - candidate.requested.value) <=
-          0.005 + Number.EPSILON &&
+        volumeFeedbackMatches(observedVolume, candidate) &&
         (observation.commandId !== undefined
           ? observation.commandId === candidate.id &&
             (candidate.id !== latestVolume?.id ||
@@ -1612,8 +1610,7 @@ export class MusicController {
           observation.commandId === command.id) &&
         !this.attributedSupersededVolumeCommands.has(command.id) &&
         !this.attributedOlderAutomaticVolumeCommands.has(command.id) &&
-        Math.abs(observedVolume - command.requested.value) <=
-          0.005 + Number.EPSILON
+        volumeFeedbackMatches(observedVolume, command)
       ) {
         superseded = command;
         break;
@@ -1779,8 +1776,7 @@ export class MusicController {
     const actual = observation.values[property];
     const matches =
       property === 'volume'
-        ? typeof actual === 'number' &&
-          Math.abs(actual - Number(value)) <= 0.005 + Number.EPSILON
+        ? typeof actual === 'number' && volumeFeedbackMatches(actual, command)
         : actual === value;
     if (!matches) return false;
     command.status = 'confirmed';

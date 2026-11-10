@@ -123,3 +123,45 @@ export function calculateMusicVolume(
           ),
   };
 }
+
+const VOLUME_STEP = 0.01;
+const VOLUME_ROUNDING_TOLERANCE = 0.005;
+
+// Whether a device that truncates to whole percent would report `observed` for
+// a request between two percent steps. Only the exact lower step qualifies.
+function truncatesTo(observed: number, requested: number): boolean {
+  const lower = Math.floor(requested / VOLUME_STEP + 1e-9) * VOLUME_STEP;
+  return requested - lower > 1e-9 && Math.abs(observed - lower) <= 1e-9;
+}
+
+/**
+ * Whether device-reported volume is feedback for a requested volume. The WiiM
+ * stores whole percent and truncates, so an off-grid policy request such as
+ * 0.2088 is reported as 0.20, which is not a human adjustment. A request already
+ * on a whole percent, and every fade step, keep the tight tolerance: a fade
+ * step cannot be told apart from a human landing on the truncated value.
+ */
+export function volumeFeedbackMatches(
+  observed: number,
+  command: {
+    requested: { value: unknown };
+    provenance: { reason?: string | undefined };
+  },
+): boolean {
+  const requested = Number(command.requested.value);
+  if (
+    Math.abs(observed - requested) <=
+    VOLUME_ROUNDING_TOLERANCE + Number.EPSILON
+  )
+    return true;
+  if (command.provenance.reason?.startsWith('Volume fade step ')) return false;
+  return truncatesTo(observed, requested);
+}
+
+/** Whether the receiver already reports a policy target, allowing truncation. */
+export function volumeReached(observed: number, target: number): boolean {
+  return (
+    Math.abs(observed - target) < VOLUME_ROUNDING_TOLERANCE ||
+    truncatesTo(observed, target)
+  );
+}

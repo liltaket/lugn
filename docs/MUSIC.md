@@ -57,6 +57,11 @@ the existing per-command timeout keep a stalled fade bounded. These tolerances
 are initial software defaults and need measurement against the real WiiM.
 
 Volume matching allows a difference of 0.005 in Home Assistant's 0..1 scale.
+The WiiM stores whole percent and truncates, so a policy request between two
+percent steps (for example 0.2088) is reported as the lower one (0.20). That
+feedback also matches the request, so it is not mistaken for a human adjustment
+and does not switch the player to Manual. Requests already on a whole percent and
+fade steps keep the 0.005 tolerance.
 An observation cached from before a request cannot confirm it, and a matching
 observation only proves that HA reported the expected value. The volume policy
 tracks authority separately from attribution: explicit/manual volume changes

@@ -3,6 +3,7 @@ import {
   defaultMusicVolumeSettings,
   MusicVolumeSettingsSchema,
   type MusicVolumeSettings,
+  volumeReached,
 } from '../core/music-volume-settings.js';
 import type { Clock, TimerHandle } from '../core/clock.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
@@ -1104,8 +1105,7 @@ export class MusicAutomation {
         device.availability === 'available' &&
         device.observed.volume !== null &&
         device.requested.volume === undefined &&
-        Math.abs(device.observed.volume - this.manualTarget(target, hold)) <
-          0.005
+        volumeReached(device.observed.volume, this.manualTarget(target, hold))
       ) {
         this.passiveManaged.set(target, false);
         changed = true;
@@ -1316,7 +1316,7 @@ export class MusicAutomation {
           ? this.calculateVolume(baseline, target).target!
           : this.sourceOnlyTarget(target);
       const current = device.requested.volume ?? device.observed.volume;
-      if (current !== null && Math.abs(current - desired) < 0.005) continue;
+      if (current !== null && volumeReached(current, desired)) continue;
       if (!hold) this.volumeControllers.set(target, 'lugn');
       this.send(
         target,
@@ -1439,17 +1439,15 @@ export class MusicAutomation {
         if (
           !this.volumeSettings.opticalOffsets[target]?.enabled &&
           device.requested.volume === undefined &&
-          Math.abs(
-            device.observed.volume -
-              (this.getManualVolumeHold(target)
-                ? this.manualTarget(target, this.getManualVolumeHold(target)!)
-                : this.volumeAutomationEnabled
-                  ? this.calculateVolume(
-                      this.configuredBaseline(target),
-                      target,
-                    ).target!
-                  : this.sourceOnlyTarget(target)),
-          ) < 0.005
+          volumeReached(
+            device.observed.volume,
+            this.getManualVolumeHold(target)
+              ? this.manualTarget(target, this.getManualVolumeHold(target)!)
+              : this.volumeAutomationEnabled
+                ? this.calculateVolume(this.configuredBaseline(target), target)
+                    .target!
+                : this.sourceOnlyTarget(target),
+          )
         ) {
           this.sourceTrimManaged.delete(target);
           this.sourceReferences.delete(target);
