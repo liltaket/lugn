@@ -679,6 +679,17 @@ export const RoomStateSchema = z.object({
     state: PresenceSchema,
     personCount: z.number().int().nonnegative().nullable(),
     continuityExpiresAt: z.number().nonnegative().nullable(),
+    /**
+     * Present only while the sensor reports the room empty but Lugn is
+     * deliberately waiting before it acts (the exit grace). The room still
+     * reads occupied until then.
+     */
+    exitPending: z
+      .object({
+        startedAt: z.number().nonnegative(),
+        until: z.number().nonnegative(),
+      })
+      .optional(),
     home: z.object({
       state: HomePresenceSchema,
       observedAt: z.number().nonnegative().nullable(),

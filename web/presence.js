@@ -128,6 +128,10 @@ function failureText(error, fallback) {
       return 'Sensorn avvisade ändringen. Kontrollera värdena.';
     if (error.code === 'target_not_configured')
       return 'Sensorn är inte konfigurerad i Lugn.';
+    if (error.code === 'chime_unavailable')
+      return 'Ljudet kunde inte spelas. Kontrollera att en högtalare är ansluten.';
+    if (error.code === 'presence_feedback_save_failed')
+      return 'Kunde inte spara. Ändringarna gäller inte.';
   }
   return fallback;
 }
@@ -139,6 +143,22 @@ function isActive() {
     !section.hidden &&
     document.visibilityState === 'visible'
   );
+}
+
+// ---------- Exit grace ----------
+
+// Says what Lugn is doing while it waits after the sensor saw the room empty.
+function renderExit() {
+  const status = panel.exitPending?.();
+  el('presence-exit').hidden = !status;
+  if (!status) return;
+  const seconds = Math.ceil(status.remainingMs / 1000);
+  el('presence-exit-text').textContent =
+    seconds > 0
+      ? `Sensorn ser ingen i rummet. Ljus och musik släcks om ${seconds} s, eller så avbryts det om någon kommer tillbaka.`
+      : 'Sensorn ser ingen i rummet. Lugn släcker nu.';
+  el('presence-exit-fill').style.width =
+    `${Math.round((status.remainingMs / status.totalMs) * 100)}%`;
 }
 
 // ---------- Live stream ----------
@@ -641,6 +661,8 @@ function fieldError(field, value) {
 
 function onFieldInput(field, input) {
   draft[field.key] = readInput(field, input);
+  if (el('presence-settings-status').dataset.tone === 'bad')
+    setSettingsStatus('');
   resetConfirmation();
   updateFormControls();
 }
@@ -663,9 +685,12 @@ function updateFormControls() {
   el('presence-save').disabled = !dirty || busy;
   el('presence-discard').disabled = !dirty || busy;
   const status = el('presence-settings-status');
-  if (dirty) setSettingsStatus('Du har osparade ändringar.', 'warn');
-  // Only the unsaved-changes notice is cleared here; a result message stays.
-  else if (status.dataset.tone === 'warn') setSettingsStatus('');
+  // A failure message stays until the person edits again; only the
+  // unsaved-changes notice is replaced or cleared here.
+  if (dirty) {
+    if (status.dataset.tone !== 'bad')
+      setSettingsStatus('Du har osparade ändringar.', 'warn');
+  } else if (status.dataset.tone === 'warn') setSettingsStatus('');
 }
 
 function setSettingsStatus(text, tone = 'neutral') {
@@ -756,6 +781,155 @@ async function saveSettings() {
   );
 }
 
+// ---------- Exit grace and chime ----------
+
+const FEEDBACK_IDS = {
+  grace: 'feedback-grace',
+  enabled: 'feedback-chime-enabled',
+  entry: 'feedback-chime-entry',
+  exit: 'feedback-chime-exit',
+  volume: 'feedback-chime-volume',
+  style: 'feedback-chime-style',
+};
+let feedbackSaved = null;
+let feedbackLoaded = false;
+let feedbackLoading = false;
+let feedbackBusy = false;
+
+function feedbackStatus(text, tone = 'neutral') {
+  el('feedback-status').textContent = text;
+  el('feedback-status').dataset.tone = tone;
+}
+
+// One shape, one key order, so the form and the server's copy compare equal.
+function feedbackSettings(grace, chime) {
+  return {
+    exitGraceSeconds: grace,
+    chime: {
+      enabled: chime.enabled,
+      volume: chime.volume,
+      style: chime.style,
+      entry: chime.entry,
+      exit: chime.exit,
+    },
+  };
+}
+
+function readFeedback() {
+  return feedbackSettings(Number(el(FEEDBACK_IDS.grace).value), {
+    enabled: el(FEEDBACK_IDS.enabled).checked,
+    entry: el(FEEDBACK_IDS.entry).checked,
+    exit: el(FEEDBACK_IDS.exit).checked,
+    volume: Number(el(FEEDBACK_IDS.volume).value) / 100,
+    style: el(FEEDBACK_IDS.style).value,
+  });
+}
+
+function writeFeedback(settings) {
+  el(FEEDBACK_IDS.grace).value = String(settings.exitGraceSeconds);
+  el(FEEDBACK_IDS.enabled).checked = settings.chime.enabled;
+  el(FEEDBACK_IDS.entry).checked = settings.chime.entry;
+  el(FEEDBACK_IDS.exit).checked = settings.chime.exit;
+  el(FEEDBACK_IDS.volume).value = String(
+    Math.round(settings.chime.volume * 100),
+  );
+  el(FEEDBACK_IDS.style).value = settings.chime.style;
+  el('feedback-volume-value').textContent = el(FEEDBACK_IDS.volume).value;
+}
+
+function feedbackError(settings) {
+  const grace = settings.exitGraceSeconds;
+  if (!Number.isInteger(grace) || grace < 0 || grace > 600)
+    return 'Fördröjningen måste vara ett helt antal sekunder, 0 till 600.';
+  return null;
+}
+
+function updateFeedbackControls() {
+  const current = readFeedback();
+  const dirty =
+    feedbackSaved !== null &&
+    JSON.stringify(current) !== JSON.stringify(feedbackSaved);
+  el('feedback-save').disabled = !dirty || feedbackBusy;
+  el('feedback-discard').disabled = !dirty || feedbackBusy;
+  el('feedback-test-entry').disabled = feedbackBusy;
+  el('feedback-test-exit').disabled = feedbackBusy;
+  el('feedback-volume-value').textContent = el(FEEDBACK_IDS.volume).value;
+  const status = el('feedback-status');
+  // A failure message stays until the person edits again.
+  if (dirty) {
+    if (status.dataset.tone !== 'bad')
+      feedbackStatus('Du har osparade ändringar.', 'warn');
+  } else if (status.dataset.tone === 'warn') feedbackStatus('');
+}
+
+function applyFeedback(settings) {
+  feedbackSaved = feedbackSettings(settings.exitGraceSeconds, settings.chime);
+  writeFeedback(settings);
+  updateFeedbackControls();
+}
+
+async function loadFeedback() {
+  if (feedbackLoading || feedbackLoaded) return;
+  feedbackLoading = true;
+  try {
+    applyFeedback((await capability('presence.getFeedbackSettings')).settings);
+    feedbackLoaded = true;
+    el('feedback-form').hidden = false;
+  } catch {
+    el('feedback-form').hidden = true;
+  } finally {
+    feedbackLoading = false;
+  }
+}
+
+async function saveFeedback() {
+  if (feedbackBusy) return;
+  const settings = readFeedback();
+  const message = feedbackError(settings);
+  if (message) {
+    feedbackStatus(message, 'bad');
+    return;
+  }
+  feedbackBusy = true;
+  updateFeedbackControls();
+  feedbackStatus('Sparar …');
+  try {
+    const result = await capability('presence.updateFeedbackSettings', {
+      settings,
+    });
+    applyFeedback(result.settings);
+    feedbackStatus('Sparat.', 'good');
+  } catch (error) {
+    feedbackStatus(
+      failureText(error, 'Kunde inte spara. Ändringarna gäller inte.'),
+      'bad',
+    );
+  } finally {
+    feedbackBusy = false;
+    updateFeedbackControls();
+  }
+}
+
+// Auditions the volume as set on screen, saved or not, so it can be tuned.
+async function testChime(kind) {
+  if (feedbackBusy) return;
+  feedbackBusy = true;
+  updateFeedbackControls();
+  try {
+    await capability('presence.testChime', {
+      kind,
+      volume: readFeedback().chime.volume,
+      style: readFeedback().chime.style,
+    });
+    if (el('feedback-status').dataset.tone === 'bad') feedbackStatus('');
+  } catch (error) {
+    feedbackStatus(failureText(error, 'Ljudet kunde inte spelas.'), 'bad');
+  } finally {
+    feedbackBusy = false;
+    updateFeedbackControls();
+  }
+}
+
 // ---------- Lifecycle ----------
 
 function sync() {
@@ -763,6 +937,7 @@ function sync() {
   if (isActive()) {
     openStream();
     void loadConfig();
+    void loadFeedback();
   } else {
     closeStream();
   }
@@ -803,10 +978,34 @@ if (panel && section) {
     updateFormControls();
     setSettingsStatus('Ändringarna är borttagna.');
   });
+  const feedbackForm = el('feedback-form');
+  const edited = () => {
+    if (el('feedback-status').dataset.tone === 'bad') feedbackStatus('');
+    updateFeedbackControls();
+  };
+  feedbackForm.addEventListener('input', edited);
+  feedbackForm.addEventListener('change', edited);
+  feedbackForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void saveFeedback();
+  });
+  el('feedback-discard').addEventListener('click', () => {
+    if (!feedbackSaved) return;
+    writeFeedback(feedbackSaved);
+    updateFeedbackControls();
+    feedbackStatus('Ändringarna är borttagna.');
+  });
+  // Moving the volume or picking a sound plays it, so tuning needs no extra click.
+  for (const id of [FEEDBACK_IDS.volume, FEEDBACK_IDS.style])
+    el(id).addEventListener('change', () => void testChime('entry'));
+  el('feedback-test-entry').addEventListener('click', () => testChime('entry'));
+  el('feedback-test-exit').addEventListener('click', () => testChime('exit'));
   window.addEventListener('resize', () => drawRadar(latestFrame));
   window.addEventListener('hashchange', sync);
   document.addEventListener('visibilitychange', sync);
   document.addEventListener('lugn:render', sync);
+  document.addEventListener('lugn:render', renderExit);
+  document.addEventListener('lugn:exit-tick', renderExit);
   window.addEventListener('pagehide', closeStream);
   renderIdle();
   sync();

@@ -25,6 +25,13 @@ import {
   SwitchCommandStatusSchema,
 } from '../core/schemas.js';
 import type { ActorSchema } from '../core/schemas.js';
+import {
+  ChimeKindSchema,
+  ChimeStyleSchema,
+  defaultPresenceFeedbackSettings,
+  PresenceFeedbackSettingsSchema,
+} from '../core/presence-feedback.js';
+import type { PresenceFeedback } from './presence-feedback.js';
 import type { ExecutionGuard, LugnEngine } from './lugn-engine.js';
 import {
   MusicFadeDurationError,
@@ -84,6 +91,9 @@ export class CapabilityInputError extends Error {
       | 'volume_pending'
       | 'fade_active'
       | 'sensor_rejected_change'
+      | 'presence_feedback_unavailable'
+      | 'presence_feedback_save_failed'
+      | 'chime_unavailable'
       | 'human_actor_required',
   ) {
     super(code);
@@ -130,6 +140,28 @@ export const CapabilitySchemas = {
       accepted: z.literal(true),
       backgroundReset: z.boolean(),
     }),
+  },
+  'presence.getFeedbackSettings': {
+    input: z.object({}).strict(),
+    output: z.object({
+      settings: PresenceFeedbackSettingsSchema,
+      defaults: PresenceFeedbackSettingsSchema,
+    }),
+  },
+  'presence.updateFeedbackSettings': {
+    input: z.object({ settings: PresenceFeedbackSettingsSchema }).strict(),
+    output: z.object({ settings: PresenceFeedbackSettingsSchema }),
+  },
+  'presence.testChime': {
+    input: z
+      .object({
+        kind: ChimeKindSchema,
+        /** Lets the page audition an unsaved volume or style. */
+        volume: z.number().min(0).max(1).optional(),
+        style: ChimeStyleSchema.optional(),
+      })
+      .strict(),
+    output: z.object({ played: z.literal(true) }),
   },
   'music.getState': {
     input: GetMusicInput,
@@ -220,6 +252,7 @@ export class CapabilityRegistry {
     private readonly adapters: {
       buttonAdapter?: HomeAssistantButtonAdapter;
       presenceCountAdapter?: Stl27lPresenceControlAdapter;
+      presenceFeedback?: PresenceFeedback;
     } = {},
   ) {}
 
@@ -235,6 +268,13 @@ export class CapabilityRegistry {
         throw new CapabilityInputError('sensor_rejected_change');
       throw error;
     }
+  }
+
+  private feedback(): PresenceFeedback {
+    const feedback = this.adapters.presenceFeedback;
+    if (!feedback)
+      throw new CapabilityInputError('presence_feedback_unavailable');
+    return feedback;
   }
 
   async invoke<Name extends CapabilityName>(
@@ -306,6 +346,43 @@ export class CapabilityRegistry {
             adapter.updateConfig(input.changes),
           )),
         };
+        break;
+      }
+      case 'presence.getFeedbackSettings': {
+        CapabilitySchemas[name].input.parse(rawInput);
+        output = {
+          settings: this.feedback().getSettings(),
+          defaults: structuredClone(defaultPresenceFeedbackSettings),
+        };
+        break;
+      }
+      case 'presence.updateFeedbackSettings': {
+        const input =
+          CapabilitySchemas['presence.updateFeedbackSettings'].input.parse(
+            rawInput,
+          );
+        try {
+          output = {
+            settings: await this.feedback().updateSettings(input.settings),
+          };
+        } catch {
+          throw new CapabilityInputError('presence_feedback_save_failed');
+        }
+        break;
+      }
+      case 'presence.testChime': {
+        const input =
+          CapabilitySchemas['presence.testChime'].input.parse(rawInput);
+        const feedback = this.feedback();
+        try {
+          await feedback.testChime(input.kind, {
+            ...(input.volume === undefined ? {} : { volume: input.volume }),
+            ...(input.style === undefined ? {} : { style: input.style }),
+          });
+        } catch {
+          throw new CapabilityInputError('chime_unavailable');
+        }
+        output = { played: true };
         break;
       }
       case 'music.getState': {

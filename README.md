@@ -150,6 +150,11 @@ recalibration and the sensor's settings (geometry, motion filter, passage
 deadtime, prelight mode). Lugn relays the sensor's data and edits; the sensor
 still owns its configuration. See [Presence](docs/PRESENCE.md#sensor-page-in-the-control-panel).
 
+The Närvaro page also holds an optional exit grace (lights and music wait a
+set number of seconds after the sensor sees the room empty, and a return cancels
+it) and a quiet entry/exit chime played from the sensor's host; see
+[Exit grace and chime](docs/PRESENCE.md#exit-grace-and-chime).
+
 Each Hub has a separate role and private path token. Lugn starts DashCast on
 configured Cast receivers, yields while another cast is active, and can restore
 its dashboard after the receiver is idle. DashCast control confirms that Lugn

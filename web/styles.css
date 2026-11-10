@@ -1398,6 +1398,7 @@ details[open] > summary::before {
 #camera-settings-status[data-tone='bad'],
 #presence-settings-status[data-tone='bad'],
 #presence-action-status[data-tone='bad'],
+#feedback-status[data-tone='bad'],
 #routine-status[data-tone='bad'] {
   color: var(--bad);
 }
@@ -2972,6 +2973,35 @@ details[open] > summary::before {
   line-height: 1;
 }
 
+.presence-exit {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-small);
+}
+
+.presence-exit p {
+  margin: 0;
+}
+
+.presence-exit-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--line-strong);
+}
+
+.presence-exit-bar span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--warn);
+  transition: width 1s linear;
+}
+
 .presence-group + .presence-group {
   margin-top: 24px;
 }
@@ -2994,11 +3024,13 @@ details[open] > summary::before {
   font-size: 0.875rem;
 }
 
-#presence-settings-status[data-tone='warn'] {
+#presence-settings-status[data-tone='warn'],
+#feedback-status[data-tone='warn'] {
   color: var(--warn);
 }
 
 #presence-settings-status[data-tone='good'],
-#presence-action-status[data-tone='good'] {
+#presence-action-status[data-tone='good'],
+#feedback-status[data-tone='good'] {
   color: var(--good);
 }

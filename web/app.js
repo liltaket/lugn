@@ -102,6 +102,7 @@ let sessionRenewInProgress = false;
 let sessionRenewDone = null;
 let overview = null;
 let overviewStale = false;
+let overviewReceivedAt = 0;
 let lastOverviewAt = 0;
 let overviewInstanceId;
 let overviewInstanceGeneration = 0;
@@ -1058,6 +1059,7 @@ function acceptOverview(next) {
     : overviewDeliveryRevision;
   overview = next;
   overviewStale = false;
+  overviewReceivedAt = Date.now();
   lastOverviewAt = Date.now();
   return true;
 }
@@ -1230,11 +1232,33 @@ async function invokeCapability(capability, input, actionKey) {
   }
 }
 
+// The sensor has reported the room empty and Lugn is deliberately waiting
+// before it acts. The countdown runs on the server's clock as of this overview
+// plus the time since it arrived, so a phone with a wrong clock stays right.
+function exitPendingStatus() {
+  // Held whenever it is set, also after an unknown report: the engine clears it
+  // on every presence report, so it never outlives the wait.
+  const pending = overview?.state?.presence?.exitPending;
+  if (!pending) return null;
+  const serverNow =
+    (overview.generatedAt ?? Date.now()) + (Date.now() - overviewReceivedAt);
+  return {
+    remainingMs: Math.max(0, pending.until - serverNow),
+    totalMs: Math.max(1, pending.until - pending.startedAt),
+  };
+}
+
+function exitCountdownText(status) {
+  const seconds = Math.ceil(status.remainingMs / 1000);
+  return seconds > 0 ? `om ${seconds} s` : 'nu';
+}
+
 // Read-only handle for presence.js, which owns the Närvaro page.
 window.lugnPanel = {
   csrfToken: () => csrfToken,
   overview: () => overview,
   refresh: () => refreshOverview(),
+  exitPending: exitPendingStatus,
 };
 
 function render() {
@@ -1293,15 +1317,21 @@ function restoreFocus(focusedKey, focusedValue) {
 
 function renderRoomStatus(data) {
   const presence = data.state.presence ?? {};
-  const tone = presenceTone(presence.state);
+  const exiting = exitPendingStatus();
+  const tone = exiting ? 'warn' : presenceTone(presence.state);
   roomPresence.dataset.tone = tone;
   const presenceLabels = {
     occupied: 'Någon i rummet',
     confirmed_empty: 'Rummet är tomt',
     unknown: 'Närvaro okänd',
   };
-  presenceTitle.textContent = `${overviewStale ? 'Senast rapporterat: ' : ''}${presenceLabels[presence.state] ?? 'Närvaro okänd'}`;
-  if (presence.state === 'occupied' && Number.isInteger(presence.personCount)) {
+  presenceTitle.textContent = `${overviewStale ? 'Senast rapporterat: ' : ''}${exiting ? 'Rummet verkar tomt' : (presenceLabels[presence.state] ?? 'Närvaro okänd')}`;
+  if (exiting) {
+    presenceDetail.textContent = `Lamporna släcks ${exitCountdownText(exiting)}. Kommer någon tillbaka avbryts det.`;
+  } else if (
+    presence.state === 'occupied' &&
+    Number.isInteger(presence.personCount)
+  ) {
     const count = presence.personCount;
     presenceDetail.textContent = `${count} ${count === 1 ? 'person' : 'personer'} registrerade`;
   } else if (presence.state === 'confirmed_empty') {
@@ -3084,7 +3114,9 @@ function renderSettingsIndex(data) {
     intelligens:
       data.intelligence?.settings?.optical?.enabled === true ? 'På' : 'Av',
     kameror: data.cameraDashboard?.settings?.enabled ? 'På' : 'Av',
-    narvaro: presenceLabels[data.state?.presence?.state] ?? 'Okänt',
+    narvaro: exitPendingStatus()
+      ? 'Släcker snart'
+      : (presenceLabels[data.state?.presence?.state] ?? 'Okänt'),
     datorer: String(Object.keys(data.state?.computer?.devices ?? {}).length),
     anslutningar: healthChip.textContent,
   };
@@ -3287,6 +3319,12 @@ function initializeAmbience() {
     .catch(() => {});
   renderHeroClock();
   window.setInterval(renderHeroClock, 15000);
+  // Counts the exit grace down; nothing else needs a one-second render.
+  window.setInterval(() => {
+    if (!overview || !exitPendingStatus()) return;
+    renderRoomStatus(overview);
+    document.dispatchEvent(new CustomEvent('lugn:exit-tick'));
+  }, 1000);
   // The image is decoration; the panel must start without it.
   try {
     initializeSky();

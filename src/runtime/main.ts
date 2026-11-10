@@ -29,6 +29,9 @@ import {
   type HomeAssistantConnection,
 } from '../adapters/home-assistant-websocket.js';
 import { PresenceEventIngress } from '../adapters/presence-event-ingress.js';
+import { ChimePlayer } from '../adapters/chime-player.js';
+import { PresenceFeedback } from '../application/presence-feedback.js';
+import { PresenceFeedbackSettingsStore } from './presence-feedback-settings-store.js';
 import {
   Stl27lMqttPresenceAdapter,
   type Stl27lPresenceMqttSubscriber,
@@ -320,7 +323,40 @@ export async function startRuntime(
   const presenceSensorStream = presenceControl
     ? new Stl27lSensorStream(presenceControl.streamUrl)
     : undefined;
+  const presenceIngress = new PresenceEventIngress((event) =>
+    engine.handleEvent(event),
+  );
+  const presenceFeedbackStore = new PresenceFeedbackSettingsStore(
+    `${lightingIntentPath}.presence-feedback.json`,
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  const savedPresenceFeedback = await presenceFeedbackStore.load();
+  const presenceFeedback = new PresenceFeedback({
+    clock: systemClock,
+    forward: (event) => {
+      const rejected = () =>
+        console.warn('[lugn] rejected normalized sensor event');
+      // A held exit is forwarded from a timer, where a throw would be uncaught.
+      try {
+        void presenceIngress.accept(event).catch(rejected);
+      } catch {
+        rejected();
+      }
+    },
+    save: (settings) => presenceFeedbackStore.save(settings),
+    onExitPending: (pending) => engine.setPresenceExitPending(pending),
+    chime: new ChimePlayer({
+      ...(config.presenceFeedback?.audioDevice === undefined
+        ? {}
+        : { audioDevice: config.presenceFeedback.audioDevice }),
+      onWarning: (message) => console.warn(`[lugn] ${message}`),
+    }),
+    ...(savedPresenceFeedback === undefined
+      ? {}
+      : { initial: savedPresenceFeedback }),
+  });
   const capabilities = new CapabilityRegistry(engine, {
+    presenceFeedback,
     ...(presenceControl === undefined
       ? {}
       : { presenceCountAdapter: presenceControl }),
@@ -602,16 +638,9 @@ export async function startRuntime(
       ((subscriberConfig, onError) =>
         new MqttJsSubscriber(subscriberConfig, onError))
     )(mqttConfig, () => console.warn('[lugn] MQTT operation failed'));
-    const ingress = new PresenceEventIngress((event) =>
-      engine.handleEvent(event),
-    );
     sensorAdapter = new Stl27lMqttPresenceAdapter(
       mqttSubscriber satisfies Stl27lPresenceMqttSubscriber,
-      (event) => {
-        void ingress.accept(event).catch(() => {
-          console.warn('[lugn] rejected normalized sensor event');
-        });
-      },
+      (event) => presenceFeedback.accept(event),
       {
         baseTopic: config.mqtt.baseTopic,
         maxAgeMs: config.mqtt.maxAgeMs,
@@ -797,6 +826,7 @@ export async function startRuntime(
     await http.stop();
     presenceSensorStream?.close();
     sensorAdapter?.stop();
+    presenceFeedback.dispose();
     for (const adapter of playbackAdapters.values()) adapter.stop();
     for (const adapter of computerAdapters) adapter.stop();
     unsubscribeMqttStatus?.();
@@ -828,6 +858,7 @@ export async function startRuntime(
       await displayServer?.stop();
       await http.stop();
       sensorAdapter?.stop();
+      presenceFeedback.dispose();
       for (const adapter of playbackAdapters.values()) adapter.stop();
       for (const adapter of computerAdapters) adapter.stop();
       unsubscribeMqttStatus?.();
