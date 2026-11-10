@@ -1236,9 +1236,10 @@ async function invokeCapability(capability, input, actionKey) {
 // before it acts. The countdown runs on the server's clock as of this overview
 // plus the time since it arrived, so a phone with a wrong clock stays right.
 function exitPendingStatus() {
-  const presence = overview?.state?.presence;
-  const pending = presence?.exitPending;
-  if (presence?.state !== 'occupied' || !pending) return null;
+  // Held whenever it is set, also after an unknown report: the engine clears it
+  // on every presence report, so it never outlives the wait.
+  const pending = overview?.state?.presence?.exitPending;
+  if (!pending) return null;
   const serverNow =
     (overview.generatedAt ?? Date.now()) + (Date.now() - overviewReceivedAt);
   return {

@@ -661,6 +661,8 @@ function fieldError(field, value) {
 
 function onFieldInput(field, input) {
   draft[field.key] = readInput(field, input);
+  if (el('presence-settings-status').dataset.tone === 'bad')
+    setSettingsStatus('');
   resetConfirmation();
   updateFormControls();
 }
@@ -683,9 +685,12 @@ function updateFormControls() {
   el('presence-save').disabled = !dirty || busy;
   el('presence-discard').disabled = !dirty || busy;
   const status = el('presence-settings-status');
-  if (dirty) setSettingsStatus('Du har osparade ändringar.', 'warn');
-  // Only the unsaved-changes notice is cleared here; a result message stays.
-  else if (status.dataset.tone === 'warn') setSettingsStatus('');
+  // A failure message stays until the person edits again; only the
+  // unsaved-changes notice is replaced or cleared here.
+  if (dirty) {
+    if (status.dataset.tone !== 'bad')
+      setSettingsStatus('Du har osparade ändringar.', 'warn');
+  } else if (status.dataset.tone === 'warn') setSettingsStatus('');
 }
 
 function setSettingsStatus(text, tone = 'neutral') {
@@ -796,18 +801,28 @@ function feedbackStatus(text, tone = 'neutral') {
   el('feedback-status').dataset.tone = tone;
 }
 
-function readFeedback() {
-  const grace = Number(el(FEEDBACK_IDS.grace).value);
+// One shape, one key order, so the form and the server's copy compare equal.
+function feedbackSettings(grace, chime) {
   return {
     exitGraceSeconds: grace,
     chime: {
-      enabled: el(FEEDBACK_IDS.enabled).checked,
-      entry: el(FEEDBACK_IDS.entry).checked,
-      exit: el(FEEDBACK_IDS.exit).checked,
-      volume: Number(el(FEEDBACK_IDS.volume).value) / 100,
-      style: el(FEEDBACK_IDS.style).value,
+      enabled: chime.enabled,
+      volume: chime.volume,
+      style: chime.style,
+      entry: chime.entry,
+      exit: chime.exit,
     },
   };
+}
+
+function readFeedback() {
+  return feedbackSettings(Number(el(FEEDBACK_IDS.grace).value), {
+    enabled: el(FEEDBACK_IDS.enabled).checked,
+    entry: el(FEEDBACK_IDS.entry).checked,
+    exit: el(FEEDBACK_IDS.exit).checked,
+    volume: Number(el(FEEDBACK_IDS.volume).value) / 100,
+    style: el(FEEDBACK_IDS.style).value,
+  });
 }
 
 function writeFeedback(settings) {
@@ -840,12 +855,15 @@ function updateFeedbackControls() {
   el('feedback-test-exit').disabled = feedbackBusy;
   el('feedback-volume-value').textContent = el(FEEDBACK_IDS.volume).value;
   const status = el('feedback-status');
-  if (dirty) feedbackStatus('Du har osparade ändringar.', 'warn');
-  else if (status.dataset.tone === 'warn') feedbackStatus('');
+  // A failure message stays until the person edits again.
+  if (dirty) {
+    if (status.dataset.tone !== 'bad')
+      feedbackStatus('Du har osparade ändringar.', 'warn');
+  } else if (status.dataset.tone === 'warn') feedbackStatus('');
 }
 
 function applyFeedback(settings) {
-  feedbackSaved = settings;
+  feedbackSaved = feedbackSettings(settings.exitGraceSeconds, settings.chime);
   writeFeedback(settings);
   updateFeedbackControls();
 }
@@ -961,8 +979,12 @@ if (panel && section) {
     setSettingsStatus('Ändringarna är borttagna.');
   });
   const feedbackForm = el('feedback-form');
-  feedbackForm.addEventListener('input', updateFeedbackControls);
-  feedbackForm.addEventListener('change', updateFeedbackControls);
+  const edited = () => {
+    if (el('feedback-status').dataset.tone === 'bad') feedbackStatus('');
+    updateFeedbackControls();
+  };
+  feedbackForm.addEventListener('input', edited);
+  feedbackForm.addEventListener('change', edited);
   feedbackForm.addEventListener('submit', (event) => {
     event.preventDefault();
     void saveFeedback();

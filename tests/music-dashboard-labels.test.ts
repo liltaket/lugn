@@ -320,11 +320,18 @@ describe('web music observation labels', () => {
       vi.advanceTimersByTime(20_000);
       runInContext('renderRoomStatus(overview)', ui.context);
       expect(ui.get('presenceDetail').textContent).toContain('släcks nu');
-      // Without a wait, or once the room is no longer occupied, nothing changes.
+      // A fresh wait after an unknown report is just as real, and just as visible.
       runInContext(
-        'delete overview.state.presence.exitPending; renderRoomStatus(overview)',
+        "overview.state.presence.state = 'unknown'; overview.state.presence.exitPending = { startedAt: 5_000_000, until: 5_020_000 }; renderRoomStatus(overview)",
         ui.context,
       );
+      expect(ui.get('presenceTitle').textContent).toBe('Rummet verkar tomt');
+      runInContext(
+        "overview.state.presence.state = 'occupied'; delete overview.state.presence.exitPending",
+        ui.context,
+      );
+      // Without a wait, nothing changes.
+      runInContext('renderRoomStatus(overview)', ui.context);
       expect(ui.get('presenceTitle').textContent).toBe('Någon i rummet');
       expect(ui.get('roomPresence').dataset['tone']).toBe('good');
     } finally {

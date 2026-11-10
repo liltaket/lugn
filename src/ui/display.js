@@ -1651,16 +1651,16 @@ function renderEnvironment(environment) {
 
 function renderRoomPresence(state) {
   const presence = state?.presence;
+  if (presence?.exitPending) {
+    setText(refs.roomPresence, 'Rummet verkar tomt · släcker snart');
+    return;
+  }
   if (presence?.state === 'confirmed_empty') {
     setText(refs.roomPresence, 'Rummet är tomt');
     return;
   }
   if (presence?.state !== 'occupied') {
     setText(refs.roomPresence, 'Närvaro okänd');
-    return;
-  }
-  if (presence.exitPending) {
-    setText(refs.roomPresence, 'Rummet verkar tomt · släcker snart');
     return;
   }
   const count = presence.personCount;
