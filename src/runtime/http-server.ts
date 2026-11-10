@@ -1046,7 +1046,7 @@ export class LugnHttpServer {
     const write = (message: SensorStreamMessage): void => {
       if (response.destroyed) return;
       if (expired()) {
-        response.end();
+        response.destroy();
         return;
       }
       if (message.type === 'frame' && response.writableNeedDrain) return;
@@ -1054,7 +1054,7 @@ export class LugnHttpServer {
     };
     const unsubscribe = stream.subscribe(write);
     const heartbeat = setInterval(() => {
-      if (expired()) response.end();
+      if (expired()) response.destroy();
       else response.write(': keep-alive\n\n');
     }, 15_000);
     response.once('close', () => {

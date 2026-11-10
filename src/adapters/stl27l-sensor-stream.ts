@@ -4,6 +4,8 @@ const MAX_FRAME_CHARACTERS = 1_000_000;
 const MAX_POINTS = 5_000;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 10_000;
+// The sensor streams at least every 200 ms; silence means its scan loop stopped.
+const STALE_AFTER_MS = 5_000;
 
 const Scalar = z.union([z.number(), z.boolean(), z.string(), z.null()]);
 
@@ -99,6 +101,7 @@ export class Stl27lSensorStream {
   >();
   private socket: SocketHandlers | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private staleTimer: ReturnType<typeof setTimeout> | undefined;
   private failures = 0;
   private connected = false;
   private latestFrame: string | undefined;
@@ -156,22 +159,38 @@ export class Stl27lSensorStream {
       if (this.socket !== socket) return;
       this.failures = 0;
       this.setConnected(true);
+      this.watchForSilence();
     };
     socket.onmessage = (event) => {
       if (this.socket !== socket) return;
       const frame = parseFrame(event.data);
       if (!frame) return;
+      // The socket can stay open after the sensor's scan loop stops, so
+      // liveness is judged by frames, not by the connection alone.
+      this.setConnected(true);
+      this.watchForSilence();
       this.latestFrame = frame;
       this.emit({ type: 'frame', data: frame });
     };
     const lost = (): void => {
       if (this.socket !== socket) return;
+      if (this.staleTimer !== undefined) clearTimeout(this.staleTimer);
+      this.staleTimer = undefined;
       this.socket = undefined;
       this.setConnected(false);
       this.scheduleReconnect();
     };
     socket.onclose = lost;
     socket.onerror = lost;
+  }
+
+  private watchForSilence(): void {
+    if (this.staleTimer !== undefined) clearTimeout(this.staleTimer);
+    this.staleTimer = setTimeout(() => {
+      this.staleTimer = undefined;
+      this.setConnected(false);
+    }, STALE_AFTER_MS);
+    this.staleTimer.unref();
   }
 
   private scheduleReconnect(): void {
@@ -189,6 +208,8 @@ export class Stl27lSensorStream {
   }
 
   private disconnect(): void {
+    if (this.staleTimer !== undefined) clearTimeout(this.staleTimer);
+    this.staleTimer = undefined;
     if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     const socket = this.socket;

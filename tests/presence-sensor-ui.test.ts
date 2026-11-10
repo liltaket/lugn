@@ -267,6 +267,32 @@ describe('sensor radar stream', () => {
     expect(sockets[0]!.closed).toBe(true);
   });
 
+  it('reports a frozen sensor as not live even while the socket stays open', () => {
+    const { sockets, factory } = fakeSockets();
+    const stream = new Stl27lSensorStream('ws://sensor/ws/stream', factory);
+    const messages: string[] = [];
+    stream.subscribe((message) =>
+      messages.push(
+        message.type === 'status' ? `status:${message.data}` : message.type,
+      ),
+    );
+    sockets[0]!.onopen?.();
+    sockets[0]!.onmessage?.({ data: JSON.stringify(frame) });
+    vi.advanceTimersByTime(4_999);
+    expect(messages.at(-1)).toBe('frame');
+    vi.advanceTimersByTime(1);
+    expect(messages.at(-1)).toBe('status:{"connected":false}');
+    expect(sockets[0]!.closed).toBe(false);
+
+    const late: string[] = [];
+    stream.subscribe((message) => late.push(message.type));
+    expect(late).toEqual(['status']);
+
+    sockets[0]!.onmessage?.({ data: JSON.stringify(frame) });
+    expect(messages.slice(-2)).toEqual(['status:{"connected":true}', 'frame']);
+    stream.close();
+  });
+
   it('replays the latest frame to a late viewer and reconnects with backoff', () => {
     const { sockets, factory } = fakeSockets();
     const stream = new Stl27lSensorStream('ws://sensor/ws/stream', factory);

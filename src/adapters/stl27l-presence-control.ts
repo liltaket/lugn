@@ -27,7 +27,11 @@ const CorrectionResponseSchema = z.object({
   count: z.literal(1),
 });
 
-const SensorConfigValueSchema = z.union([z.number(), z.boolean(), z.string()]);
+const SensorConfigValueSchema = z.union([
+  z.number(),
+  z.boolean(),
+  z.string().max(64),
+]);
 
 /** Editable sensor setting as described by the sensor's own `/api/v1/config`. */
 export const SensorConfigFieldSchema = z.object({
