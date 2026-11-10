@@ -23,6 +23,9 @@ class Element {
   dataset: Record<string, string> = {};
   children: Element[] = [];
   attributes = new Map<string, string>();
+  hasAttribute(name: string) {
+    return this.attributes.has(name);
+  }
   listeners = new Map<string, ((event: unknown) => unknown)[]>();
   focused = false;
   classes = new Set<string>();

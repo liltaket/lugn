@@ -1,0 +1,12 @@
+<<<<<<< SEARCH
+  dataset: Record<string, string> = {};
+  children: Element[] = [];
+  attributes = new Map<string, string>();
+=======
+  dataset: Record<string, string> = {};
+  children: Element[] = [];
+  attributes = new Map<string, string>();
+  hasAttribute(name: string) {
+    return this.attributes.has(name);
+  }
+>>>>>>> REPLACE

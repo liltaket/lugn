@@ -1,0 +1,11 @@
+<<<<<<< SEARCH
+  attributes = new Map<string, string>();
+=======
+  attributes = new Map<string, string>();
+  hasAttribute(name: string) {
+    return this.attributes.has(name);
+  }
+  removeAttribute(name: string) {
+    this.attributes.delete(name);
+  }
+>>>>>>> REPLACE

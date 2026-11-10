@@ -154,6 +154,12 @@ class ClerkAuthorizationError extends Error {}
 tokenHelp.textContent =
   'Använd installationens lokala HTTPS-adress eller en SSH-tunnel. Hämta åtkomsttoken på Lugn-värden enligt docs/OPERATIONS.md i ett privat terminalfönster och klistra in den bara här.';
 
+tokenInput.addEventListener('input', () => {
+  if (tokenInput.hasAttribute('aria-invalid')) {
+    tokenInput.removeAttribute('aria-invalid');
+  }
+});
+
 loginForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void createSession();
@@ -236,6 +242,11 @@ function setLiveStatus(label, tone = 'neutral') {
 function setLoginError(message) {
   loginError.textContent = message;
   loginError.hidden = !message;
+  if (message && tokenInput.type !== 'hidden') {
+    tokenInput.setAttribute('aria-invalid', 'true');
+  } else {
+    tokenInput.removeAttribute('aria-invalid');
+  }
 }
 
 function updateLoginPresentation() {

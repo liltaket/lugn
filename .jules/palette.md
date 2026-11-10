@@ -17,3 +17,8 @@
 
 **Learning:** During async operations, setting disabled properties on trigger buttons is not enough. Screen readers need `aria-busy="true"` on the element to announce the state correctly to the user.
 **Action:** Always add `aria-busy="true"` logic when applying `disabled` and loading text states to buttons that trigger asynchronous operations.
+
+## 2025-02-18 - Managing aria-invalid on input fields
+
+**Learning:** It is crucial for screen reader users that invalid input fields explicitly carry the `aria-invalid="true"` attribute when validation errors are present, avoiding false positives by explicitly tying this state to specific validation failures. Furthermore, this state must be cleared immediately as the user begins to correct their input, rather than waiting for a subsequent form submission attempt.
+**Action:** Set `aria-invalid="true"` on input fields specifically when rendering field-level error messages, and ensure an `input` event listener is attached to the field that proactively removes the `aria-invalid` attribute.
