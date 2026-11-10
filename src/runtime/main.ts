@@ -41,6 +41,7 @@ import {
 import { ComputerMqttAdapter } from '../adapters/computer-mqtt.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
 import { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
+import { Stl27lSensorStream } from '../adapters/stl27l-sensor-stream.js';
 import {
   resolveRoomDefaultSceneId,
   withRoomPresets,
@@ -312,14 +313,17 @@ export async function startRuntime(
     },
   );
   lightingIntentStore.start(engine);
+  const presenceControl =
+    config.presenceControl === undefined
+      ? undefined
+      : new Stl27lPresenceControlAdapter(config.presenceControl.baseUrl);
+  const presenceSensorStream = presenceControl
+    ? new Stl27lSensorStream(presenceControl.streamUrl)
+    : undefined;
   const capabilities = new CapabilityRegistry(engine, {
-    ...(config.presenceControl === undefined
+    ...(presenceControl === undefined
       ? {}
-      : {
-          presenceCountAdapter: new Stl27lPresenceControlAdapter(
-            config.presenceControl.baseUrl,
-          ),
-        }),
+      : { presenceCountAdapter: presenceControl }),
     ...(homeAssistantButton === undefined
       ? {}
       : { buttonAdapter: homeAssistantButton }),
@@ -671,6 +675,7 @@ export async function startRuntime(
     capabilities,
     ...(artwork ? { artworkProvider: artwork } : {}),
     ...(cameraService && cameraMedia ? { cameraService, cameraMedia } : {}),
+    ...(presenceSensorStream ? { presenceSensorStream } : {}),
     experience,
     musicObservationTrustProvider: musicObservationTrust,
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
@@ -790,6 +795,7 @@ export async function startRuntime(
     await castManager?.stop();
     await displayServer?.stop();
     await http.stop();
+    presenceSensorStream?.close();
     sensorAdapter?.stop();
     for (const adapter of playbackAdapters.values()) adapter.stop();
     for (const adapter of computerAdapters) adapter.stop();

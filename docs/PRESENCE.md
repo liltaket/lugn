@@ -68,6 +68,39 @@ dashboard therefore confirms the ledger acknowledgement while waiting for
 sensor status. An unavailable sensor or invalid acknowledgement reports a
 failure; the control stays hidden when no URL is configured.
 
+## Sensor page in the control panel
+
+With `presenceControl.baseUrl` set, **Inställningar → Närvaro** shows the
+sensor live and edits it. The page is Lugn's; the sensor service remains the
+owner of its configuration, ledger and perception.
+
+- **Live radar and status.** The browser opens `GET /ui/api/presence-sensor/stream`
+  (server-sent events). Lugn keeps one WebSocket to the sensor's `/ws/stream`
+  only while someone is watching, validates each frame, and drops fields the
+  page does not draw (the Home Assistant door entity and the serial port).
+  A slow viewer skips frames instead of queueing them. Leaving the page closes
+  the stream. The sensor's processing thread runs close to capacity on its Pi, so
+  Lugn asks for 5 frames/s and every 8th point (`?max_fps=5&point_step=8`),
+  about a tenth of the overhead of the sensor's own page; a sensor that predates
+  these options ignores them and streams at full rate.
+- **Settings.** The form is built from the sensor's `GET /api/v1/config`
+  (keys, ranges, units) and saved with `PUT /api/v1/config`, so ranges are
+  defined once, in the sensor. The sensor validates the whole request before
+  it applies anything and rejects unknown keys. Lugn sends only changed keys.
+- **Recalibration.** Changing geometry or motion settings makes the sensor
+  learn its background again; the page asks for confirmation first, and while
+  it relearns the sensor's quality is not `CERTAIN`, which Lugn already maps
+  to `unknown` rather than empty.
+- **Count correction.** −1, +1 and Nollställ write the sensor's ledger through
+  `/api/manual`. As with "Sätt till 1 person", Lugn's own presence state
+  still follows MQTT.
+
+These actions are typed capabilities (`presence.getSensorConfig`,
+`presence.updateSensorConfig`, `presence.recalibrate`, `presence.setCount`) and
+use the panel's session, same-origin and CSRF checks. They are not exposed on
+the Hub dashboards. The prelight and confirmed-occupancy path stays on MQTT
+and does not depend on this page.
+
 ## STL27L role
 
 The STL27L path may provide:

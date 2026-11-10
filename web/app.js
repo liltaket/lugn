@@ -1230,6 +1230,13 @@ async function invokeCapability(capability, input, actionKey) {
   }
 }
 
+// Read-only handle for presence.js, which owns the Närvaro page.
+window.lugnPanel = {
+  csrfToken: () => csrfToken,
+  overview: () => overview,
+  refresh: () => refreshOverview(),
+};
+
 function render() {
   if (!overview) return;
   const focusedKey = document.activeElement?.dataset?.focusKey;
@@ -1255,6 +1262,7 @@ function render() {
   renderHeroStatus(overview);
   renderSettingsIndex(overview);
   renderUpdatedAt(overview.state?.updatedAt);
+  document.dispatchEvent(new CustomEvent('lugn:render'));
   actionStatus.textContent = actionMessage;
   actionStatus.dataset.tone = actionTone;
   restoreFocus(focusedKey, focusedValue);
@@ -3062,13 +3070,21 @@ function renderSettingsIndex(data) {
   const sections = {
     musikautomatik: 'music-settings-section',
     kameror: 'cameras-section',
+    narvaro: 'presence-section',
     datorer: 'computer-section',
+  };
+  const presenceSection = document.getElementById('presence-section');
+  if (presenceSection) presenceSection.hidden = !data.presenceSensorEnabled;
+  const presenceLabels = {
+    occupied: 'Upptaget',
+    confirmed_empty: 'Tomt',
   };
   const values = {
     musikautomatik: data.musicSettings?.enabled ? 'På' : 'Av',
     intelligens:
       data.intelligence?.settings?.optical?.enabled === true ? 'På' : 'Av',
     kameror: data.cameraDashboard?.settings?.enabled ? 'På' : 'Av',
+    narvaro: presenceLabels[data.state?.presence?.state] ?? 'Okänt',
     datorer: String(Object.keys(data.state?.computer?.devices ?? {}).length),
     anslutningar: healthChip.textContent,
   };
@@ -3335,6 +3351,7 @@ function initializeLugn2() {
     musikautomatik: 'Musikautomatik',
     intelligens: 'Intelligens',
     kameror: 'Kameror',
+    narvaro: 'Närvaro',
     datorer: 'Datorer',
     anslutningar: 'Anslutningar',
     system: 'System',
@@ -3345,6 +3362,7 @@ function initializeLugn2() {
     'musikautomatik',
     'intelligens',
     'kameror',
+    'narvaro',
     'datorer',
     'anslutningar',
     'system',

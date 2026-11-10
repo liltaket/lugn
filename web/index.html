@@ -51,6 +51,7 @@
     />
     <link rel="stylesheet" href="/ui/styles.css" />
     <script type="module" src="/ui/app.js"></script>
+    <script type="module" src="/ui/presence.js"></script>
   </head>
   <body>
     <!--
@@ -450,7 +451,7 @@
         <div class="system-alert" id="system-alert" role="status" hidden></div>
         <nav
           class="settings-index"
-          data-pages="installningar musikautomatik intelligens kameror datorer anslutningar system"
+          data-pages="installningar musikautomatik intelligens kameror narvaro datorer anslutningar system"
           aria-label="Inställningar"
         >
           <h2 class="settings-group-title">Rummet</h2>
@@ -533,6 +534,32 @@
           </ul>
           <h2 class="settings-group-title">Enheter</h2>
           <ul class="settings-group">
+            <li>
+              <a
+                class="settings-row"
+                href="#narvaro"
+                data-settings-page="narvaro"
+                ><span class="settings-row-icon" data-hue="blue"
+                  ><svg
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                    focusable="false"
+                  >
+                    <circle cx="12" cy="12" r="2" />
+                    <path
+                      d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"
+                    /></svg></span
+                ><span class="settings-row-text"
+                  ><span class="settings-row-label">Närvaro</span
+                  ><span class="settings-row-detail"
+                    >Lidarn vid dörren: se och styr</span
+                  ></span
+                ><span
+                  class="settings-row-value"
+                  id="settings-value-narvaro"
+                ></span
+              ></a>
+            </li>
             <li>
               <a
                 class="settings-row"
@@ -959,6 +986,143 @@
             </div>
             <p id="settings-status" role="status" aria-live="polite"></p>
           </form>
+        </section>
+
+        <section
+          class="presence-section"
+          id="presence-section"
+          data-pages="narvaro"
+          aria-labelledby="presence-title"
+          hidden
+        >
+          <div class="section-heading">
+            <div>
+              <h2 id="presence-title">Närvaro</h2>
+              <p>
+                Lidarn vid dörren räknar passager och tänder ljuset före
+                inträdet. Radar och status är live. Ändrade inställningar gäller
+                först när du sparar.
+              </p>
+            </div>
+            <span class="state-chip" id="presence-link" data-tone="warn"
+              >Ansluter …</span
+            >
+          </div>
+          <div class="presence-layout">
+            <figure class="presence-radar">
+              <canvas
+                id="presence-radar"
+                width="640"
+                height="640"
+                role="img"
+                aria-label="Radarvy över dörröppningen"
+              ></canvas>
+              <figcaption class="field-help">
+                Sensorn sitter i mitten. Blå punkter är rörelse och gröna
+                markörer är spårade personer.
+              </figcaption>
+            </figure>
+            <div class="presence-side">
+              <dl class="presence-readings">
+                <div class="presence-count">
+                  <dt>Personer i rummet</dt>
+                  <dd id="presence-count">–</dd>
+                </div>
+                <div>
+                  <dt>Kvalitet</dt>
+                  <dd id="presence-quality">–</dd>
+                </div>
+                <div>
+                  <dt>Konfidens</dt>
+                  <dd id="presence-confidence">–</dd>
+                </div>
+                <div>
+                  <dt>Senaste riktning</dt>
+                  <dd id="presence-direction">–</dd>
+                </div>
+                <div>
+                  <dt>Förtändning</dt>
+                  <dd id="presence-preview">–</dd>
+                </div>
+                <div>
+                  <dt>Dörr</dt>
+                  <dd id="presence-door">–</dd>
+                </div>
+                <div>
+                  <dt>Lidar</dt>
+                  <dd id="presence-lidar">–</dd>
+                </div>
+              </dl>
+              <div class="button-row" role="group" aria-label="Rätta antal">
+                <button
+                  id="presence-minus"
+                  class="button button-quiet"
+                  type="button"
+                  disabled
+                >
+                  −1</button
+                ><button
+                  id="presence-plus"
+                  class="button button-quiet"
+                  type="button"
+                  disabled
+                >
+                  +1</button
+                ><button
+                  id="presence-zero"
+                  class="button button-quiet"
+                  type="button"
+                  disabled
+                >
+                  Nollställ
+                </button>
+              </div>
+              <p class="field-help">
+                Rättar sensorns räknare. Rummets status i Lugn följer sensorns
+                nästa rapport.
+              </p>
+              <button
+                id="presence-recalibrate"
+                class="button button-quiet"
+                type="button"
+                disabled
+              >
+                Kalibrera om bakgrund
+              </button>
+              <p
+                id="presence-action-status"
+                class="field-help"
+                role="status"
+              ></p>
+            </div>
+          </div>
+          <form id="presence-form" class="editor-surface" novalidate hidden>
+            <fieldset id="presence-fields">
+              <legend>Sensorinställningar</legend>
+              <div id="presence-groups"></div>
+              <div class="button-row">
+                <button
+                  id="presence-save"
+                  class="button button-primary"
+                  type="submit"
+                  disabled
+                >
+                  Spara</button
+                ><button
+                  id="presence-discard"
+                  class="button button-quiet"
+                  type="button"
+                  disabled
+                >
+                  Ångra ändringar
+                </button>
+              </div>
+              <p id="presence-settings-status" role="status"></p>
+            </fieldset>
+          </form>
+          <p id="presence-settings-unavailable" class="empty-note" hidden>
+            Sensorns inställningar kunde inte hämtas.
+          </p>
         </section>
 
         <section

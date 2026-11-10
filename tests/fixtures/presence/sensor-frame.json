@@ -1,0 +1,105 @@
+{
+  "timestamp": "2026-01-01T00:00:05.446620+00:00",
+  "scan_id": 54,
+  "metrics": {
+    "lidar_hz": 0.0,
+    "points_per_second": 0.0,
+    "total_scans": 0,
+    "crc_errors": 0
+  },
+  "state": {
+    "count": 0,
+    "quality": "CERTAIN",
+    "confidence": 1.0,
+    "last_direction": "none"
+  },
+  "preview_active": true,
+  "preview_info": {
+    "active": true,
+    "approaching_tracks": [
+      {
+        "track_id": 1,
+        "x": -0.15,
+        "y": 1.73,
+        "norm_y": -0.23,
+        "norm_vy": 1.46,
+        "distance_m": 0.23,
+        "speed_mps": 1.46,
+        "eta_seconds": 0.15
+      }
+    ],
+    "hold_seconds": 1.8
+  },
+  "door": {
+    "enabled": false,
+    "connected": false,
+    "entity_id": "",
+    "state": "unknown",
+    "blocking": false,
+    "last_changed": null,
+    "suppressed_episodes": 0,
+    "pending_episodes": 0,
+    "delayed_released": 0
+  },
+  "serial_port": null,
+  "points": [
+    [-0.3305, 1.9035, true],
+    [-0.3096, 1.8462, true],
+    [-0.2944, 1.8203, true],
+    [-0.281, 1.8032, true],
+    [-0.2682, 1.789, true],
+    [-0.2566, 1.7816, true],
+    [-0.2447, 1.7722, true],
+    [-0.2336, 1.7676, true],
+    [-0.2228, 1.764, true],
+    [-0.2124, 1.7633, true],
+    [-0.2018, 1.7615, true],
+    [-0.1919, 1.7646, true],
+    [0.0071, 3.948, false],
+    [0.03, 3.9579, false],
+    [0.0531, 3.9506, false],
+    [0.0759, 3.9503, false],
+    [0.0987, 3.9498, false],
+    [0.1216, 3.9511, false],
+    [0.1444, 3.9504, false],
+    [0.1672, 3.9495, false],
+    [0.1897, 3.9484, false],
+    [0.2123, 3.9443, false],
+    [0.2355, 3.95, false],
+    [0.259, 3.9595, false]
+  ],
+  "clusters": [{ "x": -0.1533, "y": 1.7251, "diameter": 0.194, "points": 35 }],
+  "tracks": [
+    {
+      "id": 1,
+      "state": "CONFIRMED",
+      "x": -0.1533,
+      "y": 1.7251,
+      "vx": 0.652,
+      "vy": -1.46,
+      "is_moving": true,
+      "is_static": false,
+      "trajectory": [
+        [-0.2109, 1.8541],
+        [-0.1533, 1.7251]
+      ]
+    }
+  ],
+  "config": {
+    "rotation_deg": 0.0,
+    "threshold_y": 1.5,
+    "threshold_margin": 0.17,
+    "corridor_x_min": -0.25,
+    "corridor_x_max": 0.35,
+    "inside_y_min": 1.67,
+    "inside_y_max": 4.5,
+    "outside_y_min": -3.5,
+    "outside_y_max": 1.33,
+    "invert_direction": true,
+    "box_filter_enabled": false,
+    "box_filter_x_min": 0.2,
+    "box_filter_x_max": 0.7,
+    "box_filter_y_min": 0.55,
+    "box_filter_y_max": 1.15
+  }
+}

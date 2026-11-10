@@ -1,6 +1,10 @@
 import type { CameraDashboardService } from '../application/camera-dashboard.js';
 import { CameraError, type CameraDashboardSnapshot } from '../core/cameras.js';
 import type { CameraMediaProvider } from './camera-media.js';
+import type {
+  SensorStreamMessage,
+  Stl27lSensorStream,
+} from '../adapters/stl27l-sensor-stream.js';
 import {
   MusicVolumeSettingsSchema,
   defaultMusicVolumeSettings,
@@ -81,6 +85,8 @@ export type LugnHttpServerOptions = {
   cameraService?: CameraDashboardService;
   cameraMedia?: CameraMediaProvider;
   artworkProvider?: ArtworkProvider;
+  /** Live radar relay; present only when the STL27L control URL is configured. */
+  presenceSensorStream?: Stl27lSensorStream;
   integrations: () => Record<string, string>;
   /** Trust in each player's observations, independent of subscription health. */
   musicObservationTrustProvider?: () => Record<string, boolean>;
@@ -249,6 +255,10 @@ export class LugnHttpServer {
       },
       '/ui/app.js': {
         name: 'app.js',
+        contentType: 'text/javascript; charset=utf-8',
+      },
+      '/ui/presence.js': {
+        name: 'presence.js',
         contentType: 'text/javascript; charset=utf-8',
       },
       '/ui/styles.css': {
@@ -685,6 +695,26 @@ export class LugnHttpServer {
       return true;
     }
     if (
+      request.method === 'GET' &&
+      pathname === '/ui/api/presence-sensor/stream'
+    ) {
+      const sessionId = this.getUiSessionId(request);
+      const stream = this.options.presenceSensorStream;
+      if (!sessionId) {
+        sendJson(response, 401, { error: 'unauthorized' });
+      } else if (!stream) {
+        sendJson(response, 404, { error: 'presence_sensor_unavailable' });
+      } else {
+        this.startPresenceSensorStream(
+          response,
+          sessionId,
+          session.expiresAt,
+          stream,
+        );
+      }
+      return true;
+    }
+    if (
       request.method === 'POST' &&
       (pathname === '/ui/api/music-settings' ||
         pathname === '/ui/api/music-settings/preview')
@@ -992,6 +1022,48 @@ export class LugnHttpServer {
     response.once('close', cleanup);
   }
 
+  /** Radar frames are lossy by design: a slow viewer skips frames instead of queueing them. */
+  private startPresenceSensorStream(
+    response: ServerResponse,
+    sessionId: string,
+    expiresAt: number,
+    stream: Stl27lSensorStream,
+  ): void {
+    if (this.uiEventStreams.size >= MAX_UI_EVENT_STREAMS) {
+      sendJson(response, 503, { error: 'too_many_event_streams' });
+      return;
+    }
+    response.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+      'x-content-type-options': 'nosniff',
+    });
+    this.uiEventStreams.set(response, sessionId);
+    const expired = (): boolean =>
+      Date.now() >= expiresAt || !this.uiSessions.has(sessionId);
+    const write = (message: SensorStreamMessage): void => {
+      if (response.destroyed) return;
+      if (expired()) {
+        response.destroy();
+        return;
+      }
+      if (message.type === 'frame' && response.writableNeedDrain) return;
+      response.write(`event: ${message.type}\ndata: ${message.data}\n\n`);
+    };
+    const unsubscribe = stream.subscribe(write);
+    const heartbeat = setInterval(() => {
+      if (expired()) response.destroy();
+      else response.write(': keep-alive\n\n');
+    }, 15_000);
+    response.once('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      this.uiEventStreams.delete(response);
+    });
+  }
+
   private closeUiEventStreams(sessionId: string): void {
     for (const [response, streamSessionId] of this.uiEventStreams) {
       if (streamSessionId === sessionId) response.destroy();
@@ -1018,6 +1090,7 @@ export class LugnHttpServer {
     musicSettings: MusicVolumeSettings;
     musicSettingsDefaults: MusicVolumeSettings;
     musicSettingsEnabled: boolean;
+    presenceSensorEnabled: boolean;
     musicVolumePolicies: ReturnType<
       LugnEngine['getMusicVolumePolicySnapshots']
     >;
@@ -1052,6 +1125,7 @@ export class LugnHttpServer {
       musicSettings: this.options.engine.getMusicVolumeSettings(),
       musicSettingsDefaults: structuredClone(defaultMusicVolumeSettings),
       musicSettingsEnabled: this.options.volumeSettingsStore !== undefined,
+      presenceSensorEnabled: this.options.presenceSensorStream !== undefined,
       musicVolumePolicies: this.options.engine.getMusicVolumePolicySnapshots(),
       scenes: [...this.options.engine.scenes.values()].map((scene) =>
         this.uiScene(scene),

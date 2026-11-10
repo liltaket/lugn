@@ -144,6 +144,12 @@ For a local STL27L sensor dashboard, optionally configure
 ledger via `/api/manual`; MQTT then supplies the resulting room state.
 The button reports success only after the sensor acknowledges count 1.
 
+The same URL also adds **Inställningar → Närvaro** to the control panel at
+`/ui/`: a live radar and status for the sensor, count correction, background
+recalibration and the sensor's settings (geometry, motion filter, passage
+deadtime, prelight mode). Lugn relays the sensor's data and edits; the sensor
+still owns its configuration. See [Presence](docs/PRESENCE.md#sensor-page-in-the-control-panel).
+
 Each Hub has a separate role and private path token. Lugn starts DashCast on
 configured Cast receivers, yields while another cast is active, and can restore
 its dashboard after the receiver is idle. DashCast control confirms that Lugn
