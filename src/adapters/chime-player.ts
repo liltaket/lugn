@@ -7,7 +7,7 @@ const SAMPLE_RATE = 44_100;
 const PLAYBACK_TIMEOUT_MS = 3_000;
 const WARNING_INTERVAL_MS = 5 * 60_000;
 /** The Pi's DAC needs a moment after the device opens; sound sent earlier is clipped. */
-const LEAD_IN_SECONDS = 0.04;
+const LEAD_IN_SECONDS = 0.02;
 const TAIL_SECONDS = 0.08;
 
 type Voice = {
@@ -66,18 +66,18 @@ const VOICES: Record<ChimeStyle, Voice> = {
   },
 };
 
+const masters = new Map<string, Float64Array>();
+
 /**
- * Renders a short UI blip in memory, so there is no audio asset to ship.
- * Notes are sines with a few overtones under a fast attack and an exponential
- * decay, mixed through a darkened echo. The loudest sample is scaled to a
- * fixed ceiling, so every style is equally loud at the same volume, and the
- * volume is squared so the quiet end of the slider has useful resolution.
+ * One voice rendered at unit peak. Volume only scales it, so it is rendered
+ * once per style and kind, ahead of time, and never when a sensor event is
+ * waiting. Notes are sines with a few overtones under a fast attack and an
+ * exponential decay, mixed through a darkened echo.
  */
-export function renderChime(
-  kind: ChimeKind,
-  volume: number,
-  style: ChimeStyle = 'glass',
-): Buffer {
+function renderMaster(kind: ChimeKind, style: ChimeStyle): Float64Array {
+  const key = `${style}:${kind}`;
+  const cached = masters.get(key);
+  if (cached) return cached;
   const voice = VOICES[style];
   const notes = voice.notes[kind];
   const lastDecay = voice.decaySeconds.at(-1) ?? 0.1;
@@ -87,18 +87,40 @@ export function renderChime(
   const lead = Math.round(LEAD_IN_SECONDS * SAMPLE_RATE);
   const total = lead + Math.round((bodySeconds + TAIL_SECONDS) * SAMPLE_RATE);
   const dry = new Float64Array(total);
+  const partials = voice.partials.length;
+  const value = new Float64Array(partials);
+  const next = new Float64Array(partials);
+  const coefficient = new Float64Array(partials);
   notes.forEach((frequency, note) => {
     const start = lead + Math.round(note * voice.noteGapSeconds * SAMPLE_RATE);
     const decay = voice.decaySeconds[note] ?? lastDecay;
+    // Each overtone is a recurrence, y[n+1] = 2cos(w)y[n] - y[n-1], so sin is
+    // evaluated once per overtone instead of once per sample. That is what
+    // keeps a render cheap on a Pi.
+    voice.partials.forEach(([ratio], partial) => {
+      const step = (2 * Math.PI * frequency * ratio) / SAMPLE_RATE;
+      coefficient[partial] = 2 * Math.cos(step);
+      value[partial] = 0;
+      next[partial] = Math.sin(step);
+    });
+    const rise = Math.exp(-1 / (voice.attackSeconds * SAMPLE_RATE));
+    const fall = Math.exp(-1 / (decay * SAMPLE_RATE));
+    let attack = 1;
+    let level = 1;
     for (let index = start; index < total; index += 1) {
-      const t = (index - start) / SAMPLE_RATE;
-      const envelope =
-        (1 - Math.exp(-t / voice.attackSeconds)) * Math.exp(-t / decay);
-      if (envelope < 1e-4 && t > decay) break;
-      let value = 0;
-      for (const [ratio, amplitude] of voice.partials)
-        value += amplitude * Math.sin(2 * Math.PI * frequency * ratio * t);
-      dry[index]! += value * envelope;
+      const envelope = (1 - attack) * level;
+      if (envelope < 1e-4 && (index - start) / SAMPLE_RATE > decay) break;
+      let sum = 0;
+      for (let partial = 0; partial < partials; partial += 1) {
+        sum += voice.partials[partial]![1] * value[partial]!;
+        const following =
+          coefficient[partial]! * next[partial]! - value[partial]!;
+        value[partial] = next[partial]!;
+        next[partial] = following;
+      }
+      dry[index]! += sum * envelope;
+      attack *= rise;
+      level *= fall;
     }
   });
   const mixed = Float64Array.from(dry);
@@ -115,8 +137,37 @@ export function renderChime(
   const fade = Math.round(0.02 * SAMPLE_RATE);
   for (let index = 0; index < fade; index += 1)
     mixed[total - 1 - index]! *= index / fade;
-  const peak = Math.max(1e-9, ...mixed.map(Math.abs));
-  const scale = (0.6 * volume * volume * 32_767) / peak;
+  let peak = 1e-9;
+  for (const sample of mixed) peak = Math.max(peak, Math.abs(sample));
+  for (let index = 0; index < total; index += 1) mixed[index]! /= peak;
+  masters.set(key, mixed);
+  return mixed;
+}
+
+/** Renders every voice now, so a sensor event never has to. */
+export function warmChimes(): void {
+  for (const style of Object.keys(VOICES) as ChimeStyle[])
+    for (const kind of ['entry', 'exit'] as const) {
+      renderMaster(kind, style);
+      // Also warms the code that turns a voice into a WAV at some volume.
+      renderChime(kind, 0.3, style);
+    }
+}
+
+/**
+ * Renders a short UI blip in memory, so there is no audio asset to ship. The
+ * loudest sample is scaled to a fixed ceiling, so every style is equally loud
+ * at the same volume, and the volume is squared so the quiet end of the slider
+ * has useful resolution.
+ */
+export function renderChime(
+  kind: ChimeKind,
+  volume: number,
+  style: ChimeStyle = 'glass',
+): Buffer {
+  const mixed = renderMaster(kind, style);
+  const total = mixed.length;
+  const scale = 0.6 * volume * volume * 32_767;
   const wav = Buffer.alloc(44 + total * 2);
   wav.write('RIFF', 0);
   wav.writeUInt32LE(36 + total * 2, 4);
@@ -130,8 +181,10 @@ export function renderChime(
   wav.writeUInt16LE(16, 34);
   wav.write('data', 36);
   wav.writeUInt32LE(total * 2, 40);
+  // Buffer.alloc is not pooled, so the data starts on an even offset.
+  const pcm = new Int16Array(wav.buffer, wav.byteOffset + 44, total);
   for (let index = 0; index < total; index += 1)
-    wav.writeInt16LE(Math.round(mixed[index]! * scale), 44 + index * 2);
+    pcm[index] = Math.round(mixed[index]! * scale);
   return wav;
 }
 
