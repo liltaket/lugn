@@ -79,7 +79,10 @@ owner of its configuration, ledger and perception.
   only while someone is watching, validates each frame, and drops fields the
   page does not draw (the Home Assistant door entity and the serial port).
   A slow viewer skips frames instead of queueing them. Leaving the page closes
-  the stream.
+  the stream. The sensor's processing thread runs close to capacity on its Pi, so
+  Lugn asks for 5 frames/s and every 8th point (`?max_fps=5&point_step=8`),
+  about a tenth of the overhead of the sensor's own page; a sensor that predates
+  these options ignores them and streams at full rate.
 - **Settings.** The form is built from the sensor's `GET /api/v1/config`
   (keys, ranges, units) and saved with `PUT /api/v1/config`, so ranges are
   defined once, in the sensor. The sensor validates the whole request before

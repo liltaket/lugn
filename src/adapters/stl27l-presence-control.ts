@@ -84,10 +84,17 @@ export class Stl27lPresenceControlAdapter {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
   }
 
-  /** WebSocket address of the sensor's live radar stream. */
+  /**
+   * WebSocket address of the sensor's live radar stream. The sensor's single
+   * processing thread already runs near capacity on its Pi, so the control
+   * panel asks for a quieter stream (5 frames/s, every 8th point) than the
+   * sensor's own page. A sensor that predates these options ignores them.
+   */
   get streamUrl(): string {
     const url = new URL(`${this.baseUrl}/ws/stream`);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.searchParams.set('max_fps', '5');
+    url.searchParams.set('point_step', '8');
     return url.toString();
   }
 

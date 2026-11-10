@@ -103,7 +103,9 @@ describe('sensor control adapter and capabilities', () => {
     expect(JSON.parse(init?.body as string)).toEqual({
       changes: { passage_deadtime_ms: 350 },
     });
-    expect(adapter.streamUrl).toBe('ws://sensor.local:8080/ws/stream');
+    expect(adapter.streamUrl).toBe(
+      'ws://sensor.local:8080/ws/stream?max_fps=5&point_step=8',
+    );
   });
 
   it('maps a sensor rejection to an input error and other failures to errors', async () => {
