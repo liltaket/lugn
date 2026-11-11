@@ -532,21 +532,21 @@ export class LugnEngine {
       (preserveRestoredDefinition || restoredIntent.currentScene === null)
         ? (restoredIntent.appliedScene ??
           (restoredIntent.currentScene
-            ? {
-                id: restoredIntent.currentScene,
-                name: this.scenes.get(restoredIntent.currentScene)!.name,
-                lighting: Object.fromEntries(
-                  Object.entries(restoredIntent.devices)
-                    .filter(
-                      ([, device]) =>
-                        Object.keys(device.baselineDesired).length > 0,
-                    )
-                    .map(([target, device]) => [
-                      target,
-                      { ...device.baselineDesired },
-                    ]),
-                ),
-              }
+            ? (() => {
+                const lighting: Record<string, LightingValues> = {};
+                for (const [target, device] of Object.entries(
+                  restoredIntent.devices,
+                )) {
+                  if (Object.keys(device.baselineDesired).length > 0) {
+                    lighting[target] = { ...device.baselineDesired };
+                  }
+                }
+                return {
+                  id: restoredIntent.currentScene,
+                  name: this.scenes.get(restoredIntent.currentScene)!.name,
+                  lighting,
+                };
+              })()
             : undefined))
         : undefined;
     const restoredContinuityExpired =
@@ -3224,15 +3224,18 @@ export class LugnEngine {
         }
       }
     }
+    const lighting: Record<string, LightingValues> = {};
+    for (const [target, device] of Object.entries(
+      this.state.lighting.devices,
+    )) {
+      if (Object.keys(device.baselineDesired).length > 0) {
+        lighting[target] = { ...device.baselineDesired };
+      }
+    }
+
     this.activeSceneDefinition = {
       ...scene,
-      lighting: Object.fromEntries(
-        Object.entries(this.state.lighting.devices)
-          .filter(
-            ([, device]) => Object.keys(device.baselineDesired).length > 0,
-          )
-          .map(([target, device]) => [target, { ...device.baselineDesired }]),
-      ),
+      lighting,
     };
     this.addDiagnostic('scene.selected', `Scene ${scene.name} selected`, {
       scene: scene.id,
