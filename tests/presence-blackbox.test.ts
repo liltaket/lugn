@@ -164,6 +164,32 @@ it('expires stale data on capture even when the sensor stops sending', async () 
   expect((await captures(recorder))[0]).toHaveLength(1);
 });
 
+it('flush waits for an accepted correction awaiting its sensor response and disk write', async () => {
+  const { recorder, directory } = await setup();
+  let respond!: (response: Response) => void;
+  const response = new Promise<Response>((resolve) => {
+    respond = resolve;
+  });
+  const adapter = new Stl27lPresenceControlAdapter(
+    'http://sensor.local',
+    () => response,
+    () => recorder.beginCapture(),
+  );
+  const correction = adapter.setCountOne();
+  let flushed = false;
+  const flushing = recorder.flush().then(() => {
+    flushed = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(flushed).toBe(false);
+  expect(await readdir(directory)).toEqual([]);
+  respond(Response.json({ ok: true, count: 1 }));
+  await correction;
+  await flushing;
+  expect(flushed).toBe(true);
+  expect((await captures(recorder))[0]![0].acknowledged).toBe(true);
+});
+
 it('rotates only owned captures by bytes and leaves unrelated files intact', async () => {
   const { recorder, clock } = await setup();
   recorder.beginCapture()(true);

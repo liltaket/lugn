@@ -31,6 +31,7 @@ export class PresenceBlackbox {
   private readonly startedAt: number;
   private pending = 0;
   private writes: Promise<void> = Promise.resolve();
+  private readonly captures = new Set<Promise<void>>();
 
   constructor(
     readonly directory: string,
@@ -94,6 +95,11 @@ export class PresenceBlackbox {
       stream: { requestedMaxFps: 5, requestedPointStep: 8 },
     };
     this.pending += 1;
+    let complete!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    this.captures.add(completion);
     let finished = false;
     return (acknowledged) => {
       if (finished) return;
@@ -105,6 +111,8 @@ export class PresenceBlackbox {
         })
         .finally(() => {
           this.pending -= 1;
+          this.captures.delete(completion);
+          complete();
         });
     };
   }
@@ -168,8 +176,8 @@ export class PresenceBlackbox {
     }
   }
 
-  /** The runtime first drains HTTP requests, so all outcome callbacks have run. */
+  /** Include accepted corrections still waiting for their bounded sensor POST. */
   async flush(): Promise<void> {
-    await this.writes;
+    await Promise.all(this.captures);
   }
 }
