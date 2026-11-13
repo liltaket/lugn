@@ -16,6 +16,7 @@ const Scalar = z.union([z.number(), z.boolean(), z.string(), z.null()]);
  */
 export const SensorFrameSchema = z.object({
   timestamp: z.string().max(64),
+  scan_id: z.number().int().optional(),
   metrics: z.object({
     lidar_hz: z.number(),
     points_per_second: z.number(),
@@ -92,8 +93,8 @@ export type SensorSocketFactory = (url: string) => SocketHandlers;
 
 /**
  * Relays the sensor's radar WebSocket to any number of local viewers over one
- * upstream connection. The connection exists only while someone is watching,
- * so an idle control panel adds no load to the sensor host.
+ * upstream connection. The runtime's blackbox is also a subscriber, keeping
+ * the retrospective window warm without opening a second upstream connection.
  */
 export class Stl27lSensorStream {
   private readonly listeners = new Set<
@@ -178,6 +179,13 @@ export class Stl27lSensorStream {
       this.staleTimer = undefined;
       this.socket = undefined;
       this.setConnected(false);
+      // An error need not be followed by close: release the old upstream so
+      // reconnects cannot leave additional sensor streams running.
+      try {
+        socket.close();
+      } catch {
+        /* Already closed. */
+      }
       this.scheduleReconnect();
     };
     socket.onclose = lost;

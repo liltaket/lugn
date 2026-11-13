@@ -6,3 +6,4 @@ config.json
 lugn.env
 dist-bench/
 bench/results/
+*.presence-captures/
