@@ -1,10 +1,13 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readdir, readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { startRuntime } from '../src/runtime/main.js';
+import type { SensorSocketFactory } from '../src/adapters/stl27l-sensor-stream.js';
 
 it('loads existing presenceControl config and composes acknowledged correction without changing sensor truth or music intent', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lugn-presence-control-'));
@@ -20,6 +23,8 @@ it('loads existing presenceControl config and composes acknowledged correction w
   });
   const portFinder = createServer();
   let runtime: Awaited<ReturnType<typeof startRuntime>> | undefined;
+  let socket: ReturnType<SensorSocketFactory> | undefined;
+  const closeSocket = vi.fn();
   try {
     await new Promise<void>((resolve) =>
       sensor.listen(0, '127.0.0.1', resolve),
@@ -54,6 +59,25 @@ it('loads existing presenceControl config and composes acknowledged correction w
         close: () => {},
       }),
       lightingIntentPath: join(directory, 'intent.json'),
+      createSensorSocket: () => {
+        socket = {
+          onopen: null,
+          onclose: null,
+          onerror: null,
+          onmessage: null,
+          close: closeSocket,
+        };
+        return socket;
+      },
+    });
+    // No radar browser is open: the recorder must already be subscribed.
+    expect(socket).toBeDefined();
+    socket!.onopen?.();
+    socket!.onmessage?.({
+      data: readFileSync(
+        new URL('./fixtures/presence/sensor-frame.json', import.meta.url),
+        'utf8',
+      ),
     });
     const human = {
       actor: { type: 'user' as const },
@@ -85,6 +109,22 @@ it('loads existing presenceControl config and composes acknowledged correction w
     expect(bodies[0]).toMatchObject({ count: 1 });
     expect(runtime.engine.state.presence).toEqual(presence);
     expect(runtime.engine.getMusicIntentSnapshot()).toEqual(musicIntent);
+    await runtime.stop();
+    runtime = undefined;
+    expect(closeSocket).toHaveBeenCalledOnce();
+    const capturesPath = join(directory, 'intent.json.presence-captures');
+    const files = await readdir(capturesPath);
+    expect(files).toHaveLength(1);
+    const records = gunzipSync(await readFile(join(capturesPath, files[0]!)))
+      .toString('utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(records[0]).toMatchObject({ acknowledged: true, frameCount: 1 });
+    expect(records.find((record) => record.type === 'frame').data.scan_id).toBe(
+      54,
+    );
+    expect(JSON.stringify(records)).not.toContain('serial_port');
   } finally {
     await runtime?.stop();
     await new Promise<void>((resolve) => sensor.close(() => resolve()));

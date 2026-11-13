@@ -44,7 +44,11 @@ import {
 import { ComputerMqttAdapter } from '../adapters/computer-mqtt.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
 import { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
-import { Stl27lSensorStream } from '../adapters/stl27l-sensor-stream.js';
+import {
+  Stl27lSensorStream,
+  type SensorSocketFactory,
+} from '../adapters/stl27l-sensor-stream.js';
+import { PresenceBlackbox } from './presence-blackbox.js';
 import {
   resolveRoomDefaultSceneId,
   withRoomPresets,
@@ -86,6 +90,7 @@ export type LugnRuntimeDependencies = {
   ) => RuntimeMqttSubscriber;
   createHomeAssistantSocket?: HomeAssistantSocketFactory;
   createDashCastAdapter?: () => DashCastAdapter;
+  createSensorSocket?: SensorSocketFactory;
 };
 
 /** Starts the local Lugn host and its configured Home Assistant/MQTT links. */
@@ -316,12 +321,22 @@ export async function startRuntime(
     },
   );
   lightingIntentStore.start(engine);
+  const presenceBlackbox = config.presenceControl
+    ? new PresenceBlackbox(`${lightingIntentPath}.presence-captures`)
+    : undefined;
   const presenceControl =
     config.presenceControl === undefined
       ? undefined
-      : new Stl27lPresenceControlAdapter(config.presenceControl.baseUrl);
+      : new Stl27lPresenceControlAdapter(
+          config.presenceControl.baseUrl,
+          fetch,
+          () => presenceBlackbox!.beginCapture(),
+        );
   const presenceSensorStream = presenceControl
-    ? new Stl27lSensorStream(presenceControl.streamUrl)
+    ? new Stl27lSensorStream(
+        presenceControl.streamUrl,
+        dependencies.createSensorSocket,
+      )
     : undefined;
   const presenceIngress = new PresenceEventIngress((event) =>
     engine.handleEvent(event),
@@ -816,6 +831,11 @@ export async function startRuntime(
     await http.start();
     await displayServer?.start();
     castManager?.start();
+    // One shared upstream connection keeps the retrospective window warm even
+    // when no browser is open; viewers reuse this same validated frame stream.
+    presenceSensorStream?.subscribe((message) =>
+      presenceBlackbox!.accept(message),
+    );
   } catch (error) {
     unsubscribeComputerNowPlaying();
     routines.dispose();
@@ -827,6 +847,7 @@ export async function startRuntime(
     await displayServer?.stop();
     await http.stop();
     presenceSensorStream?.close();
+    await presenceBlackbox?.flush();
     sensorAdapter?.stop();
     presenceFeedback.dispose();
     for (const adapter of playbackAdapters.values()) adapter.stop();
@@ -859,6 +880,8 @@ export async function startRuntime(
       await castManager?.stop();
       await displayServer?.stop();
       await http.stop();
+      presenceSensorStream?.close();
+      await presenceBlackbox?.flush();
       sensorAdapter?.stop();
       presenceFeedback.dispose();
       for (const adapter of playbackAdapters.values()) adapter.stop();

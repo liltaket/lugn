@@ -83,6 +83,9 @@ export class Stl27lPresenceControlAdapter {
   constructor(
     baseUrl: string,
     private readonly transport: typeof fetch = fetch,
+    private readonly beginCountOneCapture?: () => (
+      acknowledged: boolean,
+    ) => void,
   ) {
     const config = PresenceControlConfigSchema.parse({ baseUrl });
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
@@ -124,23 +127,28 @@ export class Stl27lPresenceControlAdapter {
   }
 
   async setCountOne(): Promise<void> {
-    CorrectionResponseSchema.parse(
-      await this.send('/api/manual', 'POST', {
-        count: 1,
-        reason: 'Sätt till 1 person via Lugn-dashboard',
-      }),
-    );
+    await this.correctCount(1, 'Sätt till 1 person via Lugn-dashboard');
   }
 
   async setCount(count: number): Promise<void> {
-    const result = z.object({ ok: z.literal(true), count: z.number() }).parse(
-      await this.send('/api/manual', 'POST', {
-        count,
-        reason: 'Ändrat i Lugn',
-      }),
-    );
-    if (result.count !== count)
-      throw new Error('Presence correction was not acknowledged');
+    await this.correctCount(count, 'Ändrat i Lugn');
+  }
+
+  private async correctCount(count: number, reason: string): Promise<void> {
+    // Freeze the preceding window before the POST can change sensor truth.
+    const finish = count === 1 ? this.beginCountOneCapture?.() : undefined;
+    let acknowledged = false;
+    try {
+      const result = z
+        .object({ ok: z.literal(true), count: z.number() })
+        .parse(await this.send('/api/manual', 'POST', { count, reason }));
+      if (count === 1) CorrectionResponseSchema.parse(result);
+      if (result.count !== count)
+        throw new Error('Presence correction was not acknowledged');
+      acknowledged = true;
+    } finally {
+      finish?.(acknowledged);
+    }
   }
 
   async getConfig(): Promise<SensorConfigDocument> {

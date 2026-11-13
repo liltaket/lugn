@@ -68,6 +68,40 @@ dashboard therefore confirms the ledger acknowledgement while waiting for
 sensor status. An unavailable sensor or invalid acknowledgement reports a
 failure; the control stays hidden when no URL is configured.
 
+### Correction blackbox
+
+With `presenceControl.baseUrl` configured, Lugn continuously keeps the preceding
+60 seconds of validated radar frames and connection status in RAM, even with
+no dashboard open. Both “Sätt till 1 person” and a count edit to 1 freeze this
+window **before** posting the correction. Successful and failed corrections
+are saved separately with an `acknowledged` label; the requested count describes
+the human's correction at that instant, not ground truth for every earlier frame.
+
+Clips live in `<statePath>.presence-captures/`, beside the persistent lighting
+state, outside release directories. Each private (0600) `*.jsonl.gz` file starts
+with schema-versioned capture metadata, followed by `frame`/`status` records.
+Records contain the local receive time, monotonic milliseconds relative to the
+button press, and sensor data including sensor timestamps, scan IDs when provided,
+points, tracks, clusters, count/quality, and the streamed sensor configuration.
+Metadata reports startup history and buffer truncation; frame timing and status
+records expose missing data. Empty/offline windows are still saved.
+
+The archive uses the same single upstream stream as the radar view, requesting
+5 frames/s and every eighth point. This is sampled radar data, not full raw
+serial scans; these limits and any missing history must be considered when
+training or comparing models. Older sensors may ignore the requested limits.
+The RAM window is additionally capped at 400 records / 16 MiB, with at most two
+pending captures. Gzip level 1 and asynchronous file I/O run only on correction;
+ordinary frames cause no disk writes. The correction does not wait for storage.
+Write failures or a full capture queue produce a warning in the service journal.
+
+The archive retains up to 500 clips / 128 MiB compressed, deleting the oldest
+owned clips on the next save when necessary. Export clips periodically to a
+separate training dataset to retain them permanently; copy the `.jsonl.gz` files
+without adding them to Git. For inspection, `gzip -dc <clip>.jsonl.gz` prints the
+JSONL. No dataset HTTP route is exposed. The in-memory minute starts fresh after
+a service restart; existing clips survive release changes and restarts.
+
 ## Sensor page in the control panel
 
 With `presenceControl.baseUrl` set, **Inställningar → Närvaro** shows the
@@ -76,10 +110,10 @@ owner of its configuration, ledger and perception.
 
 - **Live radar and status.** The browser opens `GET /ui/api/presence-sensor/stream`
   (server-sent events). Lugn keeps one WebSocket to the sensor's `/ws/stream`
-  only while someone is watching, validates each frame, and drops fields the
+  shared with the correction blackbox, validates each frame, and drops fields the
   page does not draw (the Home Assistant door entity and the serial port).
   A slow viewer skips frames instead of queueing them. Leaving the page closes
-  the stream. The sensor's processing thread runs close to capacity on its Pi, so
+  the browser stream while the blackbox stays connected. The sensor's processing thread runs close to capacity on its Pi, so
   Lugn asks for 5 frames/s and every 8th point (`?max_fps=5&point_step=8`),
   about a tenth of the overhead of the sensor's own page; a sensor that predates
   these options ignores them and streams at full rate.
