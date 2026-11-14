@@ -1,9 +1,12 @@
 # Govee performance and preset qualification — 14 November 2026
 
-## Installed result
+The later [Party/rotation deployment](GOVEE-PARTY.md) records the current runtime
+and additional live tests. The measurements below qualify the earlier release.
 
-Runtime source `317e10471c4ea74cc11d8f82cdeba8a149a16060` is installed at
-`/home/bruno/lugn-govee-317e10471c4e`. Both user services use this immutable
+## Performance qualification release
+
+Runtime source `317e10471c4ea74cc11d8f82cdeba8a149a16060` was installed at
+`/home/bruno/lugn-govee-317e10471c4e`. Both user services used that immutable
 release. It includes the independently implemented preset engine/editor/socket
 client and preserves the concurrently deployed reviewed Lugn fixes from
 `f803c5b6cd750b63af8e99f0266100640c37625d`. Protected configuration, credentials,

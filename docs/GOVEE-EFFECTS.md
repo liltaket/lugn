@@ -1,6 +1,9 @@
 # Local Govee app effects
 
-For the installed runtime and measured transport comparisons, see
+For the installed animation loop and Party configuration, see
+[Party and LED 2 rotation](GOVEE-PARTY.md).
+
+For the earlier measured transport comparisons, see
 [performance and preset qualification](GOVEE-PERFORMANCE.md).
 
 The optional Govee companion exposes app scene variants as Home Assistant MQTT
