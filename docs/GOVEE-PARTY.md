@@ -146,3 +146,49 @@ delivery. This is not relabelled as fresh hardware confirmation. The user's
 visual confirmation applies to the direct 4000 K reset. Focus remains selected;
 the earlier request to leave the empty room OFF no longer describes this later
 occupied-room session.
+
+## Follow-up: outward-facing animation during absence
+
+Runtime `8840c447afd19c902530c22e5631729abb89718c` extends the existing window
+policy to Govee app effects and rotations. The live window target is H612A /
+`lighting.govee_strip_1`: this is the strip actually ON in Vardagsljus when Bruno
+reported that his “LED 2 ute” was lit. Earlier LED 2 labels in this document refer
+to the separate H612F loop; the production window target was not moved.
+
+The window keeps its configured 55% brightness, `always` presence mode and sun
+threshold of 6 degrees. All presets use that policy, including effects, while
+Allt av, sleep and manual OFF retain priority. Other room fixtures still switch
+OFF on confirmed exit. Window animation also survives room continuity expiry;
+restart restores only the permitted window mode before room entry.
+
+The saved Party definition now has 15-second intervals on both strips:
+
+- H612A window: Rainbow · B → Meteor shower → Aurora · A → Universe · B →
+  Forest → Rainbow · A → repeat.
+- H612F: Rainbow B → Meteor shower → Aurora → Colorful → Forest → Party → repeat.
+
+Other Party modes/baselines and all six other saved presets are preserved.
+The change passed `npm run check` (127 suites / 2071 tests, both installer
+fixtures), build and independent read-only review. A strengthened exit test
+also proves a previously lit ordinary lamp turns OFF while the window continues.
+Dawn, pending-step cancellation, home/room restrictions, continuity expiry,
+daylight restart and default room entry have deterministic coverage.
+
+Both services run `/home/bruno/lugn-govee-8840c447afd1`. All 367 installed
+source/build hashes match the qualified build; archive SHA-256:
+`f99ded17807c0b71cd63e139dcd355222f888604dacc0bc716530c1f930ceee7`.
+A live Party activation accepted all five Govee modes. A real main-service
+restart then replayed actual `confirmed_empty` / home `away` state: only the
+window remained ON, and its complete six-effect sequence plus wrap delivered
+with fresh control IDs and no repeated ordinary lighting commands. The other
+eight room lamps stayed OFF. This verifies transport and reported power;
+Bruno was away, so this is not a new visual confirmation of animation fidelity.
+
+The final explicit `scene.all_off` then held all nine configured lights OFF for
+45 seconds with no effect/control ID or external lease. Individual HA reads
+reported all nine OFF; independent native discovery/status reads confirmed
+H612A, H612F, H6022 and H60A6 OFF. Both services remained active with zero
+automatic restarts. The final room state is Allt av, as Bruno requested after
+leaving home again. Private evidence: `window-live-proof.log`,
+`window-effects-live-proof.json`, `window-final-native-off.json` and
+`active-lugn-manifest-8840c447afd1.json` in the artifact directory above.
