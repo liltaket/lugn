@@ -17,9 +17,11 @@ Select **Lugn** to restore the lamp's prior room lighting and manual overrides.
 Ordinary explicit Lugn lighting controls and scene selections also take control
 back. Effects selected directly in the Govee app are outside this handoff.
 
-The selector reports the requested effect after UDP transmission. Its diagnostic
+The LAN selector reports the requested effect after UDP transmission. Its diagnostic
 sensor reports `udp_sent`; this is not confirmation that the firmware displayed
-the animation. `devStatus` reports power, brightness, color and temperature but
+the animation. The GU10 diagnostic reports `cloud_accepted` after the API accepts
+its commands. Its selector uses actual platform scene feedback; when Govee leaves
+that field empty it displays **Extern (okänd effekt)** even after acceptance. `devStatus` reports power, brightness, color and temperature but
 not the active scene. After a companion-only restart an existing handoff appears
 as **Extern (okänd effekt)** until a new choice is made. This is a status option,
 not an effect to play.

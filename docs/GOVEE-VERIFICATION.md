@@ -109,9 +109,51 @@ Pure encoder comparisons against the upstream implementation match all 86
 H60A6 and 239 H612A playable variants, including app-specific parameter overrides.
 These comparisons establish packet agreement, not observed firmware behavior.
 
-Live expansion command tests and physical feedback are recorded separately from
-this pre-deployment software qualification. Existing user visual confirmation
-above applies only to H612F.
+The frozen runtime source is commit
+`f79b9d3f0862be6e633a2ff9d376759ae761eda0`, installed at
+`/home/bruno/lugn-govee-f79b9d3f0862`. All 347 installed `src`/`dist` file hashes
+match the qualified host build. Both user services remain active with zero
+automatic restarts; protected configuration, credentials and lighting state stay
+outside the release. The source archive SHA-256 is
+`3cb725c2faeeb7e78c6b829f0a840fe72d49d4f3356add60ce008f1cf37824ec`.
+
+### Expanded live evidence
+
+Home Assistant discovered five **Appanimation** selectors (241, 79, 98, 88 and
+65 total options), plus four explicit ceiling zone buttons. The existing three
+selector entity IDs were preserved. Ceiling zone light proxies remain honestly
+unavailable because the platform returns empty zone states.
+
+Authenticated HA selections sent Forest to all four LAN fixtures, and Aurora to
+the ceiling. Fresh independent UDP reads reported the target ON at 10% brightness
+and other configured fixtures OFF for each selection. All four were returned to
+OFF. The first ceiling restoration check found its master level normalized to
+1% after Matter OFF; the original 100%/4000 K setting was restored and independently
+read back while OFF. The packet/status tests do not establish visible scene
+fidelity because the LAN protocol has no active-scene feedback.
+
+The room then entered its ordinary everyday-light scene. An OFF-only GU10 test
+preflight cancelled before mutation; the attended rerun preserved the active
+room scene. Forest and Aurora each produced a fresh `cloud_accepted` diagnostic,
+with the GU10 independently reporting ON through Matter at approximately 10%.
+Govee's scene state remained empty, so its selector correctly reported
+**Extern (okänd effekt)** rather than presenting the requested scene as confirmed.
+The GU10's original 48%/2700 K setting and ON room intent were restored, and
+other room-light power states were unchanged.
+
+Each ceiling main/ring ON/OFF button produced a fresh API acceptance diagnostic.
+The attended two-stage test requested main ON/ring OFF and then main OFF/ring ON.
+Bruno reported seeing the main light alone, an intermediate period with both
+parts lit, then the ring alone, followed by OFF. This is user-reported visual
+evidence of independent zone power control; it also shows delayed transitions
+between separate cloud commands. It does not establish independent zone RGB,
+brightness or animation editing. API zone readback remained empty throughout.
+A final ring-ON test then invoked ordinary `lighting.set({power:false})` through
+the existing Matter entity. Independent LAN feedback changed from ON at 10% to
+OFF; this confirms the normal local OFF path also reaches a lit ring. Its master
+level again normalized to 1% on Matter OFF, and was restored to the original
+100% while the fixture remained OFF. No external-control leases remained and
+other everyday room lighting was preserved.
 
 App scene editing/speed controls, DIY uploads, music modes, AI and DreamView are
 outside the installed bridge. See [operation and rollback](GOVEE-EFFECTS.md).
