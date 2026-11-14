@@ -511,6 +511,7 @@ function actionStatus(text, tone = 'neutral') {
 async function runAction(name, input, doneText) {
   if (busy) return;
   busy = true;
+  updateFormControls();
   for (const id of ['minus', 'plus', 'zero', 'recalibrate'])
     el(`presence-${id}`).disabled = true;
   actionStatus('Skickar till sensorn …');
@@ -524,6 +525,7 @@ async function runAction(name, input, doneText) {
     );
   } finally {
     busy = false;
+    updateFormControls();
     if (latestFrame) renderFrame(latestFrame);
   }
 }
@@ -682,6 +684,8 @@ function resetConfirmation() {
 
 function updateFormControls() {
   const dirty = changedKeys().length > 0;
+  el('presence-fields').disabled = busy;
+  el('presence-form').setAttribute('aria-busy', String(busy));
   el('presence-save').disabled = !dirty || busy;
   el('presence-discard').disabled = !dirty || busy;
   const status = el('presence-settings-status');
