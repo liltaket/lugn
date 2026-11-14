@@ -1,8 +1,8 @@
 # Govee Party and LED 2 rotation — 14 November 2026
 
-Runtime source `f5d50fde807a1be872a813f3c194f00b099a433d` is merged into `main`,
+Initial Party runtime `f5d50fde807a1be872a813f3c194f00b099a433d` was merged into `main`,
 pushed and installed at `/home/bruno/lugn-govee-f5d50fde807a` on BrunoCAM. Both
-user services use that release. All 367 installed source/build hashes match the
+user services used that release. All 367 installed source/build hashes matched the
 qualified host build. The package SHA-256 is
 `5de029573d36029d1445944b56d2fb405a2bb99f8212dc102e29a153c25bce64`.
 
@@ -117,3 +117,32 @@ later explicit activation; the final room state is Allt av.
 
 The private follow-up evidence is `room-off-proof.json` and
 `room-off-native.json` in the artifact directory above.
+
+## Follow-up: GU10 still blinking in Focus
+
+After returning home, Bruno selected Focus and observed the H600D still flashing
+RGB. Lugn and its Matter entity both reported ON, 100%, 4000 K, with no Govee
+animation intent or external lease. A direct, guarded Govee API temperature
+command at 4000 K stopped the effect; Bruno confirmed steady white.
+
+Runtime `92c0b0c86256db726524eaa8f05e33437c5d3cc0`, merged/pushed to main and
+installed at `/home/bruno/lugn-govee-92c0b0c86256`, adds that color-mode reset to
+ordinary H600D commands. Static preset selection forces the reset even when
+Matter already claims all requested values. It works without remembered effect
+history, while OFF, exit, new commands and genuine external takeover revoke
+queued old resets. Only white/RGB is sent through the official API; ordinary OFF
+remains local. See the [static-color contract](GOVEE-PRESETS.md#h600d-static-color-after-an-app-effect).
+
+The version passes 127 suites / 2061 tests, lint, formatting, TypeScript, both
+installer fixtures and build. Real socket tests model the Matter/vendor mismatch
+and cover OFF/exit/manual RGB preemption; the cached-white regression fails
+without the explicit reset. Independent review found an external-takeover race,
+which was repaired and regression tested before deployment.
+
+Focus was reapplied in production with the requested values unchanged and no
+animation intent. An unchanged Matter value may produce no fresh state event;
+the ordinary lighting ledger can remain unconfirmed despite accepted vendor
+delivery. This is not relabelled as fresh hardware confirmation. The user's
+visual confirmation applies to the direct 4000 K reset. Focus remains selected;
+the earlier request to leave the empty room OFF no longer describes this later
+occupied-room session.
