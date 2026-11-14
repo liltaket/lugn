@@ -3674,10 +3674,10 @@ export class LugnEngine {
         !supersededCommand &&
         !pendingHaProperties.has(property) &&
         !(
-          property === 'colorTemperature' &&
+          (property === 'colorTemperature' || property === 'brightness') &&
           lightingFeedbackMatches(
             property,
-            device.effectiveDesired.colorTemperature,
+            device.effectiveDesired[property],
             value,
           )
         ) &&
@@ -3686,7 +3686,11 @@ export class LugnEngine {
           this.ledger.isKnownCommandId(observation.commandId)
         ) &&
         previouslyObserved !== undefined &&
-        !lightingFeedbackMatches(property, previouslyObserved, value)
+        // Compare brightness drift to the exact intent above, rather than
+        // swallowing successive small steps beyond its tolerance window.
+        !(property === 'brightness'
+          ? lightingIntentMatches(property, previouslyObserved, value)
+          : lightingFeedbackMatches(property, previouslyObserved, value))
       ) {
         this.noteIntervention({
           domain: 'lighting',
