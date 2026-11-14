@@ -1071,6 +1071,55 @@ describe('Hub live state with resilient polling fallback', () => {
     },
   );
 
+  it.each([
+    [53, 'Bekräftat'],
+    [54, 'Bekräftat'],
+    [57, 'Bekräftat'],
+    [52, 'Valt'],
+    [58, 'Valt'],
+  ])(
+    'confirms Hub scenes using brightness tolerance at %i percent',
+    async (reported, label) => {
+      vi.useFakeTimers();
+      const ui = dashboard(0.3, true);
+      try {
+        await microtasks();
+        const payload = {
+          ...ui.payload(),
+          scenes: [
+            { id: 'scene.brightness', name: 'Brightness', lighting: {} },
+          ],
+        };
+        payload.state.lighting.currentScene = 'scene.brightness';
+        payload.state.lighting.devices['lighting.desk'] = {
+          effectiveDesired: {
+            power: true,
+            brightness: 55,
+            colorTemperature: 2700,
+          },
+          baselineDesired: {
+            power: true,
+            brightness: 55,
+            colorTemperature: 2700,
+          },
+          observed: {
+            power: true,
+            brightness: reported,
+            colorTemperature: 2700,
+          },
+          ownership: {},
+          availability: 'available',
+        };
+        runInContext(`render(${JSON.stringify(payload)})`, ui.context);
+        const button = ui.get('#scene-grid').children[0]!;
+        expect(button.querySelector('.scene-status')?.textContent).toBe(label);
+      } finally {
+        ui.windowListeners.get('pagehide')?.();
+        ui.engine.dispose();
+      }
+    },
+  );
+
   it('does not claim a pending default scene is confirmed before device feedback', async () => {
     vi.useFakeTimers();
     const ui = dashboard(0.3, true);
