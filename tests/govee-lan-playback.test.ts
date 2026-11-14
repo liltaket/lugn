@@ -48,7 +48,47 @@ describe('guarded native Govee activation', () => {
     expect(
       p.send.mock.calls.map((x) => (x[1] as { msg: { cmd: string } }).msg.cmd),
     ).toEqual(['turn', 'ptReal']);
-    expect(p.wait).toHaveBeenCalledTimes(1);
+    expect(p.wait).toHaveBeenCalledTimes(2);
+  });
+  it('allows a physical ON taking 410 ms even when UDP status replies are immediate', async () => {
+    const p = port([0]);
+    const initial = await p.status();
+    let elapsed = 0;
+    p.status.mockImplementation(async () => ({
+      ...initial,
+      onOff: elapsed >= 410 ? 1 : 0,
+    }));
+    const wait = vi.fn(async (ms: number) => {
+      elapsed += ms;
+    });
+    await sendGoveeLanEffect('192.0.2.2', effect, { ...p, wait }, true);
+    expect(elapsed).toBe(600);
+    expect(
+      p.send.mock.calls.map((x) => (x[1] as { msg: { cmd: string } }).msg.cmd),
+    ).toEqual(['turn', 'ptReal']);
+  });
+  it('does not send an effect if permission is revoked during activation settling', async () => {
+    const p = port([0, 1]);
+    let current = true;
+    p.guard = vi.fn(async () => {
+      if (!current) throw new Error('exit');
+    });
+    await expect(
+      sendGoveeLanEffect(
+        '192.0.2.2',
+        effect,
+        {
+          ...p,
+          wait: async () => {
+            current = false;
+          },
+        },
+        true,
+      ),
+    ).rejects.toThrow('exit');
+    expect(p.send).toHaveBeenCalledOnce();
+    expect(p.send.mock.calls[0]?.[1]).toMatchObject({ msg: { cmd: 'turn' } });
+    expect(p.status).toHaveBeenCalledOnce();
   });
   it('does not retry an unconfirmed power write or send the scene', async () => {
     const p = port([0]);

@@ -31,13 +31,14 @@ export async function sendGoveeLanEffect(
       await port.guard();
       await port.send(ip, { msg: { cmd: 'turn', data: { value: 1 } } });
       for (let attempt = 0; attempt < 3; attempt++) {
+        // A fast UDP reply may still reflect the preceding OFF. Allow the
+        // physical activation to settle before each read, without resending ON.
+        await (port.wait ?? ((ms) => new Promise((ok) => setTimeout(ok, ms))))(
+          200,
+        );
         await port.guard();
         status = await port.status(ip);
         if (status.onOff === 1) break;
-        if (attempt < 2)
-          await (
-            port.wait ?? ((ms) => new Promise((ok) => setTimeout(ok, ms)))
-          )(80);
       }
       if (status.onOff !== 1)
         throw new Error('Govee native activation unconfirmed');
