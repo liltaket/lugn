@@ -224,6 +224,18 @@ export const CapabilitySchemas = {
     input: EmptyInput,
     output: z.object({ sceneRevision: z.number().int().nonnegative() }),
   },
+  'lighting.beginExternalControl': {
+    input: z
+      .object({ target: z.string(), activate: z.boolean().default(true) })
+      .strict(),
+    output: z.object({ accepted: z.literal(true), controlId: z.string() }),
+  },
+  'lighting.endExternalControl': {
+    input: z
+      .object({ target: z.string(), expectedControlId: z.string().optional() })
+      .strict(),
+    output: z.object({ accepted: z.literal(true) }),
+  },
   'lighting.set': {
     input: SetLightingInput,
     output: z.object({ accepted: z.literal(true) }),
@@ -551,6 +563,47 @@ export class CapabilityRegistry {
           ),
         };
         break;
+      case 'lighting.beginExternalControl': {
+        const input =
+          CapabilitySchemas['lighting.beginExternalControl'].input.parse(
+            rawInput,
+          );
+        assertLightingTarget(this.engine, input.target);
+        if (
+          !['user', 'physical_remote', 'home_assistant'].includes(
+            provenance.actor.type,
+          )
+        )
+          throw new CapabilityInputError('human_actor_required');
+        const controlId = await this.engine.beginExternalLightingControl(
+          input.target,
+          provenance.actor,
+          provenance.source,
+          input.activate,
+        );
+        output = { accepted: true, controlId };
+        break;
+      }
+      case 'lighting.endExternalControl': {
+        const input =
+          CapabilitySchemas['lighting.endExternalControl'].input.parse(
+            rawInput,
+          );
+        assertLightingTarget(this.engine, input.target);
+        if (
+          !['user', 'physical_remote', 'home_assistant'].includes(
+            provenance.actor.type,
+          )
+        )
+          throw new CapabilityInputError('human_actor_required');
+        await this.engine.endExternalLightingControl(
+          input.target,
+          provenance.actor,
+          input.expectedControlId,
+        );
+        output = { accepted: true };
+        break;
+      }
       case 'lighting.set': {
         const input = SetLightingInput.parse(rawInput);
         assertLightingTarget(this.engine, input.target);

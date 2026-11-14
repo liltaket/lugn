@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { type MusicVolumeSettings } from '../core/music-volume-settings.js';
 import {
   ComputerObservationSchema,
@@ -61,6 +62,8 @@ import {
   SemanticSwitchIdSchema,
   ProvenanceSchema,
   type DeviceSwitchState,
+  type DeviceLightingState,
+  type AutomationHold,
   type CommandRecord,
   type Provenance,
   type SwitchCommandRecord,
@@ -198,6 +201,7 @@ export class LugnEngine {
   private windowCanRunWhileEmpty(target?: string): boolean {
     return (
       this.windowLighting !== undefined &&
+      !this.requireDevice(this.windowLighting.target).externalControl &&
       (target === undefined || target === this.windowLighting.target) &&
       this.windowLighting.presenceMode !== 'room'
     );
@@ -207,6 +211,7 @@ export class LugnEngine {
     const settings = this.windowLighting;
     if (!settings) return false;
     const device = this.requireDevice(settings.target);
+    if (device.externalControl) return false;
     const scene = this.activeSceneDefinition ?? this.defaultSceneOnOccupancy;
     // The default can supply just the window's intent before first room entry.
     // Other targets still wait for occupancy through the ordinary entry path.
@@ -261,7 +266,11 @@ export class LugnEngine {
   }
 
   private async reconcileWindowLighting(force = false): Promise<void> {
-    if (!this.windowLighting) return;
+    if (
+      !this.windowLighting ||
+      this.requireDevice(this.windowLighting.target).externalControl
+    )
+      return;
     const guard = this.lightingExecutionGuards.get(this.windowLighting.target);
     if (guard && !guard())
       this.lightingExecutionGuards.delete(this.windowLighting.target);
@@ -325,6 +334,23 @@ export class LugnEngine {
   private readonly convergenceStartedAt = new Map<number, number>();
   private readonly targetConvergenceStartedAt = new Map<string, number>();
   private readonly manualLightingWhileEmpty = new Set<string>();
+  private externalLightingEmptyBoundary = 0;
+  private readonly externalLightingIntent = new Map<
+    string,
+    {
+      effectiveDesired: DeviceLightingState['effectiveDesired'];
+      ownership: DeviceLightingState['ownership'];
+      activationHold?: AutomationHold;
+      manualWhileEmpty: boolean;
+      explicitPower: boolean;
+      executionGuard?: ExecutionGuard;
+      emptyBoundary: number;
+    }
+  >();
+  private readonly lightingTransportPromises = new Map<
+    string,
+    { target: string; promise: Promise<void> }
+  >();
   private lastConfirmedPresence: 'occupied' | 'confirmed_empty' | 'unknown' =
     'unknown';
   private presenceTransitionGeneration = 0;
@@ -1363,19 +1389,23 @@ export class LugnEngine {
   }
 
   getLightingIntentSnapshot(): LightingIntentSnapshot {
+    const activationHolds = [
+      ...this.holds
+        .snapshot()
+        .filter(
+          (hold) =>
+            hold.scope === 'lighting.activation' &&
+            !this.externalLightingIntent.has(hold.target),
+        ),
+      ...[...this.externalLightingIntent.values()].flatMap((intent) =>
+        intent.activationHold ? [intent.activationHold] : [],
+      ),
+    ];
     return LightingIntentSnapshotSchema.parse({
       ...(this.activeSceneDefinition
         ? { appliedScene: this.activeSceneDefinition }
         : {}),
-      ...(this.holds
-        .snapshot()
-        .some((hold) => hold.scope === 'lighting.activation')
-        ? {
-            activationHolds: this.holds
-              .snapshot()
-              .filter((hold) => hold.scope === 'lighting.activation'),
-          }
-        : {}),
+      ...(activationHolds.length > 0 ? { activationHolds } : {}),
       ...(this.state.lighting.currentScene === null &&
       this.hasExplicitAllLightsOffScene()
         ? { detachedOffScene: true }
@@ -1388,8 +1418,12 @@ export class LugnEngine {
           id,
           {
             baselineDesired: device.baselineDesired,
-            effectiveDesired: device.effectiveDesired,
-            ownership: device.ownership,
+            effectiveDesired:
+              this.externalLightingIntent.get(id)?.effectiveDesired ??
+              device.effectiveDesired,
+            ownership:
+              this.externalLightingIntent.get(id)?.ownership ??
+              device.ownership,
           },
         ]),
       ),
@@ -1795,6 +1829,296 @@ export class LugnEngine {
     };
   }
 
+  /** Transfer one lamp to an external effect controller; never persist the lease. */
+  async beginExternalLightingControl(
+    target: string,
+    actor: Actor,
+    source = 'external',
+    activate = true,
+  ): Promise<string> {
+    if (!isHumanActor(actor))
+      throw new Error('External control requires a human actor');
+    const device = this.requireDevice(target);
+    this.noteIntervention({ domain: 'lighting', target });
+    const priorIntent = structuredClone({
+      effectiveDesired: device.effectiveDesired,
+      ownership: device.ownership,
+    });
+    const priorControl = device.externalControl
+      ? structuredClone(device.externalControl)
+      : undefined;
+    const priorSavedIntent = this.externalLightingIntent.get(target);
+    const priorActivationHold = this.holds
+      .snapshot()
+      .find(
+        (hold) =>
+          hold.scope === 'lighting.activation' && hold.target === target,
+      );
+    const priorManualWhileEmpty = this.manualLightingWhileEmpty.has(target);
+    const priorExplicitPower =
+      this.explicitPowerWhileAwaitingOccupancy.has(target);
+    const priorExecutionGuard = this.lightingExecutionGuards.get(target);
+    if (!this.externalLightingIntent.has(target))
+      this.externalLightingIntent.set(target, {
+        ...structuredClone({
+          effectiveDesired: device.effectiveDesired,
+          ownership: device.ownership,
+        }),
+        ...(priorActivationHold ? { activationHold: priorActivationHold } : {}),
+        manualWhileEmpty: priorManualWhileEmpty,
+        explicitPower: priorExplicitPower,
+        ...(priorExecutionGuard ? { executionGuard: priorExecutionGuard } : {}),
+        emptyBoundary: this.externalLightingEmptyBoundary,
+      });
+    const emptyBoundary = this.externalLightingEmptyBoundary;
+    const control = { id: randomUUID(), source, startedAt: this.clock.now() };
+    device.externalControl = control;
+    device.effectiveDesired = { power: true };
+    device.ownership = {
+      power: {
+        kind: 'override',
+        actor,
+        source,
+        reason: 'Explicit external lighting control',
+        createdAt: this.clock.now(),
+      },
+    };
+    this.lightingExecutionGuards.delete(target);
+    this.holds.clear('lighting.activation', target);
+    this.explicitPowerWhileAwaitingOccupancy.add(target);
+    if (this.shouldRemainPhysicallyEmpty())
+      this.manualLightingWhileEmpty.add(target);
+    this.ledger.supersedePending('External controller owns this light', target);
+    this.clearLightingDeliveryAttempts(target);
+    let powerAttempted = false;
+    try {
+      await this.finishPrelight(
+        true,
+        undefined,
+        new Map([[target, new Set(LightingProperties)]]),
+      );
+      let timeout: TimerHandle | undefined;
+      try {
+        await Promise.race([
+          Promise.allSettled(
+            [...this.lightingTransportPromises.values()]
+              .filter((item) => item.target === target)
+              .map((item) => item.promise),
+          ),
+          new Promise<never>((_, reject) => {
+            timeout = this.clock.setTimeout(
+              () =>
+                reject(new Error('External control transport drain timed out')),
+              10000,
+            );
+          }),
+        ]);
+      } finally {
+        if (timeout !== undefined) this.clock.clearTimeout(timeout);
+      }
+      if (device.externalControl !== control)
+        throw new Error('External lighting control superseded');
+      if (this.externalLightingEmptyBoundary !== emptyBoundary)
+        throw new Error(
+          'External lighting control cancelled by confirmed exit',
+        );
+      // Zone writes must not implicitly switch on the other zone of a fixture.
+      // The caller owns physical activation when it requests a handoff only.
+      if (activate) {
+        // Power only: the companion selects the animation after this transport settles.
+        powerAttempted = true;
+        await this.dispatch(
+          target,
+          { power: true },
+          this.state.lighting.sceneRevision,
+          source,
+          'Explicit external lighting control',
+          actor,
+          control.id,
+        );
+        if (this.externalLightingEmptyBoundary !== emptyBoundary) {
+          if (this.shouldRemainPhysicallyEmpty())
+            await this.dispatch(
+              target,
+              { power: false },
+              this.state.lighting.sceneRevision,
+              'presence',
+              'Confirmed exit superseded external handoff',
+              systemActor,
+              undefined,
+              undefined,
+              'confirmed_empty_off',
+            );
+          throw new Error(
+            'External lighting control cancelled by confirmed exit',
+          );
+        }
+        if (device.externalControl !== control)
+          throw new Error('External lighting control superseded');
+        const powerCommand = this.ledger.records.find(
+          (command) =>
+            command.target === target && command.requestId === control.id,
+        );
+        const deliveryUnknown =
+          powerCommand &&
+          this.state.diagnostics.some(
+            (diagnostic) =>
+              diagnostic.kind === 'command.delivery_unknown' &&
+              diagnostic.details['commandId'] === powerCommand.id,
+          );
+        if (
+          !powerCommand ||
+          deliveryUnknown ||
+          (powerCommand.status !== 'confirmed' &&
+            !this.acceptedLightingCommandIds.has(powerCommand.id))
+        )
+          throw new Error('External lighting power command was not accepted');
+      }
+      this.publish(['lighting', 'commands', 'diagnostics']);
+      return control.id;
+    } catch (error) {
+      // A rejected handoff must not strand ownership or activation permission.
+      // An explicit newer command owns its own rollback and must remain intact.
+      if (device.externalControl === control) {
+        device.effectiveDesired = priorIntent.effectiveDesired;
+        device.ownership = priorIntent.ownership;
+        if (priorControl) device.externalControl = priorControl;
+        else delete device.externalControl;
+        if (priorSavedIntent)
+          this.externalLightingIntent.set(target, priorSavedIntent);
+        else this.externalLightingIntent.delete(target);
+        if (priorActivationHold)
+          this.holds.restoreLightingActivation(priorActivationHold);
+        else this.holds.clear('lighting.activation', target);
+        // An exit boundary revokes all former permission to illuminate an empty room.
+        if (
+          this.externalLightingEmptyBoundary === emptyBoundary &&
+          priorManualWhileEmpty
+        )
+          this.manualLightingWhileEmpty.add(target);
+        else this.manualLightingWhileEmpty.delete(target);
+        if (
+          this.externalLightingEmptyBoundary === emptyBoundary &&
+          priorExplicitPower
+        )
+          this.explicitPowerWhileAwaitingOccupancy.add(target);
+        else this.explicitPowerWhileAwaitingOccupancy.delete(target);
+        if (priorExecutionGuard)
+          this.lightingExecutionGuards.set(target, priorExecutionGuard);
+        else this.lightingExecutionGuards.delete(target);
+        this.publish(['lighting', 'commands', 'diagnostics']);
+        // A lost HA acknowledgement can still mean the physical ON was applied.
+        // Reassert this target's restored intent even if cached feedback matches it.
+        if (powerAttempted) {
+          const restored = device.effectiveDesired;
+          const values =
+            this.shouldRemainPhysicallyEmpty() &&
+            !this.manualLightingWhileEmpty.has(target)
+              ? { power: false }
+              : priorControl
+                ? { power: restored.power ?? false }
+                : { ...restored };
+          await this.dispatch(
+            target,
+            values,
+            this.state.lighting.sceneRevision,
+            source,
+            'Restore lighting after rejected external handoff',
+            actor,
+            undefined,
+            undefined,
+            'scene',
+            () => device.effectiveDesired === restored,
+          );
+        }
+      }
+      throw error;
+    }
+  }
+
+  async endExternalLightingControl(
+    target: string,
+    actor: Actor,
+    expectedControlId?: string,
+  ): Promise<void> {
+    if (!isHumanActor(actor))
+      throw new Error('External control requires a human actor');
+    const device = this.requireDevice(target);
+    if (
+      expectedControlId !== undefined &&
+      device.externalControl?.id !== expectedControlId
+    )
+      throw new Error('External lighting control superseded');
+    if (!device.externalControl) return;
+    this.noteIntervention({ domain: 'lighting', target });
+    this.restoreExternalLightingIntent(target);
+    this.ledger.supersedePending(
+      'Resume lighting after external control',
+      target,
+    );
+    this.clearLightingDeliveryAttempts(target);
+    this.startConvergenceAttempt(this.state.lighting.sceneRevision, target);
+    if (
+      this.shouldRemainPhysicallyEmpty() &&
+      !this.targetIntentCanRunWhileEmpty(
+        this.state.lighting.sceneRevision,
+        target,
+      )
+    ) {
+      await this.dispatch(
+        target,
+        { power: false },
+        this.state.lighting.sceneRevision,
+        'external.resume',
+        'Resume empty-room OFF after external control',
+        actor,
+        undefined,
+        undefined,
+        'confirmed_empty_off',
+      );
+    } else {
+      await this.reconcileScene(
+        this.state.lighting.sceneRevision,
+        undefined,
+        new Set([target]),
+        {
+          onlyTargets: new Set([target]),
+          allowInFlight: true,
+        },
+      );
+    }
+    this.publish(['lighting', 'commands', 'diagnostics']);
+  }
+
+  private restoreExternalLightingIntent(target: string): void {
+    const device = this.requireDevice(target);
+    const intent = this.externalLightingIntent.get(target);
+    if (intent) {
+      device.effectiveDesired = structuredClone(intent.effectiveDesired);
+      device.ownership = structuredClone(intent.ownership);
+      if (intent.activationHold)
+        this.holds.restoreLightingActivation(intent.activationHold);
+      else this.holds.clear('lighting.activation', target);
+      if (
+        intent.emptyBoundary === this.externalLightingEmptyBoundary &&
+        intent.manualWhileEmpty
+      )
+        this.manualLightingWhileEmpty.add(target);
+      else this.manualLightingWhileEmpty.delete(target);
+      if (
+        intent.emptyBoundary === this.externalLightingEmptyBoundary &&
+        intent.explicitPower
+      )
+        this.explicitPowerWhileAwaitingOccupancy.add(target);
+      else this.explicitPowerWhileAwaitingOccupancy.delete(target);
+      if (intent.executionGuard)
+        this.lightingExecutionGuards.set(target, intent.executionGuard);
+      else this.lightingExecutionGuards.delete(target);
+      this.externalLightingIntent.delete(target);
+    }
+    delete device.externalControl;
+  }
+
   async setLighting(
     target: string,
     values: LightingValues,
@@ -1809,7 +2133,14 @@ export class LugnEngine {
   ): Promise<void> {
     this.assertExecution(isCurrent);
     values = LightingValuesSchema.parse(values);
-    this.requireDevice(target);
+    const targetDevice = this.requireDevice(target);
+    if (
+      targetDevice.externalControl &&
+      !isHumanActor(provenance.actor) &&
+      values.power !== false
+    )
+      throw new Error('Automatic lighting is held by external control');
+    this.restoreExternalLightingIntent(target);
     const morningGrant = provenance.requestId
       ? this.bedtimeMorningLighting.get(provenance.requestId)
       : undefined;
@@ -1844,6 +2175,7 @@ export class LugnEngine {
                   (sceneTarget === this.windowLighting?.target &&
                     this.requireDevice(sceneTarget).effectiveDesired.power ===
                       true)) &&
+                !this.requireDevice(sceneTarget).externalControl &&
                 (sceneValues.colorTemperature !== undefined ||
                   (sceneTarget === this.windowLighting?.target &&
                     this.requireDevice(sceneTarget).effectiveDesired
@@ -2162,8 +2494,10 @@ export class LugnEngine {
       normalizedEvent.presence === 'confirmed_empty' &&
       (lastConfirmedBeforeEvent !== 'confirmed_empty' || prelightWasActive);
     if (normalizedEvent.presence === 'confirmed_empty') {
-      if (lastConfirmedBeforeEvent !== 'confirmed_empty')
+      if (lastConfirmedBeforeEvent !== 'confirmed_empty') {
+        this.externalLightingEmptyBoundary++;
         this.manualLightingWhileEmpty.clear();
+      }
       this.state.presence.state = normalizedEvent.presence;
       this.state.presence.personCount = normalizedEvent.personCount ?? 0;
       this.lastConfirmedPresence = normalizedEvent.presence;
@@ -3113,11 +3447,30 @@ export class LugnEngine {
     intent: IntentProvenance,
     isCurrent?: ExecutionGuard,
   ): number {
+    // Automatic scene activation must not reclaim a lamp explicitly handed to an
+    // effect controller. Automatic OFF remains a valid boundary.
+    if (!isHumanActor(intent.actor))
+      scene = {
+        ...scene,
+        lighting: Object.fromEntries(
+          Object.entries(scene.lighting).filter(
+            ([target, values]) =>
+              !this.requireDevice(target).externalControl ||
+              values.power === false,
+          ),
+        ),
+      };
     const includedTargets = new Set([
       ...Object.keys(scene.lighting),
-      ...(this.windowLighting ? [this.windowLighting.target] : []),
+      ...(this.windowLighting &&
+      (isHumanActor(intent.actor) ||
+        !this.requireDevice(this.windowLighting.target).externalControl ||
+        scene.lighting[this.windowLighting.target]?.power === false)
+        ? [this.windowLighting.target]
+        : []),
     ]);
     for (const target of includedTargets) {
+      this.restoreExternalLightingIntent(target);
       if (isCurrent) this.lightingExecutionGuards.set(target, isCurrent);
       else this.lightingExecutionGuards.delete(target);
     }
@@ -3204,7 +3557,10 @@ export class LugnEngine {
           device.ownership[property] = { kind: 'scene', revision };
       }
     }
-    if (this.windowLighting) {
+    if (
+      this.windowLighting &&
+      !this.requireDevice(this.windowLighting.target).externalControl
+    ) {
       const target = this.windowLighting.target;
       const windowValues = scene.lighting[target];
       if (!windowValues?.rgb && windowValues?.colorTemperature === undefined) {
@@ -3266,6 +3622,11 @@ export class LugnEngine {
     if (
       values.power !== false &&
       this.holds.blocks('lighting.activation', target)
+    )
+      return;
+    if (
+      this.requireDevice(target).externalControl &&
+      Object.keys(values).some((property) => property !== 'power')
     )
       return;
     const deliveryKey = this.lightingDeliveryKey(revision, target);
@@ -3335,7 +3696,13 @@ export class LugnEngine {
     this.inFlightLightingCommandIds.add(command.id);
     this.lightingTransportsInFlight.set(command.id, target);
     try {
-      await this.adapter.dispatch({ id: command.id, target, values });
+      const promise = this.adapter.dispatch({ id: command.id, target, values });
+      this.lightingTransportPromises.set(command.id, { target, promise });
+      try {
+        await promise;
+      } finally {
+        this.lightingTransportPromises.delete(command.id);
+      }
     } catch (error) {
       dispatchFailed = true;
       dispatchError = error;
@@ -3659,6 +4026,48 @@ export class LugnEngine {
               feedbackTime,
             )
           : undefined;
+      // Effect colors are observations, but an external whole-fixture OFF is
+      // still a durable human boundary. Do not replay the old ON intent later.
+      if (device.externalControl) {
+        if (
+          property === 'power' &&
+          value === false &&
+          previouslyObserved === true &&
+          !command &&
+          !supersededCommand &&
+          observation.observedAt >= device.externalControl.startedAt
+        ) {
+          this.restoreExternalLightingIntent(observation.target);
+          this.noteIntervention({
+            domain: 'lighting',
+            target: observation.target,
+          });
+          const provenance = {
+            actor: observation.provenance?.actor ?? {
+              type: 'home_assistant' as const,
+            },
+            source: observation.provenance?.source ?? 'external_observation',
+            reason: 'External lighting switched off',
+          };
+          device.effectiveDesired.power = false;
+          device.ownership.power = {
+            kind: 'override',
+            ...provenance,
+            createdAt: feedbackTime,
+          };
+          this.holds.set('lighting.activation', observation.target, provenance);
+          this.manualLightingWhileEmpty.delete(observation.target);
+          this.explicitPowerWhileAwaitingOccupancy.delete(observation.target);
+          this.lightingExecutionGuards.delete(observation.target);
+          this.ledger.supersedePending(
+            'External lighting switched off',
+            observation.target,
+          );
+          this.clearLightingDeliveryAttempts(observation.target);
+          effectiveIntentChanged = true;
+        }
+        continue;
+      }
       if (supersededCommand) attributedStaleCommand = true;
       if (
         command &&
@@ -4640,6 +5049,7 @@ export class LugnEngine {
     const guard = this.lightingExecutionGuards.get(target);
     if (guard && !guard()) return false;
     const device = this.requireDevice(target);
+    if (device.externalControl) return false;
     // OFF never needs permission to activate a remembered scene.
     if (device.effectiveDesired.power === false) return true;
     if (this.holds.blocks('lighting.activation', target)) return false;
