@@ -3059,6 +3059,30 @@ function cameraCanRun(epoch) {
   );
 }
 
+// Decode offscreen so a bad candidate never replaces the last good frame.
+function decodeCameraFrame(url, signal) {
+  return new Promise((resolve, reject) => {
+    const candidate = document.createElement('img');
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      candidate.onload = null;
+      candidate.onerror = null;
+      signal.removeEventListener('abort', aborted);
+      candidate.removeAttribute('src');
+      if (error) reject(error);
+      else resolve();
+    };
+    const aborted = () => finish(new Error('image_aborted'));
+    candidate.onload = () => finish();
+    candidate.onerror = () => finish(new Error('image_decode_failed'));
+    signal.addEventListener('abort', aborted, { once: true });
+    if (signal.aborted) aborted();
+    else candidate.src = url;
+  });
+}
+
 function startCameraImages(active, epoch) {
   window.clearTimeout(cameraMediaTimeout);
   const imageUrl = cameraMediaUrl(active.imageUrl);
@@ -3075,6 +3099,7 @@ function startCameraImages(active, epoch) {
     cameraImageController = controller;
     const timeout = window.setTimeout(() => controller.abort(), 8000);
     cameraMediaTimeout = timeout;
+    let candidateUrl = null;
     try {
       const response = await fetch(imageUrl, {
         cache: 'no-store',
@@ -3089,22 +3114,19 @@ function startCameraImages(active, epoch) {
       const blob = await response.blob();
       if (!cameraCanRun(epoch)) return;
       if (blob.size > 8 * 1024 * 1024) throw new Error('image_too_large');
-      const nextUrl = URL.createObjectURL(blob);
-      if (cameraObjectUrl) URL.revokeObjectURL(cameraObjectUrl);
-      cameraObjectUrl = nextUrl;
-      refs.cameraImage.onload = () => {
-        if (!cameraCanRun(epoch)) return;
-        failures = 0;
-        refs.cameraImage.hidden = false;
-        refs.cameraPlaceholder.hidden = true;
-        refs.cameraStatus.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
-        cameraImageTimer = window.setTimeout(frame, 1000);
-      };
-      refs.cameraImage.onerror = () => {
-        if (!cameraCanRun(epoch)) return;
-        refs.cameraStatus.textContent = 'Kamerabilden kunde inte visas.';
-      };
-      refs.cameraImage.src = nextUrl;
+      candidateUrl = URL.createObjectURL(blob);
+      await decodeCameraFrame(candidateUrl, controller.signal);
+      if (!cameraCanRun(epoch)) return;
+      const previousUrl = cameraObjectUrl;
+      cameraObjectUrl = candidateUrl;
+      candidateUrl = null;
+      refs.cameraImage.src = cameraObjectUrl;
+      if (previousUrl) URL.revokeObjectURL(previousUrl);
+      failures = 0;
+      refs.cameraImage.hidden = false;
+      refs.cameraPlaceholder.hidden = true;
+      refs.cameraStatus.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
+      cameraImageTimer = window.setTimeout(frame, 1000);
     } catch {
       if (!cameraCanRun(epoch)) return;
       failures += 1;
@@ -3116,6 +3138,7 @@ function startCameraImages(active, epoch) {
         refs.cameraStatus.textContent += ' Bilden är inaktuell.';
       if (failures < 3) cameraImageTimer = window.setTimeout(frame, 2000);
     } finally {
+      if (candidateUrl) URL.revokeObjectURL(candidateUrl);
       window.clearTimeout(timeout);
       if (cameraImageController === controller) cameraImageController = null;
     }
