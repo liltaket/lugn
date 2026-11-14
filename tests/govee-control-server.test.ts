@@ -383,6 +383,13 @@ describe('Govee Unix command server', () => {
       { ...command, effect: undefined },
       { ...command, zones: { main: true } },
       { ...command, zones: { main: false, ring: false } },
+      { ...command, modeOnly: false },
+      {
+        ...command,
+        effect: undefined,
+        zones: { main: false, ring: true },
+        modeOnly: true,
+      },
     ]) {
       const response = await call(f.socketPath, '/apply', input);
       expect(response.status).toBe(400);

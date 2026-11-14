@@ -17,6 +17,7 @@ export interface GoveeControlClient {
     target: string;
     controlId: string;
     effect?: string | undefined;
+    modeOnly?: true | undefined;
     zones?: { main: boolean; ring: boolean } | undefined;
   }): Promise<void>;
   cancel(target: string, controlId?: string): Promise<void>;
@@ -145,8 +146,16 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     const capability = this.goveeCapabilities[command.target]!;
     const intent = command.govee;
     if (
+      command.goveeOnly &&
+      (!intent?.effect ||
+        !command.isCurrent ||
+        Object.keys(command.values).length !== 0)
+    )
+      throw new Error('Invalid Govee rotation step');
+    if (
       intent &&
-      ((intent.effect && !capability.effects.includes(intent.effect)) ||
+      (intent.rotation !== undefined ||
+        (intent.effect && !capability.effects.includes(intent.effect)) ||
         (intent.zones && !capability.zones))
     )
       throw new Error('Unsupported Govee preset');
@@ -168,11 +177,12 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
         range.min,
         Math.min(range.max, values.colorTemperature),
       );
-    await this.ordinary.dispatch({
-      id: command.id,
-      target: command.target,
-      values,
-    });
+    if (!command.goveeOnly)
+      await this.ordinary.dispatch({
+        id: command.id,
+        target: command.target,
+        values,
+      });
     if (!current() || !intent || values.power === false) return;
     // A disconnected/aborted HTTP request cannot retract a cloud write. On guard
     // invalidation explicitly cancel and wait for the server's drain acknowledgement.
@@ -200,7 +210,10 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
         this.client.apply({
           requestId: command.id,
           target: command.target,
-          ...intent,
+          controlId: intent.controlId,
+          ...(command.goveeOnly ? { modeOnly: true as const } : {}),
+          ...(intent.effect !== undefined ? { effect: intent.effect } : {}),
+          ...(intent.zones !== undefined ? { zones: intent.zones } : {}),
         }),
         cancellation,
       ]);

@@ -514,6 +514,17 @@ export type PresenceInputEvent = z.infer<typeof PresenceInputEventSchema>;
 export const GoveeSceneIntentSchema = z
   .object({
     effect: z.string().min(1).max(255).optional(),
+    rotation: z
+      .object({
+        effects: z
+          .array(z.string().min(1).max(255))
+          .min(2)
+          .max(16)
+          .refine((effects) => new Set(effects).size === effects.length),
+        intervalSeconds: z.number().int().min(15).max(3600),
+      })
+      .strict()
+      .optional(),
     zones: z
       .object({ main: z.boolean(), ring: z.boolean() })
       .strict()
@@ -525,10 +536,21 @@ export const GoveeSceneIntentSchema = z
   })
   .strict()
   .refine(
-    (intent) => intent.effect !== undefined || intent.zones !== undefined,
-    'An effect or zone mask is required',
+    (intent) =>
+      intent.effect !== undefined ||
+      intent.rotation !== undefined ||
+      intent.zones !== undefined,
+    'An effect, rotation or zone mask is required',
+  )
+  .refine(
+    (intent) => intent.effect === undefined || intent.rotation === undefined,
+    'Choose an effect or a rotation',
   );
 export type GoveeSceneIntent = z.infer<typeof GoveeSceneIntentSchema>;
+
+export function goveeEffectNames(intent: GoveeSceneIntent): readonly string[] {
+  return intent.rotation?.effects ?? (intent.effect ? [intent.effect] : []);
+}
 
 export const GoveeCapabilitiesSchema = z.record(
   SemanticLightingIdSchema,
@@ -564,7 +586,7 @@ export const SceneSchema = z
       if (
         !values ||
         values.power !== true ||
-        (intent.effect !== undefined &&
+        (goveeEffectNames(intent).length > 0 &&
           (values.rgb !== undefined || values.colorTemperature !== undefined))
       )
         context.addIssue({
@@ -598,6 +620,8 @@ export const DeviceLightingStateSchema = z.object({
     .object({
       intent: GoveeSceneIntentSchema,
       controlId: z.string().optional(),
+      /** Session-only rotation step; delivery is not physical scene confirmation. */
+      activeEffect: z.string().optional(),
       status: z.enum(['pending', 'sent', 'failed']),
     })
     .optional(),

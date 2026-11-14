@@ -54,6 +54,7 @@ export function combineGoveePresetControls(
             target: command.target,
             controlId: command.controlId,
             effect: command.effect,
+            ...(command.modeOnly ? { modeOnly: true as const } : {}),
           },
           guard,
         );
@@ -68,6 +69,7 @@ export function combineGoveePresetControls(
             target: command.target,
             controlId: command.controlId,
             zones: command.zones,
+            ...(command.modeOnly ? { modeOnly: true as const } : {}),
           },
           guard,
         );

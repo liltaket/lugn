@@ -53,6 +53,7 @@ import {
   type LightingControlModes,
   LightingIntentSnapshotSchema,
   LightingValuesSchema,
+  goveeEffectNames,
   type GoveeCapabilities,
   type GoveeSceneIntent,
   PresenceEventSchema,
@@ -305,7 +306,9 @@ export class LugnEngine {
 
   private readonly goveeTransitionTargets = new Set<string>();
   private readonly lightingTargetGenerations = new Map<string, number>();
+  private readonly goveeRotationTimers = new Map<string, TimerHandle>();
   private invalidateLightingTarget(target: string): void {
+    this.clearGoveeRotation(target);
     this.lightingTargetGenerations.set(
       target,
       (this.lightingTargetGenerations.get(target) ?? 0) + 1,
@@ -313,8 +316,131 @@ export class LugnEngine {
     const govee = this.state?.lighting.devices[target]?.govee;
     if (govee) {
       delete govee.controlId;
+      delete govee.activeEffect;
       govee.status = 'pending';
     }
+  }
+
+  private clearGoveeRotation(target: string): void {
+    const timer = this.goveeRotationTimers.get(target);
+    if (timer !== undefined) this.clock.clearTimeout(timer);
+    this.goveeRotationTimers.delete(target);
+  }
+
+  /** Timers are session state; durable intent alone never grants illumination. */
+  private scheduleGoveeRotation(
+    target: string,
+    govee: NonNullable<DeviceLightingState['govee']>,
+    permitted: ExecutionGuard,
+    index: number,
+  ): void {
+    this.clearGoveeRotation(target);
+    const rotation = govee.intent.rotation;
+    const controlId = govee.controlId;
+    if (!rotation || !controlId || !permitted()) return;
+    const current = () => {
+      const device = this.requireDevice(target);
+      return (
+        permitted() &&
+        device.govee === govee &&
+        govee.controlId === controlId &&
+        !device.externalControl &&
+        device.effectiveDesired.power === true &&
+        !this.holds.blocks('lighting.activation', target)
+      );
+    };
+    const timer = this.clock.setTimeout(() => {
+      if (this.goveeRotationTimers.get(target) !== timer) return;
+      this.goveeRotationTimers.delete(target);
+      if (!current()) return;
+      void this.advanceGoveeRotation(
+        target,
+        govee,
+        permitted,
+        (index + 1) % rotation.effects.length,
+      );
+    }, rotation.intervalSeconds * 1000);
+    this.goveeRotationTimers.set(target, timer);
+  }
+
+  private async advanceGoveeRotation(
+    target: string,
+    govee: NonNullable<DeviceLightingState['govee']>,
+    permitted: ExecutionGuard,
+    index: number,
+  ): Promise<void> {
+    const effect = govee.intent.rotation?.effects[index];
+    if (!effect || !permitted() || this.requireDevice(target).govee !== govee)
+      return;
+    const controlId = randomUUID();
+    const id = `govee-rotation-${controlId}`;
+    govee.controlId = controlId;
+    govee.activeEffect = effect;
+    govee.status = 'pending';
+    const current = () => {
+      const device = this.requireDevice(target);
+      return (
+        permitted() &&
+        device.govee === govee &&
+        govee.controlId === controlId &&
+        !device.externalControl &&
+        device.effectiveDesired.power === true &&
+        !this.holds.blocks('lighting.activation', target)
+      );
+    };
+    // Register before dispatch/publication can yield to an external handoff.
+    const promise = Promise.resolve().then(async () => {
+      if (!current()) return;
+      const capability = this.adapter.goveeCapabilities?.[target];
+      if (
+        !capability?.effects.includes(effect) ||
+        (govee.intent.zones && !capability.zones)
+      )
+        throw new Error('Govee rotation capability unavailable');
+      await this.adapter.dispatch({
+        id,
+        target,
+        values: {},
+        goveeOnly: true,
+        isCurrent: current,
+        govee: {
+          effect,
+          ...(govee.intent.zones ? { zones: govee.intent.zones } : {}),
+          controlId,
+        },
+      });
+    });
+    this.lightingTransportsInFlight.set(id, target);
+    this.lightingTransportPromises.set(id, { target, promise });
+    this.publish(['lighting']);
+    let sent = false;
+    try {
+      await promise;
+      if (current()) {
+        govee.status = 'sent';
+        sent = true;
+        this.addDiagnostic(
+          'lighting.govee_sent',
+          `Govee rotation step sent for ${target}; scene feedback unavailable`,
+          { target, controlId, effect },
+        );
+      }
+    } catch {
+      if (current()) {
+        govee.status = 'failed';
+        this.addDiagnostic(
+          'lighting.govee_failed',
+          `Govee rotation stopped for ${target}; delivery failed`,
+          { target, controlId, effect },
+        );
+      }
+    } finally {
+      this.lightingTransportPromises.delete(id);
+      this.lightingTransportsInFlight.delete(id);
+    }
+    if (current()) this.publish(['lighting', 'diagnostics']);
+    if (sent && current())
+      this.scheduleGoveeRotation(target, govee, permitted, index);
   }
 
   private clampLightingTemperature(
@@ -374,7 +500,9 @@ export class LugnEngine {
       const capability = this.adapter.goveeCapabilities?.[target];
       if (
         !capability ||
-        (intent.effect && !capability.effects.includes(intent.effect)) ||
+        goveeEffectNames(intent).some(
+          (effect) => !capability.effects.includes(effect),
+        ) ||
         (intent.zones && !capability.zones)
       )
         throw new Error(`Unsupported Govee scene for ${target}`);
@@ -3180,7 +3308,9 @@ export class LugnEngine {
         const intent = device.govee.intent;
         if (
           !capability ||
-          (intent.effect && !capability.effects.includes(intent.effect)) ||
+          goveeEffectNames(intent).some(
+            (effect) => !capability.effects.includes(effect),
+          ) ||
           (intent.zones && !capability.zones)
         ) {
           device.govee.status = 'failed';
@@ -3408,6 +3538,8 @@ export class LugnEngine {
 
   dispose(): void {
     this.disposed = true;
+    for (const target of this.goveeRotationTimers.keys())
+      this.clearGoveeRotation(target);
     if (this.lightingEnforcementTimer !== undefined)
       this.clock.clearTimeout(this.lightingEnforcementTimer);
     this.lightingEnforcementTimer = undefined;
@@ -3682,7 +3814,11 @@ export class LugnEngine {
     for (const target of includedTargets) {
       this.invalidateLightingTarget(target);
       this.restoreExternalLightingIntent(target);
-      if (this.requireDevice(target).govee && !scene.govee?.[target]?.effect) {
+      if (
+        this.requireDevice(target).govee &&
+        !scene.govee?.[target]?.effect &&
+        !scene.govee?.[target]?.rotation
+      ) {
         const values = scene.lighting[target];
         if (
           values &&
@@ -3927,15 +4063,24 @@ export class LugnEngine {
         reason !== prelightCommandReason
           ? this.requireDevice(target).govee
           : undefined;
+      // A rotation generation survives a partial scene omitting its lamp. Its
+      // explicit empty-room grant survives until exit/new target intent revokes
+      // the generation; retired global scene metadata cannot own that grant.
+      const rotationWhileEmpty = govee?.intent.rotation
+        ? this.targetIntentCanRunWhileEmpty(revision, target)
+        : undefined;
       const isCurrent = () =>
         !this.disposed &&
         generation === (this.lightingTargetGenerations.get(target) ?? 0) &&
         (!executionGuard || executionGuard()) &&
         (values.power === false ||
           !this.shouldRemainPhysicallyEmpty() ||
-          this.targetIntentCanRunWhileEmpty(revision, target));
+          (rotationWhileEmpty ??
+            this.targetIntentCanRunWhileEmpty(revision, target)));
       if (govee && isCurrent() && !govee.controlId) {
         govee.controlId = randomUUID();
+        if (govee.intent.rotation)
+          govee.activeEffect = govee.intent.rotation.effects[0]!;
         this.publish(['lighting']);
       }
       // Consume the forced transition before synchronous adapter feedback can
@@ -3949,7 +4094,17 @@ export class LugnEngine {
           // Existing adapters retain their command shape; only the Govee composite consumes guards.
           ...(this.adapter.goveeCapabilities ? { isCurrent } : {}),
           ...(govee?.controlId
-            ? { govee: { ...govee.intent, controlId: govee.controlId! } }
+            ? {
+                govee: {
+                  ...(govee.intent.rotation
+                    ? { effect: govee.intent.rotation.effects[0]! }
+                    : govee.intent.effect
+                      ? { effect: govee.intent.effect }
+                      : {}),
+                  ...(govee.intent.zones ? { zones: govee.intent.zones } : {}),
+                  controlId: govee.controlId!,
+                },
+              }
             : {}),
         })
         .then(
@@ -3968,6 +4123,7 @@ export class LugnEngine {
                 `Govee request sent for ${target}; scene feedback unavailable`,
                 { target, controlId: govee.controlId },
               );
+              this.scheduleGoveeRotation(target, govee, isCurrent, 0);
             }
           },
           (error: unknown) => {

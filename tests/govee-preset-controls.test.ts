@@ -93,4 +93,29 @@ describe('complementary Govee scene transports', () => {
     ).rejects.toThrow('superseded');
     expect(f.platform.apply).not.toHaveBeenCalled();
   });
+  it('preserves the mode-only restriction across both effect and zone transports', async () => {
+    const f = fixture();
+    await f.controls.apply(
+      {
+        target,
+        requestId: 'r',
+        controlId: 'g',
+        effect: 'Forest',
+        zones: { main: false, ring: true },
+        modeOnly: true,
+      },
+      async () => undefined,
+    );
+    expect(f.local.apply).toHaveBeenCalledWith(
+      expect.objectContaining({ effect: 'Forest', modeOnly: true }),
+      expect.any(Function),
+    );
+    expect(f.platform.apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        zones: { main: false, ring: true },
+        modeOnly: true,
+      }),
+      expect.any(Function),
+    );
+  });
 });

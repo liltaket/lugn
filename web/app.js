@@ -1598,7 +1598,12 @@ function openPresetEditor(scene) {
 }
 
 function setPresetGovee(target, intent) {
-  if (intent && (intent.effect !== undefined || intent.zones !== undefined)) {
+  if (
+    intent &&
+    (intent.effect !== undefined ||
+      intent.rotation !== undefined ||
+      intent.zones !== undefined)
+  ) {
     presetDraft.govee ??= {};
     presetDraft.govee[target] = intent;
   } else if (presetDraft.govee) {
@@ -1650,6 +1655,7 @@ function renderPresetLight(target) {
     presetDraft.lighting[target] ?? { power: false, brightness: 0 },
   );
   let retainedGovee = structuredClone(presetDraft.govee?.[target]);
+  let retainedRotation = structuredClone(retainedGovee?.rotation);
   let retainedWhite =
     retained.colorTemperature ?? capability?.colorTemperature?.min ?? 2700;
   let retainedRgb = retained.rgb ?? [255, 160, 80];
@@ -1675,12 +1681,17 @@ function renderPresetLight(target) {
     ...(capability?.effects?.length || retainedEffect
       ? [['effect', 'Appanimation']]
       : []),
+    ...(capability?.effects?.length || retainedRotation
+      ? [['rotation', 'Animationsloop']]
+      : []),
   ]);
-  mode.value = retainedGovee?.effect
-    ? 'effect'
-    : retained.rgb
-      ? 'rgb'
-      : 'white';
+  mode.value = retainedRotation
+    ? 'rotation'
+    : retainedGovee?.effect
+      ? 'effect'
+      : retained.rgb
+        ? 'rgb'
+        : 'white';
   field('Ljustyp', mode);
   const white = document.createElement('input');
   white.type = 'number';
@@ -1705,6 +1716,45 @@ function renderPresetLight(target) {
   const effect = select(effects.map((name) => [name, name]));
   effect.value = retainedEffect ?? '';
   const effectLabel = field('Appanimation', effect);
+  const rotationCatalog = [...(capability?.effects ?? [])];
+  const orderedRotationEffects = [
+    ...(retainedRotation?.effects ?? []),
+    ...rotationCatalog,
+  ].filter((name, index, names) => names.indexOf(name) === index);
+  const rotationEffects = select(
+    orderedRotationEffects.map((name) => [name, name]),
+  );
+  rotationEffects.multiple = true;
+  rotationEffects.size = 7;
+  rotationEffects.setAttribute(
+    'aria-label',
+    `Välj 2 till 16 animationer för ${displayTarget(target)}`,
+  );
+  const selectedRotationEffects = new Set(retainedRotation?.effects ?? []);
+  for (const option of rotationEffects.options)
+    option.selected = selectedRotationEffects.has(option.value);
+  const rotationLabel = field('Animationer i loopen (2–16)', rotationEffects);
+  const rotationInterval = document.createElement('input');
+  rotationInterval.type = 'number';
+  rotationInterval.min = '15';
+  rotationInterval.max = '3600';
+  rotationInterval.step = '1';
+  rotationInterval.required = true;
+  rotationInterval.inputMode = 'numeric';
+  rotationInterval.value = String(retainedRotation?.intervalSeconds ?? 60);
+  const rotationIntervalLabel = field(
+    'Byt animation efter (sekunder)',
+    rotationInterval,
+  );
+  const rotationNote = node(
+    'p',
+    'preset-light-note',
+    'Valda animationer spelas i visad ordning. Loopen fortsätter tills preset, färg eller ström ändras.',
+  );
+  rotationNote.setAttribute('aria-live', 'polite');
+  const rotationStatus = node('output', 'preset-light-note');
+  rotationStatus.setAttribute('aria-live', 'polite');
+  detail.append(rotationNote, rotationStatus);
   const zones = select([
     ['default', 'Standard'],
     ['both', 'Huvudljus och ring'],
@@ -1738,10 +1788,60 @@ function renderPresetLight(target) {
     white.disabled = !include.checked || mode.value !== 'white';
     rgb.disabled = !include.checked || mode.value !== 'rgb';
     effect.disabled = !include.checked || mode.value !== 'effect';
+    rotationEffects.disabled =
+      !include.checked ||
+      mode.value !== 'rotation' ||
+      rotationCatalog.length === 0;
+    rotationInterval.disabled = !include.checked || mode.value !== 'rotation';
     zones.disabled = !include.checked || !capability?.zones;
     whiteLabel.hidden = mode.value !== 'white';
     rgbLabel.hidden = mode.value !== 'rgb';
     effectLabel.hidden = mode.value !== 'effect';
+    rotationLabel.hidden = mode.value !== 'rotation';
+    rotationIntervalLabel.hidden = mode.value !== 'rotation';
+    rotationNote.hidden = mode.value !== 'rotation';
+    rotationStatus.hidden = mode.value !== 'rotation';
+    if (mode.value === 'rotation') {
+      const selected = [...rotationEffects.selectedOptions].map(
+        (option) => option.value,
+      );
+      const missing = selected.filter(
+        (name) => !rotationCatalog.includes(name),
+      );
+      const unchangedRotation =
+        JSON.stringify(retainedRotation) ===
+        JSON.stringify(presetOriginal?.govee?.[target]?.rotation);
+      const preservingWithoutCatalog =
+        rotationCatalog.length === 0 && unchangedRotation;
+      let rotationError = '';
+      if (selected.length < 2 || selected.length > 16)
+        rotationError = 'Välj mellan 2 och 16 animationer.';
+      else if (missing.length && !preservingWithoutCatalog)
+        rotationError = `Finns inte i den aktuella katalogen: ${missing.join(', ')}.`;
+      else if (
+        !rotationInterval.validity.valid ||
+        !Number.isInteger(Number(rotationInterval.value))
+      )
+        rotationError = 'Ange ett helt intervall mellan 15 och 3600 sekunder.';
+      rotationStatus.textContent = rotationError
+        ? rotationError
+        : preservingWithoutCatalog
+          ? 'Katalogen saknas. Sparade animationer behålls i utkastet. Katalogen behöver vara tillgänglig när du sparar.'
+          : '';
+      rotationStatus.dataset.tone = rotationError
+        ? 'bad'
+        : preservingWithoutCatalog
+          ? 'warn'
+          : 'neutral';
+      rotationEffects.setAttribute(
+        'aria-invalid',
+        String(Boolean(rotationError)),
+      );
+      rotationInterval.setAttribute(
+        'aria-invalid',
+        String(Boolean(rotationError)),
+      );
+    }
     slider.setAttribute(
       'aria-valuetext',
       include.checked ? `${brightness} procent` : 'Oförändrad',
@@ -1761,6 +1861,16 @@ function renderPresetLight(target) {
       intent.effect = retainedEffect;
       // Saving an OFF draft may have completed its remembered white intent.
       // Re-entering an animation must select the animation's color mode again.
+      const values = presetDraft.lighting[target];
+      if (values?.power === true) {
+        delete values.rgb;
+        delete values.colorTemperature;
+      }
+      retainedRotation = undefined;
+      for (const option of rotationEffects.options) option.selected = false;
+    }
+    if (mode.value === 'rotation' && retainedRotation) {
+      intent.rotation = structuredClone(retainedRotation);
       const values = presetDraft.lighting[target];
       if (values?.power === true) {
         delete values.rgb;
@@ -1794,11 +1904,36 @@ function renderPresetLight(target) {
     const values = presetDraft.lighting[target];
     delete values.rgb;
     delete values.colorTemperature;
-    if (mode.value === 'white') values.colorTemperature = retainedWhite;
-    if (mode.value === 'rgb') values.rgb = [...retainedRgb];
+    if (mode.value === 'white') {
+      values.colorTemperature = retainedWhite;
+      retainedRotation = undefined;
+      for (const option of rotationEffects.options) option.selected = false;
+    }
+    if (mode.value === 'rgb') {
+      values.rgb = [...retainedRgb];
+      retainedRotation = undefined;
+      for (const option of rotationEffects.options) option.selected = false;
+    }
     if (mode.value === 'effect') {
       values.power = true;
       values.brightness = Math.max(1, values.brightness ?? 50);
+      retainedRotation = undefined;
+      for (const option of rotationEffects.options) option.selected = false;
+      if (capability?.zones && zones.value === 'default') zones.value = 'both';
+    }
+    if (mode.value === 'rotation') {
+      values.power = true;
+      values.brightness = Math.max(1, values.brightness ?? 50);
+      retainedEffect = undefined;
+      retainedRotation = {
+        effects: [...rotationEffects.selectedOptions].map(
+          (option) => option.value,
+        ),
+        intervalSeconds:
+          Number(rotationInterval.value) ||
+          retainedRotation?.intervalSeconds ||
+          60,
+      };
       if (capability?.zones && zones.value === 'default') zones.value = 'both';
     }
     writeGovee();
@@ -1822,6 +1957,24 @@ function renderPresetLight(target) {
     retainedEffect = effect.value;
     setMode();
   });
+  const updateRotation = () => {
+    retainedRotation = {
+      effects: [...rotationEffects.selectedOptions].map(
+        (option) => option.value,
+      ),
+      intervalSeconds: Number(rotationInterval.value),
+    };
+    if (include.checked) {
+      const values = presetDraft.lighting[target];
+      values.power = true;
+      values.brightness = Math.max(1, values.brightness ?? 50);
+    }
+    writeGovee();
+    sync();
+    updatePresetDirtyState();
+  };
+  rotationEffects.addEventListener('change', updateRotation);
+  rotationInterval.addEventListener('input', updateRotation);
   zones.addEventListener('change', () => {
     if (zones.value !== 'default') {
       const values = presetDraft.lighting[target];
@@ -1859,6 +2012,36 @@ function renderPresetLight(target) {
   control.append(slider, numberWrap, status);
   row.append(includeLabel, control, detail);
   return row;
+}
+
+function presetRotationValidationMessage() {
+  for (const [target, intent] of Object.entries(presetDraft.govee ?? {})) {
+    if (!intent.rotation) continue;
+    const rotation = intent.rotation;
+    if (
+      !Array.isArray(rotation.effects) ||
+      rotation.effects.length < 2 ||
+      rotation.effects.length > 16 ||
+      new Set(rotation.effects).size !== rotation.effects.length
+    )
+      return `Välj 2–16 olika animationer för ${displayTarget(target)}.`;
+    if (
+      !Number.isInteger(rotation.intervalSeconds) ||
+      rotation.intervalSeconds < 15 ||
+      rotation.intervalSeconds > 3600
+    )
+      return `Ange ett helt intervall mellan 15 och 3600 sekunder för ${displayTarget(target)}.`;
+    const available = overview.goveeCapabilities?.[target]?.effects ?? [];
+    const missing = rotation.effects.filter(
+      (name) => !available.includes(name),
+    );
+    const unchanged =
+      JSON.stringify(rotation) ===
+      JSON.stringify(presetOriginal?.govee?.[target]?.rotation);
+    if (missing.length && !(unchanged && available.length === 0))
+      return `Någon animation för ${displayTarget(target)} saknas i aktuell Govee-katalog (${missing.join(', ')}). Välj om loopen.`;
+  }
+  return '';
 }
 
 function setPresetBusy(busy) {
@@ -1927,6 +2110,11 @@ async function savePreset(activate) {
   }
   if (!Object.keys(presetDraft.lighting).length) {
     setPresetStatus('Välj minst en lampa som ska ingå.', 'bad');
+    return;
+  }
+  const rotationError = presetRotationValidationMessage();
+  if (rotationError) {
+    setPresetStatus(rotationError, 'bad');
     return;
   }
   setPresetBusy(true);
@@ -2715,6 +2903,39 @@ function renderLights(devices, presenceState) {
   }
 }
 
+function appendGoveeReadings(readings, govee) {
+  const intent = govee.intent;
+  if (intent.effect)
+    appendReading(readings, 'Begärd appanimation', intent.effect);
+  if (intent.rotation)
+    appendReading(
+      readings,
+      `Animationsloop · ${intent.rotation.intervalSeconds} s`,
+      intent.rotation.effects.join(' → '),
+    );
+  if (govee.activeEffect)
+    appendReading(
+      readings,
+      govee.status === 'pending'
+        ? 'Skickar Govee-animation'
+        : govee.status === 'failed'
+          ? 'Senaste Govee-animation misslyckades'
+          : 'Senast skickad Govee-animation',
+      govee.activeEffect,
+      govee.status === 'failed' ? 'bad' : 'warn',
+    );
+  if (intent.zones)
+    appendReading(
+      readings,
+      'Begärda delar',
+      intent.zones.main
+        ? intent.zones.ring
+          ? 'Huvudljus och ring'
+          : 'Bara huvudljus'
+        : 'Bara ring',
+    );
+}
+
 function renderLight(target, device, presenceState) {
   const article = node('article', 'light-row');
   const glow = lampGlow(device);
@@ -2775,21 +2996,7 @@ function renderLight(target, device, presenceState) {
       device.observed?.colorTemperature === undefined ? 'warn' : '',
     );
   }
-  if (device.govee) {
-    const intent = device.govee.intent;
-    if (intent.effect)
-      appendReading(readings, 'Begärd appanimation', intent.effect);
-    if (intent.zones)
-      appendReading(
-        readings,
-        'Begärda delar',
-        intent.zones.main
-          ? intent.zones.ring
-            ? 'Huvudljus och ring'
-            : 'Bara huvudljus'
-          : 'Bara ring',
-      );
-  }
+  if (device.govee) appendGoveeReadings(readings, device.govee);
   article.append(readings);
 
   const controls = node('div', 'light-controls');

@@ -87,10 +87,54 @@ room lamps in real presets. Omitted targets retain their existing intent.
 ```
 
 A Govee entry requires a corresponding included lamp with `power:true`. An effect
-cannot be mixed with static RGB/Kelvin. Both zones OFF is represented by ordinary
+or rotation cannot be mixed with static RGB/Kelvin. Both zones OFF is represented by ordinary
 whole-fixture `power:false`, without a Govee entry. Unknown effects or unsupported
 zone masks fail validation before any effect write. Definitions remain readable
 through a companion outage; activating unavailable effects fails explicitly.
+
+## Effect rotations
+
+Choose **Animationsloop** in the editor to select 2–16 distinct catalog effects
+and an interval of 15–3600 whole seconds. For example:
+
+```json
+{
+  "lighting.govee_strip_2": {
+    "rotation": {
+      "effects": [
+        "Rainbow B",
+        "Meteor shower",
+        "Aurora",
+        "Colorful",
+        "Forest",
+        "Party"
+      ],
+      "intervalSeconds": 30
+    }
+  }
+}
+```
+
+This is an entry in a scene's `govee` map; include the powered lamp in `lighting`.
+The engine owns one timer per target. The interval begins after successful
+delivery, so slow writes never accumulate timer jobs. Steps wrap in saved order.
+Only the definition persists; the current index, timer and control ID do not.
+Restore waits for normal occupancy/explicit permission and starts at the first
+effect. Each step gets a new live ID and reports requested `activeEffect` and
+transport status, without claiming physical animation feedback.
+
+Later steps skip ordinary power/brightness baseline writes and carry
+`modeOnly:true` to the companion. LAN requires fresh native ON; the cloud path
+requires a fresh valid ON state and omits global power ON. OFF, unknown power or
+delivery failure stops rotation rather than reactivating the fixture or retrying
+blindly. Accepted cloud work still cannot be retracted atomically. Reapply the
+preset after resolving a failure.
+
+Manual color/OFF, a new included scene, external selector takeover, confirmed
+exit and shutdown invalidate pending steps. Omitted targets keep their current
+rotation. After confirmed exit the intent may resume under the normal entry
+permission, while an explicit manual OFF remains authoritative. This feature
+requires the matching companion version supporting the mode-only restriction.
 
 ## Transitions and truthful status
 
@@ -129,7 +173,7 @@ an explicit Govee mode owns the strip, and resumes with ordinary static control.
 HTTP over the protected Unix socket, with no network listener:
 
 - `GET /capabilities` → `{targets: Record<target,{effects:string[],zones:boolean,colorTemperature?:{min,max}}>}`.
-- `POST /apply` ← `{requestId,target,controlId,effect?,zones?}` → matching IDs and `status:"sent"`, plus truthful delivery metadata.
+- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation.
 - `POST /cancel` ← `{target,controlId?}` → `{status:"drained"}`.
 
 The server verifies the live optional engine ID, no external lease and powered

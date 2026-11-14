@@ -37,6 +37,8 @@ export const GoveeControlRequestSchema = z
     target: Target,
     controlId: Token,
     effect: z.string().min(1).max(255).optional(),
+    /** Periodic step: require an already powered fixture; never activate it. */
+    modeOnly: z.literal(true).optional(),
     zones: z
       .object({ main: z.boolean(), ring: z.boolean() })
       .strict()
@@ -44,6 +46,7 @@ export const GoveeControlRequestSchema = z
       .optional(),
   })
   .strict()
+  .refine((request) => !request.modeOnly || request.effect !== undefined)
   .refine(
     (request) => request.effect !== undefined || request.zones !== undefined,
   );

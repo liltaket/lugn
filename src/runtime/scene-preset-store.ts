@@ -260,6 +260,9 @@ export class ScenePresetStore {
         !capability ||
         (intent.effect !== undefined &&
           !capability.effects.includes(intent.effect)) ||
+        intent.rotation?.effects.some(
+          (effect) => !capability.effects.includes(effect),
+        ) ||
         (intent.zones !== undefined && !capability.zones)
       )
         throw new ScenePresetError(400, 'govee_unsupported');
@@ -371,6 +374,14 @@ function sameGovee(
       return (
         other !== undefined &&
         intent.effect === other.effect &&
+        intent.rotation?.intervalSeconds === other.rotation?.intervalSeconds &&
+        (intent.rotation === undefined
+          ? other.rotation === undefined
+          : other.rotation !== undefined &&
+            intent.rotation.effects.length === other.rotation.effects.length &&
+            intent.rotation.effects.every(
+              (effect, index) => effect === other.rotation!.effects[index],
+            )) &&
         intent.zones?.main === other.zones?.main &&
         intent.zones?.ring === other.zones?.ring
       );

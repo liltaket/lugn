@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import type { connect } from 'mqtt';
 import type { RuntimeConfig } from '../src/runtime/config.js';
+import type { GoveePresetControls } from '../src/runtime/govee-preset-controls.js';
 import {
   platformScenes,
   type PlatformDevice,
@@ -241,6 +242,7 @@ async function running(
     return new Response(JSON.stringify(response));
   };
   const mqttConnect = vi.fn(() => client);
+  let preset!: GoveePresetControls;
   const stop = await startGoveePlatformBridge(
     runtime,
     GoveePlatformConfigSchema.parse({
@@ -259,16 +261,98 @@ async function running(
       },
       pollIntervalMs: options.pollIntervalMs ?? 60000,
       followupDelayMs: 60000,
+      ready: (controls) => {
+        preset = controls;
+      },
     },
   );
   client.emit('connect');
   await vi.waitFor(() =>
     expect(client.last('lugn/govee/platform/availability')).toBe('online'),
   );
-  return { client, localCalls, platform, stop, mqttConnect };
+  return { client, localCalls, platform, stop, mqttConnect, preset };
 }
 
 describe('cloud zone controls and discovery', () => {
+  it('sends only the scene for a mode-only step after fresh confirmed ON', async () => {
+    const f = await running();
+    try {
+      await f.preset.apply(
+        {
+          requestId: 'r',
+          target: fixture.target,
+          controlId: 'g',
+          effect: 'Forest',
+          modeOnly: true,
+        },
+        async () => undefined,
+      );
+      expect(f.platform.control.mock.calls.map((call) => call[1])).toEqual([
+        catalogs.get('Forest')!.control,
+      ]);
+      expect(
+        f.localCalls.some((call) => call.path.endsWith('beginExternalControl')),
+      ).toBe(false);
+    } finally {
+      await f.stop();
+    }
+  });
+  it.each([0, '', undefined])(
+    'never activates a cloud rotation when fresh power is %s',
+    async (value) => {
+      const f = await running();
+      try {
+        const fresh = state();
+        fresh.capabilities.find(
+          (c) => c.instance === 'powerSwitch',
+        )!.state.value = value;
+        f.platform.state.mockResolvedValueOnce(fresh);
+        await expect(
+          f.preset.apply(
+            {
+              requestId: 'r',
+              target: fixture.target,
+              controlId: 'g',
+              effect: 'Forest',
+              modeOnly: true,
+              zones: { main: false, ring: true },
+            },
+            async () => undefined,
+          ),
+        ).rejects.toThrow('confirmed power ON');
+        expect(f.platform.control).not.toHaveBeenCalled();
+      } finally {
+        await f.stop();
+      }
+    },
+  );
+  it('rechecks ownership after the asynchronous fresh cloud power query', async () => {
+    const f = await running();
+    let current = true;
+    try {
+      f.platform.state.mockImplementationOnce(async () => {
+        current = false;
+        return state();
+      });
+      await expect(
+        f.preset.apply(
+          {
+            requestId: 'r',
+            target: fixture.target,
+            controlId: 'g',
+            effect: 'Forest',
+            modeOnly: true,
+          },
+          async () => {
+            if (!current) throw new Error('revoked');
+          },
+        ),
+      ).rejects.toThrow('revoked');
+      expect(f.platform.control).not.toHaveBeenCalled();
+    } finally {
+      await f.stop();
+    }
+  });
   it('keeps whole power ON at every step between nonempty zone masks', () => {
     const masks = [
       { main: true, ring: false },

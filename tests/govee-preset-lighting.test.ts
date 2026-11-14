@@ -79,6 +79,54 @@ it('drains before baseline and applies effect/mask afterward without inventing s
     ...effect.govee,
   });
 });
+it('drains a guarded rotation step without rewriting ordinary power or brightness', async () => {
+  const f = fixture();
+  const apply = vi.spyOn(f.client, 'apply');
+  await f.adapter.dispatch({
+    ...effect,
+    values: {},
+    goveeOnly: true,
+    isCurrent: () => true,
+  });
+  expect(f.events).toEqual(['cancel:all', 'apply']);
+  expect(f.writes).toHaveLength(0);
+  expect(apply).toHaveBeenCalledWith({
+    requestId: effect.id,
+    target,
+    ...effect.govee,
+    modeOnly: true,
+  });
+});
+it('rejects rotation-only steps without an effect, live guard or empty baseline', async () => {
+  const f = fixture();
+  for (const command of [
+    { ...effect, goveeOnly: true as const },
+    { ...effect, goveeOnly: true as const, isCurrent: () => true },
+    {
+      ...effect,
+      values: {},
+      goveeOnly: true as const,
+      govee: { controlId: 'bad', zones: { main: true, ring: false } },
+      isCurrent: () => true,
+    },
+  ])
+    await expect(f.adapter.dispatch(command)).rejects.toThrow('rotation step');
+  expect(f.events).toEqual([]);
+});
+it('rejects an unflattened rotation before physical writes instead of silently applying only zones', async () => {
+  const f = fixture();
+  await expect(
+    f.adapter.dispatch({
+      ...effect,
+      govee: {
+        controlId: 'bad',
+        rotation: { effects: ['Aurora', 'Forest'], intervalSeconds: 30 },
+        zones: { main: false, ring: true },
+      },
+    }),
+  ).rejects.toThrow('Unsupported');
+  expect(f.events).toEqual([]);
+});
 it('cancels an obsolete in-flight effect and keeps newer static white behind its drain', async () => {
   vi.useFakeTimers();
   const f = fixture();

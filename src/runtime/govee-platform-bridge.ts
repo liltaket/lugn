@@ -251,10 +251,14 @@ export function platformZoneControls(
 export function platformEffectControls(
   device: PlatformDevice,
   scene: PlatformScene,
+  activate = true,
 ): PlatformControl[] {
   // A local Matter OFF can be newer than the cloud's historical power state.
   // Explicit fixture effects always request ON; zone commands never use this path.
-  return [platformToggle(device, 'powerSwitch', true), scene.control];
+  return [
+    ...(activate ? [platformToggle(device, 'powerSwitch', true)] : []),
+    scene.control,
+  ];
 }
 
 function zonePower(
@@ -667,7 +671,9 @@ export async function startGoveePlatformBridge(
         const scene = catalogs.get(device.id)?.get(command.effect);
         if (!scene || !device.exposeEffects)
           throw new Error('Unsupported platform effect');
-        controls.push(...platformEffectControls(info, scene));
+        controls.push(
+          ...platformEffectControls(info, scene, !command.modeOnly),
+        );
       }
       if (command.zones) {
         controls.push(
@@ -675,6 +681,25 @@ export async function startGoveePlatformBridge(
         );
       }
       if (!controls.length) throw new Error('Empty platform preset');
+      if (command.modeOnly) {
+        // Periodic work is not a fresh human ON request. Fail closed if a
+        // physical OFF has reached the cloud before HA updates the engine.
+        await guard();
+        const fresh = await platform.state(device);
+        const power = platformStateValue(
+          info,
+          fresh,
+          'devices.capabilities.on_off',
+          'powerSwitch',
+        );
+        if (
+          !isDeepStrictEqual(
+            power,
+            platformToggle(info, 'powerSwitch', true).value,
+          )
+        )
+          throw new Error('Govee rotation requires confirmed power ON');
+      }
       for (const control of controls) {
         await guard();
         await platform.control(device, control, () => undefined);

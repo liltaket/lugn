@@ -94,4 +94,52 @@ describe('guarded native Govee activation', () => {
     expect(p.status).not.toHaveBeenCalled();
     expect(p.send).toHaveBeenCalledTimes(1);
   });
+  it('rejects mode-only native OFF even while the engine guard still permits ON', async () => {
+    const p = port([0]);
+    await expect(
+      sendGoveeLanEffect('192.0.2.2', effect, { ...p, requireOn: true }, true),
+    ).rejects.toThrow('requires native ON');
+    expect(p.status).toHaveBeenCalledOnce();
+    expect(p.send).not.toHaveBeenCalled();
+    expect(p.wait).not.toHaveBeenCalled();
+  });
+  it('sends only the scene for a mode-only native ON snapshot', async () => {
+    const p = port([1]);
+    await sendGoveeLanEffect('192.0.2.2', effect, {
+      ...p,
+      requireOn: true,
+    });
+    expect(p.status).toHaveBeenCalledOnce();
+    expect(p.send).toHaveBeenCalledOnce();
+    expect(p.send.mock.calls[0]?.[1]).toMatchObject({ msg: { cmd: 'ptReal' } });
+  });
+  it('uses a same-command mode-only preflight without issuing a duplicate status query', async () => {
+    const p = port([1]);
+    const initialStatus = await p.status();
+    p.status.mockClear();
+    await sendGoveeLanEffect('192.0.2.2', effect, {
+      ...p,
+      initialStatus,
+      requireOn: true,
+    });
+    expect(p.status).not.toHaveBeenCalled();
+    expect(p.send).toHaveBeenCalledOnce();
+  });
+  it('honors revocation while awaiting the mode-only native status reply', async () => {
+    const p = port([1]);
+    let current = true;
+    const status = p.status;
+    p.status = vi.fn(async () => {
+      const result = await status();
+      current = false;
+      return result;
+    });
+    p.guard = vi.fn(async () => {
+      if (!current) throw new Error('exit');
+    });
+    await expect(
+      sendGoveeLanEffect('192.0.2.2', effect, { ...p, requireOn: true }),
+    ).rejects.toThrow('exit');
+    expect(p.send).not.toHaveBeenCalled();
+  });
 });

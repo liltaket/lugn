@@ -152,3 +152,84 @@ it('rejects unsupported targets, effects and masks before saving or dispatching'
   expect(s.engine.scenes.size).toBe(0);
   expect(s.adapter.dispatched).toEqual([]);
 });
+
+it('persists ordered rotations without normalizing them into static white', async () => {
+  const s = await fixture();
+  const rotation = { effects: ['Aurora', 'Forest'], intervalSeconds: 60 };
+  const scene = await s.store.create(s.engine, {
+    name: 'Loop',
+    lighting: { [target]: { power: true, brightness: 30 } },
+    govee: { [target]: { rotation, zones: { main: false, ring: true } } },
+  });
+  expect(scene.lighting[target]).toEqual({ power: true, brightness: 30 });
+  expect(scene.govee?.[target]?.rotation).toEqual(rotation);
+  const loaded = await new ScenePresetStore({
+    filePath: s.path,
+    deviceIds: [target, other],
+  }).load([]);
+  expect(loaded).toEqual([scene]);
+  expect(s.adapter.dispatched).toEqual([]);
+});
+
+it('detects concurrent rotation interval and ordering edits', async () => {
+  const s = await fixture();
+  const definition = {
+    name: 'Loop',
+    lighting: { [target]: { power: true, brightness: 30 } },
+    govee: {
+      [target]: {
+        rotation: { effects: ['Aurora', 'Forest'], intervalSeconds: 60 },
+      },
+    },
+  };
+  const original = await s.store.create(s.engine, definition);
+  const changedInterval = await s.store.update(s.engine, original.id, {
+    ...definition,
+    govee: {
+      [target]: {
+        rotation: {
+          ...definition.govee[target]!.rotation,
+          intervalSeconds: 120,
+        },
+      },
+    },
+    expectedScene: original,
+  });
+  await expect(
+    s.store.delete(s.engine, original.id, original),
+  ).rejects.toMatchObject({ code: 'scene_changed' });
+  const changedOrder = await s.store.update(s.engine, original.id, {
+    ...definition,
+    govee: {
+      [target]: {
+        rotation: { effects: ['Forest', 'Aurora'], intervalSeconds: 120 },
+      },
+    },
+    expectedScene: changedInterval,
+  });
+  await expect(
+    s.store.update(s.engine, original.id, {
+      ...definition,
+      expectedScene: changedInterval,
+    }),
+  ).rejects.toMatchObject({ code: 'scene_changed' });
+  await s.store.delete(s.engine, original.id, changedOrder);
+  expect(s.engine.scenes.has(original.id)).toBe(false);
+});
+
+it('rejects any unsupported rotation label before saving', async () => {
+  const s = await fixture();
+  await expect(
+    s.store.create(s.engine, {
+      name: 'Invalid loop',
+      lighting: { [target]: { power: true, brightness: 30 } },
+      govee: {
+        [target]: {
+          rotation: { effects: ['Aurora', 'Missing'], intervalSeconds: 60 },
+        },
+      },
+    }),
+  ).rejects.toMatchObject({ code: 'govee_unsupported' });
+  expect(s.engine.scenes.size).toBe(0);
+  expect(s.adapter.dispatched).toEqual([]);
+});

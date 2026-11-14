@@ -13,13 +13,19 @@ export async function sendGoveeLanEffect(
     status(ip: string): Promise<GoveeLanStatus>;
     send(ip: string, command: unknown): Promise<void>;
     wait?: (ms: number) => Promise<void>;
-    /** A same-command preflight, bounded by the caller and corroborated by HA power. */
+    /** A fresh same-command native preflight, never an old telemetry cache. */
     initialStatus?: GoveeLanStatus;
+    /** Periodic mode changes may only address a fixture already reporting ON. */
+    requireOn?: boolean;
   },
   activate = false,
 ): Promise<void> {
   const command = encodeGoveeEffectCommand(effect);
-  if (activate) {
+  if (port.requireOn) {
+    const status = port.initialStatus ?? (await port.status(ip));
+    if (status.onOff !== 1)
+      throw new Error('Govee mode-only change requires native ON');
+  } else if (activate) {
     let status = port.initialStatus ?? (await port.status(ip));
     if (status.onOff === 0) {
       await port.guard();

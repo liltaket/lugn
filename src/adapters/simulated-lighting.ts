@@ -21,6 +21,8 @@ export type LightingObservation = {
 export type LightingCommand = {
   /** Checked by composite transports before each delayed physical write. */
   isCurrent?: () => boolean;
+  /** Internal mode-only rotation step; never repeats baseline power/brightness. */
+  goveeOnly?: true;
   govee?: GoveeSceneIntent & { controlId: string };
   id: string;
   target: string;

@@ -85,6 +85,7 @@ export function synchronizeSceneColorTemperature(
         target,
         values.rgb === undefined &&
         scene.govee?.[target]?.effect === undefined &&
+        scene.govee?.[target]?.rotation === undefined &&
         values.colorTemperature === undefined &&
         cct !== undefined
           ? { ...values, colorTemperature: cct }

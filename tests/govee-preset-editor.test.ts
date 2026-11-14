@@ -14,24 +14,43 @@ class Element {
   id = '';
   min = '';
   max = '';
+  step = '';
+  multiple = false;
+  size = 0;
+  selected = false;
+  required = false;
   dataset: Record<string, string> = {};
   children: Element[] = [];
   attributes = new Map<string, string>();
   listeners = new Map<string, () => unknown>();
   get validity() {
     const value = Number(this.value);
+    const step = Number(this.step || 1);
     return {
+      stepMismatch:
+        Number.isFinite(value) && (value - Number(this.min || 0)) % step !== 0,
       valid:
         this.value !== '' &&
         value >= Number(this.min || 0) &&
-        value <= Number(this.max || Infinity),
+        value <= Number(this.max || Infinity) &&
+        Number.isFinite(value) &&
+        (value - Number(this.min || 0)) % step === 0,
     };
+  }
+  get options() {
+    return this.children;
+  }
+  get selectedOptions() {
+    return this.children.filter((option) => option.selected);
   }
   append(...children: Element[]) {
     this.children.push(...children);
   }
   setAttribute(key: string, value: string) {
     this.attributes.set(key, value);
+  }
+  getAttribute(key: string) {
+    return this.attributes.get(key) ?? null;
   }
   addEventListener(type: string, callback: () => unknown) {
     this.listeners.set(type, callback);
@@ -42,17 +61,33 @@ class Element {
   focus() {}
 }
 const target = 'lighting.govee_ceiling';
-function setup(govee = true, kelvin = 3000) {
+function setup(
+  govee = true,
+  kelvin = 3000,
+  goveeIntent?: Record<string, unknown>,
+  effects = ['Aurora', 'Forest B'],
+) {
   const lighting = {
-    [target]: { power: true, brightness: 30, colorTemperature: kelvin },
+    [target]: {
+      power: true,
+      brightness: 30,
+      ...(goveeIntent?.['rotation'] ? {} : { colorTemperature: kelvin }),
+    },
   };
-  const draft = { id: 'scene.custom_test', name: 'Kväll', lighting };
+  const draft = {
+    id: 'scene.custom_test',
+    name: 'Kväll',
+    lighting,
+    ...(goveeIntent
+      ? { govee: { [target]: structuredClone(goveeIntent) } }
+      : {}),
+  };
   const overview = {
     scenes: [],
     goveeCapabilities: govee
       ? {
           [target]: {
-            effects: ['Aurora', 'Forest B'],
+            effects,
             zones: true,
             colorTemperature: { min: 2000, max: 6500 },
           },
@@ -60,6 +95,7 @@ function setup(govee = true, kelvin = 3000) {
       : {},
   };
   const changed = vi.fn();
+  const setStatus = vi.fn();
   const invoke = vi.fn();
   const fetch = vi.fn(async (_url: string, init: RequestInit) => {
     const input = JSON.parse(String(init.body));
@@ -80,6 +116,10 @@ function setup(govee = true, kelvin = 3000) {
     csrfToken: 'csrf',
     pendingActions: new Set(),
     presetName: Object.assign(new Element(), { value: draft.name }),
+    presetForm: new Element(),
+    closePresetButton: new Element(),
+    presetConfirmYes: new Element(),
+    presetConfirmNo: new Element(),
     presetEditor: new Element(),
     savePresetButton: new Element(),
     deletePresetButton: new Element(),
@@ -92,9 +132,15 @@ function setup(govee = true, kelvin = 3000) {
         textContent: text,
         className: _className,
       }),
+    appendReading: (
+      readings: unknown[],
+      label: string,
+      value: string,
+      tone = '',
+    ) => readings.push({ label, value, ...(tone ? { tone } : {}) }),
     displayTarget: (value: string) => value,
     updatePresetDirtyState: changed,
-    setPresetStatus: vi.fn(),
+    setPresetStatus: setStatus,
     setPresetBusy: vi.fn(),
     refreshOverview: vi.fn(),
     invokeCapability: invoke,
@@ -116,6 +162,10 @@ function setup(govee = true, kelvin = 3000) {
       source.slice(
         source.indexOf('async function mutatePreset('),
         source.indexOf('async function deletePreset('),
+      ) +
+      source.slice(
+        source.indexOf('function appendGoveeReadings('),
+        source.indexOf('function renderLight('),
       ),
     context,
   );
@@ -129,7 +179,17 @@ function setup(govee = true, kelvin = 3000) {
     if (!label?.children[1]) throw new Error(`Missing preset field: ${name}`);
     return label.children[1];
   };
-  return { run, row, field, fetch, changed, invoke, overview, draft };
+  return {
+    run,
+    row,
+    field,
+    fetch,
+    changed,
+    invoke,
+    setStatus,
+    overview,
+    draft,
+  };
 }
 
 it('edits catalog animations and ceiling masks without sending a light command', async () => {
@@ -269,4 +329,197 @@ it('keeps legacy 2200 K editable without advertising new RGB for lamps without c
   expect(white.validity.valid).toBe(true);
   const mode = s.field('Ljustyp');
   expect(mode.children.map((option) => option.value)).toEqual(['white']);
+});
+
+it('creates and saves an ordered animation loop with its interval and ceiling mask', async () => {
+  const s = setup();
+  const mode = s.field('Ljustyp');
+  expect(mode.children.map((option) => option.value)).toContain('rotation');
+  mode.value = 'rotation';
+  await mode.fire('change');
+  const rotations = s.field('Animationer i loopen (2–16)');
+  for (const option of rotations.options)
+    option.selected = ['Aurora', 'Forest B'].includes(option.value);
+  await rotations.fire('change');
+  s.field('Byt animation efter (sekunder)').value = '25';
+  await s.field('Byt animation efter (sekunder)').fire('input');
+  s.field('Taklampans delar').value = 'ring';
+  await s.field('Taklampans delar').fire('change');
+  expect(s.run('presetDraft')).toMatchObject({
+    lighting: { [target]: { power: true, brightness: 30 } },
+    govee: {
+      [target]: {
+        rotation: { effects: ['Aurora', 'Forest B'], intervalSeconds: 25 },
+        zones: { main: false, ring: true },
+      },
+    },
+  });
+  expect(
+    s.run(`presetDraft.lighting['${target}'].colorTemperature`),
+  ).toBeUndefined();
+  await s.run('savePreset(false)');
+  const saved = JSON.parse(String(s.fetch.mock.calls[0]![1].body));
+  expect(saved.govee[target]).toEqual({
+    rotation: { effects: ['Aurora', 'Forest B'], intervalSeconds: 25 },
+    zones: { main: false, ring: true },
+  });
+  expect(s.run('sceneSnapshot(presetDraft).govee')).toEqual(saved.govee);
+});
+
+it('round-trips a saved loop order and interval when catalog capabilities are absent', async () => {
+  const rotation = {
+    effects: ['Forest B', 'Aurora'],
+    intervalSeconds: 45,
+  };
+  const s = setup(false, 3000, {
+    rotation,
+    zones: { main: false, ring: true },
+  });
+  expect(s.field('Ljustyp').value).toBe('rotation');
+  expect(
+    s
+      .field('Animationer i loopen (2–16)')
+      .options.map((option) => option.value),
+  ).toEqual(['Forest B', 'Aurora']);
+  expect(
+    s
+      .field('Animationer i loopen (2–16)')
+      .selectedOptions.map((option) => option.value),
+  ).toEqual(rotation.effects);
+  expect(s.field('Byt animation efter (sekunder)').value).toBe('45');
+  expect(s.field('Animationer i loopen (2–16)').disabled).toBe(true);
+  expect(
+    s.field('Animationer i loopen (2–16)').getAttribute('aria-invalid'),
+  ).toBe('false');
+  expect(s.setStatus).not.toHaveBeenCalled();
+  // The status stays in the editor even though the current catalog is absent.
+  expect(s.row.children[2]!.children[7]!.textContent).toContain(
+    'Katalogen saknas',
+  );
+  await s.run('savePreset(false)');
+  const saved = JSON.parse(String(s.fetch.mock.calls[0]![1].body));
+  expect(saved.govee[target]).toEqual({
+    rotation,
+    zones: { main: false, ring: true },
+  });
+});
+
+it('preserves the loop across exclusion and OFF, then restores it on re-entry', async () => {
+  const s = setup(true, 3000, {
+    rotation: { effects: ['Forest B', 'Aurora'], intervalSeconds: 30 },
+    zones: { main: false, ring: true },
+  });
+  const include = s.row.children[0]!.children[0]!;
+  include.checked = false;
+  await include.fire('change');
+  expect(s.run('presetDraft.govee')).toBeUndefined();
+  include.checked = true;
+  await include.fire('change');
+  expect(s.run(`presetDraft.govee['${target}']`)).toEqual({
+    rotation: { effects: ['Forest B', 'Aurora'], intervalSeconds: 30 },
+    zones: { main: false, ring: true },
+  });
+  const slider = s.row.children[1]!.children[0]!;
+  slider.value = '0';
+  await slider.fire('input');
+  expect(s.run(`presetDraft.lighting['${target}'].power`)).toBe(false);
+  expect(s.run('presetDraft.govee')).toBeUndefined();
+  slider.value = '30';
+  await slider.fire('input');
+  expect(s.run(`presetDraft.govee['${target}']`)).toEqual({
+    rotation: { effects: ['Forest B', 'Aurora'], intervalSeconds: 30 },
+    zones: { main: false, ring: true },
+  });
+});
+
+it.each([
+  [{ effects: ['Aurora'], intervalSeconds: 30 }, 'Välj 2–16 olika animationer'],
+  [
+    { effects: ['Aurora', 'Forest B'], intervalSeconds: 14 },
+    'intervall mellan 15 och 3600',
+  ],
+  [
+    { effects: ['Aurora', 'Forest B'], intervalSeconds: 30.5 },
+    'intervall mellan 15 och 3600',
+  ],
+  [
+    { effects: ['Aurora', 'Missing'], intervalSeconds: 30 },
+    'saknas i aktuell Govee-katalog',
+  ],
+])('blocks saving an invalid loop %j', async (rotation, expectedMessage) => {
+  const s = setup(true, 3000, { rotation });
+  await s.run('savePreset(false)');
+  expect(s.fetch).not.toHaveBeenCalled();
+  expect(s.setStatus.mock.calls[0]?.[0]).toContain(expectedMessage);
+  expect(s.run('presetRotationValidationMessage()')).toContain(expectedMessage);
+});
+
+it('accepts the 16-effect and 15/3600-second boundaries and rejects 17 effects', async () => {
+  const labels = Array.from(
+    { length: 17 },
+    (_, index) => `Effect ${index + 1}`,
+  );
+  const s = setup(true, 3000, undefined, labels);
+  s.field('Ljustyp').value = 'rotation';
+  await s.field('Ljustyp').fire('change');
+  const effects = s.field('Animationer i loopen (2–16)');
+  for (const option of effects.options) option.selected = true;
+  await effects.fire('change');
+  await s.run('savePreset(false)');
+  expect(s.fetch).not.toHaveBeenCalled();
+  expect(s.setStatus.mock.calls.at(-1)?.[0]).toContain('2–16');
+
+  const boundary = setup(true, 3000, undefined, labels.slice(0, 16));
+  boundary.field('Ljustyp').value = 'rotation';
+  await boundary.field('Ljustyp').fire('change');
+  const boundaryEffects = boundary.field('Animationer i loopen (2–16)');
+  for (const option of boundaryEffects.options) option.selected = true;
+  await boundaryEffects.fire('change');
+  const interval = boundary.field('Byt animation efter (sekunder)');
+  interval.value = '15';
+  await interval.fire('input');
+  expect(boundary.run('presetRotationValidationMessage()')).toBe('');
+  interval.value = '3600';
+  await interval.fire('input');
+  expect(boundary.run('presetRotationValidationMessage()')).toBe('');
+});
+
+it('clears a saved loop from the draft when changing to static white', async () => {
+  const s = setup(true, 3000, {
+    rotation: { effects: ['Forest B', 'Aurora'], intervalSeconds: 30 },
+  });
+  s.field('Ljustyp').value = 'white';
+  await s.field('Ljustyp').fire('change');
+  expect(s.run('presetDraft.govee')).toBeUndefined();
+  expect(s.run(`presetDraft.lighting['${target}'].colorTemperature`)).toBe(
+    2000,
+  );
+});
+
+it('labels the latest animation as sent rather than physically confirmed', () => {
+  const s = setup();
+  const readings = JSON.parse(
+    JSON.stringify(
+      s.run(`(() => {
+        const readings = [];
+        appendGoveeReadings(readings, {
+          intent: { rotation: { effects: ['Aurora', 'Forest B'], intervalSeconds: 30 } },
+          activeEffect: 'Forest B',
+          status: 'sent',
+        });
+        return readings;
+      })()`),
+    ),
+  );
+  expect(readings).toEqual([
+    {
+      label: 'Animationsloop · 30 s',
+      value: 'Aurora → Forest B',
+    },
+    {
+      label: 'Senast skickad Govee-animation',
+      value: 'Forest B',
+      tone: 'warn',
+    },
+  ]);
 });

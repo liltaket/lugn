@@ -336,8 +336,9 @@ export async function startGoveeBridge(
             status: (ip) => lan.status(ip),
             send: (ip, command) => lan.send(ip, command),
             initialStatus: status,
+            ...(command.modeOnly ? { requireOn: true } : {}),
           },
-          true,
+          command.modeOnly !== true,
         );
         return { transport: 'lan', effect: 'udp_sent' };
       },
