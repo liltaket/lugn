@@ -29,6 +29,9 @@ export function combineGoveePresetControls(
         result[target] = {
           effects: lan?.effects.length ? lan.effects : capability.effects,
           zones: Boolean(lan?.zones || capability.zones),
+          ...(capability.staticColor && !lan?.effects.length
+            ? { staticColor: true }
+            : {}),
           ...((capability.colorTemperature ?? lan?.colorTemperature)
             ? {
                 colorTemperature:
@@ -42,6 +45,12 @@ export function combineGoveePresetControls(
     async apply(command, guard) {
       const lan = local.capabilities()[command.target];
       const cloud = platform?.capabilities()[command.target];
+      if (command.staticColor) {
+        if (!platform || !cloud?.staticColor)
+          throw new Error('Govee static color unavailable');
+        await guard();
+        return platform.apply(command, guard);
+      }
       let effect: GoveeControlDelivery | undefined;
       let zones: GoveeControlDelivery | undefined;
       if (command.effect !== undefined) {

@@ -654,6 +654,9 @@ export async function startGoveePlatformBridge(
                       (zone) => platformZoneFeatures(info, zone).power,
                     )) ??
                   false,
+                ...(device.sku === 'H600D' && device.exposeEffects
+                  ? { staticColor: true }
+                  : {}),
                 ...(range
                   ? { colorTemperature: { min: range.min, max: range.max } }
                   : {}),
@@ -667,6 +670,21 @@ export async function startGoveePlatformBridge(
       const info = device && metadata.get(device.id);
       if (!device || !info) throw new Error('Platform target unavailable');
       const controls: PlatformControl[] = [];
+      if (command.staticColor) {
+        if (device.sku !== 'H600D' || !device.exposeEffects)
+          throw new Error('Unsupported vendor static color');
+        const color = command.staticColor;
+        controls.push(
+          platformControl(
+            info,
+            'devices.capabilities.color_setting',
+            color.rgb ? 'colorRgb' : 'colorTemperatureK',
+            color.rgb
+              ? (color.rgb[0] << 16) | (color.rgb[1] << 8) | color.rgb[2]
+              : color.colorTemperature,
+          ),
+        );
+      }
       if (command.effect !== undefined) {
         const scene = catalogs.get(device.id)?.get(command.effect);
         if (!scene || !device.exposeEffects)
@@ -708,6 +726,9 @@ export async function startGoveePlatformBridge(
         transport: 'platform',
         ...(command.effect ? { effect: 'cloud_accepted' as const } : {}),
         ...(command.zones ? { zones: 'cloud_accepted' as const } : {}),
+        ...(command.staticColor
+          ? { staticColor: 'cloud_accepted' as const }
+          : {}),
       };
     },
   });

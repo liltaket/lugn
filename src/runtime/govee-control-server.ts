@@ -9,6 +9,7 @@ import { createConnection, type Socket } from 'node:net';
 import { dirname, isAbsolute, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
+import { GoveeStaticColorSchema } from '../core/schemas.js';
 
 const Target = z.string().regex(/^lighting\.[a-z0-9_]{1,80}$/);
 const Token = z.string().regex(/^[A-Za-z0-9:_.\/-]{1,128}$/);
@@ -16,6 +17,7 @@ const CapabilitySchema = z
   .object({
     effects: z.array(z.string().min(1).max(255)).max(4096),
     zones: z.boolean(),
+    staticColor: z.boolean().optional(),
     colorTemperature: z
       .object({ min: z.number().positive(), max: z.number().positive() })
       .strict()
@@ -37,6 +39,7 @@ export const GoveeControlRequestSchema = z
     target: Target,
     controlId: Token,
     effect: z.string().min(1).max(255).optional(),
+    staticColor: GoveeStaticColorSchema.optional(),
     /** Periodic step: require an already powered fixture; never activate it. */
     modeOnly: z.literal(true).optional(),
     zones: z
@@ -46,9 +49,17 @@ export const GoveeControlRequestSchema = z
       .optional(),
   })
   .strict()
+  .refine(
+    (request) =>
+      !request.staticColor ||
+      (!request.effect && !request.zones && !request.modeOnly),
+  )
   .refine((request) => !request.modeOnly || request.effect !== undefined)
   .refine(
-    (request) => request.effect !== undefined || request.zones !== undefined,
+    (request) =>
+      request.effect !== undefined ||
+      request.zones !== undefined ||
+      request.staticColor !== undefined,
   );
 const CancelSchema = z
   .object({ target: Target, controlId: Token.optional() })
@@ -60,6 +71,7 @@ export type GoveeControlDelivery = {
   transport: 'lan' | 'platform' | 'mixed';
   effect?: 'udp_sent' | 'cloud_accepted';
   zones?: 'udp_sent' | 'cloud_accepted';
+  staticColor?: 'cloud_accepted';
 };
 export type GoveeWriteGuard = () => Promise<void>;
 
@@ -372,7 +384,8 @@ export async function startGoveeControlServer(
         !capability ||
         (command.effect !== undefined &&
           !capability.effects.includes(command.effect)) ||
-        (command.zones !== undefined && !capability.zones)
+        (command.zones !== undefined && !capability.zones) ||
+        (command.staticColor !== undefined && !capability.staticColor)
       )
         throw new HttpError(400, 'unsupported_command');
       response.once('close', () => {

@@ -39,6 +39,26 @@ describe('complementary Govee scene transports', () => {
       colorTemperature: { min: 2700, max: 6500 },
     });
   });
+  it('routes a non-LAN static color reset to the verified platform transport', async () => {
+    const f = fixture();
+    f.local.capabilities = () => ({});
+    f.platform.capabilities = () => ({
+      [target]: { effects: ['Party'], zones: false, staticColor: true },
+    });
+    expect(f.controls.capabilities()[target]?.staticColor).toBe(true);
+    const command = {
+      target,
+      requestId: 'r',
+      controlId: 'g',
+      staticColor: { rgb: [1, 2, 3] as [number, number, number] },
+    };
+    await f.controls.apply(command, async () => undefined);
+    expect(f.platform.apply).toHaveBeenCalledWith(
+      command,
+      expect.any(Function),
+    );
+    expect(f.local.apply).not.toHaveBeenCalled();
+  });
   it('applies fixture animation before its final zone mask', async () => {
     const f = fixture();
     const order: string[] = [];

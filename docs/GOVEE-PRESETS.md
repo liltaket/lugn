@@ -168,6 +168,25 @@ lamp behavior; animation/masked lamps wait for confirmed entry so a ring-only
 preset cannot preview with an unintended main light. Window policy yields while
 an explicit Govee mode owns the strip, and resumes with ordinary static control.
 
+## H600D static color after an app effect
+
+The H600D can keep displaying its Govee cloud scene while Matter reports the
+requested white temperature. For a target advertising `staticColor:true`, an
+ordinary permitted positive command therefore writes its normal HA baseline and
+then sends the chosen white/RGB mode through the official API. This also handles
+an effect remembered across OFF or a companion restart, without relying on an
+in-memory record of the previous animation. Selecting a static preset explicitly
+forces this reset even when Matter already reports all its requested values.
+The API reset carries only color,
+not power or brightness. Ordinary OFF stays local.
+
+The engine publishes a session-only `goveeStaticControlId` for that operation.
+It is not saved as scene intent. Manual takeover, a new target generation, OFF,
+confirmed exit and disposal revoke it; the same per-target cancel/drain barrier
+prevents queued old resets following a newer command. Prelight keeps its existing
+local path. Clearing the H600D vendor mode requires the matching companion and
+an available Govee API; Matter state alone is not proof that an app scene stopped.
+
 ## IPC contract
 
 HTTP over the protected Unix socket, with no network listener:
@@ -175,6 +194,13 @@ HTTP over the protected Unix socket, with no network listener:
 - `GET /capabilities` → `{targets: Record<target,{effects:string[],zones:boolean,colorTemperature?:{min,max}}>}`.
 - `POST /apply` ← `{requestId,target,controlId,effect?,zones?,modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation.
 - `POST /cancel` ← `{target,controlId?}` → `{status:"drained"}`.
+
+Capabilities can include optional `staticColor:true`. A color reset uses
+`POST /apply` with `{requestId,target,controlId,staticColor:{colorTemperature:4000}}`
+or `staticColor:{rgb:[r,g,b]}`. The reset cannot contain both color modes, a scene,
+zone mask, power or brightness. Its control ID must match the live static grant,
+with no Govee effect or external lease and powered desired intent. Delivery
+reports `staticColor:"cloud_accepted"`, not optical confirmation.
 
 The server verifies the live optional engine ID, no external lease and powered
 intent before each device write. Cancellation covers engine and legacy device

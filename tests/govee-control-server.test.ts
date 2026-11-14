@@ -384,6 +384,14 @@ describe('Govee Unix command server', () => {
       { ...command, zones: { main: true } },
       { ...command, zones: { main: false, ring: false } },
       { ...command, modeOnly: false },
+      { ...command, staticColor: { colorTemperature: 4000 } },
+      { ...command, effect: undefined, staticColor: {} },
+      {
+        ...command,
+        effect: undefined,
+        staticColor: { rgb: [1, 2, 3], colorTemperature: 4000 },
+      },
+      { ...command, effect: undefined, staticColor: { power: true } },
       {
         ...command,
         effect: undefined,
@@ -396,6 +404,32 @@ describe('Govee Unix command server', () => {
       expect(JSON.stringify(response.body)).not.toContain('secret-do-not-echo');
     }
     expect(f.options.apply).not.toHaveBeenCalled();
+  });
+
+  it('accepts a color-only reset on a capable target and rejects invalid combinations', async () => {
+    const f = await fixture({
+      capabilities: () => ({
+        'lighting.ceiling': {
+          effects: ['Forest'],
+          zones: true,
+          staticColor: true,
+        },
+      }),
+    });
+    const reset = {
+      ...command,
+      effect: undefined,
+      staticColor: { colorTemperature: 4000 },
+    };
+    expect((await call(f.socketPath, '/apply', reset)).status).toBe(200);
+    for (const input of [
+      { ...reset, effect: 'Forest' },
+      { ...reset, zones: { main: true, ring: false } },
+      { ...reset, modeOnly: true },
+      { ...reset, staticColor: { colorTemperature: 4000, brightness: 50 } },
+    ])
+      expect((await call(f.socketPath, '/apply', input)).status).toBe(400);
+    expect(f.options.apply).toHaveBeenCalledOnce();
   });
 
   it('rejects superseded ownership and sanitizes unavailable/error responses', async () => {

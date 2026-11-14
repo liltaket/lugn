@@ -2,7 +2,9 @@ import { request } from 'node:http';
 import { z } from 'zod';
 import {
   GoveeCapabilitiesSchema,
+  GoveeStaticColorSchema,
   type GoveeCapabilities,
+  type GoveeStaticColor,
 } from '../core/schemas.js';
 import type {
   LightingAdapter,
@@ -17,6 +19,7 @@ export interface GoveeControlClient {
     target: string;
     controlId: string;
     effect?: string | undefined;
+    staticColor?: GoveeStaticColor | undefined;
     modeOnly?: true | undefined;
     zones?: { main: boolean; ring: boolean } | undefined;
   }): Promise<void>;
@@ -123,7 +126,7 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
   }
   dispatch(command: LightingCommand): Promise<void> {
     if (!this.goveeCapabilities[command.target]) {
-      if (command.govee)
+      if (command.govee || command.goveeStatic)
         return Promise.reject(new Error('Govee capabilities unavailable'));
       return this.ordinary.dispatch(command);
     }
@@ -145,6 +148,16 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     if (!current()) return;
     const capability = this.goveeCapabilities[command.target]!;
     const intent = command.govee;
+    const staticReset = command.goveeStatic;
+    if (
+      staticReset &&
+      (intent ||
+        !capability.staticColor ||
+        !command.isCurrent ||
+        !GoveeStaticColorSchema.safeParse(staticReset.color).success ||
+        command.values.power === false)
+    )
+      throw new Error('Invalid Govee static reset');
     if (
       command.goveeOnly &&
       (!intent?.effect ||
@@ -183,7 +196,9 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
         target: command.target,
         values,
       });
-    if (!current() || !intent || values.power === false) return;
+    if (!current() || (!intent && !staticReset) || values.power === false)
+      return;
+    const controlId = (intent ?? staticReset)!.controlId;
     // A disconnected/aborted HTTP request cannot retract a cloud write. On guard
     // invalidation explicitly cancel and wait for the server's drain acknowledgement.
     let cancel: Promise<void> | undefined;
@@ -195,7 +210,7 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     });
     const requestCancel = () => {
       if (!cancel) {
-        cancel = this.client.cancel(command.target, intent.controlId);
+        cancel = this.client.cancel(command.target, controlId);
         void cancel.then(drained, drainFailed);
       }
       return cancel;
@@ -210,10 +225,11 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
         this.client.apply({
           requestId: command.id,
           target: command.target,
-          controlId: intent.controlId,
+          controlId,
           ...(command.goveeOnly ? { modeOnly: true as const } : {}),
-          ...(intent.effect !== undefined ? { effect: intent.effect } : {}),
-          ...(intent.zones !== undefined ? { zones: intent.zones } : {}),
+          ...(intent?.effect !== undefined ? { effect: intent.effect } : {}),
+          ...(intent?.zones !== undefined ? { zones: intent.zones } : {}),
+          ...(staticReset ? { staticColor: staticReset.color } : {}),
         }),
         cancellation,
       ]);

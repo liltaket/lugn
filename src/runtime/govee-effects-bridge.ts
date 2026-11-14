@@ -285,6 +285,7 @@ export async function startGoveeBridge(
                 govee: z
                   .object({ controlId: z.string().optional() })
                   .optional(),
+                goveeStaticControlId: z.string().optional(),
                 externalControl: z
                   .object({
                     id: z.string(),
@@ -348,7 +349,8 @@ export async function startGoveeBridge(
       return Boolean(
         d &&
         !d.externalControl &&
-        d.govee?.controlId === id &&
+        (d.govee?.controlId === id ||
+          (!d.govee && d.goveeStaticControlId === id)) &&
         d.effectiveDesired?.power === true,
       );
     },

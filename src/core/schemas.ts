@@ -93,6 +93,18 @@ export const LightingValuesSchema = z
     },
   );
 export type LightingValues = z.infer<typeof LightingValuesSchema>;
+/** A vendor color-mode reset; it never carries power or brightness. */
+export const GoveeStaticColorSchema = z
+  .object({
+    rgb: LightingValuesSchema.shape.rgb,
+    colorTemperature: LightingValuesSchema.shape.colorTemperature,
+  })
+  .strict()
+  .refine(
+    (color) =>
+      (color.rgb !== undefined) !== (color.colorTemperature !== undefined),
+  );
+export type GoveeStaticColor = z.infer<typeof GoveeStaticColorSchema>;
 
 export const SemanticLightingIdSchema = z
   .string()
@@ -558,6 +570,7 @@ export const GoveeCapabilitiesSchema = z.record(
     .object({
       effects: z.array(z.string().min(1).max(255)).max(4096),
       zones: z.boolean(),
+      staticColor: z.boolean().optional(),
       colorTemperature: z
         .object({
           min: z.number().int().min(1000).max(10000),
@@ -615,6 +628,8 @@ export const OwnershipSchema = z.discriminatedUnion('kind', [
 export type Ownership = z.infer<typeof OwnershipSchema>;
 
 export const DeviceLightingStateSchema = z.object({
+  /** Session-only permission for vendor static color reset; invalidated before OFF. */
+  goveeStaticControlId: z.string().optional(),
   /** Requested mode and transport outcome; never claims physical scene feedback. */
   govee: z
     .object({

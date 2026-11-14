@@ -274,6 +274,108 @@ async function running(
 }
 
 describe('cloud zone controls and discovery', () => {
+  it('resets H600D using validated CCT/RGB only, without a scene or power write', async () => {
+    const client = new FakeClient();
+    let preset!: GoveePresetControls;
+    const device = { ...fixture, sku: 'H600D', zones: undefined };
+    const info = {
+      ...metadata,
+      sku: 'H600D',
+      capabilities: [
+        ...metadata.capabilities,
+        {
+          type: 'devices.capabilities.color_setting',
+          instance: 'colorTemperatureK',
+          parameters: {
+            dataType: 'INTEGER',
+            range: { min: 2700, max: 6500, precision: 1 },
+          },
+        },
+        {
+          type: 'devices.capabilities.color_setting',
+          instance: 'colorRgb',
+          parameters: {
+            dataType: 'INTEGER',
+            range: { min: 0, max: 16777215, precision: 1 },
+          },
+        },
+      ],
+    };
+    const platform = {
+      devices: vi.fn(async () => [info]),
+      scenes: vi.fn(async () => [scene]),
+      state: vi.fn(async () => ({ ...state(), sku: 'H600D' })),
+      control: vi.fn(
+        async (_identity: unknown, _command: unknown, guard: () => void) => {
+          guard();
+        },
+      ),
+    };
+    const stop = await startGoveePlatformBridge(
+      runtime,
+      { ...config, devices: [device] },
+      {
+        connect: (() => client) as unknown as typeof connect,
+        platform,
+        environment: {
+          GOVEE_KEY_B64: Buffer.from('test-secret').toString('base64url'),
+        },
+        fetch: async () =>
+          new Response(
+            JSON.stringify({ lighting: { devices: { [fixture.target]: {} } } }),
+          ),
+        ready: (c) => {
+          preset = c;
+        },
+        pollIntervalMs: 60000,
+        followupDelayMs: 60000,
+      },
+    );
+    client.emit('connect');
+    try {
+      await vi.waitFor(() =>
+        expect(preset.capabilities()[fixture.target]?.staticColor).toBe(true),
+      );
+      const base = { requestId: 'r', target: fixture.target, controlId: 'g' };
+      await preset.apply(
+        { ...base, staticColor: { colorTemperature: 4000 } },
+        async () => undefined,
+      );
+      await preset.apply(
+        { ...base, staticColor: { rgb: [1, 2, 3] } },
+        async () => undefined,
+      );
+      expect(platform.control.mock.calls.map((c) => c[1])).toEqual([
+        {
+          type: 'devices.capabilities.color_setting',
+          instance: 'colorTemperatureK',
+          value: 4000,
+        },
+        {
+          type: 'devices.capabilities.color_setting',
+          instance: 'colorRgb',
+          value: 66051,
+        },
+      ]);
+      await expect(
+        preset.apply(
+          { ...base, staticColor: { colorTemperature: 1000 } },
+          async () => undefined,
+        ),
+      ).rejects.toThrow();
+      await expect(
+        preset.apply(
+          { ...base, staticColor: { colorTemperature: 4000 } },
+          async () => {
+            throw new Error('revoked');
+          },
+        ),
+      ).rejects.toThrow('revoked');
+      expect(platform.control).toHaveBeenCalledTimes(2);
+    } finally {
+      await stop();
+    }
+  });
   it('sends only the scene for a mode-only step after fresh confirmed ON', async () => {
     const f = await running();
     try {

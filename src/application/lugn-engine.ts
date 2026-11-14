@@ -56,6 +56,7 @@ import {
   goveeEffectNames,
   type GoveeCapabilities,
   type GoveeSceneIntent,
+  type GoveeStaticColor,
   PresenceEventSchema,
   HomePresenceSchema,
   PrelightEventSchema,
@@ -309,6 +310,8 @@ export class LugnEngine {
   private readonly goveeRotationTimers = new Map<string, TimerHandle>();
   private invalidateLightingTarget(target: string): void {
     this.clearGoveeRotation(target);
+    const device = this.state?.lighting.devices[target];
+    if (device) delete device.goveeStaticControlId;
     this.lightingTargetGenerations.set(
       target,
       (this.lightingTargetGenerations.get(target) ?? 0) + 1,
@@ -3538,6 +3541,8 @@ export class LugnEngine {
 
   dispose(): void {
     this.disposed = true;
+    for (const device of Object.values(this.state.lighting.devices))
+      delete device.goveeStaticControlId;
     for (const target of this.goveeRotationTimers.keys())
       this.clearGoveeRotation(target);
     if (this.lightingEnforcementTimer !== undefined)
@@ -3831,6 +3836,14 @@ export class LugnEngine {
             2700;
       }
       this.setGoveeIntent(target, scene.govee?.[target]);
+      // H600D may report the requested Matter color while retaining a vendor
+      // scene. An explicit static preset must reset that mode even on a match.
+      if (
+        !scene.govee?.[target] &&
+        scene.lighting[target]?.power === true &&
+        this.adapter.goveeCapabilities?.[target]?.staticColor
+      )
+        this.goveeTransitionTargets.add(target);
       if (isCurrent) this.lightingExecutionGuards.set(target, isCurrent);
       else this.lightingExecutionGuards.delete(target);
     }
@@ -4069,9 +4082,14 @@ export class LugnEngine {
       const rotationWhileEmpty = govee?.intent.rotation
         ? this.targetIntentCanRunWhileEmpty(revision, target)
         : undefined;
+      let staticControlId: string | undefined;
+      let staticColor: GoveeStaticColor | undefined;
       const isCurrent = () =>
         !this.disposed &&
         generation === (this.lightingTargetGenerations.get(target) ?? 0) &&
+        (!staticControlId ||
+          this.requireDevice(target).goveeStaticControlId ===
+            staticControlId) &&
         (!executionGuard || executionGuard()) &&
         (values.power === false ||
           !this.shouldRemainPhysicallyEmpty() ||
@@ -4081,6 +4099,32 @@ export class LugnEngine {
         govee.controlId = randomUUID();
         if (govee.intent.rotation)
           govee.activeEffect = govee.intent.rotation.effects[0]!;
+        this.publish(['lighting']);
+      }
+      if (
+        !govee &&
+        values.power !== false &&
+        reason !== prelightCommandReason &&
+        this.adapter.goveeCapabilities?.[target]?.staticColor &&
+        this.requireDevice(target).effectiveDesired.power === true &&
+        isCurrent()
+      ) {
+        const desired = this.requireDevice(target).effectiveDesired;
+        staticColor = values.rgb
+          ? { rgb: values.rgb }
+          : values.colorTemperature !== undefined
+            ? { colorTemperature: values.colorTemperature }
+            : desired.rgb
+              ? { rgb: desired.rgb }
+              : {
+                  colorTemperature:
+                    desired.colorTemperature ??
+                    this.adapter.goveeCapabilities[target]?.colorTemperature
+                      ?.min ??
+                    2700,
+                };
+        staticControlId = randomUUID();
+        this.requireDevice(target).goveeStaticControlId = staticControlId;
         this.publish(['lighting']);
       }
       // Consume the forced transition before synchronous adapter feedback can
@@ -4093,6 +4137,11 @@ export class LugnEngine {
           values,
           // Existing adapters retain their command shape; only the Govee composite consumes guards.
           ...(this.adapter.goveeCapabilities ? { isCurrent } : {}),
+          ...(staticControlId && staticColor
+            ? {
+                goveeStatic: { controlId: staticControlId, color: staticColor },
+              }
+            : {}),
           ...(govee?.controlId
             ? {
                 govee: {
@@ -4558,6 +4607,8 @@ export class LugnEngine {
         )
           continue;
         this.terminateAllFastPathEvents();
+        if (device.goveeStaticControlId)
+          this.invalidateLightingTarget(observation.target);
         if (property === 'power' && value === true)
           this.holds.clear('lighting.activation', observation.target);
         const synchronizedTemperature =

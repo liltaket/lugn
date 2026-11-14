@@ -5,6 +5,7 @@ import type {
   LightingValues,
   GoveeSceneIntent,
   GoveeCapabilities,
+  GoveeStaticColor,
 } from '../core/schemas.js';
 
 export type LightingObservation = {
@@ -24,6 +25,7 @@ export type LightingCommand = {
   /** Internal mode-only rotation step; never repeats baseline power/brightness. */
   goveeOnly?: true;
   govee?: GoveeSceneIntent & { controlId: string };
+  goveeStatic?: { controlId: string; color: GoveeStaticColor };
   id: string;
   target: string;
   values: LightingValues;
