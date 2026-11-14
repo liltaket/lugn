@@ -534,6 +534,14 @@ export const OwnershipSchema = z.discriminatedUnion('kind', [
 export type Ownership = z.infer<typeof OwnershipSchema>;
 
 export const DeviceLightingStateSchema = z.object({
+  /** Session-only ownership by an explicitly selected external effect. */
+  externalControl: z
+    .object({
+      id: z.string(),
+      source: z.string(),
+      startedAt: z.number().nonnegative(),
+    })
+    .optional(),
   observed: LightingValuesSchema,
   baselineDesired: LightingValuesSchema,
   effectiveDesired: LightingValuesSchema,

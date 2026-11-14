@@ -1,0 +1,67 @@
+{
+  "cacheDirectory": "/home/bruno/.local/state/lugn-govee",
+  "interfaceAddress": "192.168.10.132",
+  "devices": [
+    {
+      "id": "strip_1",
+      "name": "Ljusslinga H612A",
+      "target": "lighting.govee_strip_1",
+      "sku": "H612A",
+      "device": "00:00:00:00:00:00:00:01"
+    },
+    {
+      "id": "strip_2",
+      "name": "Ljusslinga H612F",
+      "target": "lighting.govee_strip_2",
+      "sku": "H612F",
+      "device": "00:00:00:00:00:00:00:02"
+    },
+    {
+      "id": "table",
+      "name": "Bordslampa H6022",
+      "target": "lighting.govee_table",
+      "sku": "H6022",
+      "device": "00:00:00:00:00:00:00:03"
+    },
+    {
+      "id": "ceiling",
+      "name": "Taklampa",
+      "target": "lighting.govee_ceiling",
+      "sku": "H60A6",
+      "device": "00:00:00:00:00:00:00:04"
+    }
+  ],
+  "broadcastAddress": "192.168.10.255",
+  "platform": {
+    "apiKeyEnv": "GOVEE_API_KEY_B64",
+    "devices": [
+      {
+        "id": "ceiling",
+        "name": "Taklampa",
+        "target": "lighting.govee_ceiling",
+        "sku": "H60A6",
+        "device": "00:00:00:00:00:00:00:04",
+        "exposeEffects": false,
+        "zones": [
+          {
+            "id": "main",
+            "name": "Huvudljus",
+            "powerInstance": "mainLightToggle"
+          },
+          {
+            "id": "ring",
+            "name": "Yttre ring",
+            "powerInstance": "backgroundLightToggle"
+          }
+        ]
+      },
+      {
+        "id": "gu10",
+        "name": "GU10 skrivbord",
+        "target": "lighting.desk",
+        "sku": "H600D",
+        "device": "00:00:00:00:00:00:00:05"
+      }
+    ]
+  }
+}

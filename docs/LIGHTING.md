@@ -379,8 +379,9 @@ measure engine dispatch overhead, not MQTT delay or visible lamp response.
 0–255) or `colorTemperature` in Kelvin. Requesting both is invalid. RGB presets
 are explicit configuration for known color-capable targets; a dedicated WLED
 CCT mapping rejects RGB. HA lights with RGB, RGBW, RGBWW, HS or XY capability
-use HA's existing `rgb_color` conversion. There is no custom device protocol or
-lighting effect loop.
+use HA's existing `rgb_color` conversion. Static room lighting has no effect
+loop; the optional Govee companion below sends app scene definitions to devices
+that run their own animations.
 
 A Party preset can mix RGB accent lights with dim white-only lamps. It is never
 selected automatically on installation. Selecting a white scene clears RGB
@@ -438,3 +439,8 @@ valid elevation. Helt släckt and the sleep scene still switch it off.
 Existing RGB and white scene modes apply; simultaneous
 independent RGB and white channels are not provided. Restart after changing
 configuration. Dedicated WLED CCT mappings cannot be used as window lights.
+
+## Govee app effects
+
+The optional [local Govee effect companion](GOVEE-EFFECTS.md) adds Home Assistant
+effect selectors and an explicit per-lamp handoff from static room control.
