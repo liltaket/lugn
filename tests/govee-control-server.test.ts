@@ -382,6 +382,7 @@ describe('Govee Unix command server', () => {
       { ...command, extra: 'secret-do-not-echo' },
       { ...command, effect: undefined },
       { ...command, zones: { main: true } },
+      { ...command, zones: { main: false, ring: false } },
     ]) {
       const response = await call(f.socketPath, '/apply', input);
       expect(response.status).toBe(400);

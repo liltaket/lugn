@@ -84,6 +84,23 @@ export const GoveePlatformConfigSchema = z
 export type GoveePlatformConfig = z.infer<typeof GoveePlatformConfigSchema>;
 type BridgeDevice = GoveePlatformConfig['devices'][number];
 export type PlatformZone = NonNullable<BridgeDevice['zones']>[number];
+/** Keep the fixture ON while moving between nonempty masks. Whole OFF uses HA. */
+export function platformZoneMaskControls(
+  device: PlatformDevice,
+  zones: readonly PlatformZone[],
+  mask: { main: boolean; ring: boolean },
+): PlatformControl[] {
+  if (!mask.main && !mask.ring) throw new Error('Use ordinary whole power OFF');
+  const desired = [
+    { instance: 'mainLightToggle' as const, on: mask.main },
+    { instance: 'backgroundLightToggle' as const, on: mask.ring },
+  ].sort((a, b) => Number(b.on) - Number(a.on));
+  return desired.map((value) => {
+    if (!zones.some((zone) => zone.powerInstance === value.instance))
+      throw new Error('Unsupported platform zone');
+    return platformToggle(device, value.instance, value.on);
+  });
+}
 const Byte = z.number().int().min(0).max(255);
 const ZoneCommandSchema = z
   .object({
@@ -653,18 +670,9 @@ export async function startGoveePlatformBridge(
         controls.push(...platformEffectControls(info, scene));
       }
       if (command.zones) {
-        const mask = command.zones;
-        const desired = [
-          { instance: 'mainLightToggle' as const, on: mask.main },
-          { instance: 'backgroundLightToggle' as const, on: mask.ring },
-        ].sort((a, b) => Number(a.on) - Number(b.on));
-        for (const value of desired) {
-          if (
-            !device.zones?.some((zone) => zone.powerInstance === value.instance)
-          )
-            throw new Error('Unsupported platform zone');
-          controls.push(platformToggle(info, value.instance, value.on));
-        }
+        controls.push(
+          ...platformZoneMaskControls(info, device.zones ?? [], command.zones),
+        );
       }
       if (!controls.length) throw new Error('Empty platform preset');
       for (const control of controls) {

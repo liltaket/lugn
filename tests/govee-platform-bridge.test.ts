@@ -18,6 +18,7 @@ import {
   platformZoneControls,
   platformZoneDiscovery,
   platformZoneFeatures,
+  platformZoneMaskControls,
   platformZoneState,
   resolvePlatformKey,
   startGoveePlatformBridge,
@@ -268,6 +269,40 @@ async function running(
 }
 
 describe('cloud zone controls and discovery', () => {
+  it('keeps whole power ON at every step between nonempty zone masks', () => {
+    const masks = [
+      { main: true, ring: false },
+      { main: false, ring: true },
+      { main: true, ring: true },
+    ];
+    for (const before of masks) {
+      for (const after of masks) {
+        const actual = { ...before };
+        const controls = platformZoneMaskControls(
+          metadata,
+          [main, ring],
+          after,
+        );
+        for (const control of controls) {
+          const key = control.instance === 'mainLightToggle' ? 'main' : 'ring';
+          actual[key] = control.value === 1;
+          // An intermediate fixture OFF would look like a human OFF to the
+          // engine and correctly revoke this generation before its next write.
+          expect(actual.main || actual.ring).toBe(true);
+        }
+        expect(actual).toEqual(after);
+      }
+    }
+    expect(() =>
+      platformZoneMaskControls(metadata, [main, ring], {
+        main: false,
+        ring: false,
+      }),
+    ).toThrow('whole power OFF');
+    expect(() => platformZoneMaskControls(metadata, [main], masks[0]!)).toThrow(
+      'Unsupported platform zone',
+    );
+  });
   it('sends only the configured toggle for zone ON/OFF', () => {
     expect(platformZoneControls(metadata, main, { state: 'ON' })).toEqual([
       {

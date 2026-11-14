@@ -60,13 +60,33 @@ describe('guarded native Govee activation', () => {
   });
   it('honors a revoked grant after an asynchronous status reply', async () => {
     const p = port([0]);
-    p.guard
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('exit'));
+    let current = true;
+    const status = p.status;
+    p.status = vi.fn(async () => {
+      const value = await status();
+      current = false;
+      return value;
+    });
+    p.guard = vi.fn(async () => {
+      if (!current) throw new Error('exit');
+    });
     await expect(
       sendGoveeLanEffect('192.0.2.2', effect, p, true),
     ).rejects.toThrow('exit');
     expect(p.send).not.toHaveBeenCalled();
+  });
+  it('reuses a corroborated same-command ON preflight without another read', async () => {
+    const p = port([1]);
+    const initialStatus = await p.status();
+    p.status.mockClear();
+    await sendGoveeLanEffect(
+      '192.0.2.2',
+      effect,
+      { ...p, initialStatus },
+      true,
+    );
+    expect(p.status).not.toHaveBeenCalled();
+    expect(p.send).toHaveBeenCalledTimes(1);
   });
   it('does not globally activate an engine scene whose baseline is already managed', async () => {
     const p = port([0]);

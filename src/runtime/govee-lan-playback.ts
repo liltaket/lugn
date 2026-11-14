@@ -13,13 +13,14 @@ export async function sendGoveeLanEffect(
     status(ip: string): Promise<GoveeLanStatus>;
     send(ip: string, command: unknown): Promise<void>;
     wait?: (ms: number) => Promise<void>;
+    /** A same-command preflight, bounded by the caller and corroborated by HA power. */
+    initialStatus?: GoveeLanStatus;
   },
   activate = false,
 ): Promise<void> {
   const command = encodeGoveeEffectCommand(effect);
   if (activate) {
-    await port.guard();
-    let status = await port.status(ip);
+    let status = port.initialStatus ?? (await port.status(ip));
     if (status.onOff === 0) {
       await port.guard();
       await port.send(ip, { msg: { cmd: 'turn', data: { value: 1 } } });

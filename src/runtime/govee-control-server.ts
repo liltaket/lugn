@@ -40,6 +40,7 @@ export const GoveeControlRequestSchema = z
     zones: z
       .object({ main: z.boolean(), ring: z.boolean() })
       .strict()
+      .refine((zones) => zones.main || zones.ring)
       .optional(),
   })
   .strict()

@@ -96,9 +96,12 @@ through a companion outage; activating unavailable effects fails explicitly.
 
 The composite lighting adapter serializes each target across ordinary and Govee
 writes: cancel/drain companion work, write baseline power/brightness/static mode,
-then apply the effect and final mask. The companion applies desired OFF zones
-before desired ON zones. Baseline changes may transiently wake both ceiling
-zones; final mask handling must follow all mode/brightness/effect writes.
+then apply the effect and final mask. The companion enables desired ON zones
+before disabling undesired zones. This prevents an intermediate whole-fixture
+OFF during a main-only/ring-only transition from revoking its own generation.
+Baseline changes and mask transitions may transiently light both ceiling zones;
+final mask handling must follow all mode/brightness/effect writes. Cloud acceptance
+does not prove atomic or simultaneous physical application.
 
 `lighting.devices[target].govee` exposes requested `intent`, optional session
 `controlId` and `status` (`pending`, `sent`, `failed`). The ID is published only
