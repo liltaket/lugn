@@ -1,5 +1,8 @@
 # Local Govee app effects
 
+For the installed runtime and measured transport comparisons, see
+[performance and preset qualification](GOVEE-PERFORMANCE.md).
+
 The optional Govee companion exposes app scene variants as Home Assistant MQTT
 select entities. It uses the existing MQTT credentials and Lugn machine API.
 The LAN devices need no Govee account credentials. The optional official

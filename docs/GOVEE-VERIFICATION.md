@@ -1,5 +1,9 @@
 # Govee effect verification — 14 November 2026
 
+The current installed runtime, comparative measurements and saved-preset evidence
+are recorded in [Govee performance and preset qualification](GOVEE-PERFORMANCE.md).
+The sections below retain the earlier delivery and visual evidence separately.
+
 ## Initial LAN delivery
 
 Both room strips and the table lamp now have Home Assistant effect selectors.
