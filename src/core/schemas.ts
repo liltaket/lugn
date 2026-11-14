@@ -607,6 +607,8 @@ export const DeviceLightingStateSchema = z.object({
       id: z.string(),
       source: z.string(),
       startedAt: z.number().nonnegative(),
+      /** Revoked by a confirmed exit, even while logical ownership is retained. */
+      canActivate: z.boolean().optional(),
     })
     .optional(),
   observed: LightingValuesSchema,

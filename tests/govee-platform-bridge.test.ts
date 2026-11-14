@@ -221,7 +221,7 @@ async function running(
       : undefined;
     localCalls.push({ path, input: body?.input });
     let response: unknown;
-    if (path.endsWith('/state'))
+    if (new URL(path).pathname.endsWith('/state'))
       response = {
         lighting: {
           devices: {

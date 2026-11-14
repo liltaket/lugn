@@ -26,6 +26,39 @@ not the active scene. After a companion-only restart an existing handoff appears
 as **Extern (okänd effekt)** until a new choice is made. This is a status option,
 not an effect to play.
 
+## Command scheduling and feedback
+
+Commands to different fixtures run independently. Physical writes to the same
+fixture share a bounded queue with engine presets; a cancel/drain barrier prevents
+older queued effect or zone writes following a newer static/OFF command. The
+legacy HA-selector lease acquisition stays outside this device-write queue to
+avoid waiting on itself. New selections supersede older queued LAN scenes.
+
+The companion resolves a matching discovery reply immediately, shares overlapping
+scans and refreshes identity in the background. A timed-out peer gets one discovery
+and status-read retry. Each status query is distinct, validated and serialized per
+IP; no cached status is presented as new command confirmation. `devStatus` has no
+transaction ID, so a late duplicate cannot be correlated conclusively.
+
+With the revocable `externalControl.canActivate` grant, a LAN selection uses native
+power only when a fresh read reports OFF, verifies ON, then sends its scene. It
+skips redundant HA power activation for subsequent scenes. Confirmed exit revokes
+the grant synchronously even when the logical selector ownership remains. Older
+Lugn versions without this field use the former HA activation path.
+
+LAN selectors expose timestamped fixture power, brightness, RGB and Kelvin
+attributes. These are status snapshots, not active-scene confirmation. Per-device
+contact availability is separate from broker/Lugn availability. Delivery diagnostics
+include command duration; cloud diagnostics also retain the requested effect or
+zone command separately from the platform's reported state.
+
+The companion also exposes the protected Unix socket `control.sock` inside its
+private cache directory. This has no network listener. Main Lugn can opt in with
+`govee.socketPath` to use effects and masks directly in presets; see
+[Govee presets](GOVEE-PRESETS.md). An engine generation must remain live before
+each physical write. API acknowledgement cannot retract already accepted hardware
+work; a drain promises no further stale sends, not a firmware transaction.
+
 ## Ceiling main light and outer ring
 
 The ceiling's main light and ring have separate official API toggle capabilities.

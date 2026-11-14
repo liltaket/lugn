@@ -1984,7 +1984,12 @@ export class LugnEngine {
         emptyBoundary: this.externalLightingEmptyBoundary,
       });
     const emptyBoundary = this.externalLightingEmptyBoundary;
-    const control = { id: randomUUID(), source, startedAt: this.clock.now() };
+    const control = {
+      id: randomUUID(),
+      source,
+      startedAt: this.clock.now(),
+      canActivate: true,
+    };
     device.externalControl = control;
     device.effectiveDesired = { power: true };
     device.ownership = {
@@ -2095,8 +2100,11 @@ export class LugnEngine {
       if (device.externalControl === control) {
         device.effectiveDesired = priorIntent.effectiveDesired;
         device.ownership = priorIntent.ownership;
-        if (priorControl) device.externalControl = priorControl;
-        else delete device.externalControl;
+        if (priorControl) {
+          if (this.externalLightingEmptyBoundary !== emptyBoundary)
+            priorControl.canActivate = false;
+          device.externalControl = priorControl;
+        } else delete device.externalControl;
         if (priorSavedIntent)
           this.externalLightingIntent.set(target, priorSavedIntent);
         else this.externalLightingIntent.delete(target);
@@ -2639,6 +2647,8 @@ export class LugnEngine {
           this.state.lighting.devices,
         )) {
           this.invalidateLightingTarget(target);
+          if (device.externalControl)
+            device.externalControl.canActivate = false;
           if (device.govee) {
             device.govee.status = 'pending';
             delete device.govee.controlId;

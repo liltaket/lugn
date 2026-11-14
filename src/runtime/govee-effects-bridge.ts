@@ -1,8 +1,19 @@
-import { createSocket, type Socket } from 'node:dgram';
 import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { connect, type MqttClient } from 'mqtt';
+import { performance } from 'node:perf_hooks';
+import { GoveeLanTransport } from './govee-lan-transport.js';
+import { sendGoveeLanEffect } from './govee-lan-playback.js';
+export { GoveeLanTransport } from './govee-lan-transport.js';
+import {
+  GoveeWriteCoordinator,
+  startGoveeControlServer,
+} from './govee-control-server.js';
+import {
+  combineGoveePresetControls,
+  type GoveePresetControls,
+} from './govee-preset-controls.js';
 import { z } from 'zod';
 import {
   encodeGoveeEffectCommand,
@@ -113,7 +124,12 @@ export function selectDiscovery(device: GoveeBridgeDevice, options: string[]) {
     default_entity_id: `select.lugn_govee_${device.id}_effect`,
     command_topic: `${base}/set`,
     state_topic: `${base}/state`,
-    availability_topic: 'lugn/govee/availability',
+    json_attributes_topic: `${base}/feedback`,
+    availability: [
+      { topic: 'lugn/govee/availability' },
+      { topic: `${base}/availability` },
+    ],
+    availability_mode: 'all',
     options: [RESUME_LUGN, EXTERNAL_UNKNOWN, ...options],
     icon: 'mdi:creation',
     retain: false,
@@ -127,111 +143,6 @@ export function selectDiscovery(device: GoveeBridgeDevice, options: string[]) {
       model: device.sku,
     },
   };
-}
-
-type LanDevice = { ip: string; seenAt: number };
-/** Binds only the Govee reply port, separate from HA's host. Never sends power/color. */
-export class GoveeLanTransport {
-  private readonly socket: Socket = createSocket('udp4');
-  private readonly devices = new Map<string, LanDevice>();
-  private readonly listeners = new Set<(ip: string, data: unknown) => void>();
-  constructor(private readonly config: BridgeConfig) {}
-  async start(): Promise<void> {
-    this.socket.on('message', (bytes, peer) => {
-      if (bytes.length > 16384) return;
-      try {
-        const message = JSON.parse(bytes.toString()) as {
-          msg?: { cmd?: string; data?: Record<string, unknown> };
-        };
-        const data = message.msg?.data;
-        if (!data) return;
-        if (message.msg?.cmd === 'scan') {
-          const match = this.config.devices.find(
-            (d) =>
-              d.device === String(data['device']).toUpperCase() &&
-              d.sku === data['sku'],
-          );
-          if (match && data['ip'] === peer.address)
-            this.devices.set(match.id, {
-              ip: peer.address,
-              seenAt: Date.now(),
-            });
-        }
-        if (message.msg?.cmd === 'devStatus')
-          for (const listener of this.listeners) listener(peer.address, data);
-      } catch {
-        /* Ignore unrelated/malformed local UDP traffic. */
-      }
-    });
-    await new Promise<void>((ok, fail) => {
-      this.socket.once('error', fail);
-      this.socket.bind(4002, this.config.interfaceAddress, () => {
-        this.socket.off('error', fail);
-        ok();
-      });
-    });
-    this.socket.on('error', () => console.error('Govee UDP transport error'));
-    this.socket.setMulticastInterface(this.config.interfaceAddress);
-    this.socket.setMulticastTTL(1);
-    if (this.config.broadcastAddress) this.socket.setBroadcast(true);
-    await this.discover();
-  }
-  async discover(): Promise<void> {
-    await this.send(
-      '239.255.255.250',
-      { msg: { cmd: 'scan', data: { account_topic: 'reserve' } } },
-      4001,
-    );
-    if (this.config.broadcastAddress)
-      await this.send(
-        this.config.broadcastAddress,
-        { msg: { cmd: 'scan', data: { account_topic: 'reserve' } } },
-        4001,
-      );
-    await new Promise((ok) => setTimeout(ok, 1200));
-  }
-  async address(id: string): Promise<string> {
-    let found = this.devices.get(id);
-    if (!found || Date.now() - found.seenAt > 60000) {
-      await this.discover();
-      found = this.devices.get(id);
-    }
-    if (!found || Date.now() - found.seenAt > 60000)
-      throw new Error('Device not discovered');
-    return found.ip;
-  }
-  async status(ip: string): Promise<unknown> {
-    return new Promise((ok, fail) => {
-      const timer = setTimeout(() => {
-        this.listeners.delete(listener);
-        fail(new Error('No device status'));
-      }, 2000);
-      const listener = (peer: string, data: unknown) => {
-        if (peer !== ip) return;
-        clearTimeout(timer);
-        this.listeners.delete(listener);
-        ok(data);
-      };
-      this.listeners.add(listener);
-      void this.send(ip, { msg: { cmd: 'devStatus', data: {} } }).catch(() => {
-        clearTimeout(timer);
-        this.listeners.delete(listener);
-        fail(new Error('Status send failed'));
-      });
-    });
-  }
-  async send(ip: string, command: unknown, port = 4003): Promise<void> {
-    const bytes = Buffer.from(JSON.stringify(command));
-    if (bytes.length > 60000) throw new Error('Command too large');
-    await new Promise<void>((ok, fail) =>
-      this.socket.send(bytes, port, ip, (error) =>
-        error ? fail(error) : ok(),
-      ),
-    );
-  }
-  stop(): void {
-    this.socket.close();
-  }
 }
 
 export async function loadGoveeEffects(
@@ -305,19 +216,30 @@ export async function applyEffect(
 export async function startGoveeBridge(
   runtime: RuntimeConfig,
   config: BridgeConfig,
+  options: {
+    coordinator?: GoveeWriteCoordinator;
+    ready?: (
+      controls: GoveePresetControls,
+      owns: (target: string, id: string) => Promise<boolean>,
+    ) => void;
+  } = {},
 ): Promise<() => Promise<void>> {
   if (!runtime.mqtt) throw new Error('MQTT required');
   for (const d of config.devices)
     if (!(d.target in runtime.homeAssistant.entities))
       throw new Error('Unmapped Govee target');
+  const coordinator = options.coordinator ?? new GoveeWriteCoordinator();
   const catalogs = new Map<string, Map<string, GoveeEffect>>();
-  for (const d of config.devices)
-    catalogs.set(
-      d.id,
-      effectOptions(
-        playableEffects(await loadGoveeEffects(d.sku, config.cacheDirectory)),
-      ),
-    );
+  await Promise.all(
+    config.devices.map(async (d) => {
+      catalogs.set(
+        d.id,
+        effectOptions(
+          playableEffects(await loadGoveeEffects(d.sku, config.cacheDirectory)),
+        ),
+      );
+    }),
+  );
   const lan = new GoveeLanTransport(config);
   await lan.start();
   const headers = {
@@ -346,7 +268,7 @@ export async function startGoveeBridge(
     if (!response.ok) throw new Error('Lugn request failed');
     return response.json();
   };
-  const readState = async () =>
+  const readState = async (target?: string) =>
     z
       .object({
         lighting: z.object({
@@ -354,8 +276,17 @@ export async function startGoveeBridge(
             z.string(),
             z
               .object({
+                effectiveDesired: z
+                  .object({ power: z.boolean().optional() })
+                  .optional(),
+                govee: z
+                  .object({ controlId: z.string().optional() })
+                  .optional(),
                 externalControl: z
-                  .object({ id: z.string() })
+                  .object({
+                    id: z.string(),
+                    canActivate: z.boolean().optional(),
+                  })
                   .passthrough()
                   .optional(),
               })
@@ -363,7 +294,52 @@ export async function startGoveeBridge(
           ),
         }),
       })
-      .parse(await request('/state'));
+      .parse(
+        await request(
+          target
+            ? `/state?lightingTarget=${encodeURIComponent(target)}`
+            : '/state?lightingOnly=1',
+        ),
+      );
+  options.ready?.(
+    {
+      capabilities: () =>
+        Object.fromEntries(
+          config.devices.map((d) => [
+            d.target,
+            {
+              effects: [...catalogs.get(d.id)!.keys()],
+              zones: false,
+              ...(d.sku === 'H60A6'
+                ? { colorTemperature: { min: 2700, max: 6500 } }
+                : {}),
+            },
+          ]),
+        ),
+      apply: async (command, guard) => {
+        const d = config.devices.find((d) => d.target === command.target);
+        const effect =
+          d && command.effect !== undefined
+            ? catalogs.get(d.id)?.get(command.effect)
+            : undefined;
+        if (!d || !effect || command.zones)
+          throw new Error('Unsupported LAN preset');
+        const { ip } = await lan.ensureReachable(d.id);
+        await guard();
+        await lan.send(ip, encodeGoveeEffectCommand(effect));
+        return { transport: 'lan', effect: 'udp_sent' };
+      },
+    },
+    async (target, id) => {
+      const d = (await readState(target)).lighting.devices[target];
+      return Boolean(
+        d &&
+        !d.externalControl &&
+        d.govee?.controlId === id &&
+        d.effectiveDesired?.power === true,
+      );
+    },
+  );
   const client: MqttClient = connect(runtime.mqtt.url, {
     ...(runtime.mqtt.username === undefined
       ? {}
@@ -402,6 +378,35 @@ export async function startGoveeBridge(
     );
   };
   const active = new Map<string, { controlId: string; name: string }>();
+  const contactChecks = new Set<string>();
+  const feedback = (status: {
+    onOff: 0 | 1;
+    brightness: number;
+    color: { r: number; g: number; b: number };
+    colorTemInKelvin: number;
+  }) => ({
+    observed_at: new Date().toISOString(),
+    power: status.onOff === 1,
+    brightness: status.brightness,
+    rgb: [status.color.r, status.color.g, status.color.b],
+    kelvin: status.colorTemInKelvin,
+    scope: 'fixture_status_only',
+    scene_feedback: 'not_available',
+  });
+  const checkContact = async (d: GoveeBridgeDevice) => {
+    if (stopped || contactChecks.has(d.id)) return;
+    contactChecks.add(d.id);
+    try {
+      const { status } = await lan.ensureReachable(d.id);
+      await publish(`lugn/govee/${d.id}/availability`, 'online');
+      await publish(`lugn/govee/${d.id}/feedback`, feedback(status));
+    } catch {
+      await publish(`lugn/govee/${d.id}/availability`, 'offline');
+    } finally {
+      contactChecks.delete(d.id);
+    }
+  };
+
   client.on('error', () => console.error('Govee MQTT connection error'));
   client.on('connect', () => {
     connectionGeneration++;
@@ -444,6 +449,7 @@ export async function startGoveeBridge(
               : EXTERNAL_UNKNOWN,
         );
       }
+      for (const d of config.devices) void checkContact(d);
       // A clean subscription never replays old retained device commands.
       await client.subscribeAsync(
         config.devices.map((d) => `lugn/govee/${d.id}/set`),
@@ -453,7 +459,8 @@ export async function startGoveeBridge(
     })().catch(() => console.error('Govee discovery publication failed'));
   });
   let queued = 0;
-  let queue = Promise.resolve();
+  const queues = new Map<string, Promise<void>>();
+  const commandRevisions = new Map<string, number>();
   client.on('message', (topic, bytes, packet) => {
     if (stopped || packet.retain || bytes.length > 1024 || queued >= 8) return;
     const d = config.devices.find((d) => topic === `lugn/govee/${d.id}/set`);
@@ -462,17 +469,21 @@ export async function startGoveeBridge(
     const effect = catalogs.get(d.id)?.get(name);
     if (name !== RESUME_LUGN && !effect) return;
     selectionRevision++;
+    const receivedAt = performance.now();
+    const commandRevision = (commandRevisions.get(d.id) ?? 0) + 1;
+    commandRevisions.set(d.id, commandRevision);
     const commandGeneration = connectionGeneration;
     const assertSession = () => {
       if (
         stopped ||
         !client.connected ||
-        commandGeneration !== connectionGeneration
+        commandGeneration !== connectionGeneration ||
+        commandRevisions.get(d.id) !== commandRevision
       )
         throw new Error('MQTT command session expired');
     };
     queued++;
-    queue = queue
+    const queue = (queues.get(d.id) ?? Promise.resolve())
       .then(async () => {
         assertSession();
         if (name === RESUME_LUGN) {
@@ -481,21 +492,53 @@ export async function startGoveeBridge(
           });
           active.delete(d.id);
         } else if (effect) {
-          const ip = await lan.address(d.id);
-          await lan.status(ip); // Require a live device before changing Lugn intent.
+          const { ip } = await lan.ensureReachable(d.id); // Live read before changing intent.
+          let liveControlId: string | undefined;
+          let nativeActivation = false;
           const controlId = await applyEffect(d.target, effect, {
             begin: async (target) => {
               assertSession();
-              return z.object({ controlId: z.string() }).parse(
+              liveControlId = z.object({ controlId: z.string() }).parse(
                 await request('/capabilities/lighting.beginExternalControl', {
                   target,
+                  activate: false,
                 }),
               ).controlId;
+              try {
+                const control = (await readState(target)).lighting.devices[
+                  target
+                ]?.externalControl;
+                if (
+                  control?.id !== liveControlId ||
+                  control.canActivate === false
+                )
+                  throw new Error('External activation revoked');
+                nativeActivation = control.canActivate === true;
+                if (!nativeActivation) {
+                  // Older Lugn versions lack the revocable native activation grant.
+                  liveControlId = z
+                    .object({ controlId: z.string() })
+                    .parse(
+                      await request(
+                        '/capabilities/lighting.beginExternalControl',
+                        { target },
+                      ),
+                    ).controlId;
+                }
+                return liveControlId;
+              } catch (error) {
+                await request('/capabilities/lighting.endExternalControl', {
+                  target,
+                  expectedControlId: liveControlId,
+                }).catch(() => undefined);
+                throw error;
+              }
             },
             owns: async (target, id) => {
-              const state = await readState();
+              const state = await readState(target);
               assertSession();
-              return state.lighting.devices[target]?.externalControl?.id === id;
+              const control = state.lighting.devices[target]?.externalControl;
+              return control?.id === id && control.canActivate !== false;
             },
             end: async (target, expectedControlId) => {
               await request('/capabilities/lighting.endExternalControl', {
@@ -505,20 +548,70 @@ export async function startGoveeBridge(
             },
             send: async (e) => {
               assertSession();
-              await lan.send(ip, encodeGoveeEffectCommand(e));
+              await coordinator.run(
+                d.target,
+                liveControlId!,
+                async () => {
+                  assertSession();
+                  const control = (await readState(d.target)).lighting.devices[
+                    d.target
+                  ]?.externalControl;
+                  return (
+                    control !== undefined &&
+                    control.id === liveControlId &&
+                    control.canActivate !== false
+                  );
+                },
+                async (guard) => {
+                  await sendGoveeLanEffect(
+                    ip,
+                    e,
+                    {
+                      guard,
+                      status: (ip) => lan.status(ip),
+                      send: (ip, command) => lan.send(ip, command),
+                    },
+                    nativeActivation,
+                  );
+                },
+              );
             },
           });
           active.set(d.id, { name, controlId });
+          void lan
+            .status(ip)
+            .then(async (feedback) => {
+              if (
+                stopped ||
+                commandRevisions.get(d.id) !== commandRevision ||
+                active.get(d.id)?.controlId !== controlId
+              )
+                return;
+              await publish(`lugn/govee/${d.id}/feedback`, {
+                observed_at: new Date().toISOString(),
+                control_id: controlId,
+                power: feedback.onOff === 1,
+                brightness: feedback.brightness,
+                rgb: [feedback.color.r, feedback.color.g, feedback.color.b],
+                kelvin: feedback.colorTemInKelvin,
+                scope: 'fixture_status_only',
+                scene_feedback: 'not_available',
+              });
+            })
+            .catch(() => undefined);
         }
+        assertSession();
         await publish(`lugn/govee/${d.id}/state`, name);
         await publish(`lugn/govee/${d.id}/result`, {
           status: name === RESUME_LUGN ? 'lugn' : 'udp_sent',
           requested_effect: name,
           at: new Date().toISOString(),
           scene_feedback: 'not_available',
+          duration_ms: Math.round((performance.now() - receivedAt) * 100) / 100,
         });
       })
       .catch(async () => {
+        if (commandRevisions.get(d.id) !== commandRevision) return;
         console.error(`Govee effect command failed: ${d.id}`);
         await publish(`lugn/govee/${d.id}/result`, {
           status: 'error',
@@ -528,12 +621,19 @@ export async function startGoveeBridge(
       })
       .finally(() => {
         queued--;
+        if (queues.get(d.id) === queue) queues.delete(d.id);
       });
+    queues.set(d.id, queue);
   });
   let polling = false;
+  let lastContactCheck = 0;
   const timer = setInterval(() => {
     if (stopped || polling || !client.connected || queued > 0) return;
     polling = true;
+    if (Date.now() - lastContactCheck >= 15000) {
+      lastContactCheck = Date.now();
+      for (const d of config.devices) void checkContact(d);
+    }
     const revision = selectionRevision;
     const generation = connectionGeneration;
     void readState()
@@ -566,7 +666,8 @@ export async function startGoveeBridge(
     stopped = true;
     clearInterval(timer);
     // Drop queued work; no resumption or light actuation during shutdown.
-    await queue;
+    await Promise.allSettled(queues.values());
+    if (!options.coordinator) await coordinator.stop();
     lan.stop();
     if (client.connected)
       await client.publishAsync('lugn/govee/availability', 'offline', {
@@ -607,19 +708,49 @@ async function main(): Promise<void> {
     }
     return;
   }
-  const stop = await startGoveeBridge(runtime, config);
+  const coordinator = new GoveeWriteCoordinator();
+  let localControls: GoveePresetControls | undefined;
+  let platformControls: GoveePresetControls | undefined;
+  let ownsPreset:
+    ((target: string, id: string) => Promise<boolean>) | undefined;
+  const stop = await startGoveeBridge(runtime, config, {
+    coordinator,
+    ready: (controls, owns) => {
+      localControls = controls;
+      ownsPreset = owns;
+    },
+  });
   let stopPlatform: (() => Promise<void>) | undefined;
+  let server: Awaited<ReturnType<typeof startGoveeControlServer>> | undefined;
   try {
     if (config.platform)
-      stopPlatform = await startGoveePlatformBridge(runtime, config.platform);
+      stopPlatform = await startGoveePlatformBridge(runtime, config.platform, {
+        coordinator,
+        ready: (controls) => {
+          platformControls = controls;
+        },
+      });
+    if (!localControls || !ownsPreset)
+      throw new Error('Govee preset controls unavailable');
+    const controls = combineGoveePresetControls(
+      localControls,
+      platformControls,
+    );
+    server = await startGoveeControlServer({
+      socketPath: join(config.cacheDirectory, 'control.sock'),
+      coordinator,
+      capabilities: () => controls.capabilities(),
+      owns: ownsPreset,
+      apply: (command, guard) => controls.apply(command, guard),
+    });
   } catch (error) {
-    await stop();
+    await Promise.allSettled([stop(), stopPlatform?.(), coordinator.stop()]);
     throw error;
   }
   for (const signal of ['SIGTERM', 'SIGINT'] as const)
     process.once(signal, () => {
-      void Promise.allSettled([stop(), stopPlatform?.()]).then(() =>
-        process.exit(0),
+      void Promise.allSettled([server?.stop(), stop(), stopPlatform?.()]).then(
+        () => process.exit(0),
       );
     });
   console.log(

@@ -22,6 +22,67 @@ async function flush() {
 }
 
 describe('explicit external lighting ownership', () => {
+  it('revokes delayed external activation at exit while retaining logical ownership', async () => {
+    const { engine } = setup();
+    try {
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+      });
+      const id = await engine.beginExternalLightingControl(
+        'lighting.desk',
+        user,
+        'govee',
+        false,
+      );
+      expect(
+        engine.state.lighting.devices['lighting.desk']?.externalControl
+          ?.canActivate,
+      ).toBe(true);
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'confirmed_empty',
+      });
+      expect(
+        engine.state.lighting.devices['lighting.desk']?.externalControl,
+      ).toMatchObject({ id, canActivate: false });
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+      });
+      expect(
+        engine.state.lighting.devices['lighting.desk']?.externalControl
+          ?.canActivate,
+      ).toBe(false);
+    } finally {
+      engine.dispose();
+    }
+  });
+  it('grants a new manual selection while already empty without restoring an old grant', async () => {
+    const { engine } = setup();
+    try {
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'confirmed_empty',
+      });
+      await engine.beginExternalLightingControl(
+        'lighting.desk',
+        user,
+        'govee',
+        false,
+      );
+      await engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'confirmed_empty',
+      });
+      expect(
+        engine.state.lighting.devices['lighting.desk']?.externalControl
+          ?.canActivate,
+      ).toBe(true);
+    } finally {
+      engine.dispose();
+    }
+  });
   it('keeps effect frames out of desired values and preserves other lamps and durable intent', async () => {
     const { clock, adapter, engine } = setup();
     try {

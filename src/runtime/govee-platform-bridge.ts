@@ -1,4 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
+import { performance } from 'node:perf_hooks';
+import { GoveeWriteCoordinator } from './govee-control-server.js';
+import type { GoveePresetControls } from './govee-preset-controls.js';
 import { connect, type MqttClient } from 'mqtt';
 import { z } from 'zod';
 import {
@@ -472,13 +475,20 @@ type BridgeDependencies = {
   environment?: NodeJS.ProcessEnv;
   pollIntervalMs?: number;
   followupDelayMs?: number;
+  coordinator?: GoveeWriteCoordinator;
+  ready?: (controls: GoveePresetControls) => void;
 };
 const LugnStateSchema = z.object({
   lighting: z.object({
     devices: z.record(
       z.string(),
       z.object({
-        externalControl: z.object({ id: z.string().min(1) }).optional(),
+        externalControl: z
+          .object({
+            id: z.string().min(1),
+            canActivate: z.boolean().optional(),
+          })
+          .optional(),
       }),
     ),
   }),
@@ -491,6 +501,7 @@ export async function startGoveePlatformBridge(
   dependencies: BridgeDependencies = {},
 ): Promise<() => Promise<void>> {
   const config = GoveePlatformConfigSchema.parse(input);
+  const coordinator = dependencies.coordinator ?? new GoveeWriteCoordinator();
   if (!runtime.mqtt) throw new Error('MQTT required');
   for (const device of config.devices)
     if (!(device.target in runtime.homeAssistant.entities))
@@ -551,7 +562,14 @@ export async function startGoveePlatformBridge(
     }
     return JSON.parse(Buffer.concat(chunks).toString()) as unknown;
   };
-  const readLugn = async () => LugnStateSchema.parse(await lugn('/state'));
+  const readLugn = async (target?: string) =>
+    LugnStateSchema.parse(
+      await lugn(
+        target
+          ? `/state?lightingTarget=${encodeURIComponent(target)}`
+          : '/state?lightingOnly=1',
+      ),
+    );
   const client: MqttClient = (dependencies.connect ?? connect)(
     runtime.mqtt.url,
     {
@@ -580,7 +598,7 @@ export async function startGoveePlatformBridge(
     revision = 0,
     queued = 0,
     polling = false;
-  let queue = Promise.resolve();
+  const queues = new Map<string, Promise<void>>();
   const pollInterval = dependencies.pollIntervalMs ?? 60000;
   const metadata = new Map<string, PlatformDevice>();
   const catalogs = new Map<string, Map<string, PlatformScene>>();
@@ -589,6 +607,77 @@ export async function startGoveePlatformBridge(
   const discoveryCache = new Map<string, string>();
   const followups = new Set<ReturnType<typeof setTimeout>>();
   let nextCatalogAttempt = 0;
+  dependencies.ready?.({
+    capabilities: () =>
+      Object.fromEntries(
+        config.devices.flatMap((device) => {
+          const info = metadata.get(device.id);
+          if (!info) return [];
+          const range = numericRange(
+            platformCapability(
+              info,
+              'devices.capabilities.color_setting',
+              'colorTemperatureK',
+            )?.parameters,
+          );
+          return [
+            [
+              device.target,
+              {
+                effects: device.exposeEffects
+                  ? [...(catalogs.get(device.id)?.keys() ?? [])]
+                  : [],
+                zones:
+                  (device.zones?.length === 2 &&
+                    device.zones.every(
+                      (zone) => platformZoneFeatures(info, zone).power,
+                    )) ??
+                  false,
+                ...(range
+                  ? { colorTemperature: { min: range.min, max: range.max } }
+                  : {}),
+              },
+            ],
+          ];
+        }),
+      ),
+    apply: async (command, guard) => {
+      const device = config.devices.find((d) => d.target === command.target);
+      const info = device && metadata.get(device.id);
+      if (!device || !info) throw new Error('Platform target unavailable');
+      const controls: PlatformControl[] = [];
+      if (command.effect !== undefined) {
+        const scene = catalogs.get(device.id)?.get(command.effect);
+        if (!scene || !device.exposeEffects)
+          throw new Error('Unsupported platform effect');
+        controls.push(...platformEffectControls(info, scene));
+      }
+      if (command.zones) {
+        const mask = command.zones;
+        const desired = [
+          { instance: 'mainLightToggle' as const, on: mask.main },
+          { instance: 'backgroundLightToggle' as const, on: mask.ring },
+        ].sort((a, b) => Number(a.on) - Number(b.on));
+        for (const value of desired) {
+          if (
+            !device.zones?.some((zone) => zone.powerInstance === value.instance)
+          )
+            throw new Error('Unsupported platform zone');
+          controls.push(platformToggle(info, value.instance, value.on));
+        }
+      }
+      if (!controls.length) throw new Error('Empty platform preset');
+      for (const control of controls) {
+        await guard();
+        await platform.control(device, control, () => undefined);
+      }
+      return {
+        transport: 'platform',
+        ...(command.effect ? { effect: 'cloud_accepted' as const } : {}),
+        ...(command.zones ? { zones: 'cloud_accepted' as const } : {}),
+      };
+    },
+  });
   const connected = () => !stopped && client.connected;
   const publish = async (
     topic: string,
@@ -852,6 +941,7 @@ export async function startGoveePlatformBridge(
     } catch {
       return;
     }
+    const receivedAt = performance.now();
     const commandGeneration = generation;
     const assertSession = () => {
       if (!connected() || generation !== commandGeneration)
@@ -859,11 +949,11 @@ export async function startGoveePlatformBridge(
     };
     revision++;
     queued++;
-    queue = queue
+    const queue = (queues.get(device.target) ?? Promise.resolve())
       .then(async () => {
         assertSession();
         if (!zone && name === PLATFORM_RESUME_LUGN) {
-          const state = await readLugn();
+          const state = await readLugn(device.target);
           assertSession();
           const id = state.lighting.devices[device.target]?.externalControl?.id;
           if (id) {
@@ -874,11 +964,12 @@ export async function startGoveePlatformBridge(
             knownControls.delete(device.id);
           }
         } else {
+          let activeId: string | undefined;
           const id = await applyPlatformControls(device.target, controls, {
             assertSession,
             begin: async (target) => {
               assertSession();
-              return z
+              activeId = z
                 .object({
                   accepted: z.literal(true),
                   controlId: z.string().min(1),
@@ -889,10 +980,13 @@ export async function startGoveePlatformBridge(
                     activate: false,
                   }),
                 ).controlId;
+              return activeId;
             },
-            owns: async (target, id) =>
-              (await readLugn()).lighting.devices[target]?.externalControl
-                ?.id === id,
+            owns: async (target, id) => {
+              const control = (await readLugn(target)).lighting.devices[target]
+                ?.externalControl;
+              return control?.id === id && control.canActivate !== false;
+            },
             end: async (target, id) => {
               assertSession();
               await lugn('/capabilities/lighting.endExternalControl', {
@@ -902,7 +996,25 @@ export async function startGoveePlatformBridge(
             },
             send: async (control, guard) => {
               assertSession();
-              await platform.control(device, control, guard);
+              await coordinator.run(
+                device.target,
+                activeId!,
+                async () => {
+                  assertSession();
+                  const control = (await readLugn(device.target)).lighting
+                    .devices[device.target]?.externalControl;
+                  return (
+                    control !== undefined &&
+                    control.id === activeId &&
+                    control.canActivate !== false
+                  );
+                },
+                async (writeGuard) => {
+                  await writeGuard();
+                  guard();
+                  await platform.control(device, control, guard);
+                },
+              );
             },
           });
           knownControls.set(device.id, id);
@@ -915,6 +1027,11 @@ export async function startGoveePlatformBridge(
               name === PLATFORM_RESUME_LUGN ? 'lugn' : 'cloud_accepted',
             at: new Date().toISOString(),
             feedback: 'separate_platform_state',
+            requested: zone
+              ? { zone: zone.id, command: name }
+              : { effect: name },
+            duration_ms:
+              Math.round((performance.now() - receivedAt) * 100) / 100,
           },
           () => connected() && generation === commandGeneration,
         );
@@ -929,6 +1046,7 @@ export async function startGoveePlatformBridge(
       })
       .finally(() => {
         queued--;
+        if (queues.get(device.target) === queue) queues.delete(device.target);
         if (!queued && !stopped) {
           void refresh(device.id);
           const followupRevision = revision;
@@ -943,6 +1061,7 @@ export async function startGoveePlatformBridge(
           followups.add(followup);
         }
       });
+    queues.set(device.target, queue);
   });
   const timer = setInterval(() => {
     void refresh();
@@ -952,7 +1071,8 @@ export async function startGoveePlatformBridge(
     generation++;
     clearInterval(timer);
     for (const followup of followups) clearTimeout(followup);
-    await queue;
+    await Promise.allSettled(queues.values());
+    if (!dependencies.coordinator) await coordinator.stop();
     try {
       if (client.connected)
         await client.publishAsync(
