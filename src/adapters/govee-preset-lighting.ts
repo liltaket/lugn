@@ -1,0 +1,224 @@
+import { request } from 'node:http';
+import { z } from 'zod';
+import {
+  GoveeCapabilitiesSchema,
+  type GoveeCapabilities,
+} from '../core/schemas.js';
+import type {
+  LightingAdapter,
+  LightingCommand,
+  LightingObservation,
+} from './simulated-lighting.js';
+
+export interface GoveeControlClient {
+  capabilities(): Promise<GoveeCapabilities>;
+  apply(body: {
+    requestId: string;
+    target: string;
+    controlId: string;
+    effect?: string | undefined;
+    zones?: { main: boolean; ring: boolean } | undefined;
+  }): Promise<void>;
+  cancel(target: string, controlId?: string): Promise<void>;
+}
+
+/** Local IPC only. Responses contain delivery outcomes, never physical effect confirmation. */
+export class GoveeSocketClient implements GoveeControlClient {
+  constructor(private readonly socketPath: string) {}
+  async capabilities(): Promise<GoveeCapabilities> {
+    return z
+      .object({ targets: GoveeCapabilitiesSchema })
+      .parse(await this.call('GET', '/capabilities')).targets;
+  }
+  async apply(body: Parameters<GoveeControlClient['apply']>[0]): Promise<void> {
+    const result = z
+      .object({
+        requestId: z.literal(body.requestId),
+        target: z.literal(body.target),
+        controlId: z.literal(body.controlId),
+        status: z.literal('sent'),
+      })
+      .safeParse(await this.call('POST', '/apply', body));
+    if (!result.success) throw new Error('Invalid Govee delivery response');
+  }
+  async cancel(target: string, controlId?: string): Promise<void> {
+    z.object({ status: z.literal('drained') }).parse(
+      await this.call('POST', '/cancel', {
+        target,
+        ...(controlId ? { controlId } : {}),
+      }),
+    );
+  }
+  private call(method: string, path: string, body?: unknown): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const bytes = body === undefined ? undefined : JSON.stringify(body);
+      const req = request(
+        {
+          socketPath: this.socketPath,
+          signal: AbortSignal.timeout(method === 'GET' ? 2_000 : 60_000),
+          method,
+          path,
+          headers:
+            bytes === undefined
+              ? {}
+              : {
+                  'content-type': 'application/json',
+                  'content-length': Buffer.byteLength(bytes),
+                },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          let length = 0;
+          response.on('data', (chunk: Buffer) => {
+            length += chunk.length;
+            if (length > 1024 * 1024)
+              req.destroy(new Error('Govee response too large'));
+            else chunks.push(chunk);
+          });
+          response.on('end', () => {
+            if (response.statusCode !== 200) {
+              reject(
+                new Error(
+                  `Govee control request failed (${response.statusCode ?? 503})`,
+                ),
+              );
+              return;
+            }
+            try {
+              resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+            } catch {
+              reject(new Error('Invalid Govee control response'));
+            }
+          });
+          response.on('error', () =>
+            reject(new Error('Govee control response interrupted')),
+          );
+        },
+      );
+      req.setTimeout(method === 'GET' ? 2_000 : 60_000, () =>
+        req.destroy(new Error('Govee control request timed out')),
+      );
+      req.on('error', () => reject(new Error('Govee companion unavailable')));
+      req.end(bytes);
+    });
+  }
+}
+
+/** One queue per physical target spans baseline, effects, masks and subsequent static/OFF. */
+export class GoveePresetLightingAdapter implements LightingAdapter {
+  private readonly tails = new Map<string, Promise<void>>();
+  async refreshCapabilities(): Promise<void> {
+    const next = await this.client.capabilities();
+    // Keep known capabilities through an outage so static/OFF still uses its barrier.
+    Object.assign(this.goveeCapabilities, next);
+  }
+  constructor(
+    private readonly ordinary: LightingAdapter,
+    private readonly client: GoveeControlClient,
+    readonly goveeCapabilities: GoveeCapabilities,
+  ) {}
+  subscribe(listener: (observation: LightingObservation) => void): () => void {
+    return this.ordinary.subscribe(listener);
+  }
+  dispatch(command: LightingCommand): Promise<void> {
+    if (!this.goveeCapabilities[command.target]) {
+      if (command.govee)
+        return Promise.reject(new Error('Govee capabilities unavailable'));
+      return this.ordinary.dispatch(command);
+    }
+    const previous = this.tails.get(command.target) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.execute(command));
+    this.tails.set(command.target, next);
+    void next
+      .finally(() => {
+        if (this.tails.get(command.target) === next)
+          this.tails.delete(command.target);
+      })
+      .catch(() => undefined);
+    return next;
+  }
+  private async execute(command: LightingCommand): Promise<void> {
+    const current = () => command.isCurrent?.() !== false;
+    if (!current()) return;
+    const capability = this.goveeCapabilities[command.target]!;
+    const intent = command.govee;
+    if (
+      intent &&
+      ((intent.effect && !capability.effects.includes(intent.effect)) ||
+        (intent.zones && !capability.zones))
+    )
+      throw new Error('Unsupported Govee preset');
+    // Every new physical request drains legacy selector writes too. Lease acquisition
+    // is outside the companion's device-write lock, avoiding a circular main API wait.
+    try {
+      await this.client.cancel(command.target);
+    } catch (error) {
+      // Local OFF remains available during a companion outage. No positive write is safe.
+      if (command.values.power === false && current())
+        await this.ordinary.dispatch(command);
+      throw error;
+    }
+    if (!current()) return;
+    const values = { ...command.values };
+    const range = capability.colorTemperature;
+    if (range && values.colorTemperature !== undefined)
+      values.colorTemperature = Math.max(
+        range.min,
+        Math.min(range.max, values.colorTemperature),
+      );
+    await this.ordinary.dispatch({
+      id: command.id,
+      target: command.target,
+      values,
+    });
+    if (!current() || !intent || values.power === false) return;
+    // A disconnected/aborted HTTP request cannot retract a cloud write. On guard
+    // invalidation explicitly cancel and wait for the server's drain acknowledgement.
+    let cancel: Promise<void> | undefined;
+    let drained!: () => void;
+    let drainFailed!: (error: unknown) => void;
+    const cancellation = new Promise<void>((resolve, reject) => {
+      drained = resolve;
+      drainFailed = reject;
+    });
+    const requestCancel = () => {
+      if (!cancel) {
+        cancel = this.client.cancel(command.target, intent.controlId);
+        void cancel.then(drained, drainFailed);
+      }
+      return cancel;
+    };
+    const timer = setInterval(() => {
+      if (!current()) requestCancel();
+    }, 20);
+    try {
+      // A drained cancellation releases the target even if the obsolete apply
+      // response is lost. Promise.race consumes any late apply rejection.
+      await Promise.race([
+        this.client.apply({
+          requestId: command.id,
+          target: command.target,
+          ...intent,
+        }),
+        cancellation,
+      ]);
+    } catch (error) {
+      await requestCancel();
+      if (!current()) return;
+      // A partial mask failure must not leave an accidentally illuminated second zone.
+      if (current())
+        await this.ordinary.dispatch({
+          id: `${command.id}-govee-failed-off`,
+          target: command.target,
+          values: { power: false },
+        });
+      throw error;
+    } finally {
+      clearInterval(timer);
+      if (!current()) requestCancel();
+      if (cancel) await cancel;
+    }
+  }
+}

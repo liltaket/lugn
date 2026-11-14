@@ -53,6 +53,71 @@ describe('local capability HTTP API', () => {
     engine = undefined;
   });
 
+  it('authenticates and narrows lighting ownership reads without serializing unrelated state', async () => {
+    const port = await findAvailablePort();
+    engine = new LugnEngine(new FakeClock(), {
+      deviceIds: ['lighting.ceiling', 'lighting.table'],
+      scenes: [],
+    });
+    server = new LugnHttpServer({
+      host: '127.0.0.1',
+      port,
+      bearerToken: 'state-test',
+      engine,
+      capabilities: new CapabilityRegistry(engine),
+      integrations: () => ({}),
+    });
+    await server.start();
+    const url = `http://127.0.0.1:${port}/state`;
+    const headers = { Authorization: 'Bearer state-test' };
+    expect(
+      (await fetch(`${url}?lightingOnly=1&lightingTarget=lighting.ceiling`))
+        .status,
+    ).toBe(401);
+    const full = await (await fetch(url, { headers })).json();
+    expect(full).toHaveProperty('commands');
+    expect(
+      await (await fetch(`${url}?lightingOnly=1`, { headers })).json(),
+    ).toEqual({ lighting: engine.state.lighting });
+    const narrowed = {
+      lighting: {
+        devices: {
+          'lighting.ceiling': engine.state.lighting.devices['lighting.ceiling'],
+        },
+      },
+    };
+    expect(
+      await (
+        await fetch(`${url}?lightingOnly=1&lightingTarget=lighting.ceiling`, {
+          headers,
+        })
+      ).json(),
+    ).toEqual(narrowed);
+    expect(
+      await (
+        await fetch(`${url}?lightingTarget=lighting.ceiling`, { headers })
+      ).json(),
+    ).toEqual(narrowed);
+    expect(
+      (
+        await fetch(`${url}?lightingOnly=1&lightingTarget=lighting.missing`, {
+          headers,
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (await fetch(`${url}?lightingTarget=__proto__`, { headers })).status,
+    ).toBe(400);
+    expect(
+      (
+        await fetch(
+          `${url}?lightingTarget=lighting.ceiling&lightingTarget=lighting.table`,
+          { headers },
+        )
+      ).status,
+    ).toBe(400);
+  });
+
   it('protects routes and sends validated capability requests to the engine', async () => {
     const port = await findAvailablePort();
     const clock = new FakeClock();

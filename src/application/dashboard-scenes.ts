@@ -52,7 +52,7 @@ export function withRoomPresets(
 }
 
 /**
- * Keeps white lights in the installed room's shared CCT range and lifts WLED.
+ * Completes legacy white intent without replacing per-lamp Kelvin, and lifts WLED.
  */
 function normalizeRoomScenes(
   scenes: readonly LightingScene[],
@@ -83,7 +83,10 @@ export function synchronizeSceneColorTemperature(
     lighting: Object.fromEntries(
       Object.entries(scene.lighting).map(([target, values]) => [
         target,
-        values.rgb === undefined && cct !== undefined
+        values.rgb === undefined &&
+        scene.govee?.[target]?.effect === undefined &&
+        values.colorTemperature === undefined &&
+        cct !== undefined
           ? { ...values, colorTemperature: cct }
           : { ...values },
       ]),

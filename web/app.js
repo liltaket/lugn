@@ -1464,6 +1464,9 @@ function sceneSnapshot(scene) {
     id: scene.id,
     name: scene.name,
     lighting: structuredClone(scene.lighting),
+    ...(scene.govee === undefined
+      ? {}
+      : { govee: structuredClone(scene.govee) }),
   };
 }
 
@@ -1558,7 +1561,13 @@ function openPresetEditor(scene) {
     );
   presetDraft = scene
     ? sceneSnapshot(scene)
-    : { name: '', lighting: structuredClone(lighting) };
+    : {
+        name: '',
+        lighting: structuredClone(lighting),
+        ...(source?.govee === undefined
+          ? {}
+          : { govee: structuredClone(source.govee) }),
+      };
   presetName.value = presetDraft.name;
   document.getElementById('preset-editor-title').textContent = scene
     ? `Redigera ${scene.name}`
@@ -1582,6 +1591,16 @@ function openPresetEditor(scene) {
   renderScenes(overview);
   presetName.focus({ preventScroll: true });
   presetEditor.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+}
+
+function setPresetGovee(target, intent) {
+  if (intent && (intent.effect !== undefined || intent.zones !== undefined)) {
+    presetDraft.govee ??= {};
+    presetDraft.govee[target] = intent;
+  } else if (presetDraft.govee) {
+    delete presetDraft.govee[target];
+    if (!Object.keys(presetDraft.govee).length) delete presetDraft.govee;
+  }
 }
 
 function renderPresetLight(target) {
@@ -1621,9 +1640,89 @@ function renderPresetLight(target) {
   numberWrap.append(number, node('span', '', '%'));
   const status = node('output', 'preset-light-state');
   status.htmlFor = slider.id;
+  const detail = node('div', 'preset-light-detail');
+  const capability = overview.goveeCapabilities?.[target];
   let retained = structuredClone(
     presetDraft.lighting[target] ?? { power: false, brightness: 0 },
   );
+  let retainedGovee = structuredClone(presetDraft.govee?.[target]);
+  let retainedWhite =
+    retained.colorTemperature ?? capability?.colorTemperature?.min ?? 2700;
+  let retainedRgb = retained.rgb ?? [255, 160, 80];
+  let retainedEffect = retainedGovee?.effect ?? capability?.effects?.[0];
+  const field = (labelText, element) => {
+    const label = node('label', 'preset-light-field');
+    label.append(node('span', '', labelText), element);
+    detail.append(label);
+    return label;
+  };
+  const select = (entries) => {
+    const element = document.createElement('select');
+    for (const [value, text] of entries) {
+      const option = node('option', '', text);
+      option.value = value;
+      element.append(option);
+    }
+    return element;
+  };
+  const mode = select([
+    ['white', 'Vitt ljus'],
+    ...(capability || retained.rgb ? [['rgb', 'Fast färg']] : []),
+    ...(capability?.effects?.length || retainedEffect
+      ? [['effect', 'Appanimation']]
+      : []),
+  ]);
+  mode.value = retainedGovee?.effect
+    ? 'effect'
+    : retained.rgb
+      ? 'rgb'
+      : 'white';
+  field('Ljustyp', mode);
+  const white = document.createElement('input');
+  white.type = 'number';
+  white.min = String(
+    capability?.colorTemperature?.min ?? Math.min(2700, retainedWhite),
+  );
+  white.max = String(
+    capability?.colorTemperature?.max ?? Math.max(6500, retainedWhite),
+  );
+  white.step = '1';
+  white.required = true;
+  white.inputMode = 'numeric';
+  white.value = String(retainedWhite);
+  const whiteLabel = field('Färgtemperatur (K)', white);
+  const rgb = document.createElement('input');
+  rgb.type = 'color';
+  rgb.value = `#${retainedRgb.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+  const rgbLabel = field('Färg', rgb);
+  const effects = [...(capability?.effects ?? [])];
+  if (retainedEffect && !effects.includes(retainedEffect))
+    effects.push(retainedEffect);
+  const effect = select(effects.map((name) => [name, name]));
+  effect.value = retainedEffect ?? '';
+  const effectLabel = field('Appanimation', effect);
+  const zones = select([
+    ['default', 'Standard'],
+    ['both', 'Huvudljus och ring'],
+    ['main', 'Bara huvudljus'],
+    ['ring', 'Bara ring'],
+  ]);
+  zones.value = !retainedGovee?.zones
+    ? 'default'
+    : retainedGovee.zones.main
+      ? retainedGovee.zones.ring
+        ? 'both'
+        : 'main'
+      : 'ring';
+  const zonesLabel = field('Taklampans delar', zones);
+  zonesLabel.hidden = !capability?.zones && !retainedGovee?.zones;
+  const note = node(
+    'p',
+    'preset-light-note',
+    'Animationen gäller hela lampan. Välj vilka delar som ska lysa.',
+  );
+  note.hidden = zonesLabel.hidden;
+  detail.append(note);
   const sync = () => {
     const values = presetDraft.lighting[target];
     const brightness = values?.power === false ? 0 : (values?.brightness ?? 50);
@@ -1631,6 +1730,14 @@ function renderPresetLight(target) {
     number.value = String(brightness);
     slider.disabled = !include.checked;
     number.disabled = !include.checked;
+    mode.disabled = !include.checked;
+    white.disabled = !include.checked || mode.value !== 'white';
+    rgb.disabled = !include.checked || mode.value !== 'rgb';
+    effect.disabled = !include.checked || mode.value !== 'effect';
+    zones.disabled = !include.checked || !capability?.zones;
+    whiteLabel.hidden = mode.value !== 'white';
+    rgbLabel.hidden = mode.value !== 'rgb';
+    effectLabel.hidden = mode.value !== 'effect';
     slider.setAttribute(
       'aria-valuetext',
       include.checked ? `${brightness} procent` : 'Oförändrad',
@@ -1644,6 +1751,29 @@ function renderPresetLight(target) {
           : 'På';
     row.dataset.included = String(include.checked);
   };
+  const writeGovee = () => {
+    const intent = {};
+    if (mode.value === 'effect' && retainedEffect) {
+      intent.effect = retainedEffect;
+      // Saving an OFF draft may have completed its remembered white intent.
+      // Re-entering an animation must select the animation's color mode again.
+      const values = presetDraft.lighting[target];
+      if (values?.power === true) {
+        delete values.rgb;
+        delete values.colorTemperature;
+      }
+    }
+    if (zones.value !== 'default')
+      intent.zones = {
+        main: zones.value !== 'ring',
+        ring: zones.value !== 'main',
+      };
+    retainedGovee = Object.keys(intent).length ? intent : undefined;
+    setPresetGovee(
+      target,
+      presetDraft.lighting[target]?.power === true ? retainedGovee : undefined,
+    );
+  };
   const setBrightness = (value) => {
     if (!Number.isInteger(value) || value < 0 || value > 100) return;
     presetDraft.lighting[target] = {
@@ -1651,9 +1781,53 @@ function renderPresetLight(target) {
       power: value > 0,
       brightness: value,
     };
+    writeGovee();
     sync();
     updatePresetDirtyState();
   };
+  const setMode = () => {
+    if (!include.checked) return;
+    const values = presetDraft.lighting[target];
+    delete values.rgb;
+    delete values.colorTemperature;
+    if (mode.value === 'white') values.colorTemperature = retainedWhite;
+    if (mode.value === 'rgb') values.rgb = [...retainedRgb];
+    if (mode.value === 'effect') {
+      values.power = true;
+      values.brightness = Math.max(1, values.brightness ?? 50);
+      if (capability?.zones && zones.value === 'default') zones.value = 'both';
+    }
+    writeGovee();
+    sync();
+    updatePresetDirtyState();
+  };
+  mode.addEventListener('change', setMode);
+  white.addEventListener('input', () => {
+    if (white.value !== '' && white.validity.valid) {
+      retainedWhite = Number(white.value);
+      setMode();
+    }
+  });
+  rgb.addEventListener('input', () => {
+    retainedRgb = [1, 3, 5].map((offset) =>
+      Number.parseInt(rgb.value.slice(offset, offset + 2), 16),
+    );
+    setMode();
+  });
+  effect.addEventListener('change', () => {
+    retainedEffect = effect.value;
+    setMode();
+  });
+  zones.addEventListener('change', () => {
+    if (zones.value !== 'default') {
+      const values = presetDraft.lighting[target];
+      values.power = true;
+      values.brightness = Math.max(1, values.brightness ?? 50);
+    }
+    writeGovee();
+    sync();
+    updatePresetDirtyState();
+  });
   slider.addEventListener('input', () => setBrightness(Number(slider.value)));
   number.addEventListener('input', () => {
     if (number.value !== '' && number.validity.valid)
@@ -1663,17 +1837,23 @@ function renderPresetLight(target) {
     if (number.validity.valid && number.value !== '') sync();
   });
   include.addEventListener('change', () => {
-    if (include.checked) presetDraft.lighting[target] = retained;
-    else {
+    if (include.checked) {
+      presetDraft.lighting[target] = retained;
+      writeGovee();
+    } else {
       retained = structuredClone(presetDraft.lighting[target]);
+      retainedGovee = structuredClone(
+        presetDraft.govee?.[target] ?? retainedGovee,
+      );
       delete presetDraft.lighting[target];
+      setPresetGovee(target, undefined);
     }
     sync();
     updatePresetDirtyState();
   });
   sync();
   control.append(slider, numberWrap, status);
-  row.append(includeLabel, control);
+  row.append(includeLabel, control, detail);
   return row;
 }
 
@@ -1709,6 +1889,10 @@ async function mutatePreset(path, method, body) {
         'Det här presetet behövs av systemet och kan inte ändras eller raderas.',
       target_not_configured:
         'En lampa finns inte längre i konfigurationen. Stäng och öppna presetet igen för att hämta aktuella lampor.',
+      govee_unsupported:
+        'Animationen eller lampdelen är inte tillgänglig. Välj en aktuell animation eller vitt ljus och försök igen.',
+      invalid_govee_scene:
+        'Kontrollera animationen och lampdelarna. En animation behöver vara på och kan inte kombineras med en fast färg.',
       scene_limit_reached:
         'Presetlistan är full. Radera ett preset innan du skapar ett nytt.',
       scene_save_failed:
@@ -1750,6 +1934,9 @@ async function savePreset(activate) {
       {
         name,
         lighting: presetDraft.lighting,
+        ...(presetDraft.govee === undefined
+          ? {}
+          : { govee: presetDraft.govee }),
         ...(presetOriginal ? { expectedScene: presetOriginal } : {}),
       },
     );
@@ -2584,6 +2771,21 @@ function renderLight(target, device, presenceState) {
       device.observed?.colorTemperature === undefined ? 'warn' : '',
     );
   }
+  if (device.govee) {
+    const intent = device.govee.intent;
+    if (intent.effect)
+      appendReading(readings, 'Begärd appanimation', intent.effect);
+    if (intent.zones)
+      appendReading(
+        readings,
+        'Begärda delar',
+        intent.zones.main
+          ? intent.zones.ring
+            ? 'Huvudljus och ring'
+            : 'Bara huvudljus'
+          : 'Bara ring',
+      );
+  }
   article.append(readings);
 
   const controls = node('div', 'light-controls');
@@ -2604,7 +2806,8 @@ function renderLight(target, device, presenceState) {
   powerInput.className = 'switch-input';
   powerInput.checked = knownPower === true;
   powerInput.indeterminate = knownPower === undefined;
-  powerInput.disabled = unavailable || isPending;
+  powerInput.disabled =
+    isPending || (unavailable && !(device.govee && knownPower === true));
   powerInput.setAttribute(
     'aria-label',
     `Önskat strömläge för ${displayTarget(target)}`,
@@ -2762,6 +2965,7 @@ function renderMappingSummary(devices, presenceState) {
     unavailable: 0,
     empty: 0,
     degraded: 0,
+    effects: 0,
   };
   for (const device of Object.values(devices)) {
     if (device.availability === 'unavailable') {
@@ -2770,6 +2974,10 @@ function renderMappingSummary(devices, presenceState) {
     }
     if (device.availability === 'degraded') {
       counts.degraded += 1;
+      continue;
+    }
+    if (device.govee) {
+      counts.effects += 1;
       continue;
     }
     const desired = device.effectiveDesired ?? {};
@@ -2807,6 +3015,8 @@ function renderMappingSummary(devices, presenceState) {
   if (counts.unavailable) parts.push(`${counts.unavailable} otillgängliga`);
   if (counts.degraded) parts.push(`${counts.degraded} med degraderad status`);
   if (counts.empty) parts.push(`${counts.empty} utan önskade värden`);
+  if (counts.effects)
+    parts.push(`${counts.effects} Govee-lägen utan effektåterrapportering`);
   mappingSummary.textContent = parts.length
     ? parts.join(' · ')
     : 'Inga lampor att visa';
@@ -2826,6 +3036,7 @@ function renderUpdatedAt(value) {
 function integrationLabel(name) {
   const labels = {
     home_assistant: 'Home Assistant',
+    govee: 'Govee',
     mqtt: 'MQTT',
   };
   return (
@@ -2876,6 +3087,16 @@ function convergenceStatus(device, presenceState) {
       return { label: 'Väntar på avstängning', tone: 'warn' };
     return { label: 'Inväntar avstängningsrapport', tone: 'warn' };
   }
+  if (device.govee)
+    return {
+      label:
+        device.govee.status === 'failed'
+          ? 'Govee-begäran misslyckades'
+          : device.govee.status === 'sent'
+            ? 'Skickat till Govee; effekt ej återrapporterad'
+            : 'Inväntar Govee',
+      tone: device.govee.status === 'failed' ? 'bad' : 'warn',
+    };
   const desired = device.effectiveDesired ?? {};
   const properties = Object.keys(desired);
   if (properties.length === 0)

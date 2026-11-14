@@ -307,6 +307,15 @@ const FileConfigSchema = z
       })
       .strict()
       .default({ host: '127.0.0.1', port: 8787, trustedOrigins: [] }),
+    govee: z
+      .object({
+        socketPath: z
+          .string()
+          .min(1)
+          .refine(isAbsolute, 'socketPath must be absolute'),
+      })
+      .strict()
+      .optional(),
     homeAssistant: HomeAssistantConfigSchema,
     lightingControlModes: LightingControlModesSchema.default({}),
     windowLighting: WindowLightingSchema.optional(),
@@ -471,6 +480,7 @@ export function validateRuntimeFileConfig(value: unknown): void {
 }
 
 export type RuntimeConfig = {
+  govee?: { socketPath: string };
   windowLighting?: WindowLighting;
   presenceControl?: z.output<typeof PresenceControlConfigSchema>;
   presenceFeedback?: z.output<typeof PresenceFeedbackConfigSchema>;
@@ -660,6 +670,7 @@ export function loadRuntimeConfig(
       ...(apiToken === undefined ? {} : { bearerToken: apiToken }),
       ...(clerk === undefined ? {} : { clerk }),
     },
+    ...(fileConfig.govee ? { govee: fileConfig.govee } : {}),
     homeAssistant: {
       baseUrl: fileConfig.homeAssistant.baseUrl.replace(/\/+$/, ''),
       token: homeAssistantToken,

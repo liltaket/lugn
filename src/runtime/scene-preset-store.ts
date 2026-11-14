@@ -18,6 +18,7 @@ export const ScenePresetInputSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
     lighting: z.record(SemanticLightingIdSchema, LightingValuesSchema.strict()),
+    govee: SceneSchema.shape.govee,
   })
   .strict();
 const StoredSceneSchema = ScenePresetInputSchema.extend({
@@ -149,6 +150,7 @@ export class ScenePresetStore {
         id: `scene.custom_${randomUUID()}`,
       };
       this.validateTargets(requested);
+      this.validateGoveeCapabilities(engine, requested);
       const scene = synchronizeSceneColorTemperature(requested, 2700);
       if (engine.scenes.size >= MAX_SCENES)
         throw new ScenePresetError(409, 'scene_limit_reached');
@@ -170,8 +172,14 @@ export class ScenePresetStore {
       this.checkExpected(engine, id, parsed.expectedScene);
       if (id === 'scene.all_off')
         throw new ScenePresetError(409, 'scene_protected');
-      const requested = { id, name: parsed.name, lighting: parsed.lighting };
+      const requested = {
+        id,
+        name: parsed.name,
+        lighting: parsed.lighting,
+        ...(parsed.govee === undefined ? {} : { govee: parsed.govee }),
+      };
       this.validateTargets(requested);
+      this.validateGoveeCapabilities(engine, requested);
       const scene = synchronizeSceneColorTemperature(requested, 2700);
       const next = {
         ...this.data,
@@ -220,7 +228,8 @@ export class ScenePresetStore {
     if (
       scene.id !== expected.id ||
       scene.name !== expected.name ||
-      !sameLighting(scene.lighting, expected.lighting)
+      !sameLighting(scene.lighting, expected.lighting) ||
+      !sameGovee(scene.govee, expected.govee)
     )
       throw new ScenePresetError(409, 'scene_changed');
   }
@@ -237,6 +246,24 @@ export class ScenePresetStore {
       )
     )
       throw new ScenePresetError(400, 'scene_lighting_required');
+    if (!SceneSchema.safeParse(scene).success)
+      throw new ScenePresetError(400, 'invalid_govee_scene');
+  }
+
+  private validateGoveeCapabilities(
+    engine: LugnEngine,
+    scene: LightingScene,
+  ): void {
+    for (const [target, intent] of Object.entries(scene.govee ?? {})) {
+      const capability = engine.goveeCapabilities[target];
+      if (
+        !capability ||
+        (intent.effect !== undefined &&
+          !capability.effects.includes(intent.effect)) ||
+        (intent.zones !== undefined && !capability.zones)
+      )
+        throw new ScenePresetError(400, 'govee_unsupported');
+    }
   }
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -326,6 +353,26 @@ function sameLighting(
           ? b.rgb === undefined
           : b.rgb !== undefined &&
             a.rgb.every((channel, index) => channel === b.rgb![index]))
+      );
+    })
+  );
+}
+
+function sameGovee(
+  left: LightingScene['govee'],
+  right: LightingScene['govee'],
+): boolean {
+  const a = left ?? {};
+  const b = right ?? {};
+  return (
+    Object.keys(a).length === Object.keys(b).length &&
+    Object.entries(a).every(([target, intent]) => {
+      const other = b[target];
+      return (
+        other !== undefined &&
+        intent.effect === other.effect &&
+        intent.zones?.main === other.zones?.main &&
+        intent.zones?.ring === other.zones?.ring
       );
     })
   );

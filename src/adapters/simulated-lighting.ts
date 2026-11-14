@@ -1,6 +1,11 @@
 import { mergeLightingValues } from '../core/lighting-feedback.js';
 import type { Clock } from '../core/clock.js';
-import type { Actor, LightingValues } from '../core/schemas.js';
+import type {
+  Actor,
+  LightingValues,
+  GoveeSceneIntent,
+  GoveeCapabilities,
+} from '../core/schemas.js';
 
 export type LightingObservation = {
   target: string;
@@ -14,6 +19,9 @@ export type LightingObservation = {
 };
 
 export type LightingCommand = {
+  /** Checked by composite transports before each delayed physical write. */
+  isCurrent?: () => boolean;
+  govee?: GoveeSceneIntent & { controlId: string };
   id: string;
   target: string;
   values: LightingValues;
@@ -40,6 +48,7 @@ export function isLightingDeliveryUnknownError(
 }
 
 export interface LightingAdapter {
+  readonly goveeCapabilities?: GoveeCapabilities;
   dispatch(command: LightingCommand): Promise<void>;
   subscribe(listener: (observation: LightingObservation) => void): () => void;
 }
@@ -59,7 +68,9 @@ export class SimulatedLightingAdapter implements LightingAdapter {
   constructor(private readonly clock: Clock) {}
 
   async dispatch(command: LightingCommand): Promise<void> {
-    this.dispatched.push(structuredClone(command));
+    const { isCurrent, ...record } = command;
+    if (isCurrent && !isCurrent()) return;
+    this.dispatched.push(structuredClone(record));
     if (!this.available) throw new Error('Simulated adapter is unavailable');
     if (
       this.ignoredCommandIds.has(command.id) ||

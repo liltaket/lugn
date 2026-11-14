@@ -511,11 +511,70 @@ export const PresenceInputEventSchema = z.union([
 ]);
 export type PresenceInputEvent = z.infer<typeof PresenceInputEventSchema>;
 
-export const SceneSchema = z.object({
-  id: z.string().regex(/^scene\.[a-z0-9][a-z0-9._-]*$/),
-  name: z.string().min(1),
-  lighting: z.record(SemanticLightingIdSchema, LightingValuesSchema),
-});
+export const GoveeSceneIntentSchema = z
+  .object({
+    effect: z.string().min(1).max(255).optional(),
+    zones: z
+      .object({ main: z.boolean(), ring: z.boolean() })
+      .strict()
+      .refine(
+        (zones) => zones.main || zones.ring,
+        'Use whole-fixture OFF to disable both zones',
+      )
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (intent) => intent.effect !== undefined || intent.zones !== undefined,
+    'An effect or zone mask is required',
+  );
+export type GoveeSceneIntent = z.infer<typeof GoveeSceneIntentSchema>;
+
+export const GoveeCapabilitiesSchema = z.record(
+  SemanticLightingIdSchema,
+  z
+    .object({
+      effects: z.array(z.string().min(1).max(255)).max(4096),
+      zones: z.boolean(),
+      colorTemperature: z
+        .object({
+          min: z.number().int().min(1000).max(10000),
+          max: z.number().int().min(1000).max(10000),
+        })
+        .strict()
+        .refine((range) => range.min <= range.max)
+        .optional(),
+    })
+    .strict(),
+);
+export type GoveeCapabilities = z.infer<typeof GoveeCapabilitiesSchema>;
+
+export const SceneSchema = z
+  .object({
+    id: z.string().regex(/^scene\.[a-z0-9][a-z0-9._-]*$/),
+    name: z.string().min(1),
+    lighting: z.record(SemanticLightingIdSchema, LightingValuesSchema),
+    govee: z
+      .record(SemanticLightingIdSchema, GoveeSceneIntentSchema)
+      .optional(),
+  })
+  .superRefine((scene, context) => {
+    for (const [target, intent] of Object.entries(scene.govee ?? {})) {
+      const values = scene.lighting[target];
+      if (
+        !values ||
+        values.power !== true ||
+        (intent.effect !== undefined &&
+          (values.rgb !== undefined || values.colorTemperature !== undefined))
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['govee', target],
+          message:
+            'Govee intent requires an included powered lamp; effects cannot include static color',
+        });
+    }
+  });
 export type LightingScene = z.infer<typeof SceneSchema>;
 
 export const OwnershipSchema = z.discriminatedUnion('kind', [
@@ -534,6 +593,14 @@ export const OwnershipSchema = z.discriminatedUnion('kind', [
 export type Ownership = z.infer<typeof OwnershipSchema>;
 
 export const DeviceLightingStateSchema = z.object({
+  /** Requested mode and transport outcome; never claims physical scene feedback. */
+  govee: z
+    .object({
+      intent: GoveeSceneIntentSchema,
+      controlId: z.string().optional(),
+      status: z.enum(['pending', 'sent', 'failed']),
+    })
+    .optional(),
   /** Session-only ownership by an explicitly selected external effect. */
   externalControl: z
     .object({
@@ -574,7 +641,7 @@ export const LightingIntentSnapshotSchema = z
     /** Preserve all-off semantics after deleting the active preset definition. */
     detachedOffScene: z.literal(true).optional(),
     /** The applied definition can differ from a subsequently edited preset. */
-    appliedScene: SceneSchema.extend({
+    appliedScene: SceneSchema.safeExtend({
       lighting: z.record(
         SemanticLightingIdSchema,
         LightingValuesSchema.strict(),
@@ -602,6 +669,7 @@ export const LightingIntentSnapshotSchema = z
       SemanticLightingIdSchema,
       z
         .object({
+          govee: GoveeSceneIntentSchema.nullable().optional(),
           baselineDesired: LightingValuesSchema.strict(),
           effectiveDesired: LightingValuesSchema.strict(),
           ownership: z.partialRecord(

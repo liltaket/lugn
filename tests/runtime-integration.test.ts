@@ -1,3 +1,4 @@
+import type { GoveePresetLightingAdapter } from '../src/adapters/govee-preset-lighting.js';
 import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type AddressInfo } from 'node:net';
@@ -1244,3 +1245,112 @@ async function findEphemeralLoopbackPort(): Promise<number> {
   });
   return port;
 }
+
+it.each([true, false])(
+  'wires the Govee composite with recoverable initial readiness=%s and no startup actuation',
+  async (ready) => {
+    const directory = await mkdtemp(join(tmpdir(), 'lugn-runtime-govee-'));
+    const port = await findEphemeralLoopbackPort();
+    vi.stubEnv('LUGN_TEST_HA_TOKEN', 'test-ha-token');
+    const target = 'lighting.govee_ceiling';
+    const configPath = join(directory, 'runtime.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        http: { host: '127.0.0.1', port },
+        govee: { socketPath: join(directory, 'control.sock') },
+        homeAssistant: {
+          baseUrl: 'http://ha.invalid',
+          tokenEnv: 'LUGN_TEST_HA_TOKEN',
+          entities: { [target]: 'light.ceiling' },
+        },
+        scenes: [
+          {
+            id: 'scene.govee_test',
+            name: 'Ring',
+            lighting: { [target]: { power: true, brightness: 20 } },
+            govee: {
+              [target]: {
+                effect: 'Aurora',
+                zones: { main: false, ring: true },
+              },
+            },
+          },
+        ],
+      }),
+    );
+    const capabilities = {
+      [target]: {
+        effects: ['Aurora'],
+        zones: true,
+        colorTemperature: { min: 2700, max: 6500 },
+      },
+    };
+    const events: string[] = [];
+    const client = {
+      capabilities: async () => {
+        if (!ready) throw new Error('offline');
+        return capabilities;
+      },
+      cancel: async () => {
+        events.push('drained');
+      },
+      apply: async () => {
+        events.push('apply');
+      },
+    };
+    const warning = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
+    const runtime = await startRuntime(configPath, {
+      lightingIntentPath: join(directory, 'state', 'intent.json'),
+      goveeControlClient: client,
+      homeAssistantFetch: async (input) => {
+        if (String(input).includes('/api/services/')) events.push('static');
+        return String(input).endsWith('/api/states')
+          ? Response.json([
+              { entity_id: 'light.ceiling', state: 'off', attributes: {} },
+            ])
+          : Response.json([]);
+      },
+      createHomeAssistantSocket: () => new InertHomeAssistantSocket(),
+    });
+    try {
+      expect(events).toEqual([]);
+      if (!ready) {
+        expect(runtime.engine.goveeCapabilities).toEqual({});
+        await expect(
+          runtime.engine.activateScene('scene.govee_test', { type: 'user' }),
+        ).rejects.toThrow('Unsupported Govee');
+        expect(events).toEqual([]);
+        client.capabilities = async () => capabilities;
+        await (
+          runtime.engine.adapter as GoveePresetLightingAdapter
+        ).refreshCapabilities();
+        runtime.engine.refreshGoveeCapabilities();
+      }
+      expect(runtime.engine.goveeCapabilities).toEqual(capabilities);
+      await runtime.engine.activateScene('scene.govee_test', { type: 'user' });
+      expect(events.slice(0, 3)).toEqual(['drained', 'static', 'apply']);
+      expect(runtime.engine.state.lighting.devices[target]?.govee?.status).toBe(
+        'sent',
+      );
+      await runtime.engine.setLighting(
+        target,
+        { power: true, colorTemperature: 2200 },
+        { actor: { type: 'user' } },
+        undefined,
+        'target',
+      );
+      expect(
+        runtime.engine.state.lighting.devices[target]?.effectiveDesired
+          .colorTemperature,
+      ).toBe(2700);
+      expect(events.slice(-2)).toEqual(['drained', 'static']);
+    } finally {
+      await runtime.stop();
+      warning.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);

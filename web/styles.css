@@ -1350,6 +1350,38 @@ details[open] > summary::before {
   font-size: 0.8125rem;
 }
 
+.preset-light-detail {
+  grid-column: 2 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 10px 16px;
+  min-width: 0;
+  padding-bottom: 8px;
+}
+
+.preset-light-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: 0.875rem;
+}
+
+.preset-light-field input[type='color'] {
+  width: 100%;
+  min-height: 44px;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--raised);
+}
+
+.preset-light-note {
+  grid-column: 1 / -1;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+
 .preset-footer {
   display: flex;
   flex-wrap: wrap;
@@ -2876,6 +2908,10 @@ details[open] > summary::before {
   .preset-light,
   .mapping-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .preset-light-detail {
+    grid-column: 1 / -1;
   }
 
   .settings-point {

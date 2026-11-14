@@ -21,6 +21,11 @@ import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { DashCastAdapter } from '../adapters/dashcast.js';
+import {
+  GoveePresetLightingAdapter,
+  GoveeSocketClient,
+  type GoveeControlClient,
+} from '../adapters/govee-preset-lighting.js';
 import { HomeAssistantLightingAdapter } from '../adapters/home-assistant-lighting.js';
 import { HomeAssistantSwitchAdapter } from '../adapters/home-assistant-switch.js';
 import {
@@ -82,6 +87,7 @@ type RuntimeMqttSubscriber = Stl27lPresenceMqttSubscriber & {
 
 /** Optional transport factories keep the composed runtime deterministic in tests. */
 export type LugnRuntimeDependencies = {
+  goveeControlClient?: GoveeControlClient;
   lightingIntentPath?: string;
   homeAssistantFetch?: typeof fetch;
   createMqttSubscriber?: (
@@ -119,6 +125,28 @@ export async function startRuntime(
     homeAssistantFetch,
     systemClock,
   );
+  const goveeLighting = config.govee
+    ? new GoveePresetLightingAdapter(
+        homeAssistantLighting,
+        dependencies.goveeControlClient ??
+          new GoveeSocketClient(config.govee.socketPath),
+        {},
+      )
+    : undefined;
+  let goveeConnected = false;
+  if (goveeLighting) {
+    await goveeLighting
+      .refreshCapabilities()
+      .then(() => {
+        goveeConnected = true;
+      })
+      .catch(() =>
+        console.warn(
+          '[lugn] Govee companion unavailable; effects will recover when it returns.',
+        ),
+      );
+  }
+  let goveeRefreshTimer: ReturnType<typeof setInterval> | undefined;
   const homeAssistantButton =
     Object.keys(config.homeAssistant.buttons).length > 0
       ? new HomeAssistantButtonAdapter(
@@ -258,7 +286,7 @@ export async function startRuntime(
       : undefined;
   const engine = new LugnEngine(systemClock, {
     ...(computerPlayback ? { computerPlayback } : {}),
-    adapter: homeAssistantLighting,
+    adapter: goveeLighting ?? homeAssistantLighting,
     deviceIds,
     scenes,
     preserveRestoredSceneIds: scenePresetStore.managedSceneIds,
@@ -299,6 +327,27 @@ export async function startRuntime(
         }),
   });
   engineRef.current = engine;
+  if (goveeLighting) {
+    let refreshing = false;
+    goveeRefreshTimer = setInterval(() => {
+      if (refreshing) return;
+      refreshing = true;
+      void goveeLighting
+        .refreshCapabilities()
+        .then(() => {
+          goveeConnected = true;
+          engine.refreshGoveeCapabilities();
+        })
+        .catch(() => {
+          goveeConnected = false;
+          engine.refreshGoveeCapabilities();
+        })
+        .finally(() => {
+          refreshing = false;
+        });
+    }, 30_000);
+    goveeRefreshTimer.unref();
+  }
   const homeAssistantSun = new HomeAssistantSunAdapter((elevation) => {
     void engine.handleSunElevation(elevation);
   });
@@ -727,6 +776,9 @@ export async function startRuntime(
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
     integrations: () => ({
       home_assistant: homeAssistantSocket.status,
+      ...(goveeLighting
+        ? { govee: goveeConnected ? 'connected' : 'disconnected' }
+        : {}),
       mqtt: mqttSubscriber?.status ?? 'not_configured',
     }),
   });
@@ -853,6 +905,7 @@ export async function startRuntime(
     for (const adapter of playbackAdapters.values()) adapter.stop();
     for (const adapter of computerAdapters) adapter.stop();
     unsubscribeMqttStatus?.();
+    if (goveeRefreshTimer) clearInterval(goveeRefreshTimer);
     homeAssistantSocket.stop();
     await lightingIntentStore.stop().catch(() => undefined);
     engine.dispose();
@@ -887,6 +940,7 @@ export async function startRuntime(
       for (const adapter of playbackAdapters.values()) adapter.stop();
       for (const adapter of computerAdapters) adapter.stop();
       unsubscribeMqttStatus?.();
+      if (goveeRefreshTimer) clearInterval(goveeRefreshTimer);
       homeAssistantSocket.stop();
       try {
         await mqttSubscriber?.stop();

@@ -26,7 +26,10 @@ import {
 } from 'node:http';
 import { join } from 'node:path';
 import { z, ZodError } from 'zod';
-import type { LightingScene } from '../core/schemas.js';
+import {
+  SemanticLightingIdSchema,
+  type LightingScene,
+} from '../core/schemas.js';
 import {
   ScenePresetError,
   ScenePresetInputSchema,
@@ -194,7 +197,28 @@ export class LugnHttpServer {
       }
 
       if (request.method === 'GET' && url.pathname === '/state') {
-        sendJson(response, 200, this.options.engine.state);
+        const target = url.searchParams.get('lightingTarget');
+        if (target !== null) {
+          if (
+            !SemanticLightingIdSchema.safeParse(target).success ||
+            url.searchParams.getAll('lightingTarget').length !== 1
+          ) {
+            sendJson(response, 400, { error: 'invalid_lighting_target' });
+            return;
+          }
+          const device = this.options.engine.state.lighting.devices[target];
+          if (!device) {
+            sendJson(response, 404, { error: 'target_not_configured' });
+            return;
+          }
+          sendJson(response, 200, {
+            lighting: { devices: { [target]: device } },
+          });
+        } else if (url.searchParams.get('lightingOnly') === '1') {
+          sendJson(response, 200, {
+            lighting: this.options.engine.state.lighting,
+          });
+        } else sendJson(response, 200, this.options.engine.state);
         return;
       }
 
@@ -1086,6 +1110,7 @@ export class LugnHttpServer {
         protectionReason?: string;
       }
     >;
+    goveeCapabilities: LugnEngine['goveeCapabilities'];
     presetsEnabled: boolean;
     musicSettings: MusicVolumeSettings;
     musicSettingsDefaults: MusicVolumeSettings;
@@ -1121,6 +1146,7 @@ export class LugnHttpServer {
       musicObservationTrust:
         this.options.musicObservationTrustProvider?.() ?? {},
       state: structuredClone(this.options.engine.state),
+      goveeCapabilities: this.options.engine.goveeCapabilities,
       presetsEnabled: this.options.scenePresetStore !== undefined,
       musicSettings: this.options.engine.getMusicVolumeSettings(),
       musicSettingsDefaults: structuredClone(defaultMusicVolumeSettings),

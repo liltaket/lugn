@@ -53,6 +53,8 @@ import {
   type LightingControlModes,
   LightingIntentSnapshotSchema,
   LightingValuesSchema,
+  type GoveeCapabilities,
+  type GoveeSceneIntent,
   PresenceEventSchema,
   HomePresenceSchema,
   PrelightEventSchema,
@@ -202,6 +204,7 @@ export class LugnEngine {
     return (
       this.windowLighting !== undefined &&
       !this.requireDevice(this.windowLighting.target).externalControl &&
+      !this.requireDevice(this.windowLighting.target).govee &&
       (target === undefined || target === this.windowLighting.target) &&
       this.windowLighting.presenceMode !== 'room'
     );
@@ -211,7 +214,7 @@ export class LugnEngine {
     const settings = this.windowLighting;
     if (!settings) return false;
     const device = this.requireDevice(settings.target);
-    if (device.externalControl) return false;
+    if (device.externalControl || device.govee) return false;
     const scene = this.activeSceneDefinition ?? this.defaultSceneOnOccupancy;
     // The default can supply just the window's intent before first room entry.
     // Other targets still wait for occupancy through the ordinary entry path.
@@ -296,6 +299,96 @@ export class LugnEngine {
   readonly adapter: LightingAdapter;
   readonly switchAdapter: SwitchAdapter;
   private readonly sceneDefinitions: Map<string, LightingScene>;
+  get goveeCapabilities(): GoveeCapabilities {
+    return structuredClone(this.adapter.goveeCapabilities ?? {});
+  }
+
+  private readonly goveeTransitionTargets = new Set<string>();
+  private readonly lightingTargetGenerations = new Map<string, number>();
+  private invalidateLightingTarget(target: string): void {
+    this.lightingTargetGenerations.set(
+      target,
+      (this.lightingTargetGenerations.get(target) ?? 0) + 1,
+    );
+    const govee = this.state?.lighting.devices[target]?.govee;
+    if (govee) {
+      delete govee.controlId;
+      govee.status = 'pending';
+    }
+  }
+
+  private clampLightingTemperature(
+    target: string,
+    values: LightingValues,
+  ): LightingValues {
+    const range = this.adapter.goveeCapabilities?.[target]?.colorTemperature;
+    return range && values.colorTemperature !== undefined
+      ? {
+          ...values,
+          colorTemperature: Math.max(
+            range.min,
+            Math.min(range.max, values.colorTemperature),
+          ),
+        }
+      : values;
+  }
+
+  private normalizeGoveeScene(scene: LightingScene): LightingScene {
+    return {
+      ...scene,
+      lighting: Object.fromEntries(
+        Object.entries(scene.lighting).map(([target, values]) => [
+          target,
+          this.clampLightingTemperature(target, values),
+        ]),
+      ),
+    };
+  }
+
+  /** Refresh editor metadata without actuating or replacing applied intent. */
+  refreshGoveeCapabilities(): void {
+    if (this.disposed) return;
+    for (const [id, scene] of this.sceneDefinitions)
+      this.sceneDefinitions.set(id, this.normalizeGoveeScene(scene));
+    for (const [target, device] of Object.entries(
+      this.state.lighting.devices,
+    )) {
+      device.baselineDesired = this.clampLightingTemperature(
+        target,
+        device.baselineDesired,
+      );
+      device.effectiveDesired = this.clampLightingTemperature(
+        target,
+        device.effectiveDesired,
+      );
+    }
+    if (this.activeSceneDefinition)
+      this.activeSceneDefinition = this.normalizeGoveeScene(
+        this.activeSceneDefinition,
+      );
+    this.publish(['lighting']);
+  }
+
+  private validateGoveeScene(scene: LightingScene): void {
+    for (const [target, intent] of Object.entries(scene.govee ?? {})) {
+      const capability = this.adapter.goveeCapabilities?.[target];
+      if (
+        !capability ||
+        (intent.effect && !capability.effects.includes(intent.effect)) ||
+        (intent.zones && !capability.zones)
+      )
+        throw new Error(`Unsupported Govee scene for ${target}`);
+    }
+  }
+
+  private setGoveeIntent(target: string, intent?: GoveeSceneIntent): void {
+    const device = this.requireDevice(target);
+    if (device.govee || intent) this.goveeTransitionTargets.add(target);
+    if (intent)
+      device.govee = { intent: structuredClone(intent), status: 'pending' };
+    else delete device.govee;
+  }
+
   get scenes(): ReadonlyMap<string, LightingScene> {
     return this.sceneDefinitions;
   }
@@ -457,7 +550,7 @@ export class LugnEngine {
     this.stream = new StateEventStream(options.stateHistoryLimit);
     this.ledger = new CommandLedger(clock, options.commandAttributionWindowMs);
     const scenes = (options.scenes ?? defaultScenes).map((scene) =>
-      SceneSchema.parse(scene),
+      this.normalizeGoveeScene(SceneSchema.parse(scene)),
     );
     this.sceneDefinitions = new Map(scenes.map((scene) => [scene.id, scene]));
     const restoredIntent =
@@ -661,8 +754,12 @@ export class LugnEngine {
               (owner) => owner.kind === 'override',
             ))
         ) {
-          device.baselineDesired = { ...intent.baselineDesired };
-          device.effectiveDesired = { ...intent.effectiveDesired };
+          device.baselineDesired = {
+            ...this.clampLightingTemperature(target, intent.baselineDesired),
+          };
+          device.effectiveDesired = {
+            ...this.clampLightingTemperature(target, intent.effectiveDesired),
+          };
           device.ownership = structuredClone(intent.ownership);
         }
       }
@@ -1086,6 +1183,17 @@ export class LugnEngine {
     const restoredDetachedOff =
       detachedOffDefinition !== undefined && restoredScene === null;
     if (restoredDetachedOff) this.activeSceneDefinition = detachedOffDefinition;
+    if (hasRestoredIntent) {
+      for (const [target, device] of Object.entries(devices)) {
+        const saved = restoredIntent?.devices[target];
+        const intent =
+          saved && Object.hasOwn(saved, 'govee')
+            ? saved.govee
+            : this.activeSceneDefinition?.govee?.[target];
+        if (intent && device.effectiveDesired.power !== false)
+          this.setGoveeIntent(target, intent);
+      }
+    }
     if (
       restoredScene !== null &&
       restoredScene !== 'scene.all_off' &&
@@ -1417,6 +1525,7 @@ export class LugnEngine {
         Object.entries(this.state.lighting.devices).map(([id, device]) => [
           id,
           {
+            govee: device.govee?.intent ?? null,
             baselineDesired: device.baselineDesired,
             effectiveDesired:
               this.externalLightingIntent.get(id)?.effectiveDesired ??
@@ -1701,7 +1810,7 @@ export class LugnEngine {
 
   /** Definitions are edited independently of the currently applied lighting. */
   saveSceneDefinition(scene: LightingScene): void {
-    const parsed = SceneSchema.parse(scene);
+    const parsed = this.normalizeGoveeScene(SceneSchema.parse(scene));
     for (const target of Object.keys(parsed.lighting))
       this.requireDevice(target);
     this.sceneDefinitions.set(parsed.id, parsed);
@@ -1742,6 +1851,7 @@ export class LugnEngine {
     this.assertExecution(isCurrent);
     const scene = this.scenes.get(sceneId);
     if (!scene) throw new Error(`Unknown scene: ${sceneId}`);
+    this.validateGoveeScene(scene);
     // The window follows scene changes even when omitted; other omitted targets
     // retain their intent and guards when reconciliation retries them.
     if (isHumanActor(actor) && !isCurrent)
@@ -1762,6 +1872,8 @@ export class LugnEngine {
       throw new Error(
         'Automatic lighting is held by explicit human off intent',
       );
+    for (const target of Object.keys(scene.lighting))
+      this.invalidateLightingTarget(target);
     const restoredTargets =
       this.prelightActive || this.prelightFinishPromise
         ? await this.finishPrelight(true, scene)
@@ -1839,6 +1951,7 @@ export class LugnEngine {
     if (!isHumanActor(actor))
       throw new Error('External control requires a human actor');
     const device = this.requireDevice(target);
+    this.invalidateLightingTarget(target);
     this.noteIntervention({ domain: 'lighting', target });
     const priorIntent = structuredClone({
       effectiveDesired: device.effectiveDesired,
@@ -2117,6 +2230,10 @@ export class LugnEngine {
       this.externalLightingIntent.delete(target);
     }
     delete device.externalControl;
+    if (device.govee) {
+      device.govee.status = 'pending';
+      delete device.govee.controlId;
+    }
   }
 
   async setLighting(
@@ -2132,7 +2249,10 @@ export class LugnEngine {
     temperatureScope: 'target' | 'scene' = 'scene',
   ): Promise<void> {
     this.assertExecution(isCurrent);
-    values = LightingValuesSchema.parse(values);
+    values = this.clampLightingTemperature(
+      target,
+      LightingValuesSchema.parse(values),
+    );
     const targetDevice = this.requireDevice(target);
     if (
       targetDevice.externalControl &&
@@ -2141,6 +2261,18 @@ export class LugnEngine {
     )
       throw new Error('Automatic lighting is held by external control');
     this.restoreExternalLightingIntent(target);
+    if (
+      targetDevice.govee &&
+      values.power !== false &&
+      values.rgb === undefined &&
+      values.colorTemperature === undefined
+    )
+      values = {
+        colorTemperature:
+          this.adapter.goveeCapabilities?.[target]?.colorTemperature?.min ??
+          2700,
+        ...values,
+      };
     const morningGrant = provenance.requestId
       ? this.bedtimeMorningLighting.get(provenance.requestId)
       : undefined;
@@ -2201,11 +2333,16 @@ export class LugnEngine {
     const updates = new Map<string, LightingValues>(
       targets.map((lightingTarget) => [
         lightingTarget,
-        lightingTarget === target
-          ? { ...values }
-          : { colorTemperature: values.colorTemperature },
+        this.clampLightingTemperature(
+          lightingTarget,
+          lightingTarget === target
+            ? { ...values }
+            : { colorTemperature: values.colorTemperature },
+        ),
       ]),
     );
+    for (const lightingTarget of targets)
+      this.invalidateLightingTarget(lightingTarget);
     await this.finishPrelight(
       true,
       undefined,
@@ -2222,6 +2359,8 @@ export class LugnEngine {
     if (morningGrant && !confirmedMorning())
       throw new Error('Bedtime morning lighting authorization expired');
     for (const lightingTarget of targets) {
+      this.invalidateLightingTarget(lightingTarget);
+      this.setGoveeIntent(lightingTarget);
       if (isCurrent)
         this.lightingExecutionGuards.set(lightingTarget, isCurrent);
       else this.lightingExecutionGuards.delete(lightingTarget);
@@ -2496,6 +2635,15 @@ export class LugnEngine {
     if (normalizedEvent.presence === 'confirmed_empty') {
       if (lastConfirmedBeforeEvent !== 'confirmed_empty') {
         this.externalLightingEmptyBoundary++;
+        for (const [target, device] of Object.entries(
+          this.state.lighting.devices,
+        )) {
+          this.invalidateLightingTarget(target);
+          if (device.govee) {
+            device.govee.status = 'pending';
+            delete device.govee.controlId;
+          }
+        }
         this.manualLightingWhileEmpty.clear();
       }
       this.state.presence.state = normalizedEvent.presence;
@@ -2847,6 +2995,8 @@ export class LugnEngine {
     for (const target of Object.keys(targetValues)) {
       const device = this.state.lighting.devices[target];
       if (
+        scene?.govee?.[target] !== undefined ||
+        device?.govee !== undefined ||
         this.holds.blocks('lighting.activation', target) ||
         (device?.ownership.power?.kind === 'override' &&
           device.effectiveDesired.power === false)
@@ -3011,6 +3161,39 @@ export class LugnEngine {
       )
         continue;
       if (!this.canReconcileLightingTarget(target)) continue;
+      if (
+        device.govee &&
+        device.effectiveDesired.power !== false &&
+        device.govee.status === 'pending'
+      ) {
+        const capability = this.adapter.goveeCapabilities?.[target];
+        const intent = device.govee.intent;
+        if (
+          !capability ||
+          (intent.effect && !capability.effects.includes(intent.effect)) ||
+          (intent.zones && !capability.zones)
+        ) {
+          device.govee.status = 'failed';
+          delete device.govee.controlId;
+          device.availability = 'unavailable';
+          this.addDiagnostic(
+            'lighting.govee_unavailable',
+            `Govee capabilities unavailable for ${target}`,
+            { target },
+          );
+          this.publish(['lighting', 'diagnostics']);
+          continue;
+        }
+      }
+      // App-scene feedback is unavailable; accepted mode requests must not be
+      // replayed merely because animation changes its reported brightness/color.
+      if (
+        device.govee &&
+        (device.govee.status !== 'pending' ||
+          [...this.lightingTransportsInFlight.values()].includes(target)) &&
+        !forceTargets.has(target)
+      )
+        continue;
       if (options.onlyTargets && !options.onlyTargets.has(target)) continue;
       if (!options.allowInFlight && this.hasEnforcedLightingTransport(target))
         continue;
@@ -3059,6 +3242,13 @@ export class LugnEngine {
           continue;
         Object.assign(desired, { [property]: value });
       }
+      if (
+        this.goveeTransitionTargets.has(target) ||
+        (device.govee &&
+          device.effectiveDesired.power !== false &&
+          device.govee.status === 'pending')
+      )
+        Object.assign(desired, device.effectiveDesired);
       if (Object.keys(desired).length === 0) continue;
       // Off observations deliberately omit brightness/CCT. The remembered
       // values are not evidence of what a lamp will restore on its next ON.
@@ -3460,6 +3650,16 @@ export class LugnEngine {
           ),
         ),
       };
+    if (scene.govee)
+      scene = {
+        ...scene,
+        govee: Object.fromEntries(
+          Object.entries(scene.govee).filter(
+            ([target]) => scene.lighting[target] !== undefined,
+          ),
+        ),
+      };
+    this.validateGoveeScene(scene);
     const includedTargets = new Set([
       ...Object.keys(scene.lighting),
       ...(this.windowLighting &&
@@ -3470,7 +3670,21 @@ export class LugnEngine {
         : []),
     ]);
     for (const target of includedTargets) {
+      this.invalidateLightingTarget(target);
       this.restoreExternalLightingIntent(target);
+      if (this.requireDevice(target).govee && !scene.govee?.[target]?.effect) {
+        const values = scene.lighting[target];
+        if (
+          values &&
+          values.power !== false &&
+          values.rgb === undefined &&
+          values.colorTemperature === undefined
+        )
+          values.colorTemperature =
+            this.adapter.goveeCapabilities?.[target]?.colorTemperature?.min ??
+            2700;
+      }
+      this.setGoveeIntent(target, scene.govee?.[target]);
       if (isCurrent) this.lightingExecutionGuards.set(target, isCurrent);
       else this.lightingExecutionGuards.delete(target);
     }
@@ -3695,8 +3909,67 @@ export class LugnEngine {
     let dispatchError: unknown;
     this.inFlightLightingCommandIds.add(command.id);
     this.lightingTransportsInFlight.set(command.id, target);
+    const generation = this.lightingTargetGenerations.get(target) ?? 0;
     try {
-      const promise = this.adapter.dispatch({ id: command.id, target, values });
+      const govee =
+        values.power !== false &&
+        !this.requireDevice(target).externalControl &&
+        reason !== prelightCommandReason
+          ? this.requireDevice(target).govee
+          : undefined;
+      const isCurrent = () =>
+        !this.disposed &&
+        generation === (this.lightingTargetGenerations.get(target) ?? 0) &&
+        (!executionGuard || executionGuard()) &&
+        (values.power === false ||
+          !this.shouldRemainPhysicallyEmpty() ||
+          this.targetIntentCanRunWhileEmpty(revision, target));
+      if (govee && isCurrent() && !govee.controlId) {
+        govee.controlId = randomUUID();
+        this.publish(['lighting']);
+      }
+      // Consume the forced transition before synchronous adapter feedback can
+      // re-enter reconciliation; the in-flight command now owns this attempt.
+      this.goveeTransitionTargets.delete(target);
+      const promise = this.adapter
+        .dispatch({
+          id: command.id,
+          target,
+          values,
+          // Existing adapters retain their command shape; only the Govee composite consumes guards.
+          ...(this.adapter.goveeCapabilities ? { isCurrent } : {}),
+          ...(govee?.controlId
+            ? { govee: { ...govee.intent, controlId: govee.controlId! } }
+            : {}),
+        })
+        .then(
+          () => {
+            if (!govee && isCurrent())
+              this.goveeTransitionTargets.delete(target);
+            if (
+              govee &&
+              isCurrent() &&
+              this.requireDevice(target).govee === govee
+            ) {
+              govee.status = 'sent';
+              this.goveeTransitionTargets.delete(target);
+              this.addDiagnostic(
+                'lighting.govee_sent',
+                `Govee request sent for ${target}; scene feedback unavailable`,
+                { target, controlId: govee.controlId },
+              );
+            }
+          },
+          (error: unknown) => {
+            if (
+              govee &&
+              isCurrent() &&
+              this.requireDevice(target).govee === govee
+            )
+              govee.status = 'failed';
+            throw error;
+          },
+        );
       this.lightingTransportPromises.set(command.id, { target, promise });
       try {
         await promise;
@@ -3764,7 +4037,11 @@ export class LugnEngine {
           ? dispatchError.message
           : String(dispatchError);
       const device = this.state.lighting.devices[target];
-      if (device) device.availability = 'unavailable';
+      if (
+        device &&
+        generation === (this.lightingTargetGenerations.get(target) ?? 0)
+      )
+        device.availability = 'unavailable';
       if (
         this.isCurrentLightingDeliveryIntent(command, retryMode, executionGuard)
       ) {
@@ -4028,16 +4305,18 @@ export class LugnEngine {
           : undefined;
       // Effect colors are observations, but an external whole-fixture OFF is
       // still a durable human boundary. Do not replay the old ON intent later.
-      if (device.externalControl) {
+      if (device.externalControl || device.govee) {
         if (
           property === 'power' &&
           value === false &&
           previouslyObserved === true &&
           !command &&
           !supersededCommand &&
-          observation.observedAt >= device.externalControl.startedAt
+          observation.observedAt >= (device.externalControl?.startedAt ?? 0)
         ) {
           this.restoreExternalLightingIntent(observation.target);
+          this.invalidateLightingTarget(observation.target);
+          this.setGoveeIntent(observation.target);
           this.noteIntervention({
             domain: 'lighting',
             target: observation.target,
