@@ -88,8 +88,9 @@ The full requested sequence completed as sent transport steps:
 Rainbow B → Meteor shower → Aurora → Colorful → Forest → Party → Rainbow B.
 The live proof verified fresh step IDs, saved order, successful delivery and no
 new ordinary LED 2 lighting commands during rotation. The proof process exited;
-the engine continues the saved loop with Party left active and no external
-selector leases. Both services remain active with zero automatic restarts.
+at that handback Party was left active with no external selector leases. Both
+services remained active with zero automatic restarts. The later room-OFF
+request below supersedes that temporary active state.
 
 Bruno is away and cannot observe these animations. Prior ring-only/both-zone
 visual confirmations still apply, but visible animation fidelity on the ceiling
@@ -100,3 +101,19 @@ Private raw evidence is retained under
 `/home/bruno/.cache/kuffe-agent/govee-performance/`, including the original
 anomaly, isolated controls, complete proof, service/manifest checks and test logs.
 Earlier comparative timings remain in [Govee performance](GOVEE-PERFORMANCE.md).
+
+## Follow-up: room left OFF
+
+Bruno subsequently requested that the room be left dark after testing. Two more
+LED 2 steps, Aurora → Colorful → Forest, delivered in saved order without new
+ordinary LED 2 lighting commands. Lugn then selected `scene.all_off`.
+
+All nine configured room lights remained observed and desired OFF for 45 seconds,
+past the next possible 30-second rotation tick. No Govee intent/control ID or
+external selector lease remained active. Separate HA entity reads reported all
+nine OFF, and direct native LAN reads confirmed both strips, the table lamp and
+the ceiling OFF. The saved Party definition and playlist remain available for
+later explicit activation; the final room state is Allt av.
+
+The private follow-up evidence is `room-off-proof.json` and
+`room-off-native.json` in the artifact directory above.
