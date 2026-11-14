@@ -59,8 +59,16 @@ OFF commands still contain no colour or brightness fields.
 Kelvin readback is accepted within an inclusive 1% of the requested value
 (2700 K accepts 2673–2727 K). Confirmation, convergence, retries, enforcement,
 and prelight completion share this tolerance. Reported Kelvin remains visible
-unchanged, and the requested Kelvin remains the goal. Power and brightness
-still require exact matches; pending-command intent comparisons remain exact.
+unchanged, and the requested Kelvin remains the goal. Brightness readback is
+accepted within an inclusive two percentage points (55% accepts 53–57%) to
+allow HA/device quantization. The actual readback remains visible while the
+exact requested brightness remains the goal. This same rule is used for
+command feedback, convergence, retries, enforcement and dashboard confirmation.
+Reports within the window are treated as feedback, including small physical
+adjustments; after the pending-command window, a brightness change outside
+that window is a manual override in normal control mode. Successive small
+changes cannot move the window away from the desired value. Power feedback
+and pending-command intent comparisons remain exact.
 Custom scenes should specify their own WLED brightness and color temperature
 when the strip should stay on.
 

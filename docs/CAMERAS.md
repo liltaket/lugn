@@ -86,7 +86,12 @@ session, origin and CSRF protection; Hub paths retain their per-device secret.
 
 The dashboard fetches refreshed JPEG previews, at most one request at a time,
 about once per second. The last successful update time is shown; these are not
-labelled as a live video stream. Closing, hiding, expiry or loss of dashboard
+labelled as a live video stream. A candidate must load successfully offscreen
+before replacing the last good frame. Fetch and image-decoding failures share
+a budget of three consecutive attempts, two seconds apart; a successful frame
+resets that budget. The retained frame is marked stale while retrying. The
+eight-second browser timeout covers fetching and image decoding together.
+Closing, hiding, expiry or loss of dashboard
 connection aborts browser work and clears the image. Missing/slow cameras do
 not block room controls.
 

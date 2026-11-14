@@ -74,6 +74,9 @@ const camera = () => ({
   ],
   active: null as ReturnType<typeof active> | null,
 });
+async function microtasks() {
+  for (let index = 0; index < 12; index++) await Promise.resolve();
+}
 const imageResponse = () =>
   new Response(new Blob(['jpeg'], { type: 'image/jpeg' }), {
     headers: { 'content-type': 'image/jpeg' },
@@ -98,9 +101,14 @@ function setup(surface: 'hub' | 'web') {
     }
     static override revokeObjectURL = revoke;
   }
+  const decoders: Element[] = [];
   const doc = {
     visibilityState: 'visible',
-    createElement: () => new Element(),
+    createElement: (tag: string) => {
+      const element = new Element();
+      if (tag === 'img') decoders.push(element);
+      return element;
+    },
     addEventListener: vi.fn(),
   };
   const context = createContext({
@@ -191,8 +199,20 @@ function setup(surface: 'hub' | 'web') {
     `const BASE_PATH='/hub/'; const API_ROOT='/ui/api'; let stopped=false; let latestPayload={role:'bed', cameraDashboard:testCamera}; let overview={cameraDashboard:testCamera,generatedAt:1000}; let overviewStale=false; let lastOverviewAt=1000; let csrfToken='csrf'; ${declarations}\n${functions}`,
     context,
   );
+  const image =
+    surface === 'hub' ? refs['cameraImage']! : get('camera-web-image');
+  image.hidden = true;
+  const decoder = () => decoders.at(-1)!;
   return {
     surface,
+    decoder,
+    decoders,
+    async decode(fails = false) {
+      await vi.waitFor(() => expect(typeof decoder().onload).toBe('function'));
+      if (fails) decoder().onerror!();
+      else decoder().onload!();
+      await microtasks();
+    },
     context,
     doc,
     get,
@@ -226,9 +246,11 @@ describe.each(['hub', 'web'] as const)(
       const ui = setup(surface);
       ui.setActive();
       ui.render();
-      await vi.waitFor(() => expect(typeof ui.image.onload).toBe('function'));
+      await vi.waitFor(() =>
+        expect(typeof ui.decoder().onload).toBe('function'),
+      );
       expect(ui.fetch).toHaveBeenCalledTimes(1);
-      ui.image.onload!();
+      await ui.decode();
       expect(ui.status.textContent).toMatch(/^Uppdaterad bild kl\./);
       expect(ui.status.textContent).not.toMatch(/Livevideo/);
       ui.render();
@@ -246,9 +268,169 @@ describe.each(['hub', 'web'] as const)(
       ui.render();
       expect(ui.fetch).toHaveBeenCalledTimes(2);
       complete(imageResponse());
-      await vi.waitFor(() => expect(ui.image.src).toBe('blob:frame-2'));
-      ui.image.onload!();
+      await vi.waitFor(() => expect(ui.decoder().src).toBe('blob:frame-2'));
+      await ui.decode();
       expect(ui.revoke).toHaveBeenCalledWith('blob:frame-1');
+    });
+    it('retries an undecodable first frame and resumes normal refresh after recovery', async () => {
+      const ui = setup(surface);
+      ui.setActive();
+      ui.render();
+      await ui.decode(true);
+      expect(ui.image.src).toBe('');
+      expect(ui.revoke).toHaveBeenCalledWith('blob:frame-1');
+      expect(ui.status.textContent).toContain('Försöker igen');
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(ui.fetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await ui.decode();
+      expect(ui.image.src).toBe('blob:frame-2');
+      expect(ui.image.hidden).toBe(false);
+      expect(ui.status.textContent).toMatch(/^Uppdaterad bild kl\./);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(ui.fetch).toHaveBeenCalledTimes(3);
+    });
+    it('keeps the last decoded frame through candidate failures and revokes it only on successful replacement', async () => {
+      const ui = setup(surface);
+      ui.setActive();
+      ui.render();
+      await ui.decode();
+      await vi.advanceTimersByTimeAsync(1000);
+      await ui.decode(true);
+      expect(ui.image.src).toBe('blob:frame-1');
+      expect(ui.image.hidden).toBe(false);
+      expect(ui.revoke).not.toHaveBeenCalledWith('blob:frame-1');
+      expect(ui.revoke).toHaveBeenCalledWith('blob:frame-2');
+      expect(ui.status.textContent).toContain('Bilden är inaktuell');
+      await vi.advanceTimersByTimeAsync(2000);
+      await ui.decode();
+      expect(ui.image.src).toBe('blob:frame-3');
+      expect(ui.revoke).toHaveBeenCalledWith('blob:frame-1');
+      expect(ui.revoke).not.toHaveBeenCalledWith('blob:frame-3');
+    });
+    it('bounds consecutive decode failures even through state rerenders', async () => {
+      const ui = setup(surface);
+      ui.setActive();
+      ui.render();
+      for (let index = 0; index < 3; index++) {
+        if (index) await vi.advanceTimersByTimeAsync(2000);
+        await ui.decode(true);
+      }
+      expect(ui.fetch).toHaveBeenCalledTimes(3);
+      expect(ui.revoke).toHaveBeenCalledTimes(3);
+      expect(ui.status.textContent).toContain('Kameran svarar inte');
+      ui.render();
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(ui.fetch).toHaveBeenCalledTimes(3);
+    });
+    it('uses one failure budget for fetch and decode errors', async () => {
+      const ui = setup(surface);
+      ui.fetch.mockRejectedValueOnce(new TypeError('offline'));
+      ui.setActive();
+      ui.render();
+      await vi.advanceTimersByTimeAsync(2000);
+      await ui.decode(true);
+      ui.fetch.mockResolvedValueOnce(new Response('', { status: 503 }));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(ui.fetch).toHaveBeenCalledTimes(3);
+      expect(ui.status.textContent).toContain('Kameran svarar inte');
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(ui.fetch).toHaveBeenCalledTimes(3);
+    });
+    it.each(['closed', 'hidden', 'expired'])(
+      'cancels a pending decode retry when %s',
+      async (state) => {
+        const ui = setup(surface);
+        ui.setActive();
+        ui.render();
+        await ui.decode(true);
+        if (state === 'closed') ui.run('testCamera.active=null');
+        if (state === 'hidden') ui.doc.visibilityState = 'hidden';
+        if (state === 'expired') vi.setSystemTime(32000);
+        ui.render();
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(ui.fetch).toHaveBeenCalledTimes(1);
+        expect(ui.image.src).toBe('');
+        expect(ui.image.hidden).toBe(true);
+      },
+    );
+    it.each(['closed', 'hidden', 'expired'])(
+      'cleans a pending decoder and ignores late events when %s',
+      async (state) => {
+        const ui = setup(surface);
+        ui.setActive();
+        ui.render();
+        await vi.waitFor(() =>
+          expect(typeof ui.decoder().onload).toBe('function'),
+        );
+        const candidate = ui.decoder();
+        const loaded = candidate.onload!;
+        const failed = candidate.onerror!;
+        if (state === 'closed') ui.run('testCamera.active=null');
+        if (state === 'hidden') ui.doc.visibilityState = 'hidden';
+        if (state === 'expired') vi.setSystemTime(32000);
+        ui.render();
+        await microtasks();
+        expect(candidate.src).toBe('');
+        expect(candidate.onload).toBeNull();
+        expect(candidate.onerror).toBeNull();
+        expect(ui.revoke).toHaveBeenCalledWith('blob:frame-1');
+        const status = ui.status.textContent;
+        loaded();
+        failed();
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(ui.status.textContent).toBe(status);
+        expect(ui.image.src).toBe('');
+        expect(ui.image.hidden).toBe(true);
+        expect(ui.fetch).toHaveBeenCalledTimes(1);
+      },
+    );
+    it('aborts pending decoding on view replacement and ignores captured stale callbacks', async () => {
+      const ui = setup(surface);
+      ui.setActive();
+      ui.render();
+      await vi.waitFor(() =>
+        expect(typeof ui.decoder().onload).toBe('function'),
+      );
+      const stale = ui.decoder();
+      const loaded = stale.onload!;
+      const failed = stale.onerror!;
+      ui.setActive('replacement');
+      ui.render();
+      await microtasks();
+      expect(stale.src).toBe('');
+      expect(stale.onload).toBeNull();
+      expect(stale.onerror).toBeNull();
+      expect(ui.revoke).toHaveBeenCalledWith('blob:frame-1');
+      const status = ui.status.textContent;
+      loaded();
+      failed();
+      await microtasks();
+      expect(ui.status.textContent).toBe(status);
+      expect(ui.image.src).toBe('');
+      expect(ui.fetch).toHaveBeenCalledTimes(2);
+      await ui.decode();
+      expect(ui.image.src).toBe('blob:frame-2');
+      expect(ui.revoke).not.toHaveBeenCalledWith('blob:frame-2');
+    });
+    it('bounds a stalled decoder with the existing timeout and can retry', async () => {
+      const ui = setup(surface);
+      ui.setActive();
+      ui.render();
+      await vi.waitFor(() =>
+        expect(typeof ui.decoder().onload).toBe('function'),
+      );
+      const stalled = ui.decoder();
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(stalled.onload).toBeNull();
+      expect(stalled.onerror).toBeNull();
+      expect(stalled.src).toBe('');
+      expect(ui.revoke).toHaveBeenCalledWith('blob:frame-1');
+      expect(ui.status.textContent).toContain('Försöker igen');
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(ui.fetch).toHaveBeenCalledTimes(2);
+      await ui.decode();
+      expect(ui.image.src).toBe('blob:frame-2');
     });
     it('stops on local close, aborts pending images and ignores late completions', async () => {
       const ui = setup(surface);
@@ -301,8 +483,10 @@ describe.each(['hub', 'web'] as const)(
       const ui = setup(surface);
       ui.setActive();
       ui.render();
-      await vi.waitFor(() => expect(typeof ui.image.onload).toBe('function'));
-      ui.image.onload!();
+      await vi.waitFor(() =>
+        expect(typeof ui.decoder().onload).toBe('function'),
+      );
+      await ui.decode();
       ui.doc.visibilityState = 'hidden';
       ui.render();
       expect(ui.image.src).toBe('');
@@ -363,8 +547,10 @@ describe.each(['hub', 'web'] as const)(
       if (surface === 'web') ui.run('cameraWebRequest=postJson');
       ui.setActive('A');
       ui.render();
-      await vi.waitFor(() => expect(typeof ui.image.onload).toBe('function'));
-      ui.image.onload!();
+      await vi.waitFor(() =>
+        expect(typeof ui.decoder().onload).toBe('function'),
+      );
+      await ui.decode();
       let finishShow!: (value: {
         cameraDashboard: ReturnType<typeof camera>;
       }) => void;
@@ -590,8 +776,8 @@ it.each(['hub', 'web'] as const)(
     const ui = setup(surface);
     ui.setActive();
     ui.render();
-    await vi.waitFor(() => expect(typeof ui.image.onload).toBe('function'));
-    ui.image.onload!();
+    await vi.waitFor(() => expect(typeof ui.decoder().onload).toBe('function'));
+    await ui.decode();
     const imageUrl = ui.image.src;
     // The authoritative detector extends this exact view from 30 to 60 seconds.
     ui.run('testCamera.active.expiresAt=61000');
@@ -619,8 +805,8 @@ it.each(['hub', 'web'] as const)(
     ui.setActive();
     ui.run('testCamera.active.expiresAt=61000');
     ui.render();
-    await vi.waitFor(() => expect(typeof ui.image.onload).toBe('function'));
-    ui.image.onload!();
+    await vi.waitFor(() => expect(typeof ui.decoder().onload).toBe('function'));
+    await ui.decode();
     vi.setSystemTime(20000);
     ui.run('testCamera.active.expiresAt=31000');
     ui.render();

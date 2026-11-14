@@ -983,6 +983,7 @@ async function signOutOfClerk() {
 
 async function switchClerkAccount() {
   clerkRetry.disabled = true;
+  clerkRetry.setAttribute('aria-busy', 'true');
   clerkRetry.textContent = 'Byter konto…';
   try {
     clerkSessionExchangeSuppressed = true;
@@ -999,6 +1000,7 @@ async function switchClerkAccount() {
     clerkRetry.hidden = false;
   } finally {
     clerkRetry.disabled = false;
+    clerkRetry.removeAttribute('aria-busy');
     if (clerkRetry.textContent === 'Byter konto…')
       clerkRetry.textContent = 'Byt Clerk-konto';
   }
@@ -1007,6 +1009,7 @@ async function switchClerkAccount() {
 async function retryClerkSignOut() {
   if (!clerkSignOutPending) return;
   clerkRetry.disabled = true;
+  clerkRetry.setAttribute('aria-busy', 'true');
   clerkRetry.textContent = 'Loggar ut…';
   setLoginError('');
   clerkStatus.textContent = 'Loggar ut från Clerk…';
@@ -1024,6 +1027,7 @@ async function retryClerkSignOut() {
     clerkRetry.hidden = false;
   } finally {
     clerkRetry.disabled = false;
+    clerkRetry.removeAttribute('aria-busy');
     clerkRetry.textContent = 'Försök igen';
   }
 }
@@ -5490,6 +5494,30 @@ function cameraWebCanRun(epoch) {
     overview?.cameraDashboard?.active?.expiresAt > cameraWebNow()
   );
 }
+// Decode offscreen so a bad candidate never replaces the last good frame.
+function decodeCameraFrame(url, signal) {
+  return new Promise((resolve, reject) => {
+    const candidate = document.createElement('img');
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      candidate.onload = null;
+      candidate.onerror = null;
+      signal.removeEventListener('abort', aborted);
+      candidate.removeAttribute('src');
+      if (error) reject(error);
+      else resolve();
+    };
+    const aborted = () => finish(new Error('image_aborted'));
+    candidate.onload = () => finish();
+    candidate.onerror = () => finish(new Error('image_decode_failed'));
+    signal.addEventListener('abort', aborted, { once: true });
+    if (signal.aborted) aborted();
+    else candidate.src = url;
+  });
+}
+
 function startCameraWebMedia(active) {
   stopCameraWebMedia();
   const epoch = cameraWebMediaEpoch;
@@ -5512,6 +5540,7 @@ function startCameraWebMedia(active) {
     cameraWebController = controller;
     const timeout = window.setTimeout(() => controller.abort(), 8000);
     cameraWebImageTimeout = timeout;
+    let candidateUrl = null;
     try {
       const response = await fetch(imageUrl, {
         cache: 'no-store',
@@ -5526,22 +5555,19 @@ function startCameraWebMedia(active) {
       const blob = await response.blob();
       if (!cameraWebCanRun(epoch)) return;
       if (blob.size > 8 * 1024 * 1024) throw new Error('image_too_large');
-      const nextUrl = URL.createObjectURL(blob);
-      if (cameraWebObjectUrl) URL.revokeObjectURL(cameraWebObjectUrl);
-      cameraWebObjectUrl = nextUrl;
-      image.onload = () => {
-        if (!cameraWebCanRun(epoch)) return;
-        failures = 0;
-        image.hidden = false;
-        placeholder.hidden = true;
-        status.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
-        cameraWebImageTimer = window.setTimeout(frame, 1000);
-      };
-      image.onerror = () => {
-        if (!cameraWebCanRun(epoch)) return;
-        status.textContent = 'Kamerabilden kunde inte visas.';
-      };
-      image.src = nextUrl;
+      candidateUrl = URL.createObjectURL(blob);
+      await decodeCameraFrame(candidateUrl, controller.signal);
+      if (!cameraWebCanRun(epoch)) return;
+      const previousUrl = cameraWebObjectUrl;
+      cameraWebObjectUrl = candidateUrl;
+      candidateUrl = null;
+      image.src = cameraWebObjectUrl;
+      if (previousUrl) URL.revokeObjectURL(previousUrl);
+      failures = 0;
+      image.hidden = false;
+      placeholder.hidden = true;
+      status.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
+      cameraWebImageTimer = window.setTimeout(frame, 1000);
     } catch {
       if (!cameraWebCanRun(epoch)) return;
       failures += 1;
@@ -5552,6 +5578,7 @@ function startCameraWebMedia(active) {
       if (!image.hidden) status.textContent += ' Bilden är inaktuell.';
       if (failures < 3) cameraWebImageTimer = window.setTimeout(frame, 2000);
     } finally {
+      if (candidateUrl) URL.revokeObjectURL(candidateUrl);
       window.clearTimeout(timeout);
       if (cameraWebController === controller) cameraWebController = null;
     }

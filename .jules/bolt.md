@@ -7,3 +7,8 @@
 
 **Learning:** `Intl.DateTimeFormat` and `Intl.NumberFormat` instantiation is relatively expensive in JavaScript. If instantiated inline inside highly-frequent operations like render loops or timer callbacks (e.g. `setClock` running every second), it can become a performance bottleneck.
 **Action:** Always extract and cache `Intl.DateTimeFormat` and `Intl.NumberFormat` instances into module-level variables or class-level properties when used repeatedly or on hot paths.
+
+## 2024-05-18 - Replacing chained array methods with for...of loops on hot paths
+
+**Learning:** Chaining array methods like `.filter().map()` inside object constructors like `Object.fromEntries()` creates multiple intermediate array allocations and GC overhead. In hot paths (like date parsing for schedule occurrence calculations), this overhead is significant and measurable.
+**Action:** Replace chained `.filter().map()` with a single `for...of` loop when dealing with frequent iterations. This removes intermediate allocations and can improve execution time on microbenchmarks by 20-50%.

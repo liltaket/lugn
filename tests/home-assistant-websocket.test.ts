@@ -55,7 +55,12 @@ class FakeSocket implements HomeAssistantSocket {
 }
 
 function setup(
-  options: { reconnectDelayMs?: number; maxReconnectDelayMs?: number } = {},
+  options: {
+    reconnectDelayMs?: number;
+    maxReconnectDelayMs?: number;
+    onConnected?: (connection: HomeAssistantConnection) => void;
+    onDisconnected?: () => void;
+  } = {},
 ) {
   const clock = new FakeClock();
   const sockets: FakeSocket[] = [];
@@ -426,5 +431,74 @@ describe('Home Assistant WebSocket service calls', () => {
     const stopped = transport.callService(call)!;
     transport.stop();
     await expect(stopped).rejects.toMatchObject({ outcome: 'no_response' });
+  });
+
+  it('abandons all pending calls on auth failure and isolates an explicit restart', async () => {
+    const connections: HomeAssistantConnection[] = [];
+    const timersAtDisconnect: number[] = [];
+    const { clock, sockets, transport } = setup({
+      onConnected: (connection) => {
+        connections.push(connection);
+      },
+      onDisconnected: () => {
+        timersAtDisconnect.push(clock.pendingTimers());
+      },
+    });
+    transport.start();
+    const first = sockets[0]!;
+    const subscription = authenticate(first);
+    first.receive({ type: 'result', id: subscription, success: true });
+    expect(connections[0]!.isCurrent()).toBe(true);
+
+    const outcomes: unknown[] = [];
+    const pending = [10_000, 20_000].map((timeout) =>
+      transport.callService(call, timeout)!.then(
+        () => outcomes.push('resolved'),
+        (error: unknown) => outcomes.push(error),
+      ),
+    );
+    const oldCallId = (JSON.parse(first.sent.at(-1)!) as { id: number }).id;
+    expect(clock.pendingTimers()).toBe(2);
+    first.receive({ type: 'auth_invalid' });
+    // This must settle without advancing the timeout or awaiting a stuck call.
+    await Promise.resolve();
+    expect(outcomes).toEqual([
+      expect.objectContaining({ outcome: 'no_response' }),
+      expect.objectContaining({ outcome: 'no_response' }),
+    ]);
+    expect(clock.pendingTimers()).toBe(0);
+    expect(timersAtDisconnect).toEqual([0]);
+    expect(transport.status).toBe('failed');
+    expect(connections[0]!.isCurrent()).toBe(false);
+    expect(transport.callService(call)).toBeUndefined();
+    await Promise.all(pending);
+    clock.advanceBy(30_000);
+    expect(sockets).toHaveLength(1);
+
+    transport.start();
+    const second = sockets[1]!;
+    const nextSubscription = authenticate(second);
+    second.receive({ type: 'result', id: nextSubscription, success: true });
+    expect(connections[1]!.isCurrent()).toBe(true);
+    let settled = false;
+    const next = transport.callService(call)!.then(() => {
+      settled = true;
+    });
+    const nextId = (JSON.parse(second.sent.at(-1)!) as { id: number }).id;
+    first.receive({ type: 'result', id: oldCallId, success: true });
+    first.receive({ type: 'result', id: nextId, success: true });
+    first.receive({ type: 'auth_invalid' });
+    first.fail();
+    first.close();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(transport.status).toBe('connected');
+    expect(connections[1]!.isCurrent()).toBe(true);
+    expect(clock.pendingTimers()).toBe(1);
+    second.receive({ type: 'result', id: nextId, success: true });
+    await next;
+    expect(settled).toBe(true);
+    transport.stop();
+    expect(clock.pendingTimers()).toBe(0);
   });
 });

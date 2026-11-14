@@ -1,12 +1,24 @@
 import type { LightingProperty, LightingValues } from './schemas.js';
 
-/** Readback allows 1% Kelvin error and two RGB levels for HS/XY rounding. */
+/** Readback allows two brightness points, 1% Kelvin error and two RGB levels. */
 export function lightingFeedbackMatches(
   property: LightingProperty,
   desired: LightingValues[LightingProperty],
   observed: LightingValues[LightingProperty],
 ): boolean {
   if (desired === undefined || observed === undefined) return false;
+  if (property === 'brightness')
+    return (
+      typeof desired === 'number' &&
+      typeof observed === 'number' &&
+      Number.isFinite(desired) &&
+      Number.isFinite(observed) &&
+      desired >= 0 &&
+      desired <= 100 &&
+      observed >= 0 &&
+      observed <= 100 &&
+      Math.abs(observed - desired) <= 2
+    );
   if (property === 'rgb')
     return (
       Array.isArray(desired) &&

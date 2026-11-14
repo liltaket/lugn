@@ -383,6 +383,7 @@ export class HomeAssistantWebSocketTransport {
     this.subscriptionId = undefined;
     this.generation += 1;
     this._status = 'failed';
+    this.abandonPendingCalls();
     this.notifyDisconnected();
     this.closeSocket(socket);
   }

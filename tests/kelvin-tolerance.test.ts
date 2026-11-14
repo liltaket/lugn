@@ -200,7 +200,7 @@ describe('one percent Kelvin feedback tolerance', () => {
     ).toBeUndefined();
   });
 
-  it('still requires exact power and brightness feedback', () => {
+  it('still requires exact power and rejects out-of-tolerance brightness feedback', () => {
     const ledger = new CommandLedger(new FakeClock(1000));
     const command = ledger.issue({
       ...commandInput,
@@ -210,7 +210,7 @@ describe('one percent Kelvin feedback tolerance', () => {
       ledger.attributeObservation(target, 'power', false, 1000),
     ).toBeUndefined();
     expect(
-      ledger.attributeObservation(target, 'brightness', 99, 1000),
+      ledger.attributeObservation(target, 'brightness', 97, 1000),
     ).toBeUndefined();
     expect(command.status).toBe('pending');
   });

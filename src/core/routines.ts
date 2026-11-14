@@ -195,12 +195,14 @@ const stockholm = new Intl.DateTimeFormat('en-GB', {
   hourCycle: 'h23',
 });
 function localParts(at: number): Record<string, number> {
-  return Object.fromEntries(
-    stockholm
-      .formatToParts(at)
-      .filter((p) => p.type !== 'literal')
-      .map((p) => [p.type, Number(p.value)]),
-  );
+  const result: Record<string, number> = {};
+  // PERFORMANCE: Replaced filter/map chain with a for...of loop to avoid intermediate array allocations and reduce GC overhead on a hot path.
+  for (const p of stockholm.formatToParts(at)) {
+    if (p.type !== 'literal') {
+      result[p.type] = Number(p.value);
+    }
+  }
+  return result;
 }
 /** Gaps are skipped; folds run once, at their first instant. Strictly future. */
 export function nextRoutineOccurrence(
