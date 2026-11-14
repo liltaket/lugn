@@ -206,7 +206,6 @@ export class LugnEngine {
     return (
       this.windowLighting !== undefined &&
       !this.requireDevice(this.windowLighting.target).externalControl &&
-      !this.requireDevice(this.windowLighting.target).govee &&
       (target === undefined || target === this.windowLighting.target) &&
       this.windowLighting.presenceMode !== 'room'
     );
@@ -216,7 +215,7 @@ export class LugnEngine {
     const settings = this.windowLighting;
     if (!settings) return false;
     const device = this.requireDevice(settings.target);
-    if (device.externalControl || device.govee) return false;
+    if (device.externalControl) return false;
     const scene = this.activeSceneDefinition ?? this.defaultSceneOnOccupancy;
     // The default can supply just the window's intent before first room entry.
     // Other targets still wait for occupancy through the ordinary entry path.
@@ -228,6 +227,7 @@ export class LugnEngine {
       }
     }
     if (
+      !device.govee &&
       device.effectiveDesired.rgb === undefined &&
       device.effectiveDesired.colorTemperature === undefined
     ) {
@@ -265,6 +265,10 @@ export class LugnEngine {
     const changed =
       device.effectiveDesired.power !== power ||
       device.effectiveDesired.brightness !== brightness;
+    // Daylight/home/OFF policy owns power even while an app effect owns color.
+    // Revoke queued steps synchronously and let the pending mode resume at dusk.
+    if (device.govee && device.effectiveDesired.power !== power)
+      this.invalidateLightingTarget(settings.target);
     device.effectiveDesired.power = power;
     device.effectiveDesired.brightness = brightness;
     return changed;
@@ -803,6 +807,10 @@ export class LugnEngine {
       restoredIntent?.continuityExpiresAt !== null &&
       restoredIntent?.continuityExpiresAt !== undefined &&
       restoredIntent.continuityExpiresAt <= clock.now();
+    const restoredWindowEffect =
+      this.windowLighting?.presenceMode !== 'room' &&
+      this.windowLighting !== undefined &&
+      restoredIntent?.devices[this.windowLighting.target]?.govee != null;
     const detachedOffDefinition: LightingScene | undefined =
       restoredIntent?.detachedOffScene === true &&
       restoredIntent.currentScene === null &&
@@ -865,8 +873,13 @@ export class LugnEngine {
       !restoredContinuityExpired &&
       restoredIntent.continuityExpiresAt !== null;
     this.suppressInitialEmptyContinuity = restoredContinuityExpired;
-    if (restoredIntent && !restoredContinuityExpired) {
+    if (
+      restoredIntent &&
+      (!restoredContinuityExpired || restoredWindowEffect)
+    ) {
       for (const [target, intent] of Object.entries(restoredIntent.devices)) {
+        if (restoredContinuityExpired && target !== this.windowLighting?.target)
+          continue;
         const device = devices[target];
         if (!device)
           throw new Error(`Unknown restored lighting device: ${target}`);
@@ -881,9 +894,10 @@ export class LugnEngine {
         if (
           hasRestoredIntent ||
           (target === this.windowLighting?.target &&
-            Object.values(intent.ownership).some(
-              (owner) => owner.kind === 'override',
-            ))
+            (restoredWindowEffect ||
+              Object.values(intent.ownership).some(
+                (owner) => owner.kind === 'override',
+              )))
         ) {
           device.baselineDesired = {
             ...this.clampLightingTemperature(target, intent.baselineDesired),
@@ -1314,14 +1328,20 @@ export class LugnEngine {
     const restoredDetachedOff =
       detachedOffDefinition !== undefined && restoredScene === null;
     if (restoredDetachedOff) this.activeSceneDefinition = detachedOffDefinition;
-    if (hasRestoredIntent) {
+    if (hasRestoredIntent || restoredWindowEffect) {
       for (const [target, device] of Object.entries(devices)) {
+        if (!hasRestoredIntent && target !== this.windowLighting?.target)
+          continue;
         const saved = restoredIntent?.devices[target];
         const intent =
           saved && Object.hasOwn(saved, 'govee')
             ? saved.govee
             : this.activeSceneDefinition?.govee?.[target];
-        if (intent && device.effectiveDesired.power !== false)
+        if (
+          intent &&
+          (device.effectiveDesired.power !== false ||
+            target === this.windowLighting?.target)
+        )
           this.setGoveeIntent(target, intent);
       }
     }
@@ -2777,10 +2797,14 @@ export class LugnEngine {
         for (const [target, device] of Object.entries(
           this.state.lighting.devices,
         )) {
-          this.invalidateLightingTarget(target);
+          const retainWindowEffect =
+            device.govee &&
+            this.windowCanRunWhileEmpty(target) &&
+            device.effectiveDesired.power === true;
+          if (!retainWindowEffect) this.invalidateLightingTarget(target);
           if (device.externalControl)
             device.externalControl.canActivate = false;
-          if (device.govee) {
+          if (device.govee && !retainWindowEffect) {
             device.govee.status = 'pending';
             delete device.govee.controlId;
           }
@@ -3332,6 +3356,7 @@ export class LugnEngine {
       // replayed merely because animation changes its reported brightness/color.
       if (
         device.govee &&
+        device.effectiveDesired.power !== false &&
         (device.govee.status !== 'pending' ||
           [...this.lightingTransportsInFlight.values()].includes(target)) &&
         !forceTargets.has(target)
@@ -3932,7 +3957,8 @@ export class LugnEngine {
     }
     if (
       this.windowLighting &&
-      !this.requireDevice(this.windowLighting.target).externalControl
+      !this.requireDevice(this.windowLighting.target).externalControl &&
+      !this.requireDevice(this.windowLighting.target).govee
     ) {
       const target = this.windowLighting.target;
       const windowValues = scene.lighting[target];
@@ -4834,7 +4860,15 @@ export class LugnEngine {
       this.defaultSceneOnOccupancy = this.normalDefaultScene;
       this.lastNonOffSceneId = null;
     }
-    for (const device of Object.values(this.state.lighting.devices)) {
+    for (const [target, device] of Object.entries(
+      this.state.lighting.devices,
+    )) {
+      // The room's continuity deadline does not own the outward-facing effect.
+      // Keep its scene mode/color, while ordinary temporary overrides expire.
+      if (device.govee && this.windowCanRunWhileEmpty(target)) {
+        device.ownership = {};
+        continue;
+      }
       device.baselineDesired = {};
       device.effectiveDesired = {};
       device.ownership = {};

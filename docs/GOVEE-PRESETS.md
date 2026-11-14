@@ -227,3 +227,20 @@ Authenticated ownership reads can use `/state?lightingOnly=1`, or
 `/state?lightingOnly=1&lightingTarget=lighting.govee_ceiling`. The latter returns
 only `{lighting:{devices:{[target]:device}}}`; unknown targets return 404 and
 malformed/duplicate targets return 400. Ordinary `/state` remains unchanged.
+
+## Outward-facing animation while the room is empty
+
+The configured `windowLighting.target` follows the same window policy in static,
+app-effect and rotation presets. Its color/effect comes from the preset; power
+and brightness follow the configured presence mode, sun elevation and window
+brightness. `always` permits it while away, `home` requires home/unknown home
+presence, and `room` still requires confirmed room occupancy. Explicit Allt av,
+sleep, manual OFF/zero brightness and external selector ownership keep their
+existing priority.
+
+A permitted outward-facing effect keeps its generation and rotation timer on
+room exit. Other room fixtures are switched OFF normally. Daylight or loss of
+home permission revokes pending steps before OFF; dusk/new permission can resume
+the saved mode at its first effect. Room continuity expiry preserves only this
+window mode, and restart restores it only after the window policy permits ON.
+Other fixtures still wait for ordinary entry permission.

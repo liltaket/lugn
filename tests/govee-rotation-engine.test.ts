@@ -122,6 +122,228 @@ it('validates bounded distinct playlists without static color or a simultaneous 
 });
 
 describe('engine-owned Govee rotation', () => {
+  function windowFixture(presenceMode: 'always' | 'home' | 'room' = 'always') {
+    return fixture({
+      windowLighting: {
+        target,
+        presenceMode,
+        brightness: 55,
+        maxSunElevation: 6,
+      },
+    });
+  }
+
+  it('keeps the outward-facing effect and its rotation through exit, even when away', async () => {
+    const { engine, adapter, clock } = windowFixture();
+    await engine.handleSunElevation(-5);
+    await presence(engine, 'occupied');
+    await engine.activateScene('scene.other', user);
+    await engine.activateScene('scene.loop', user);
+    expect(adapter.observed.get(other)?.power).toBe(true);
+    const id = engine.state.lighting.devices[target]?.govee?.controlId;
+    await engine.handleHomePresence('away');
+    await presence(engine, 'confirmed_empty');
+    expect(adapter.observed.get(target)).toMatchObject({
+      power: true,
+      brightness: 55,
+    });
+    expect(engine.state.lighting.devices[target]?.govee?.controlId).toBe(id);
+    expect(adapter.observed.get(other)?.power).toBe(false);
+    await tick(clock);
+    expect(adapter.dispatched.at(-1)).toMatchObject({
+      target,
+      goveeOnly: true,
+      govee: { effect: 'Forest' },
+    });
+    await engine.activateScene('scene.all_off', user);
+    const count = adapter.dispatched.length;
+    await tick(clock, 60_000);
+    expect(adapter.observed.get(target)?.power).toBe(false);
+    expect(
+      adapter.dispatched.slice(count).some((command) => command.govee),
+    ).toBe(false);
+  });
+
+  it('stops an effect at daylight and resumes it at dusk without room entry', async () => {
+    const { engine, adapter, clock } = windowFixture();
+    await engine.handleSunElevation(-5);
+    await engine.activateScene('scene.loop', user);
+    await presence(engine, 'confirmed_empty');
+    await engine.handleSunElevation(10);
+    expect(adapter.observed.get(target)?.power).toBe(false);
+    expect(
+      engine.state.lighting.devices[target]?.govee?.controlId,
+    ).toBeUndefined();
+    const count = adapter.dispatched.length;
+    await tick(clock);
+    expect(
+      adapter.dispatched.slice(count).some((command) => command.govee),
+    ).toBe(false);
+    await engine.handleSunElevation(-5);
+    expect(adapter.observed.get(target)?.power).toBe(true);
+    expect(engine.state.lighting.devices[target]?.govee).toMatchObject({
+      status: 'sent',
+      activeEffect: 'Aurora',
+    });
+    await tick(clock);
+    expect(adapter.dispatched.at(-1)?.govee?.effect).toBe('Forest');
+  });
+
+  it('revokes a queued rotation at dawn before it can write', async () => {
+    const { engine, adapter, clock } = windowFixture();
+    await engine.handleSunElevation(-5);
+    await engine.activateScene('scene.loop', user);
+    const b = blockNextStep(adapter);
+    await tick(clock);
+    await b.entered.promise;
+    const dawn = engine.handleSunElevation(10);
+    expect(b.command?.isCurrent?.()).toBe(false);
+    b.blocked.resolve();
+    await dawn;
+    await flush();
+    expect(adapter.observed.get(target)?.power).toBe(false);
+    expect(
+      adapter.dispatched.filter((command) => command.goveeOnly),
+    ).toHaveLength(0);
+  });
+
+  it.each(['home', 'room'] as const)(
+    'preserves %s presence restrictions for window effects',
+    async (mode) => {
+      const { engine, adapter, clock } = windowFixture(mode);
+      await engine.handleSunElevation(-5);
+      await presence(engine, 'occupied');
+      await engine.activateScene('scene.loop', user);
+      if (mode === 'home') await engine.handleHomePresence('away');
+      await presence(engine, 'confirmed_empty');
+      expect(adapter.observed.get(target)?.power).toBe(false);
+      const count = adapter.dispatched.length;
+      await tick(clock);
+      expect(
+        adapter.dispatched.slice(count).some((command) => command.govee),
+      ).toBe(false);
+    },
+  );
+
+  it('restores only the window animation at dusk before room occupancy', async () => {
+    const first = windowFixture();
+    await first.engine.handleSunElevation(-5);
+    await first.engine.activateScene('scene.loop', user);
+    const { engine, adapter } = fixture({
+      windowLighting: {
+        target,
+        presenceMode: 'always',
+        brightness: 55,
+        maxSunElevation: 6,
+      },
+      restoredLightingIntent: first.engine.getLightingIntentSnapshot(),
+    });
+    expect(adapter.dispatched).toHaveLength(0);
+    await engine.handleSunElevation(-5);
+    expect(adapter.observed.get(target)).toMatchObject({
+      power: true,
+      brightness: 55,
+    });
+    expect(engine.state.lighting.devices[target]?.govee?.status).toBe('sent');
+    expect(adapter.observed.get(other)?.power).not.toBe(true);
+  });
+
+  it('keeps only the window rotation through room continuity expiry and restart', async () => {
+    const settings = {
+      target,
+      presenceMode: 'always' as const,
+      brightness: 55,
+      maxSunElevation: 6,
+    };
+    const first = fixture({ windowLighting: settings, continuityMs: 1000 });
+    await first.engine.handleSunElevation(-5);
+    await presence(first.engine, 'occupied');
+    await first.engine.activateScene('scene.loop', user);
+    await presence(first.engine, 'confirmed_empty');
+    await tick(first.clock, 1001);
+    expect(first.engine.state.lighting.currentScene).toBeNull();
+    await tick(first.clock, 13_999);
+    expect(
+      first.engine.state.lighting.devices[target]?.govee?.activeEffect,
+    ).toBe('Forest');
+    const snapshot = first.engine.getLightingIntentSnapshot();
+    const restarted = fixture({
+      windowLighting: settings,
+      restoredLightingIntent: snapshot,
+    });
+    await restarted.engine.handleSunElevation(-5);
+    expect(restarted.engine.state.lighting.devices[target]?.govee?.status).toBe(
+      'sent',
+    );
+    expect(restarted.adapter.observed.get(other)?.power).not.toBe(true);
+  });
+
+  it('retains an animation saved during daylight so it can resume at dusk after restart', async () => {
+    const first = windowFixture();
+    await first.engine.handleSunElevation(10);
+    await first.engine.activateScene('scene.loop', user);
+    const snapshot = first.engine.getLightingIntentSnapshot();
+    const restarted = fixture({
+      windowLighting: {
+        target,
+        presenceMode: 'always',
+        brightness: 55,
+        maxSunElevation: 6,
+      },
+      restoredLightingIntent: snapshot,
+    });
+    await restarted.engine.handleSunElevation(10);
+    expect(restarted.adapter.observed.get(target)?.power).not.toBe(true);
+    await restarted.engine.handleSunElevation(-5);
+    expect(
+      restarted.engine.state.lighting.devices[target]?.govee,
+    ).toMatchObject({ status: 'sent', activeEffect: 'Aurora' });
+  });
+
+  it.each(['expired while stopped', 'daylight after expiry'] as const)(
+    'restores window animation independently of room continuity: %s',
+    async (when) => {
+      const settings = {
+        target,
+        presenceMode: 'always' as const,
+        brightness: 55,
+        maxSunElevation: 6,
+      };
+      const first = fixture({
+        windowLighting: settings,
+        continuityMs: 1000,
+        defaultSceneId: 'scene.other',
+      });
+      await first.engine.handleSunElevation(-5);
+      await presence(first.engine, 'occupied');
+      await first.engine.activateScene('scene.loop', user);
+      await presence(first.engine, 'confirmed_empty');
+      let snapshot = first.engine.getLightingIntentSnapshot();
+      if (when === 'daylight after expiry') {
+        await tick(first.clock, 1001);
+        await first.engine.handleSunElevation(10);
+        snapshot = first.engine.getLightingIntentSnapshot();
+      }
+      const restarted = fixture(
+        {
+          windowLighting: settings,
+          restoredLightingIntent: snapshot,
+          defaultSceneId: 'scene.other',
+        },
+        new FakeClock(10_000),
+      );
+      await restarted.engine.handleSunElevation(10);
+      expect(restarted.adapter.observed.get(target)?.power).not.toBe(true);
+      await restarted.engine.handleSunElevation(-5);
+      expect(
+        restarted.engine.state.lighting.devices[target]?.govee,
+      ).toMatchObject({ status: 'sent', activeEffect: 'Aurora' });
+      expect(restarted.adapter.observed.get(other)?.power).not.toBe(true);
+      await presence(restarted.engine, 'occupied');
+      expect(restarted.adapter.observed.get(other)?.power).toBe(true);
+    },
+  );
+
   it('cycles and wraps after delivery, without baseline writes or lighting ledger growth', async () => {
     const { engine, adapter, clock } = fixture();
     await engine.activateScene('scene.loop', user);

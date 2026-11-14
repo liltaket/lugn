@@ -403,7 +403,7 @@ describe('Govee scene intent in the lighting engine', () => {
     expect(adapter.observed.get(ceiling)?.power).toBe(true);
   });
 
-  it('lets an explicit effect suppress window policy and resumes window policy after static selection', async () => {
+  it('applies window power and brightness policy to effects and static selection', async () => {
     const { engine, adapter } = fixture({
       windowLighting: {
         target: ceiling,
@@ -416,16 +416,15 @@ describe('Govee scene intent in the lighting engine', () => {
     await engine.activateScene('scene.ring', user);
     expect(
       engine.state.lighting.devices[ceiling]?.effectiveDesired.brightness,
-    ).toBe(20);
+    ).toBe(55);
     const count = adapter.dispatched.length;
     await engine.handleSunElevation(15);
-    expect(
-      adapter.dispatched
-        .slice(count)
-        .filter((entry) => entry.target === ceiling),
-    ).toEqual([]);
+    expect(adapter.dispatched.slice(count).at(-1)).toMatchObject({
+      target: ceiling,
+      values: { power: false },
+    });
     expect(engine.state.lighting.devices[ceiling]?.effectiveDesired.power).toBe(
-      true,
+      false,
     );
     await engine.activateScene('scene.white', user);
     expect(engine.state.lighting.devices[ceiling]?.govee).toBeUndefined();
