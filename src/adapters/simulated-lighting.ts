@@ -30,6 +30,8 @@ export type LightingCommand = {
     staticColor?: GoveeStaticColor;
     /** Fixture reported OFF: stage a partial mask before the baseline powers it. */
     stageZones?: true;
+    /** Lit fixture's last mask delivered by Lugn; only changed toggles are sent. */
+    knownZones?: { main: boolean; ring: boolean };
   };
   goveeStatic?: {
     controlId: string;

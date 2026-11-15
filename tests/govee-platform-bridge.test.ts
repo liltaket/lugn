@@ -623,6 +623,30 @@ describe('cloud zone controls and discovery', () => {
       ).toEqual(after);
     }
   });
+  it('sends only OFF toggles in disable-only order', () => {
+    expect(
+      platformZoneMaskControls(
+        metadata,
+        [main, ring],
+        { main: false, ring: true },
+        'disable-only',
+      ),
+    ).toEqual([
+      {
+        type: toggle('mainLightToggle').type,
+        instance: 'mainLightToggle',
+        value: 0,
+      },
+    ]);
+    expect(
+      platformZoneMaskControls(
+        metadata,
+        [main, ring],
+        { main: true, ring: true },
+        'disable-only',
+      ),
+    ).toEqual([]);
+  });
   it('sends only the configured toggle for zone ON/OFF', () => {
     expect(platformZoneControls(metadata, main, { state: 'ON' })).toEqual([
       {

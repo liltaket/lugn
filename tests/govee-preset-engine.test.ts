@@ -152,13 +152,19 @@ describe('Govee scene intent in the lighting engine', () => {
         controlId: device.govee?.controlId,
       },
     });
-    // Already lit: the ordinary enable-first mask keeps the fixture ON.
+    // Already lit: Lugn's last delivered mask lets the adapter send only changes.
     await engine.activateScene('scene.both_white', user);
     expect(adapter.dispatched.at(-1)?.govee).toMatchObject({
       zones: { main: true, ring: true },
       staticColor: { colorTemperature: 4000 },
+      knownZones: { main: false, ring: true },
     });
     expect(adapter.dispatched.at(-1)?.govee?.stageZones).toBeUndefined();
+    await engine.activateScene('scene.ring_white', user);
+    expect(adapter.dispatched.at(-1)?.govee).toMatchObject({
+      zones: { main: false, ring: true },
+      knownZones: { main: true, ring: true },
+    });
     await engine.activateScene('scene.all_off', user);
     await engine.activateScene('scene.ring', user);
     const effect = adapter.dispatched

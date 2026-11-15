@@ -22,7 +22,7 @@ export interface GoveeControlClient {
     staticColor?: GoveeStaticColor | undefined;
     modeOnly?: true | undefined;
     zones?: { main: boolean; ring: boolean } | undefined;
-    zoneOrder?: 'disable-first' | undefined;
+    zoneOrder?: 'disable-first' | 'disable-only' | undefined;
   }): Promise<void>;
   cancel(target: string, controlId?: string): Promise<void>;
 }
@@ -183,6 +183,8 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
         command.values.power === false)
     )
       throw new Error('Invalid Govee static reset');
+    if (intent?.knownZones && !intent.zones)
+      throw new Error('Invalid Govee zone staging');
     if (
       intent?.stageZones &&
       (!intent.zones ||
@@ -231,10 +233,10 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     // An ON from OFF restores the fixture's own zone state, which can include an
     // unwanted main light. Stage the mask while dark; its wanted-zone toggle powers
     // the fixture. Cloud acceptance precedes delivery, so local Matter ON waits for
-    // the fixture's own ON report. The H60A6 ignores a zone OFF while dark, and
-    // any zone ON makes the next Matter level/CT write relight an unwanted zone.
-    // Once lit, the mask is repeated enable-first, so the OFF is the last toggle,
-    // and given time to arrive. The final enable-first mask still follows.
+    // the fixture's own ON report. The H60A6 ignores a zone OFF while dark, and a
+    // zone ON while lit relights an OFF zone. Once lit, only the unwanted zone's
+    // OFF is repeated and given time to arrive; no later toggle is sent.
+    let stagedLit = false;
     if (intent?.stageZones && intent.zones) {
       const powered = this.waitForPower(command.target, current);
       try {
@@ -248,9 +250,10 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
           await this.applyGuarded(
             command,
             intent.controlId,
-            { zones: intent.zones },
+            { zones: intent.zones, zoneOrder: 'disable-only' },
             current,
           );
+          stagedLit = true;
           await this.settle(this.stagedSettleMs, current);
         }
       } catch {
@@ -270,20 +273,32 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
       return;
     const controlId = (intent ?? staticReset)!.controlId;
     const color = intent?.staticColor ?? staticReset?.color;
+    const zones = intent?.zones ?? staticReset?.zones;
+    const known = intent?.knownZones;
+    // Wanted zones already lit get no ON toggle: on the H60A6 it would relight
+    // an OFF zone. Unknown or dark zones still use the enable-first mask.
+    const zoneBody =
+      !zones || stagedLit
+        ? {}
+        : known && (!zones.main || known.main) && (!zones.ring || known.ring)
+          ? zones.main && zones.ring
+            ? {}
+            : { zones, zoneOrder: 'disable-only' as const }
+          : { zones };
+    const body = {
+      ...(command.goveeOnly ? { modeOnly: true as const } : {}),
+      ...(intent?.effect !== undefined ? { effect: intent.effect } : {}),
+      ...zoneBody,
+      ...(color ? { staticColor: staticColor(color) } : {}),
+    };
+    if (
+      body.effect === undefined &&
+      body.zones === undefined &&
+      body.staticColor === undefined
+    )
+      return;
     try {
-      await this.applyGuarded(
-        command,
-        controlId,
-        {
-          ...(command.goveeOnly ? { modeOnly: true as const } : {}),
-          ...(intent?.effect !== undefined ? { effect: intent.effect } : {}),
-          ...((intent?.zones ?? staticReset?.zones) !== undefined
-            ? { zones: (intent?.zones ?? staticReset?.zones)! }
-            : {}),
-          ...(color ? { staticColor: staticColor(color) } : {}),
-        },
-        current,
-      );
+      await this.applyGuarded(command, controlId, body, current);
     } catch (error) {
       if (!current()) return;
       // A partial mask failure must not leave an accidentally illuminated second zone.

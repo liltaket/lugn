@@ -311,10 +311,14 @@ export class LugnEngine {
 
   private readonly goveeTransitionTargets = new Set<string>();
   /**
-   * Zoned fixtures remember their mask through whole OFF/ON. Only targets Lugn
-   * last left with both zones lit skip the restore on an ordinary scene.
+   * The zone mask Lugn last delivered to a zoned fixture. Fixtures remember their
+   * mask through whole OFF/ON, and a zone ON while lit can relight an OFF zone,
+   * so lit transitions send only the toggles that change. Absent means unknown.
    */
-  private readonly goveeFullZoneTargets = new Set<string>();
+  private readonly goveeZoneMasks = new Map<
+    string,
+    { main: boolean; ring: boolean }
+  >();
   private readonly lightingTargetGenerations = new Map<string, number>();
   private readonly goveeRotationTimers = new Map<string, TimerHandle>();
   private invalidateLightingTarget(target: string): void {
@@ -2169,7 +2173,7 @@ export class LugnEngine {
     };
     device.externalControl = control;
     // Explicit zone buttons and app effects can leave either zone dark.
-    this.goveeFullZoneTargets.delete(target);
+    this.goveeZoneMasks.delete(target);
     device.effectiveDesired = { power: true };
     device.ownership = {
       power: {
@@ -4176,16 +4180,18 @@ export class LugnEngine {
         !(govee.intent.zones.main && govee.intent.zones.ring) &&
         values.power === true &&
         this.requireDevice(target).observed.power === false;
+      const knownZones = this.goveeZoneMasks.get(target);
       const restoreZones = Boolean(
         staticControlId &&
         this.adapter.goveeCapabilities?.[target]?.zones &&
-        !this.goveeFullZoneTargets.has(target),
+        !(knownZones?.main && knownZones.ring),
       );
-      if (
-        govee?.intent.zones &&
-        !(govee.intent.zones.main && govee.intent.zones.ring)
-      )
-        this.goveeFullZoneTargets.delete(target);
+      const litZones =
+        this.requireDevice(target).observed.power === true
+          ? knownZones
+          : undefined;
+      if (govee?.intent.zones || restoreZones)
+        this.goveeZoneMasks.delete(target);
       // Consume the forced transition before synchronous adapter feedback can
       // re-enter reconciliation; the in-flight command now owns this attempt.
       this.goveeTransitionTargets.delete(target);
@@ -4223,6 +4229,9 @@ export class LugnEngine {
                     ? { staticColor: this.goveeStaticColor(target, values) }
                     : {}),
                   ...(goveeStageZones ? { stageZones: true as const } : {}),
+                  ...(govee.intent.zones && litZones
+                    ? { knownZones: { ...litZones } }
+                    : {}),
                   controlId: govee.controlId!,
                 },
               }
@@ -4232,12 +4241,10 @@ export class LugnEngine {
           () => {
             if (!govee && isCurrent())
               this.goveeTransitionTargets.delete(target);
-            if (
-              isCurrent() &&
-              (restoreZones ||
-                (govee?.intent.zones?.main && govee.intent.zones.ring))
-            )
-              this.goveeFullZoneTargets.add(target);
+            if (isCurrent() && restoreZones)
+              this.goveeZoneMasks.set(target, { main: true, ring: true });
+            else if (isCurrent() && govee?.intent.zones)
+              this.goveeZoneMasks.set(target, { ...govee.intent.zones });
             if (
               govee &&
               isCurrent() &&

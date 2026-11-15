@@ -157,15 +157,19 @@ precedes delivery, so the baseline waits for a fresh native ON report (at most
 4 s) before sending its local Matter ON. Without that wait, Matter ON could
 arrive before the cloud's main OFF and light both zones.
 
-An attended test series with Bruno found the cause of the remaining flash. The
-H60A6 ignores a zone OFF while it is dark. A zone ON after an OFF also makes the
-next Matter level/CT write relight the zone that was turned off, whether that
-write follows immediately, after 2 s or after 6 s. A main OFF sent as the last
-toggle while the fixture was lit held through later Matter and API white writes.
-After native ON, the adapter therefore repeats the mask **enable-first**, so the
-unwanted zone's OFF is the last toggle. It then waits 1.5 s for delivery before
-the baseline, and the final mask is also enable-first. Disable-first is used
-only while dark.
+An attended test series with Bruno isolated the remaining flash. The H60A6
+ignores a zone OFF while it is dark, so after the ring toggle lights it, a
+Matter level/CT write relights the main light (immediately, after 2 s and after
+6 s). A main OFF sent once lit held through later Matter and API white writes,
+until another ring ON was sent. That sequence, and the earlier ring ON plus main
+OFF masks, flashed the main light.
+
+After native ON, the adapter therefore repeats only the unwanted zone's OFF
+(`zoneOrder:"disable-only"`), waits 1.5 s for delivery, and sends no later zone
+toggle. For an already lit fixture, the engine passes the mask it last delivered
+(`knownZones`). Zones already lit get no ON toggle, so only the needed OFF
+toggles are sent, or none. An unknown or dark wanted zone still uses the
+enable-first mask, and the engine forgets the mask on an external handoff.
 
 Staging is best effort. If it fails or
 no ON report arrives, the baseline and final mask still run, and a final failure
@@ -230,7 +234,7 @@ an available Govee API; Matter state alone is not proof that an app scene stoppe
 HTTP over the protected Unix socket, with no network listener:
 
 - `GET /capabilities` → `{targets: Record<target,{effects:string[],zones:boolean,colorTemperature?:{min,max}}>}`.
-- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,zoneOrder?:"disable-first",modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation. `zoneOrder` requires `zones`.
+- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,zoneOrder?,modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation. `zoneOrder` (`disable-first` while dark, `disable-only` for OFF toggles only) requires `zones`.
 - `POST /cancel` ← `{target,controlId?}` → `{status:"drained"}`.
 
 Capabilities can include optional `staticColor:true`. A color reset uses

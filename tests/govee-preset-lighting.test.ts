@@ -505,7 +505,7 @@ function poweredFixture(timeoutMs = 4_000, settleMs = 400) {
     listener!({ target, values: { power }, observedAt: Date.now() });
   return { adapter, client, events, bodies, observe };
 }
-it('repeats the mask once natively lit and settles before local Matter ON', async () => {
+it('repeats only the unwanted OFF once natively lit and settles before local Matter ON', async () => {
   const f = poweredFixture();
   const staged = {
     ...ringOnly,
@@ -536,13 +536,12 @@ it('repeats the mask once natively lit and settles before local Matter ON', asyn
     'apply',
     'apply',
     'static:{"power":true,"brightness":20,"colorTemperature":2700}',
-    'apply',
   ]);
-  // Dark staging disables first; once lit, the unwanted zone OFF comes last.
-  expect(f.bodies.slice(0, 3)).toEqual([
+  // Dark staging disables first. Once lit, only the unwanted OFF is repeated: a
+  // ring ON while lit would relight the main light, so no later toggle follows.
+  expect(f.bodies).toEqual([
     { ...mask, zoneOrder: 'disable-first' },
-    mask,
-    mask,
+    { ...mask, zoneOrder: 'disable-only' },
   ]);
 });
 it('falls back to local Matter ON when staged power is never reported', async () => {
@@ -579,5 +578,54 @@ it('restores both zones with an ordinary white reset after a partial mask', asyn
       zones: { main: true, ring: true },
       staticColor: { colorTemperature: 4000 },
     },
+  ]);
+});
+it('sends only changed toggles for a lit fixture with a known mask', async () => {
+  const f = staticFixture();
+  const lit = (
+    zones: { main: boolean; ring: boolean },
+    knownZones: { main: boolean; ring: boolean },
+  ): LightingCommand => ({
+    ...ringOnly,
+    values: { power: true, brightness: 20, colorTemperature: 3000 },
+    govee: {
+      controlId: 'g-lit',
+      zones,
+      knownZones,
+      staticColor: { colorTemperature: 3000 },
+    },
+  });
+  const base = { requestId: 'c-ring', target, controlId: 'g-lit' };
+  const white = { staticColor: { colorTemperature: 3000 } };
+  await f.adapter.dispatch(
+    lit({ main: false, ring: true }, { main: true, ring: true }),
+  );
+  await f.adapter.dispatch(
+    lit({ main: false, ring: true }, { main: false, ring: true }),
+  );
+  await f.adapter.dispatch(
+    lit({ main: true, ring: true }, { main: true, ring: true }),
+  );
+  await f.adapter.dispatch(
+    lit({ main: true, ring: true }, { main: false, ring: true }),
+  );
+  expect(f.bodies).toEqual([
+    // Both lit to ring only: just the main OFF, never a ring ON.
+    {
+      ...base,
+      zones: { main: false, ring: true },
+      zoneOrder: 'disable-only',
+      ...white,
+    },
+    {
+      ...base,
+      zones: { main: false, ring: true },
+      zoneOrder: 'disable-only',
+      ...white,
+    },
+    // Already both lit: no toggle at all.
+    { ...base, ...white },
+    // A dark wanted zone still needs the enable-first mask.
+    { ...base, zones: { main: true, ring: true }, ...white },
   ]);
 });

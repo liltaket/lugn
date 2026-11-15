@@ -99,17 +99,19 @@ export function platformZoneMaskControls(
   device: PlatformDevice,
   zones: readonly PlatformZone[],
   mask: { main: boolean; ring: boolean },
-  order: 'enable-first' | 'disable-first' = 'enable-first',
+  order: 'enable-first' | 'disable-first' | 'disable-only' = 'enable-first',
 ): PlatformControl[] {
   if (!mask.main && !mask.ring) throw new Error('Use ordinary whole power OFF');
   const desired = [
     { instance: 'mainLightToggle' as const, on: mask.main },
     { instance: 'backgroundLightToggle' as const, on: mask.ring },
-  ].sort((a, b) =>
-    order === 'enable-first'
-      ? Number(b.on) - Number(a.on)
-      : Number(a.on) - Number(b.on),
-  );
+  ]
+    .filter((value) => order !== 'disable-only' || !value.on)
+    .sort((a, b) =>
+      order === 'enable-first'
+        ? Number(b.on) - Number(a.on)
+        : Number(a.on) - Number(b.on),
+    );
   return desired.map((value) => {
     if (!zones.some((zone) => zone.powerInstance === value.instance))
       throw new Error('Unsupported platform zone');
@@ -712,9 +714,7 @@ export async function startGoveePlatformBridge(
             info,
             device.zones ?? [],
             command.zones,
-            command.zoneOrder === 'disable-first'
-              ? 'disable-first'
-              : 'enable-first',
+            command.zoneOrder ?? 'enable-first',
           ),
         );
       }
