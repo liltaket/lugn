@@ -246,3 +246,36 @@ services run `/home/bruno/lugn-govee-c4d8baa` with zero restarts. Reapplying
 Vardagsljus from OFF reported `sent` with the ceiling ON at 55 %/2702 K.
 Whether the main light stayed dark, and the ring color, await Bruno's
 observation.
+
+### Third iteration: attended toggle-order series
+
+Bruno then reported that the ring lit alone, then the whole fixture lit, then
+the main light switched off. The API white now appeared to steer the ring.
+An attended probe series under an explicit external handoff isolated the
+trigger.
+
+| Step | Sequence from Matter OFF unless noted                                     | Observed by Bruno |
+| ---- | ------------------------------------------------------------------------- | ----------------- |
+| 1    | API main OFF, ring ON → native ON → immediate Matter 55 %/2700 K          | ring, then whole  |
+| 2    | Lit fixture: API main OFF → 6 s → Matter 40 %/3000 K                      | ring only         |
+| 3    | As 1, 2 s wait, Matter, then API 2700 K                                   | main lit          |
+| 4    | Lit fixture: API main OFF → 6 s → API 3000 K only                         | ring only         |
+| 5    | As 3 with a 6 s wait                                                      | main lit          |
+| 6    | As 1, then API main OFF once lit → 1.5 s → Matter → API 2700 K            | ring only         |
+| 7    | As 6, but with ring ON after each main OFF, plus a final main OFF/ring ON | flash             |
+
+A zone OFF is ignored while dark, and a ring ON while lit relights the main
+light. Commits `5a42c45` (repeat once lit) and `df32766` (OFF last) both still
+flashed through Lugn. Commit `ae193a9` repeats only the unwanted OFF after
+native ON and sends no later toggle. For a lit fixture it sends only the
+changed toggles based on the mask Lugn last delivered. It matches step 6, the
+only sequence Bruno saw without a flash.
+
+`npm run check` passed **127 suites / 2085 tests** (the Govee installer fixture
+again with the `rg` shim), and `npm run build` passed. Both services run
+`/home/bruno/lugn-govee-ae193a9` (archive SHA-256
+`7033cc6123c45e2ec832ace40a3e332d77b0d04150f99332496432c600c999ed`) with zero
+restarts. A Lugn activation of Vardagsljus from OFF reported `sent` with the
+ceiling ON at 55 %/2702 K. Bruno was not in the room and did not observe it.
+The `ae193a9` sequence through Lugn, effect presets with a ring-only mask, and
+Focus after a ring preset remain visually unverified.
