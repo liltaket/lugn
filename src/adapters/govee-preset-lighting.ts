@@ -112,6 +112,10 @@ export class GoveeSocketClient implements GoveeControlClient {
 /** One queue per physical target spans baseline, effects, masks and subsequent static/OFF. */
 export class GoveePresetLightingAdapter implements LightingAdapter {
   private readonly tails = new Map<string, Promise<void>>();
+  private readonly powerWaiters = new Set<{
+    target: string;
+    resolve: () => void;
+  }>();
   async refreshCapabilities(): Promise<void> {
     const next = await this.client.capabilities();
     // Keep known capabilities through an outage so static/OFF still uses its barrier.
@@ -121,7 +125,14 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     private readonly ordinary: LightingAdapter,
     private readonly client: GoveeControlClient,
     readonly goveeCapabilities: GoveeCapabilities,
-  ) {}
+    private readonly stagedPowerTimeoutMs = 4_000,
+  ) {
+    this.ordinary.subscribe((observation) => {
+      if (observation.values.power !== true) return;
+      for (const waiter of this.powerWaiters)
+        if (waiter.target === observation.target) waiter.resolve();
+    });
+  }
   subscribe(listener: (observation: LightingObservation) => void): () => void {
     return this.ordinary.subscribe(listener);
   }
@@ -154,6 +165,7 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
       staticReset &&
       (intent ||
         !capability.staticColor ||
+        (staticReset.zones && !capability.zones) ||
         !command.isCurrent ||
         !GoveeStaticColorSchema.safeParse(staticReset.color).success ||
         command.values.power === false)
@@ -216,9 +228,12 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
         ? color
         : { colorTemperature: kelvin(color.colorTemperature) };
     // An ON from OFF restores the fixture's own zone state, which can include an
-    // unwanted main light. Stage the mask while dark; the final mask still follows.
+    // unwanted main light. Stage the mask while dark; its wanted-zone toggle powers
+    // the fixture. Cloud acceptance precedes delivery, so local Matter ON waits for
+    // the fixture's own ON report. The final mask still follows.
     let staged = false;
     if (intent?.stageZones && intent.zones) {
+      const powered = this.waitForPower(command.target, current);
       try {
         await this.applyGuarded(
           command,
@@ -227,8 +242,11 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
           current,
         );
         staged = true;
+        await powered.wait;
       } catch {
         // Best effort only: baseline and the authoritative final mask still run.
+      } finally {
+        powered.stop();
       }
       if (!current()) return;
     }
@@ -249,7 +267,9 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
         {
           ...(command.goveeOnly ? { modeOnly: true as const } : {}),
           ...(intent?.effect !== undefined ? { effect: intent.effect } : {}),
-          ...(intent?.zones !== undefined ? { zones: intent.zones } : {}),
+          ...((intent?.zones ?? staticReset?.zones) !== undefined
+            ? { zones: (intent?.zones ?? staticReset?.zones)! }
+            : {}),
           // The staged zone is already lit, so the unwanted zone goes first.
           ...(staged ? { zoneOrder: 'disable-first' as const } : {}),
           ...(color ? { staticColor: staticColor(color) } : {}),
@@ -266,6 +286,29 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
       });
       throw error;
     }
+  }
+
+  /** Resolves on a fresh native ON report, a timeout or a lost generation. */
+  private waitForPower(
+    target: string,
+    current: () => boolean,
+  ): { wait: Promise<void>; stop: () => void } {
+    let stop!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      const waiter = { target, resolve: () => stop() };
+      const timer = setTimeout(() => stop(), this.stagedPowerTimeoutMs);
+      const poll = setInterval(() => {
+        if (!current()) stop();
+      }, 20);
+      stop = () => {
+        clearTimeout(timer);
+        clearInterval(poll);
+        this.powerWaiters.delete(waiter);
+        resolve();
+      };
+      this.powerWaiters.add(waiter);
+    });
+    return { wait, stop };
   }
 
   /** Rejects after a requested drain; cancellation never leaves later stale sends. */

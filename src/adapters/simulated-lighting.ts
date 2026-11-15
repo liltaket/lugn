@@ -31,7 +31,12 @@ export type LightingCommand = {
     /** Fixture reported OFF: stage a partial mask before the baseline powers it. */
     stageZones?: true;
   };
-  goveeStatic?: { controlId: string; color: GoveeStaticColor };
+  goveeStatic?: {
+    controlId: string;
+    color: GoveeStaticColor;
+    /** Restores both zones after Lugn last left a zoned fixture partially masked. */
+    zones?: { main: boolean; ring: boolean };
+  };
   id: string;
   target: string;
   values: LightingValues;

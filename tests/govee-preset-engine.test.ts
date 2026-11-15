@@ -169,6 +169,29 @@ describe('Govee scene intent in the lighting engine', () => {
     expect(effect.govee?.staticColor).toBeUndefined();
   });
 
+  it('restores both remembered zones once when an ordinary scene follows a ring-only mask', async () => {
+    const { engine, adapter } = fixture();
+    Object.assign(adapter.goveeCapabilities[ceiling]!, { staticColor: true });
+    const ceilingCommands = () =>
+      adapter.dispatched.filter((entry) => entry.target === ceiling);
+    await engine.activateScene('scene.white', user);
+    // Unknown startup mask: the first ordinary white also lights both zones.
+    expect(ceilingCommands().at(-1)?.goveeStatic?.zones).toEqual({
+      main: true,
+      ring: true,
+    });
+    await engine.activateScene('scene.all_off', user);
+    await engine.activateScene('scene.white', user);
+    expect(ceilingCommands().at(-1)?.goveeStatic).toBeDefined();
+    expect(ceilingCommands().at(-1)?.goveeStatic?.zones).toBeUndefined();
+    await engine.activateScene('scene.ring', user);
+    await engine.activateScene('scene.white', user);
+    expect(ceilingCommands().at(-1)?.goveeStatic).toMatchObject({
+      color: { colorTemperature: 4000 },
+      zones: { main: true, ring: true },
+    });
+  });
+
   it('combines static ceiling white with main plus ring and clamps the authoritative model range', async () => {
     const { engine, adapter } = fixture({
       scenes: [

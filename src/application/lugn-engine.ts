@@ -310,6 +310,11 @@ export class LugnEngine {
   }
 
   private readonly goveeTransitionTargets = new Set<string>();
+  /**
+   * Zoned fixtures remember their mask through whole OFF/ON. Only targets Lugn
+   * last left with both zones lit skip the restore on an ordinary scene.
+   */
+  private readonly goveeFullZoneTargets = new Set<string>();
   private readonly lightingTargetGenerations = new Map<string, number>();
   private readonly goveeRotationTimers = new Map<string, TimerHandle>();
   private invalidateLightingTarget(target: string): void {
@@ -2163,6 +2168,8 @@ export class LugnEngine {
       canActivate: true,
     };
     device.externalControl = control;
+    // Explicit zone buttons and app effects can leave either zone dark.
+    this.goveeFullZoneTargets.delete(target);
     device.effectiveDesired = { power: true };
     device.ownership = {
       power: {
@@ -4169,6 +4176,16 @@ export class LugnEngine {
         !(govee.intent.zones.main && govee.intent.zones.ring) &&
         values.power === true &&
         this.requireDevice(target).observed.power === false;
+      const restoreZones = Boolean(
+        staticControlId &&
+        this.adapter.goveeCapabilities?.[target]?.zones &&
+        !this.goveeFullZoneTargets.has(target),
+      );
+      if (
+        govee?.intent.zones &&
+        !(govee.intent.zones.main && govee.intent.zones.ring)
+      )
+        this.goveeFullZoneTargets.delete(target);
       // Consume the forced transition before synchronous adapter feedback can
       // re-enter reconciliation; the in-flight command now owns this attempt.
       this.goveeTransitionTargets.delete(target);
@@ -4181,7 +4198,13 @@ export class LugnEngine {
           ...(this.adapter.goveeCapabilities ? { isCurrent } : {}),
           ...(staticControlId && staticColor
             ? {
-                goveeStatic: { controlId: staticControlId, color: staticColor },
+                goveeStatic: {
+                  controlId: staticControlId,
+                  color: staticColor,
+                  ...(restoreZones
+                    ? { zones: { main: true, ring: true } }
+                    : {}),
+                },
               }
             : {}),
           ...(govee?.controlId
@@ -4209,6 +4232,12 @@ export class LugnEngine {
           () => {
             if (!govee && isCurrent())
               this.goveeTransitionTargets.delete(target);
+            if (
+              isCurrent() &&
+              (restoreZones ||
+                (govee?.intent.zones?.main && govee.intent.zones.ring))
+            )
+              this.goveeFullZoneTargets.add(target);
             if (
               govee &&
               isCurrent() &&

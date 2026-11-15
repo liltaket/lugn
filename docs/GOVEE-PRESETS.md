@@ -151,13 +151,22 @@ does not prove atomic or simultaneous physical application.
 When the fixture reports OFF and the mask is main-only or ring-only, the engine
 marks the command `stageZones`. The adapter first sends that mask
 **disable-first** (unwanted zone OFF, wanted zone ON) while the fixture is dark.
-Then the ordinary HA ON cannot restore a previously lit main light. A staged
-mask makes the wanted zone lit, so the final mask also disables first, removing
-any zone an ON or vendor scene re-enabled one cloud round trip sooner. Staging is
-best effort. If it fails, the baseline and the ordinary enable-first final mask
-still run, and a final failure still ends in local OFF. Whether this H60A6 keeps
-a zone state set while dark is firmware behaviour, still unproven by
-observation.
+On the H60A6, the wanted-zone toggle powers the fixture. A live probe from
+Matter OFF saw HA report ON about 1.6 s after the API accepted it. API acceptance
+precedes delivery, so the baseline waits for a fresh native ON report (at most
+4 s) before sending its local Matter ON. Without that wait, Matter ON could
+arrive before the cloud's main OFF and light both zones.
+
+The final mask then also disables first. Staging is best effort. If it fails or
+no ON report arrives, the baseline and final mask still run, and a final failure
+still ends in local OFF.
+
+The fixture remembers its zone mask through whole OFF/ON, and an ordinary Matter
+ON never changes it. After Lugn leaves a zoned fixture partially masked, the
+next ordinary positive command's white reset therefore also enables both zones,
+as does the first such command after startup or an external handoff, because
+the mask is unknown then. After that, ordinary commands skip the toggles until
+another partial mask.
 
 A platform fixture configured with `staticColor:true` (the H60A6 here) also
 sends the scene's white with a zones-only mask, ahead of the toggles. Without an

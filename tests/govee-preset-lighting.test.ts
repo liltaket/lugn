@@ -11,6 +11,7 @@ import {
 import type {
   LightingAdapter,
   LightingCommand,
+  LightingObservation,
 } from '../src/adapters/simulated-lighting.js';
 const target = 'lighting.govee_ceiling';
 const capabilities = {
@@ -50,6 +51,8 @@ function fixture() {
     ordinary,
     client,
     structuredClone(capabilities),
+    // This fake never reports native power; staging uses its short fallback.
+    20,
   );
   return { adapter, client, events, writes };
 }
@@ -467,4 +470,96 @@ it('rejects static white on effects or incapable targets and staging of a whole 
     }),
   ).rejects.toThrow('Invalid Govee static reset');
   expect(f.events).toEqual([]);
+});
+function poweredFixture(timeoutMs = 4_000) {
+  const events: string[] = [];
+  const bodies: unknown[] = [];
+  let listener: ((observation: LightingObservation) => void) | undefined;
+  const ordinary: LightingAdapter = {
+    subscribe: (next) => {
+      listener = next;
+      return () => undefined;
+    },
+    dispatch: async (command) => {
+      events.push(`static:${JSON.stringify(command.values)}`);
+    },
+  };
+  const client: GoveeControlClient = {
+    capabilities: async () => capabilities,
+    cancel: async (_target, id) => {
+      events.push(`cancel:${id ?? 'all'}`);
+    },
+    apply: async (body) => {
+      bodies.push(body);
+      events.push('apply');
+    },
+  };
+  const adapter = new GoveePresetLightingAdapter(
+    ordinary,
+    client,
+    structuredClone(capabilities),
+    timeoutMs,
+  );
+  const observe = (power: boolean) =>
+    listener!({ target, values: { power }, observedAt: Date.now() });
+  return { adapter, client, events, bodies, observe };
+}
+it('holds local Matter ON until the cloud-staged zone reports native ON', async () => {
+  const f = poweredFixture();
+  const staged = {
+    ...ringOnly,
+    govee: { ...ringOnly.govee!, stageZones: true as const },
+  };
+  const done = f.adapter.dispatch(staged);
+  await vi.waitFor(() => expect(f.events).toEqual(['cancel:all', 'apply']));
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  // Cloud acceptance alone must not release the baseline.
+  expect(f.events).toEqual(['cancel:all', 'apply']);
+  f.observe(false);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(f.events).toHaveLength(2);
+  f.observe(true);
+  await done;
+  expect(f.events).toEqual([
+    'cancel:all',
+    'apply',
+    'static:{"power":true,"brightness":20,"colorTemperature":2700}',
+    'apply',
+  ]);
+});
+it('falls back to local Matter ON when staged power is never reported', async () => {
+  const f = poweredFixture(40);
+  await f.adapter.dispatch({
+    ...ringOnly,
+    govee: { ...ringOnly.govee!, stageZones: true },
+  });
+  expect(f.events).toEqual([
+    'cancel:all',
+    'apply',
+    'static:{"power":true,"brightness":20,"colorTemperature":2700}',
+    'apply',
+  ]);
+});
+it('restores both zones with an ordinary white reset after a partial mask', async () => {
+  const f = staticFixture();
+  await f.adapter.dispatch({
+    id: 'c-white',
+    target,
+    isCurrent: () => true,
+    values: { power: true, brightness: 100, colorTemperature: 4000 },
+    goveeStatic: {
+      controlId: 's1',
+      color: { colorTemperature: 4000 },
+      zones: { main: true, ring: true },
+    },
+  });
+  expect(f.bodies).toEqual([
+    {
+      requestId: 'c-white',
+      target,
+      controlId: 's1',
+      zones: { main: true, ring: true },
+      staticColor: { colorTemperature: 4000 },
+    },
+  ]);
 });
