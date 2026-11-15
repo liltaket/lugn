@@ -192,3 +192,30 @@ automatic restarts. The final room state is Allt av, as Bruno requested after
 leaving home again. Private evidence: `window-live-proof.log`,
 `window-effects-live-proof.json`, `window-final-native-off.json` and
 `active-lugn-manifest-8840c447afd1.json` in the artifact directory above.
+
+## Follow-up: ceiling main light flash and ring white
+
+Bruno reported that ring-only modes often lit the large ceiling main light
+first, then left only the ring, and that the ring did not follow the white
+temperature. The ordinary HA/Matter ON reached the H60A6 before the cloud mask,
+so a restored main light stayed visible for one or more cloud round trips.
+
+Commit `64c02b9` stages a main-only/ring-only mask disable-first while the
+fixture reports OFF, before the HA baseline. The final mask then also disables
+first. The platform ceiling is opted into `staticColor`, so zones-only white
+presets send their Kelvin through the API before the toggles; effects keep their
+own colors. See the [preset contract](GOVEE-PRESETS.md).
+
+`npm run check` passed **127 suites / 2079 tests**, and `npm run build` passed.
+This machine lacks `rg`, which the Govee installer fixture requires; that
+fixture passed with an `rg -c` shim. The release is installed at
+`/home/bruno/lugn-govee-64c02b9` from an archive with SHA-256
+`d8c4c73fa9b9ebdd6912d66877a1c2694374703e99e05c808418e13d5d0c4734`. The only
+protected-configuration change adds `"staticColor": true` to the platform
+ceiling, with backups in `deploy-backups/govee-64c02b9`. Both services are
+active with zero restarts. The companion reports ceiling zones, LAN effects and
+static white.
+
+Bruno chose not to observe an attended test. Software evidence covers only
+ordering and payloads. Whether the H60A6 keeps a dark-staged mask through
+Matter ON, and whether API Kelvin reaches the ring, remain unobserved.
