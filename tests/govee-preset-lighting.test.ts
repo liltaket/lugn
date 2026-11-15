@@ -364,7 +364,7 @@ function staticFixture() {
   });
   return { ...f, bodies };
 }
-it('stages a ring-only mask while dark, then sends clamped white with a disable-first final mask', async () => {
+it('stages a ring-only mask while dark, then sends clamped white with an enable-first final mask', async () => {
   const f = staticFixture();
   await f.adapter.dispatch({
     ...ringOnly,
@@ -389,8 +389,8 @@ it('stages a ring-only mask while dark, then sends clamped white with a disable-
     },
     {
       ...base,
+      // A zone ON after the OFF would let the next Matter write relight main.
       zones: { main: false, ring: true },
-      zoneOrder: 'disable-first',
       // The vendor API rejects out-of-range Kelvin; clamping keeps the lamp lit.
       staticColor: { colorTemperature: 2700 },
     },
@@ -530,7 +530,6 @@ it('repeats the mask once natively lit and settles before local Matter ON', asyn
     target,
     controlId: 'g-ring',
     zones: { main: false, ring: true },
-    zoneOrder: 'disable-first',
   };
   expect(f.events).toEqual([
     'cancel:all',
@@ -539,7 +538,12 @@ it('repeats the mask once natively lit and settles before local Matter ON', asyn
     'static:{"power":true,"brightness":20,"colorTemperature":2700}',
     'apply',
   ]);
-  expect(f.bodies.slice(0, 3)).toEqual([mask, mask, mask]);
+  // Dark staging disables first; once lit, the unwanted zone OFF comes last.
+  expect(f.bodies.slice(0, 3)).toEqual([
+    { ...mask, zoneOrder: 'disable-first' },
+    mask,
+    mask,
+  ]);
 });
 it('falls back to local Matter ON when staged power is never reported', async () => {
   const f = poweredFixture(40);

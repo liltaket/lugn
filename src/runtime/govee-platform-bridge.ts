@@ -92,7 +92,8 @@ export function platformStaticColor(device: BridgeDevice): boolean {
 }
 /**
  * Keep the fixture ON while moving between nonempty masks. Whole OFF uses HA.
- * Disable-first is only for a dark fixture or one whose wanted zone is lit.
+ * Disable-first is only for a dark fixture: on the H60A6 any zone ON after an
+ * OFF lets the next Matter write relight the zone that was turned off.
  */
 export function platformZoneMaskControls(
   device: PlatformDevice,

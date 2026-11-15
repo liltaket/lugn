@@ -231,21 +231,26 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     // An ON from OFF restores the fixture's own zone state, which can include an
     // unwanted main light. Stage the mask while dark; its wanted-zone toggle powers
     // the fixture. Cloud acceptance precedes delivery, so local Matter ON waits for
-    // the fixture's own ON report. The H60A6 ignores a zone OFF while dark and a
-    // later Matter level/CT write relights that zone, so the mask is repeated once
-    // lit and given time to arrive. The final mask still follows.
-    let staged = false;
+    // the fixture's own ON report. The H60A6 ignores a zone OFF while dark, and
+    // any zone ON makes the next Matter level/CT write relight an unwanted zone.
+    // Once lit, the mask is repeated enable-first, so the OFF is the last toggle,
+    // and given time to arrive. The final enable-first mask still follows.
     if (intent?.stageZones && intent.zones) {
       const powered = this.waitForPower(command.target, current);
-      const mask = {
-        zones: intent.zones,
-        zoneOrder: 'disable-first' as const,
-      };
       try {
-        await this.applyGuarded(command, intent.controlId, mask, current);
-        staged = true;
+        await this.applyGuarded(
+          command,
+          intent.controlId,
+          { zones: intent.zones, zoneOrder: 'disable-first' },
+          current,
+        );
         if ((await powered.wait) && current()) {
-          await this.applyGuarded(command, intent.controlId, mask, current);
+          await this.applyGuarded(
+            command,
+            intent.controlId,
+            { zones: intent.zones },
+            current,
+          );
           await this.settle(this.stagedSettleMs, current);
         }
       } catch {
@@ -275,8 +280,6 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
           ...((intent?.zones ?? staticReset?.zones) !== undefined
             ? { zones: (intent?.zones ?? staticReset?.zones)! }
             : {}),
-          // The staged zone is already lit, so the unwanted zone goes first.
-          ...(staged ? { zoneOrder: 'disable-first' as const } : {}),
           ...(color ? { staticColor: staticColor(color) } : {}),
         },
         current,

@@ -158,14 +158,16 @@ precedes delivery, so the baseline waits for a fresh native ON report (at most
 arrive before the cloud's main OFF and light both zones.
 
 An attended test series with Bruno found the cause of the remaining flash. The
-H60A6 ignores a zone OFF while it is dark. Once it is lit by the ring toggle,
-a Matter level/CT write then relights the main light, whether it follows
-immediately, after 2 s or after 6 s. A main OFF sent while the fixture was already
-lit held through later Matter and API white writes. The adapter therefore
-repeats the mask once native ON is reported and waits 1.5 s for delivery before
-the baseline. With that sequence Bruno saw only the ring.
+H60A6 ignores a zone OFF while it is dark. A zone ON after an OFF also makes the
+next Matter level/CT write relight the zone that was turned off, whether that
+write follows immediately, after 2 s or after 6 s. A main OFF sent as the last
+toggle while the fixture was lit held through later Matter and API white writes.
+After native ON, the adapter therefore repeats the mask **enable-first**, so the
+unwanted zone's OFF is the last toggle. It then waits 1.5 s for delivery before
+the baseline, and the final mask is also enable-first. Disable-first is used
+only while dark.
 
-The final mask then also disables first. Staging is best effort. If it fails or
+Staging is best effort. If it fails or
 no ON report arrives, the baseline and final mask still run, and a final failure
 still ends in local OFF.
 
