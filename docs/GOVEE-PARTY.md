@@ -219,3 +219,30 @@ static white.
 Bruno chose not to observe an attended test. Software evidence covers only
 ordering and payloads. Whether the H60A6 keeps a dark-staged mask through
 Matter ON, and whether API Kelvin reaches the ring, remain unobserved.
+
+### Second iteration: native ON wait, zone restore and Vardagsljus ring
+
+Bruno then reported that the main light still flashed when the ring turned
+on, and that Focus left the main light dark after a ring-only preset. His test
+log showed staging ran from a confirmed OFF. A live probe from Matter OFF (main
+OFF, then ring ON through the API) saw HA report ON about 1.6 s after the API
+accepted the request. Thus a cloud toggle powers the dark fixture, but its
+acceptance precedes delivery; the following local Matter ON could arrive
+first. The Focus result shows that the fixture keeps its zone mask through
+Matter OFF/ON.
+
+Commit `c4d8baa` waits up to 4 s for that native ON report before the
+baseline. After a partial mask, the next ordinary white reset also enables both
+zones, as does the first one after startup or a handoff. At Bruno's request,
+Vardagsljus now lights the ceiling ring only at 55 %/2700 K. The other preset
+lamps and the six other presets are unchanged, and the offline save issued no
+physical commands.
+
+`npm run check` passed **127 suites / 2083 tests**, including both installer
+fixtures (the Govee one again with the `rg` shim), and `npm run build` passed.
+The archive SHA-256 is
+`41dc85676ce512815d969d9f57421af357caf779ea8018a790e1fe7ccc00adb0`; both
+services run `/home/bruno/lugn-govee-c4d8baa` with zero restarts. Reapplying
+Vardagsljus from OFF reported `sent` with the ceiling ON at 55 %/2702 K.
+Whether the main light stayed dark, and the ring color, await Bruno's
+observation.
