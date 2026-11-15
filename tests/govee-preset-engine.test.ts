@@ -115,6 +115,60 @@ describe('Govee scene intent in the lighting engine', () => {
     );
   });
 
+  it('stages a partial mask from a dark fixture and sends ring white only without an effect', async () => {
+    const { engine, adapter } = fixture({
+      scenes: [
+        ...structuredClone(scenes),
+        {
+          id: 'scene.ring_white',
+          name: 'Ring white',
+          lighting: {
+            [ceiling]: { power: true, brightness: 20, colorTemperature: 3000 },
+          },
+          govee: { [ceiling]: { zones: { main: false, ring: true } } },
+        },
+        {
+          id: 'scene.both_white',
+          name: 'Both white',
+          lighting: {
+            [ceiling]: { power: true, brightness: 60, colorTemperature: 4000 },
+          },
+          govee: { [ceiling]: { zones: { main: true, ring: true } } },
+        },
+      ],
+    });
+    Object.assign(adapter.goveeCapabilities[ceiling]!, { staticColor: true });
+    await engine.activateScene('scene.all_off', user);
+    expect(engine.state.lighting.devices[ceiling]?.observed.power).toBe(false);
+    await engine.activateScene('scene.ring_white', user);
+    const device = engine.state.lighting.devices[ceiling]!;
+    expect(adapter.dispatched.at(-1)).toMatchObject({
+      target: ceiling,
+      values: { power: true, brightness: 20, colorTemperature: 3000 },
+      govee: {
+        zones: { main: false, ring: true },
+        staticColor: { colorTemperature: 3000 },
+        stageZones: true,
+        controlId: device.govee?.controlId,
+      },
+    });
+    // Already lit: the ordinary enable-first mask keeps the fixture ON.
+    await engine.activateScene('scene.both_white', user);
+    expect(adapter.dispatched.at(-1)?.govee).toMatchObject({
+      zones: { main: true, ring: true },
+      staticColor: { colorTemperature: 4000 },
+    });
+    expect(adapter.dispatched.at(-1)?.govee?.stageZones).toBeUndefined();
+    await engine.activateScene('scene.all_off', user);
+    await engine.activateScene('scene.ring', user);
+    const effect = adapter.dispatched
+      .filter((entry) => entry.target === ceiling)
+      .at(-1)!;
+    expect(effect.govee).toMatchObject({ effect: 'Aurora', stageZones: true });
+    // The vendor scene supplies its own colors.
+    expect(effect.govee?.staticColor).toBeUndefined();
+  });
+
   it('combines static ceiling white with main plus ring and clamps the authoritative model range', async () => {
     const { engine, adapter } = fixture({
       scenes: [

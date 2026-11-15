@@ -42,6 +42,7 @@
         "sku": "H60A6",
         "device": "00:00:00:00:00:00:00:04",
         "exposeEffects": false,
+        "staticColor": true,
         "zones": [
           {
             "id": "main",

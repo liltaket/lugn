@@ -24,7 +24,13 @@ export type LightingCommand = {
   isCurrent?: () => boolean;
   /** Internal mode-only rotation step; never repeats baseline power/brightness. */
   goveeOnly?: true;
-  govee?: GoveeSceneIntent & { controlId: string };
+  govee?: GoveeSceneIntent & {
+    controlId: string;
+    /** Whole-fixture white/RGB sent with a zones-only mask, never with an effect. */
+    staticColor?: GoveeStaticColor;
+    /** Fixture reported OFF: stage a partial mask before the baseline powers it. */
+    stageZones?: true;
+  };
   goveeStatic?: { controlId: string; color: GoveeStaticColor };
   id: string;
   target: string;

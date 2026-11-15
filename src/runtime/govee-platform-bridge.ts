@@ -45,6 +45,8 @@ const DeviceSchema = PlatformIdentitySchema.extend({
   target: z.string().regex(/^lighting\.[a-z0-9_]+$/),
   zones: z.array(ZoneSchema).max(2).optional(),
   exposeEffects: z.boolean().default(true),
+  /** Whole-fixture white/RGB through the API, leaving any vendor scene. */
+  staticColor: z.boolean().optional(),
 })
   .strict()
   .superRefine((device, context) => {
@@ -84,17 +86,29 @@ export const GoveePlatformConfigSchema = z
 export type GoveePlatformConfig = z.infer<typeof GoveePlatformConfigSchema>;
 type BridgeDevice = GoveePlatformConfig['devices'][number];
 export type PlatformZone = NonNullable<BridgeDevice['zones']>[number];
-/** Keep the fixture ON while moving between nonempty masks. Whole OFF uses HA. */
+/** H600D keeps its earlier default; other fixtures opt in explicitly. */
+export function platformStaticColor(device: BridgeDevice): boolean {
+  return device.staticColor ?? (device.sku === 'H600D' && device.exposeEffects);
+}
+/**
+ * Keep the fixture ON while moving between nonempty masks. Whole OFF uses HA.
+ * Disable-first is only for a dark fixture or one whose wanted zone is lit.
+ */
 export function platformZoneMaskControls(
   device: PlatformDevice,
   zones: readonly PlatformZone[],
   mask: { main: boolean; ring: boolean },
+  order: 'enable-first' | 'disable-first' = 'enable-first',
 ): PlatformControl[] {
   if (!mask.main && !mask.ring) throw new Error('Use ordinary whole power OFF');
   const desired = [
     { instance: 'mainLightToggle' as const, on: mask.main },
     { instance: 'backgroundLightToggle' as const, on: mask.ring },
-  ].sort((a, b) => Number(b.on) - Number(a.on));
+  ].sort((a, b) =>
+    order === 'enable-first'
+      ? Number(b.on) - Number(a.on)
+      : Number(a.on) - Number(b.on),
+  );
   return desired.map((value) => {
     if (!zones.some((zone) => zone.powerInstance === value.instance))
       throw new Error('Unsupported platform zone');
@@ -654,9 +668,7 @@ export async function startGoveePlatformBridge(
                       (zone) => platformZoneFeatures(info, zone).power,
                     )) ??
                   false,
-                ...(device.sku === 'H600D' && device.exposeEffects
-                  ? { staticColor: true }
-                  : {}),
+                ...(platformStaticColor(device) ? { staticColor: true } : {}),
                 ...(range
                   ? { colorTemperature: { min: range.min, max: range.max } }
                   : {}),
@@ -671,7 +683,7 @@ export async function startGoveePlatformBridge(
       if (!device || !info) throw new Error('Platform target unavailable');
       const controls: PlatformControl[] = [];
       if (command.staticColor) {
-        if (device.sku !== 'H600D' || !device.exposeEffects)
+        if (!platformStaticColor(device) || command.effect !== undefined)
           throw new Error('Unsupported vendor static color');
         const color = command.staticColor;
         controls.push(
@@ -695,7 +707,14 @@ export async function startGoveePlatformBridge(
       }
       if (command.zones) {
         controls.push(
-          ...platformZoneMaskControls(info, device.zones ?? [], command.zones),
+          ...platformZoneMaskControls(
+            info,
+            device.zones ?? [],
+            command.zones,
+            command.zoneOrder === 'disable-first'
+              ? 'disable-first'
+              : 'enable-first',
+          ),
         );
       }
       if (!controls.length) throw new Error('Empty platform preset');

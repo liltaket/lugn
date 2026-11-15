@@ -82,6 +82,10 @@ H60A6, so the new zone controls expose on/off only. The existing whole-lamp
 brightness/color controls remain available. App animations are fixture scenes;
 independent ring-only animation with a separately fixed main color is not promised.
 
+With `"staticColor": true` on the platform ceiling, white presets also send their
+Kelvin through the API, so the ring follows the same white as the main light
+instead of keeping an earlier scene color. See [Govee presets](GOVEE-PRESETS.md).
+
 Lugn's ordinary ceiling mapping uses its existing Matter entity. Room-wide OFF
 therefore remains local and switches off the whole fixture, including the ring.
 A zone command first obtains a handoff with `activate:false`, which prevents

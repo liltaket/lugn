@@ -344,3 +344,127 @@ it('rejects effect intent during missing companion capabilities without baseline
   );
   expect(f.events).toEqual([]);
 });
+const ringOnly: LightingCommand = {
+  id: 'c-ring',
+  target,
+  isCurrent: () => true,
+  values: { power: true, brightness: 20, colorTemperature: 2200 },
+  govee: { controlId: 'g-ring', zones: { main: false, ring: true } },
+};
+function staticFixture() {
+  const f = fixture();
+  f.adapter.goveeCapabilities[target]!.staticColor = true;
+  const bodies: unknown[] = [];
+  vi.spyOn(f.client, 'apply').mockImplementation(async (body) => {
+    bodies.push(body);
+    f.events.push('apply');
+  });
+  return { ...f, bodies };
+}
+it('stages a ring-only mask while dark, then sends clamped white with a disable-first final mask', async () => {
+  const f = staticFixture();
+  await f.adapter.dispatch({
+    ...ringOnly,
+    govee: {
+      ...ringOnly.govee!,
+      stageZones: true,
+      staticColor: { colorTemperature: 2200 },
+    },
+  });
+  expect(f.events).toEqual([
+    'cancel:all',
+    'apply',
+    'static:{"power":true,"brightness":20,"colorTemperature":2700}',
+    'apply',
+  ]);
+  const base = { requestId: 'c-ring', target, controlId: 'g-ring' };
+  expect(f.bodies).toEqual([
+    {
+      ...base,
+      zones: { main: false, ring: true },
+      zoneOrder: 'disable-first',
+    },
+    {
+      ...base,
+      zones: { main: false, ring: true },
+      zoneOrder: 'disable-first',
+      // The vendor API rejects out-of-range Kelvin; clamping keeps the lamp lit.
+      staticColor: { colorTemperature: 2700 },
+    },
+  ]);
+});
+it('continues to the baseline and the enable-first final mask when staging fails', async () => {
+  const f = staticFixture();
+  let calls = 0;
+  vi.spyOn(f.client, 'apply').mockImplementation(async (body) => {
+    f.bodies.push(body);
+    f.events.push('apply');
+    if (++calls === 1) throw new Error('cloud unavailable');
+  });
+  await f.adapter.dispatch({
+    ...ringOnly,
+    govee: { ...ringOnly.govee!, stageZones: true },
+  });
+  expect(f.events).toEqual([
+    'cancel:all',
+    'apply',
+    'cancel:g-ring',
+    'static:{"power":true,"brightness":20,"colorTemperature":2700}',
+    'apply',
+  ]);
+  expect(f.bodies[1]).toEqual({
+    requestId: 'c-ring',
+    target,
+    controlId: 'g-ring',
+    zones: { main: false, ring: true },
+  });
+});
+it('stops before the baseline when staging outlives its generation', async () => {
+  const f = staticFixture();
+  let live = true;
+  vi.spyOn(f.client, 'apply').mockImplementation(async () => {
+    f.events.push('apply');
+    live = false;
+  });
+  await f.adapter.dispatch({
+    ...ringOnly,
+    isCurrent: () => live,
+    govee: { ...ringOnly.govee!, stageZones: true },
+  });
+  expect(f.events).toEqual(['cancel:all', 'apply', 'cancel:g-ring']);
+  expect(f.writes).toHaveLength(0);
+});
+it('rejects static white on effects or incapable targets and staging of a whole mask', async () => {
+  const f = fixture();
+  for (const command of [
+    {
+      ...ringOnly,
+      govee: { ...ringOnly.govee!, staticColor: { colorTemperature: 3000 } },
+    },
+    {
+      ...ringOnly,
+      govee: {
+        ...ringOnly.govee!,
+        zones: { main: true, ring: true },
+        stageZones: true as const,
+      },
+    },
+    {
+      ...ringOnly,
+      values: { brightness: 20 },
+      govee: { ...ringOnly.govee!, stageZones: true as const },
+    },
+  ])
+    await expect(f.adapter.dispatch(command)).rejects.toThrow('Invalid Govee');
+  f.adapter.goveeCapabilities[target]!.staticColor = true;
+  await expect(
+    f.adapter.dispatch({
+      ...ringOnly,
+      govee: {
+        ...effect.govee!,
+        staticColor: { colorTemperature: 3000 },
+      },
+    }),
+  ).rejects.toThrow('Invalid Govee static reset');
+  expect(f.events).toEqual([]);
+});

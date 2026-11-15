@@ -47,13 +47,14 @@ export const GoveeControlRequestSchema = z
       .strict()
       .refine((zones) => zones.main || zones.ring)
       .optional(),
+    /** Staged or already-lit masks may disable the unwanted zone first. */
+    zoneOrder: z.literal('disable-first').optional(),
   })
   .strict()
   .refine(
-    (request) =>
-      !request.staticColor ||
-      (!request.effect && !request.zones && !request.modeOnly),
+    (request) => !request.staticColor || (!request.effect && !request.modeOnly),
   )
+  .refine((request) => !request.zoneOrder || request.zones !== undefined)
   .refine((request) => !request.modeOnly || request.effect !== undefined)
   .refine(
     (request) =>

@@ -524,6 +524,27 @@ export class LugnEngine {
     else delete device.govee;
   }
 
+  /** The requested white/RGB for a vendor static mode; the adapter clamps Kelvin. */
+  private goveeStaticColor(
+    target: string,
+    values: LightingValues,
+  ): GoveeStaticColor {
+    const desired = this.requireDevice(target).effectiveDesired;
+    return values.rgb
+      ? { rgb: values.rgb }
+      : values.colorTemperature !== undefined
+        ? { colorTemperature: values.colorTemperature }
+        : desired.rgb
+          ? { rgb: desired.rgb }
+          : {
+              colorTemperature:
+                desired.colorTemperature ??
+                this.adapter.goveeCapabilities?.[target]?.colorTemperature
+                  ?.min ??
+                2700,
+            };
+  }
+
   get scenes(): ReadonlyMap<string, LightingScene> {
     return this.sceneDefinitions;
   }
@@ -4135,24 +4156,19 @@ export class LugnEngine {
         this.requireDevice(target).effectiveDesired.power === true &&
         isCurrent()
       ) {
-        const desired = this.requireDevice(target).effectiveDesired;
-        staticColor = values.rgb
-          ? { rgb: values.rgb }
-          : values.colorTemperature !== undefined
-            ? { colorTemperature: values.colorTemperature }
-            : desired.rgb
-              ? { rgb: desired.rgb }
-              : {
-                  colorTemperature:
-                    desired.colorTemperature ??
-                    this.adapter.goveeCapabilities[target]?.colorTemperature
-                      ?.min ??
-                    2700,
-                };
+        staticColor = this.goveeStaticColor(target, values);
         staticControlId = randomUUID();
         this.requireDevice(target).goveeStaticControlId = staticControlId;
         this.publish(['lighting']);
       }
+      const goveeZonesOnly = Boolean(
+        govee?.intent.zones && !govee.intent.effect && !govee.intent.rotation,
+      );
+      const goveeStageZones =
+        govee?.intent.zones !== undefined &&
+        !(govee.intent.zones.main && govee.intent.zones.ring) &&
+        values.power === true &&
+        this.requireDevice(target).observed.power === false;
       // Consume the forced transition before synchronous adapter feedback can
       // re-enter reconciliation; the in-flight command now owns this attempt.
       this.goveeTransitionTargets.delete(target);
@@ -4177,6 +4193,13 @@ export class LugnEngine {
                       ? { effect: govee.intent.effect }
                       : {}),
                   ...(govee.intent.zones ? { zones: govee.intent.zones } : {}),
+                  // A static zone mask may sit on a stale vendor scene/ring color.
+                  ...(goveeZonesOnly &&
+                  this.adapter.goveeCapabilities?.[target]?.staticColor &&
+                  this.requireDevice(target).effectiveDesired.power === true
+                    ? { staticColor: this.goveeStaticColor(target, values) }
+                    : {}),
+                  ...(goveeStageZones ? { stageZones: true as const } : {}),
                   controlId: govee.controlId!,
                 },
               }

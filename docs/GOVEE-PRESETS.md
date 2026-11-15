@@ -148,6 +148,24 @@ Baseline changes and mask transitions may transiently light both ceiling zones;
 final mask handling must follow all mode/brightness/effect writes. Cloud acceptance
 does not prove atomic or simultaneous physical application.
 
+When the fixture reports OFF and the mask is main-only or ring-only, the engine
+marks the command `stageZones`. The adapter first sends that mask
+**disable-first** (unwanted zone OFF, wanted zone ON) while the fixture is dark.
+Then the ordinary HA ON cannot restore a previously lit main light. A staged
+mask makes the wanted zone lit, so the final mask also disables first, removing
+any zone an ON or vendor scene re-enabled one cloud round trip sooner. Staging is
+best effort. If it fails, the baseline and the ordinary enable-first final mask
+still run, and a final failure still ends in local OFF. Whether this H60A6 keeps
+a zone state set while dark is firmware behaviour, still unproven by
+observation.
+
+A platform fixture configured with `staticColor:true` (the H60A6 here) also
+sends the scene's white with a zones-only mask, ahead of the toggles. Without an
+effect, the ring therefore leaves a previous vendor scene and follows the same
+Kelvin as the whole fixture. Effects keep their own colors. The adapter clamps
+every vendor static Kelvin to the target's range, since an API-rejected value
+would otherwise end in the failure OFF.
+
 `lighting.devices[target].govee` exposes requested `intent`, optional session
 `controlId` and `status` (`pending`, `sent`, `failed`). The ID is published only
 while illumination is permitted. `sent` is transport acceptance, **not physical
@@ -193,13 +211,13 @@ an available Govee API; Matter state alone is not proof that an app scene stoppe
 HTTP over the protected Unix socket, with no network listener:
 
 - `GET /capabilities` → `{targets: Record<target,{effects:string[],zones:boolean,colorTemperature?:{min,max}}>}`.
-- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation.
+- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,zoneOrder?:"disable-first",modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation. `zoneOrder` requires `zones`.
 - `POST /cancel` ← `{target,controlId?}` → `{status:"drained"}`.
 
 Capabilities can include optional `staticColor:true`. A color reset uses
 `POST /apply` with `{requestId,target,controlId,staticColor:{colorTemperature:4000}}`
 or `staticColor:{rgb:[r,g,b]}`. The reset cannot contain both color modes, a scene,
-zone mask, power or brightness. Its control ID must match the live static grant,
+power or brightness. It can contain a zone mask, which follows the color. Its control ID must match the live static grant,
 with no Govee effect or external lease and powered desired intent. Delivery
 reports `staticColor:"cloud_accepted"`, not optical confirmation.
 
