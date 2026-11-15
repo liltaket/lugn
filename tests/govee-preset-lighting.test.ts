@@ -471,7 +471,7 @@ it('rejects static white on effects or incapable targets and staging of a whole 
   ).rejects.toThrow('Invalid Govee static reset');
   expect(f.events).toEqual([]);
 });
-function poweredFixture(timeoutMs = 4_000) {
+function poweredFixture(timeoutMs = 4_000, settleMs = 400) {
   const events: string[] = [];
   const bodies: unknown[] = [];
   let listener: ((observation: LightingObservation) => void) | undefined;
@@ -499,12 +499,13 @@ function poweredFixture(timeoutMs = 4_000) {
     client,
     structuredClone(capabilities),
     timeoutMs,
+    settleMs,
   );
   const observe = (power: boolean) =>
     listener!({ target, values: { power }, observedAt: Date.now() });
   return { adapter, client, events, bodies, observe };
 }
-it('holds local Matter ON until the cloud-staged zone reports native ON', async () => {
+it('repeats the mask once natively lit and settles before local Matter ON', async () => {
   const f = poweredFixture();
   const staged = {
     ...ringOnly,
@@ -519,13 +520,26 @@ it('holds local Matter ON until the cloud-staged zone reports native ON', async 
   await new Promise((resolve) => setTimeout(resolve, 30));
   expect(f.events).toHaveLength(2);
   f.observe(true);
+  // The H60A6 ignores a zone OFF while dark; it is repeated once lit.
+  await vi.waitFor(() => expect(f.events).toHaveLength(3));
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  expect(f.events).toHaveLength(3);
   await done;
+  const mask = {
+    requestId: 'c-ring',
+    target,
+    controlId: 'g-ring',
+    zones: { main: false, ring: true },
+    zoneOrder: 'disable-first',
+  };
   expect(f.events).toEqual([
     'cancel:all',
+    'apply',
     'apply',
     'static:{"power":true,"brightness":20,"colorTemperature":2700}',
     'apply',
   ]);
+  expect(f.bodies.slice(0, 3)).toEqual([mask, mask, mask]);
 });
 it('falls back to local Matter ON when staged power is never reported', async () => {
   const f = poweredFixture(40);

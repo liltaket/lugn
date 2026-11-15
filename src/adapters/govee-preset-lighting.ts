@@ -126,6 +126,7 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     private readonly client: GoveeControlClient,
     readonly goveeCapabilities: GoveeCapabilities,
     private readonly stagedPowerTimeoutMs = 4_000,
+    private readonly stagedSettleMs = 1_500,
   ) {
     this.ordinary.subscribe((observation) => {
       if (observation.values.power !== true) return;
@@ -230,19 +231,23 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     // An ON from OFF restores the fixture's own zone state, which can include an
     // unwanted main light. Stage the mask while dark; its wanted-zone toggle powers
     // the fixture. Cloud acceptance precedes delivery, so local Matter ON waits for
-    // the fixture's own ON report. The final mask still follows.
+    // the fixture's own ON report. The H60A6 ignores a zone OFF while dark and a
+    // later Matter level/CT write relights that zone, so the mask is repeated once
+    // lit and given time to arrive. The final mask still follows.
     let staged = false;
     if (intent?.stageZones && intent.zones) {
       const powered = this.waitForPower(command.target, current);
+      const mask = {
+        zones: intent.zones,
+        zoneOrder: 'disable-first' as const,
+      };
       try {
-        await this.applyGuarded(
-          command,
-          intent.controlId,
-          { zones: intent.zones, zoneOrder: 'disable-first' },
-          current,
-        );
+        await this.applyGuarded(command, intent.controlId, mask, current);
         staged = true;
-        await powered.wait;
+        if ((await powered.wait) && current()) {
+          await this.applyGuarded(command, intent.controlId, mask, current);
+          await this.settle(this.stagedSettleMs, current);
+        }
       } catch {
         // Best effort only: baseline and the authoritative final mask still run.
       } finally {
@@ -292,23 +297,38 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
   private waitForPower(
     target: string,
     current: () => boolean,
-  ): { wait: Promise<void>; stop: () => void } {
-    let stop!: () => void;
-    const wait = new Promise<void>((resolve) => {
-      const waiter = { target, resolve: () => stop() };
-      const timer = setTimeout(() => stop(), this.stagedPowerTimeoutMs);
+  ): { wait: Promise<boolean>; stop: () => void } {
+    let finish!: (powered: boolean) => void;
+    const wait = new Promise<boolean>((resolve) => {
+      const waiter = { target, resolve: () => finish(true) };
+      const timer = setTimeout(() => finish(false), this.stagedPowerTimeoutMs);
       const poll = setInterval(() => {
-        if (!current()) stop();
+        if (!current()) finish(false);
       }, 20);
-      stop = () => {
+      finish = (powered) => {
         clearTimeout(timer);
         clearInterval(poll);
         this.powerWaiters.delete(waiter);
-        resolve();
+        resolve(powered);
       };
       this.powerWaiters.add(waiter);
     });
-    return { wait, stop };
+    return { wait, stop: () => finish(false) };
+  }
+
+  /** Waits for delivery after API acceptance; a lost generation ends it early. */
+  private settle(ms: number, current: () => boolean): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(done, ms);
+      const poll = setInterval(() => {
+        if (!current()) done();
+      }, 20);
+      function done() {
+        clearTimeout(timer);
+        clearInterval(poll);
+        resolve();
+      }
+    });
   }
 
   /** Rejects after a requested drain; cancellation never leaves later stale sends. */

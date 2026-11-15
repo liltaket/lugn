@@ -157,6 +157,14 @@ precedes delivery, so the baseline waits for a fresh native ON report (at most
 4 s) before sending its local Matter ON. Without that wait, Matter ON could
 arrive before the cloud's main OFF and light both zones.
 
+An attended test series with Bruno found the cause of the remaining flash. The
+H60A6 ignores a zone OFF while it is dark. Once it is lit by the ring toggle,
+a Matter level/CT write then relights the main light, whether it follows
+immediately, after 2 s or after 6 s. A main OFF sent while the fixture was already
+lit held through later Matter and API white writes. The adapter therefore
+repeats the mask once native ON is reported and waits 1.5 s for delivery before
+the baseline. With that sequence Bruno saw only the ring.
+
 The final mask then also disables first. Staging is best effort. If it fails or
 no ON report arrives, the baseline and final mask still run, and a final failure
 still ends in local OFF.
