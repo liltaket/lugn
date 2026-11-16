@@ -313,7 +313,8 @@ export class LugnEngine {
   /**
    * The zone mask Lugn last delivered to a zoned fixture. Fixtures remember their
    * mask through whole OFF/ON, and a zone ON while lit can relight an OFF zone,
-   * so lit transitions send only the toggles that change. Absent means unknown.
+   * so transitions send only the toggles that change, and an ON from OFF into
+   * the stored mask needs no staging. Absent means unknown.
    */
   private readonly goveeZoneMasks = new Map<
     string,
@@ -4186,10 +4187,6 @@ export class LugnEngine {
         this.adapter.goveeCapabilities?.[target]?.zones &&
         !(knownZones?.main && knownZones.ring),
       );
-      const litZones =
-        this.requireDevice(target).observed.power === true
-          ? knownZones
-          : undefined;
       if (govee?.intent.zones || restoreZones)
         this.goveeZoneMasks.delete(target);
       // Consume the forced transition before synchronous adapter feedback can
@@ -4229,8 +4226,8 @@ export class LugnEngine {
                     ? { staticColor: this.goveeStaticColor(target, values) }
                     : {}),
                   ...(goveeStageZones ? { stageZones: true as const } : {}),
-                  ...(govee.intent.zones && litZones
-                    ? { knownZones: { ...litZones } }
+                  ...(govee.intent.zones && knownZones
+                    ? { knownZones: { ...knownZones } }
                     : {}),
                   controlId: govee.controlId!,
                 },

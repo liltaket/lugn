@@ -364,7 +364,9 @@ function staticFixture() {
   });
   return { ...f, bodies };
 }
-it('stages a ring-only mask while dark, then sends clamped white with an enable-first final mask', async () => {
+const dim = 'static:{"power":true,"brightness":1,"colorTemperature":2700}';
+const scene = 'static:{"power":true,"brightness":20,"colorTemperature":2700}';
+it('lights a dark fixture dimly before the scene when its stored mask is unknown', async () => {
   const f = staticFixture();
   await f.adapter.dispatch({
     ...ringOnly,
@@ -374,68 +376,36 @@ it('stages a ring-only mask while dark, then sends clamped white with an enable-
       staticColor: { colorTemperature: 2200 },
     },
   });
-  expect(f.events).toEqual([
-    'cancel:all',
-    'apply',
-    'static:{"power":true,"brightness":20,"colorTemperature":2700}',
-    'apply',
-  ]);
-  const base = { requestId: 'c-ring', target, controlId: 'g-ring' };
+  // This fake never reports native ON, so the mask falls back to the final apply.
+  expect(f.events).toEqual(['cancel:all', dim, scene, 'apply']);
   expect(f.bodies).toEqual([
     {
-      ...base,
-      zones: { main: false, ring: true },
-      zoneOrder: 'disable-first',
-    },
-    {
-      ...base,
-      // A zone ON after the OFF would let the next Matter write relight main.
+      requestId: 'c-ring',
+      target,
+      controlId: 'g-ring',
       zones: { main: false, ring: true },
       // The vendor API rejects out-of-range Kelvin; clamping keeps the lamp lit.
       staticColor: { colorTemperature: 2700 },
     },
   ]);
 });
-it('continues to the baseline and the enable-first final mask when staging fails', async () => {
-  const f = staticFixture();
-  let calls = 0;
-  vi.spyOn(f.client, 'apply').mockImplementation(async (body) => {
-    f.bodies.push(body);
-    f.events.push('apply');
-    if (++calls === 1) throw new Error('cloud unavailable');
-  });
-  await f.adapter.dispatch({
-    ...ringOnly,
-    govee: { ...ringOnly.govee!, stageZones: true },
-  });
-  expect(f.events).toEqual([
-    'cancel:all',
-    'apply',
-    'cancel:g-ring',
-    'static:{"power":true,"brightness":20,"colorTemperature":2700}',
-    'apply',
-  ]);
-  expect(f.bodies[1]).toEqual({
-    requestId: 'c-ring',
-    target,
-    controlId: 'g-ring',
-    zones: { main: false, ring: true },
-  });
-});
 it('stops before the baseline when staging outlives its generation', async () => {
   const f = staticFixture();
   let live = true;
-  vi.spyOn(f.client, 'apply').mockImplementation(async () => {
-    f.events.push('apply');
-    live = false;
-  });
+  const dispatch = f.adapter['ordinary'].dispatch;
+  vi.spyOn(f.adapter['ordinary'], 'dispatch').mockImplementation(
+    async (command) => {
+      await dispatch(command);
+      live = false;
+    },
+  );
   await f.adapter.dispatch({
     ...ringOnly,
     isCurrent: () => live,
     govee: { ...ringOnly.govee!, stageZones: true },
   });
-  expect(f.events).toEqual(['cancel:all', 'apply', 'cancel:g-ring']);
-  expect(f.writes).toHaveLength(0);
+  expect(f.events).toEqual(['cancel:all', dim]);
+  expect(f.bodies).toEqual([]);
 });
 it('rejects static white on effects or incapable targets and staging of a whole mask', async () => {
   const f = fixture();
@@ -505,61 +475,126 @@ function poweredFixture(timeoutMs = 4_000, settleMs = 400) {
     listener!({ target, values: { power }, observedAt: Date.now() });
   return { adapter, client, events, bodies, observe };
 }
-it('repeats only the unwanted OFF once natively lit and settles before local Matter ON', async () => {
+it('masks a dimly lit fixture once natively ON and settles before the scene', async () => {
   const f = poweredFixture();
-  const staged = {
+  const done = f.adapter.dispatch({
     ...ringOnly,
-    govee: { ...ringOnly.govee!, stageZones: true as const },
-  };
-  const done = f.adapter.dispatch(staged);
-  await vi.waitFor(() => expect(f.events).toEqual(['cancel:all', 'apply']));
+    govee: {
+      ...ringOnly.govee!,
+      stageZones: true as const,
+      knownZones: { main: true, ring: true },
+    },
+  });
+  await vi.waitFor(() => expect(f.events).toEqual(['cancel:all', dim]));
   await new Promise((resolve) => setTimeout(resolve, 60));
-  // Cloud acceptance alone must not release the baseline.
-  expect(f.events).toEqual(['cancel:all', 'apply']);
+  // HA acceptance alone must not release the mask: the H60A6 ignores it while dark.
+  expect(f.events).toEqual(['cancel:all', dim]);
   f.observe(false);
   await new Promise((resolve) => setTimeout(resolve, 30));
   expect(f.events).toHaveLength(2);
   f.observe(true);
-  // The H60A6 ignores a zone OFF while dark; it is repeated once lit.
   await vi.waitFor(() => expect(f.events).toHaveLength(3));
   await new Promise((resolve) => setTimeout(resolve, 40));
   expect(f.events).toHaveLength(3);
   await done;
-  const mask = {
-    requestId: 'c-ring',
-    target,
-    controlId: 'g-ring',
-    zones: { main: false, ring: true },
-  };
-  expect(f.events).toEqual([
-    'cancel:all',
-    'apply',
-    'apply',
-    'static:{"power":true,"brightness":20,"colorTemperature":2700}',
-  ]);
-  // Dark staging disables first. Once lit, only the unwanted OFF is repeated: a
-  // ring ON while lit would relight the main light, so no later toggle follows.
+  expect(f.events).toEqual(['cancel:all', dim, 'apply', scene]);
+  // The stored mask already has the ring: only the main OFF is sent. A ring
+  // ON while lit would relight the main light, so no later toggle follows.
   expect(f.bodies).toEqual([
-    { ...mask, zoneOrder: 'disable-first' },
-    { ...mask, zoneOrder: 'disable-only' },
+    {
+      requestId: 'c-ring',
+      target,
+      controlId: 'g-ring',
+      zones: { main: false, ring: true },
+      zoneOrder: 'disable-only',
+    },
   ]);
 });
-it('falls back to local Matter ON when staged power is never reported', async () => {
+it('sends the full mask once lit when the stored mask is unknown', async () => {
+  const f = poweredFixture();
+  const done = f.adapter.dispatch({
+    ...ringOnly,
+    govee: { ...ringOnly.govee!, stageZones: true },
+  });
+  await vi.waitFor(() => expect(f.events).toEqual(['cancel:all', dim]));
+  f.observe(true);
+  await done;
+  expect(f.events).toEqual(['cancel:all', dim, 'apply', scene]);
+  expect(f.bodies).toEqual([
+    {
+      requestId: 'c-ring',
+      target,
+      controlId: 'g-ring',
+      zones: { main: false, ring: true },
+    },
+  ]);
+});
+it('continues to the scene and the final mask when the lit mask fails', async () => {
+  const f = poweredFixture();
+  let calls = 0;
+  vi.spyOn(f.client, 'apply').mockImplementation(async (body) => {
+    f.bodies.push(body);
+    f.events.push('apply');
+    if (++calls === 1) throw new Error('cloud unavailable');
+  });
+  const done = f.adapter.dispatch({
+    ...ringOnly,
+    govee: { ...ringOnly.govee!, stageZones: true },
+  });
+  await vi.waitFor(() => expect(f.events).toEqual(['cancel:all', dim]));
+  f.observe(true);
+  await done;
+  expect(f.events).toEqual([
+    'cancel:all',
+    dim,
+    'apply',
+    'cancel:g-ring',
+    scene,
+    'apply',
+  ]);
+  expect(f.bodies[1]).toEqual(f.bodies[0]);
+});
+it('lights straight into a stored mask that already matches', async () => {
+  const f = staticFixture();
+  await f.adapter.dispatch({
+    ...ringOnly,
+    govee: {
+      ...ringOnly.govee!,
+      stageZones: true,
+      knownZones: { main: false, ring: true },
+      staticColor: { colorTemperature: 2700 },
+    },
+  });
+  // The fixture restores its own ring-only mask; the OFF is only a safety net.
+  expect(f.events).toEqual(['cancel:all', scene, 'apply']);
+  expect(f.bodies).toEqual([
+    {
+      requestId: 'c-ring',
+      target,
+      controlId: 'g-ring',
+      zones: { main: false, ring: true },
+      zoneOrder: 'disable-only',
+      staticColor: { colorTemperature: 2700 },
+    },
+  ]);
+});
+it('falls back to the scene when dim power is never reported', async () => {
   const f = poweredFixture(40);
   await f.adapter.dispatch({
     ...ringOnly,
     govee: { ...ringOnly.govee!, stageZones: true },
   });
-  expect(f.events).toEqual([
-    'cancel:all',
-    'apply',
-    'static:{"power":true,"brightness":20,"colorTemperature":2700}',
-    'apply',
-  ]);
+  expect(f.events).toEqual(['cancel:all', dim, scene, 'apply']);
 });
-it('restores both zones with an ordinary white reset after a partial mask', async () => {
+it('restores both zones alongside the baseline, then sends the white', async () => {
   const f = staticFixture();
-  await f.adapter.dispatch({
+  const gate = deferred();
+  vi.spyOn(f.client, 'apply').mockImplementation(async (body) => {
+    f.bodies.push(body);
+    f.events.push('apply');
+    if (f.bodies.length === 1) await gate.promise;
+  });
+  const done = f.adapter.dispatch({
     id: 'c-white',
     target,
     isCurrent: () => true,
@@ -570,15 +605,38 @@ it('restores both zones with an ordinary white reset after a partial mask', asyn
       zones: { main: true, ring: true },
     },
   });
+  const white =
+    'static:{"power":true,"brightness":100,"colorTemperature":4000}';
+  // The main ON does not wait for the local baseline, nor the baseline for it.
+  await vi.waitFor(() =>
+    expect(f.events).toEqual(['cancel:all', 'apply', white]),
+  );
+  gate.resolve();
+  await done;
+  const base = { requestId: 'c-white', target, controlId: 's1' };
+  expect(f.events).toEqual(['cancel:all', 'apply', white, 'apply']);
   expect(f.bodies).toEqual([
-    {
-      requestId: 'c-white',
-      target,
-      controlId: 's1',
-      zones: { main: true, ring: true },
-      staticColor: { colorTemperature: 4000 },
-    },
+    { ...base, zones: { main: true, ring: true } },
+    { ...base, staticColor: { colorTemperature: 4000 } },
   ]);
+});
+it('surfaces a failed restore without switching the fixture off', async () => {
+  const f = staticFixture();
+  vi.spyOn(f.client, 'apply').mockRejectedValueOnce(new Error('cloud down'));
+  await expect(
+    f.adapter.dispatch({
+      id: 'c-white',
+      target,
+      isCurrent: () => true,
+      values: { power: true, brightness: 100, colorTemperature: 4000 },
+      goveeStatic: {
+        controlId: 's1',
+        color: { colorTemperature: 4000 },
+        zones: { main: true, ring: true },
+      },
+    }),
+  ).rejects.toThrow('cloud down');
+  expect(f.writes.map((write) => write.values.power)).toEqual([true]);
 });
 it('sends only changed toggles for a lit fixture with a known mask', async () => {
   const f = staticFixture();

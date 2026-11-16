@@ -230,27 +230,51 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
       color.colorTemperature === undefined
         ? color
         : { colorTemperature: kelvin(color.colorTemperature) };
-    // An ON from OFF restores the fixture's own zone state, which can include an
-    // unwanted main light. Stage the mask while dark; its wanted-zone toggle powers
-    // the fixture. Cloud acceptance precedes delivery, so local Matter ON waits for
-    // the fixture's own ON report. The H60A6 ignores a zone OFF while dark, and a
-    // zone ON while lit relights an OFF zone. Once lit, only the unwanted zone's
-    // OFF is repeated and given time to arrive; no later toggle is sent.
+    // An ON from OFF restores the fixture's stored zone mask, which persists
+    // through whole OFF/ON. The H60A6 ignores zone toggles while dark, so a mask
+    // that differs from the stored one can only change once lit. A known matching
+    // mask needs no staging. Otherwise the fixture is lit at 1 % first, so the
+    // unwanted zone is barely visible, then masked once its own ON report
+    // arrives. Cloud acceptance precedes delivery, so the mask gets time to
+    // arrive before the scene brightness. A zone ON while lit relights an OFF
+    // zone, so no toggle follows the mask.
+    const known = intent?.knownZones;
+    const covers = (
+      mask: { main: boolean; ring: boolean },
+      lit?: { main: boolean; ring: boolean },
+    ) => Boolean(lit && (!mask.main || lit.main) && (!mask.ring || lit.ring));
     let stagedLit = false;
-    if (intent?.stageZones && intent.zones) {
+    if (
+      intent?.stageZones &&
+      intent.zones &&
+      !(
+        known &&
+        known.main === intent.zones.main &&
+        known.ring === intent.zones.ring
+      )
+    ) {
       const powered = this.waitForPower(command.target, current);
       try {
-        await this.applyGuarded(
-          command,
-          intent.controlId,
-          { zones: intent.zones, zoneOrder: 'disable-first' },
-          current,
-        );
+        await this.ordinary.dispatch({
+          id: command.id,
+          target: command.target,
+          values: {
+            power: true,
+            brightness: 1,
+            ...(values.rgb
+              ? { rgb: values.rgb }
+              : values.colorTemperature !== undefined
+                ? { colorTemperature: values.colorTemperature }
+                : {}),
+          },
+        });
         if ((await powered.wait) && current()) {
           await this.applyGuarded(
             command,
             intent.controlId,
-            { zones: intent.zones, zoneOrder: 'disable-only' },
+            covers(intent.zones, known)
+              ? { zones: intent.zones, zoneOrder: 'disable-only' }
+              : { zones: intent.zones },
             current,
           );
           stagedLit = true;
@@ -263,24 +287,48 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
       }
       if (!current()) return;
     }
-    if (!command.goveeOnly)
-      await this.ordinary.dispatch({
-        id: command.id,
-        target: command.target,
-        values,
-      });
+    // Restoring both zones does not depend on the baseline: on a lit fixture
+    // the main ON lights at once, so it is sent alongside the local write.
+    const restore =
+      staticReset?.zones && !command.goveeOnly
+        ? this.applyGuarded(
+            command,
+            staticReset.controlId,
+            { zones: staticReset.zones },
+            current,
+          )
+        : undefined;
+    restore?.catch(() => undefined);
+    if (!command.goveeOnly) {
+      try {
+        await this.ordinary.dispatch({
+          id: command.id,
+          target: command.target,
+          values,
+        });
+      } catch (error) {
+        await restore?.catch(() => undefined);
+        throw error;
+      }
+    }
+    try {
+      await restore;
+    } catch (error) {
+      if (!current()) return;
+      // Both zones were wanted; a failed restore leaves no unwanted zone lit.
+      throw error;
+    }
     if (!current() || (!intent && !staticReset) || values.power === false)
       return;
     const controlId = (intent ?? staticReset)!.controlId;
     const color = intent?.staticColor ?? staticReset?.color;
-    const zones = intent?.zones ?? staticReset?.zones;
-    const known = intent?.knownZones;
+    const zones = restore ? undefined : (intent?.zones ?? staticReset?.zones);
     // Wanted zones already lit get no ON toggle: on the H60A6 it would relight
     // an OFF zone. Unknown or dark zones still use the enable-first mask.
     const zoneBody =
       !zones || stagedLit
         ? {}
-        : known && (!zones.main || known.main) && (!zones.ring || known.ring)
+        : covers(zones, known)
           ? zones.main && zones.ring
             ? {}
             : { zones, zoneOrder: 'disable-only' as const }

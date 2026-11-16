@@ -685,19 +685,18 @@ export async function startGoveePlatformBridge(
       const info = device && metadata.get(device.id);
       if (!device || !info) throw new Error('Platform target unavailable');
       const controls: PlatformControl[] = [];
+      let staticControl: PlatformControl | undefined;
       if (command.staticColor) {
         if (!platformStaticColor(device) || command.effect !== undefined)
           throw new Error('Unsupported vendor static color');
         const color = command.staticColor;
-        controls.push(
-          platformControl(
-            info,
-            'devices.capabilities.color_setting',
-            color.rgb ? 'colorRgb' : 'colorTemperatureK',
-            color.rgb
-              ? (color.rgb[0] << 16) | (color.rgb[1] << 8) | color.rgb[2]
-              : color.colorTemperature,
-          ),
+        staticControl = platformControl(
+          info,
+          'devices.capabilities.color_setting',
+          color.rgb ? 'colorRgb' : 'colorTemperatureK',
+          color.rgb
+            ? (color.rgb[0] << 16) | (color.rgb[1] << 8) | color.rgb[2]
+            : color.colorTemperature,
         );
       }
       if (command.effect !== undefined) {
@@ -718,6 +717,9 @@ export async function startGoveePlatformBridge(
           ),
         );
       }
+      // Toggles first: the zone change is what is seen, and on the H60A6 a white
+      // after a lit main OFF keeps the main light dark.
+      if (staticControl) controls.push(staticControl);
       if (!controls.length) throw new Error('Empty platform preset');
       if (command.modeOnly) {
         // Periodic work is not a fresh human ON request. Fail closed if a

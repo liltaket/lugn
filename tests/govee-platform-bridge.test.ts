@@ -376,7 +376,7 @@ describe('cloud zone controls and discovery', () => {
       await stop();
     }
   });
-  it('sends opted-in ceiling white before its staged mask, and never with an effect', async () => {
+  it('sends opted-in ceiling white after its mask toggles, and never with an effect', async () => {
     const client = new FakeClient();
     let preset!: GoveePresetControls;
     const info = {
@@ -446,11 +446,6 @@ describe('cloud zone controls and discovery', () => {
       );
       expect(platform.control.mock.calls.map((c) => c[1])).toEqual([
         {
-          type: 'devices.capabilities.color_setting',
-          instance: 'colorTemperatureK',
-          value: 3000,
-        },
-        {
           type: toggle('mainLightToggle').type,
           instance: 'mainLightToggle',
           value: 0,
@@ -459,6 +454,11 @@ describe('cloud zone controls and discovery', () => {
           type: toggle('backgroundLightToggle').type,
           instance: 'backgroundLightToggle',
           value: 1,
+        },
+        {
+          type: 'devices.capabilities.color_setting',
+          instance: 'colorTemperatureK',
+          value: 3000,
         },
       ]);
       await expect(

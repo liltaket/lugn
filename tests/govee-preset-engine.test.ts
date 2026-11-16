@@ -170,7 +170,12 @@ describe('Govee scene intent in the lighting engine', () => {
     const effect = adapter.dispatched
       .filter((entry) => entry.target === ceiling)
       .at(-1)!;
-    expect(effect.govee).toMatchObject({ effect: 'Aurora', stageZones: true });
+    // The fixture keeps its mask through OFF, so the dark ON carries it too.
+    expect(effect.govee).toMatchObject({
+      effect: 'Aurora',
+      stageZones: true,
+      knownZones: { main: false, ring: true },
+    });
     // The vendor scene supplies its own colors.
     expect(effect.govee?.staticColor).toBeUndefined();
   });

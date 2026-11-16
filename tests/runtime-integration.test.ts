@@ -1331,10 +1331,11 @@ it.each([true, false])(
       }
       expect(runtime.engine.goveeCapabilities).toEqual(capabilities);
       await runtime.engine.activateScene('scene.govee_test', { type: 'user' });
-      // The fixture reports OFF, so the ring-only mask is staged before HA ON.
+      // The fixture reports OFF with an unknown stored mask: it is lit dimly
+      // through HA first, masked once lit, then raised to the scene.
       expect(events.slice(0, 4)).toEqual([
         'drained',
-        'apply',
+        'static',
         'static',
         'apply',
       ]);
