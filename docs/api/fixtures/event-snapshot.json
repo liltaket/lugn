@@ -1,0 +1,257 @@
+{
+  "apiVersion": 1,
+  "instanceId": "f1x7e5a3c0de",
+  "revision": 5,
+  "generatedAt": 1794853801000,
+  "presence": {
+    "state": "occupied",
+    "personCount": 1,
+    "exitPending": null,
+    "continuityExpiresAt": null,
+    "home": {
+      "state": "home",
+      "observedAt": 1794853800000
+    }
+  },
+  "session": {
+    "state": "active",
+    "startedAt": 1794853800000,
+    "expiresAt": null
+  },
+  "lighting": {
+    "currentSceneId": null,
+    "sceneRevision": 0,
+    "scenes": [
+      {
+        "id": "scene.cozy",
+        "name": "Cozy",
+        "icon": null,
+        "canEdit": true,
+        "allOff": false
+      },
+      {
+        "id": "scene.movie",
+        "name": "Movie",
+        "icon": null,
+        "canEdit": true,
+        "allOff": false
+      },
+      {
+        "id": "scene.all_off",
+        "name": "Helt släckt",
+        "icon": "power",
+        "canEdit": false,
+        "allOff": true
+      },
+      {
+        "id": "scene.everyday_light",
+        "name": "Vardagsljus",
+        "icon": "sun",
+        "canEdit": true,
+        "allOff": false
+      },
+      {
+        "id": "scene.soft_light",
+        "name": "Mysljus",
+        "icon": "moon",
+        "canEdit": true,
+        "allOff": false
+      },
+      {
+        "id": "scene.focus_light",
+        "name": "Fokus",
+        "icon": "desk-lamp",
+        "canEdit": true,
+        "allOff": false
+      },
+      {
+        "id": "scene.movie_light",
+        "name": "Filmkväll",
+        "icon": "film",
+        "canEdit": true,
+        "allOff": false
+      }
+    ],
+    "lights": [
+      {
+        "id": "lighting.bed",
+        "name": "Bed",
+        "availability": "available",
+        "observed": {
+          "power": null,
+          "brightness": null,
+          "colorTemperature": null,
+          "rgb": null
+        },
+        "intent": {
+          "power": null,
+          "brightness": null,
+          "colorTemperature": null,
+          "rgb": null
+        },
+        "matchesIntent": null,
+        "overridden": [],
+        "externalControl": false
+      },
+      {
+        "id": "lighting.ceiling",
+        "name": "Ceiling",
+        "availability": "available",
+        "observed": {
+          "power": null,
+          "brightness": null,
+          "colorTemperature": null,
+          "rgb": null
+        },
+        "intent": {
+          "power": null,
+          "brightness": null,
+          "colorTemperature": null,
+          "rgb": null
+        },
+        "matchesIntent": null,
+        "overridden": [],
+        "externalControl": false
+      },
+      {
+        "id": "lighting.desk",
+        "name": "Desk",
+        "availability": "available",
+        "observed": {
+          "power": null,
+          "brightness": null,
+          "colorTemperature": null,
+          "rgb": null
+        },
+        "intent": {
+          "power": null,
+          "brightness": null,
+          "colorTemperature": null,
+          "rgb": null
+        },
+        "matchesIntent": null,
+        "overridden": [],
+        "externalControl": false
+      }
+    ]
+  },
+  "music": {
+    "targets": [
+      {
+        "id": "music.room",
+        "availability": "available",
+        "observedAt": 1794853800000,
+        "observed": {
+          "playback": "playing",
+          "volume": 0.24,
+          "source": "Spotify",
+          "title": "Exempelspår",
+          "artist": "Exempelartist",
+          "album": null
+        },
+        "allowedSources": [
+          "Spotify",
+          "Optical"
+        ],
+        "presets": [
+          "spotify_dj",
+          "optical"
+        ],
+        "volume": {
+          "controller": "lugn",
+          "mode": "auto",
+          "policyEnabled": true,
+          "policyActive": true,
+          "activityReason": "active",
+          "target": 0.3,
+          "effectiveTarget": 0.3
+        },
+        "playback": {
+          "activityReason": "awaiting_new_entry",
+          "quietHours": false,
+          "manualPause": false,
+          "entryEligible": false,
+          "resumeExpiresAt": null
+        },
+        "fade": null
+      }
+    ]
+  },
+  "routines": {
+    "generation": "5ce39ba3-e927-445a-98bd-5fb0e8e37085",
+    "next": [],
+    "running": [],
+    "bedtime": {
+      "nightAvailable": false,
+      "morningAvailable": false,
+      "musicAvailable": true,
+      "plan": null,
+      "ready": null
+    }
+  },
+  "environment": {
+    "temperature": {
+      "value": 21.4,
+      "unit": "°C",
+      "observedAt": 1794853800000
+    },
+    "humidity": {
+      "value": 38,
+      "unit": "%",
+      "observedAt": 1794853800000
+    },
+    "co2": {
+      "value": 612,
+      "unit": "ppm",
+      "observedAt": 1794853800000
+    },
+    "pm25": {
+      "value": null,
+      "unit": "µg/m³",
+      "observedAt": null
+    }
+  },
+  "suggestions": [],
+  "computer": [],
+  "health": {
+    "status": "ok",
+    "integrations": {
+      "home_assistant": "connected",
+      "mqtt": "connected"
+    }
+  },
+  "why": [
+    {
+      "id": "m1794853800000-music.room-playback",
+      "at": 1794853800000,
+      "domain": "music",
+      "outcome": "skipped",
+      "text": "Startar musik vid nästa nya entré",
+      "trigger": null,
+      "conditions": [
+        "music.room",
+        "awaiting_new_entry"
+      ]
+    },
+    {
+      "id": "d2",
+      "at": 1794853800000,
+      "domain": "presence",
+      "outcome": "acted",
+      "text": "Tände: någon kom in",
+      "trigger": "Närvarosensor",
+      "conditions": [
+        "Sensorn bekräftade upptaget rum"
+      ]
+    },
+    {
+      "id": "d0",
+      "at": 1794853800000,
+      "domain": "home",
+      "outcome": "observed",
+      "text": "Hemma enligt Home Assistant",
+      "trigger": "Home Assistant",
+      "conditions": []
+    }
+  ]
+}

@@ -72,3 +72,126 @@ paired phone runs as a human actor `{ type: "user", id: "mobile:<deviceId>" }`
 with `source: "lugn.mobile"`, so manual-override rules treat a phone tap like
 any other explicit human action. Phone observations are never actor
 commands; they are hints with their own provenance (see below).
+
+## State: `GET /api/v1/state`
+
+Returns a `StateView`: a compact DTO built for the app, not the engine's
+internal `RoomState`. It never contains command ledgers, raw diagnostics or
+timings. Top-level sections:
+
+| Section       | Contents                                                                                                                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `presence`    | `occupied` / `confirmed_empty` / `unknown` from the LiDAR sensor, `personCount` (null when unknown), `exitPending` countdown, continuity deadline and Home Assistant `home` / `away` / `unknown`. |
+| `session`     | Room session `active` / `suspended` / `ended` / `none`.                                                                                                                                           |
+| `lighting`    | Scenes (`id`, `name`, semantic `icon`, `canEdit`, `allOff`), the current scene, and per light `observed` versus `intent`, `matchesIntent`, `overridden` properties and availability.              |
+| `music`       | Per player: observed playback/volume/source/track, allowed sources, presets, volume authority (`controller` you/lugn, `mode`, targets) and playback policy (`quietHours`, `manualPause`).         |
+| `routines`    | Next runs with names, running routines and the Godnatt/God morgon plan. `generation` is needed for bedtime commands.                                                                              |
+| `environment` | Temperature, humidity, CO₂ and PM2.5 with `observedAt` (null values when unavailable).                                                                                                            |
+| `suggestions` | Active computer-context suggestions. They only suggest; nothing is applied without a command.                                                                                                     |
+| `computer`    | Desktop availability, freshness and activity summary.                                                                                                                                             |
+| `health`      | Integration status.                                                                                                                                                                               |
+| `why`         | Up to 30 newest plain-Swedish explanations, see below.                                                                                                                                            |
+
+Rules the app must keep:
+
+- `presence.state: "unknown"` is not empty and not occupied. Show it as
+  unknown. `home.state: "unknown"` is not away.
+- `lighting.lights[].intent` is Lugn's remembered effective intent. While the
+  room is confirmed empty the lights are physically off but intent is kept,
+  so `matchesIntent` can be false; that is expected.
+- `name` on lights is derived from the semantic id. Lugn has no friendly light
+  names; the app may map ids to its own labels.
+- `music.targets[].playback.quietHours` is true from 23:00 to 06:00
+  (Europe/Stockholm). Automatic playback never starts or resumes then; an
+  explicit `music.play` from the phone is still a manual action.
+
+### The `why` feed
+
+Each entry has `text` (for example `Släckte: rummet är tomt` or
+`Förtände inte: du är borta enligt Home Assistant`), `outcome` (`acted`,
+`skipped`, `observed`, `failed`), `domain`, `trigger` (`Närvarosensor`,
+`Telefon`, `Hub`, `Kontrollpanel`, `Rutin`, `Knapp`, `Home Assistant`,
+`Manuellt` or null) and `conditions`. It is derived from the engine's existing
+diagnostic ledger and music policy decisions, so it is bounded to what those
+ledgers keep (the latest 256 diagnostics, 128 music decisions) and resets on
+restart. `skipped` entries explain deliberate non-actions where Lugn already
+records them: prelight suppression, away blocking, unknown presence, quiet
+hours, manual pause and manual volume.
+
+## Commands: `POST /api/v1/commands`
+
+```json
+{
+  "requestId": "3c1f6a2e-0d4b-4e8a-9f7c-2a1b3c4d5e6f",
+  "command": "lighting.activateScene",
+  "input": { "sceneId": "scene.soft_light" },
+  "reason": "optional, ≤200 chars"
+}
+```
+
+- `requestId` is a client UUID. Retrying with the same id and identical body
+  returns the stored answer with `replayed: true` and does not act twice
+  (per device, 24 hours, last 256 ids, in memory). The same id with a
+  different body returns `409 request_id_conflict`. A failed command is not
+  stored; retrying it runs it again.
+- `status: "accepted"` means Lugn took the intent. Physical confirmation
+  arrives through state (`matchesIntent`, music `observed`). `confirmed` is
+  returned only when the capability itself already observed feedback.
+- Commands map to the existing capability registry; the phone cannot reach
+  sensor configuration, presence feedback settings or the Govee bridge
+  controls. `input` per command is in the OpenAPI document under
+  `CommandInput.<command>` (`x-lugn-command-inputs`).
+- `routines.bedtime`, `routines.action` and `suggestions.respond` use the same
+  validated routes as the Hub and the panel. Bedtime needs
+  `routines.generation` as `expectedGeneration` and its own `requestId`.
+- Errors: `400 invalid_command_input`, `404 target_not_configured` /
+  `scene_not_found`, `409` for policy refusals with the capability's code,
+  `502 command_failed`.
+
+## Events: `GET /api/v1/events`
+
+Server-sent events with bearer authentication:
+
+```text
+retry: 5000
+
+event: snapshot
+id: f1x7e5a3c0de-7
+data: {StateView}
+
+event: patch
+id: f1x7e5a3c0de-18
+data: {"instanceId":"…","revision":18,"generatedAt":…,"sections":{"lighting":{…}}}
+
+event: heartbeat
+data: {"instanceId":"…","revision":18,"serverTime":…}
+```
+
+- A `patch` replaces each listed section wholesale; sections not listed are
+  unchanged. There are no field-level diffs.
+- Event ids are `<instanceId>-<revision>`. Reconnect with `Last-Event-ID`
+  (or `?lastEventId=` when the header cannot be set). If the instance matches
+  and the revision is still in the engine's 128-update history, the first
+  event is a `patch` with every section that may have changed, plus
+  `routines`, `environment`, `suggestions`, `health` and `music`, which change
+  outside the engine revision. Otherwise the first event is a fresh
+  `snapshot`. A new `instanceId` always means a server restart.
+- Several events can share an id because routine, suggestion and clock-driven
+  changes do not advance the engine revision. Resume stays correct because
+  those sections are always resent.
+- Heartbeats every 15 s carry no id. Treat 45 s of silence as a dead stream.
+  Streams end after 30 minutes; reconnect with `Last-Event-ID`.
+- At most two streams per device: a third replaces the oldest. A slow client
+  skips patches and receives a full `snapshot` once its socket drains.
+- Use the stream only while the app is in the foreground. In the background,
+  rely on `GET /api/v1/state` when the app wakes. There is no push channel
+  yet; APNs can be added later as an additional channel without changing this
+  contract.
+
+## Fixtures
+
+`docs/api/fixtures/` holds example payloads generated by the real engine,
+view builder, registry and HTTP listener with simulated devices
+(`npm run api:generate`). Tokens are redacted; ids, session UUIDs and
+generations differ per run. A test validates every fixture against the
+schemas. Copy them into the app's test fixtures.

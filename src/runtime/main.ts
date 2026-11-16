@@ -67,6 +67,8 @@ import { ScenePresetStore } from './scene-preset-store.js';
 import { LugnHttpServer } from './http-server.js';
 import { DeviceRegistry } from './device-registry.js';
 import { LugnDeviceServer } from './device-server.js';
+import { DeviceCommandService } from './device-commands.js';
+import { randomBytes } from 'node:crypto';
 import {
   MqttJsSubscriber,
   type MqttSubscriberConfig,
@@ -770,6 +772,13 @@ export async function startRuntime(
       })
     : undefined;
   await deviceRegistry?.load();
+  const integrations = (): Record<string, string> => ({
+    home_assistant: homeAssistantSocket.status,
+    ...(goveeLighting
+      ? { govee: goveeConnected ? 'connected' : 'disconnected' }
+      : {}),
+    mqtt: mqttSubscriber?.status ?? 'not_configured',
+  });
   const http = new LugnHttpServer({
     ...config.http,
     engine,
@@ -783,13 +792,7 @@ export async function startRuntime(
     experience,
     musicObservationTrustProvider: musicObservationTrust,
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),
-    integrations: () => ({
-      home_assistant: homeAssistantSocket.status,
-      ...(goveeLighting
-        ? { govee: goveeConnected ? 'connected' : 'disconnected' }
-        : {}),
-      mqtt: mqttSubscriber?.status ?? 'not_configured',
-    }),
+    integrations,
   });
   const displayRefs: {
     castManager: DashCastManager | undefined;
@@ -875,6 +878,25 @@ export async function startRuntime(
           port: config.device.port,
           allowedHosts: config.device.allowedHosts,
           registry: deviceRegistry,
+          room: {
+            sources: {
+              engine,
+              instanceId: randomBytes(6).toString('hex'),
+              now: () => Date.now(),
+              integrations,
+              scenePresetsEditable: true,
+              experience,
+              environment: () => homeAssistantEnvironment.snapshot(),
+            },
+            stream: engine.stream,
+            subscribeAuxiliary: [(listener) => experience.subscribe(listener)],
+            commands: new DeviceCommandService({
+              capabilities,
+              experience,
+              revision: () => engine.state.revision,
+              clock: systemClock,
+            }),
+          },
         })
       : undefined;
 

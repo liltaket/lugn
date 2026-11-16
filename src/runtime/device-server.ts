@@ -18,8 +18,22 @@ import {
   type DeviceRegistry,
 } from './device-registry.js';
 import { TokenBucketLimiter } from './rate-limiter.js';
+import {
+  buildStateView,
+  type StateViewSources,
+} from '../application/state-view.js';
+import type { StateEventStream } from '../core/event-stream.js';
+import type { DeviceCommandService } from './device-commands.js';
+import { DeviceEventHub } from './device-events.js';
+import {
+  DeviceRequestError,
+  readJsonBody,
+  safeIssues,
+  sendJson,
+} from './device-http.js';
 
 const PAIR_MAX_BYTES = 2 * 1024;
+const COMMAND_MAX_BYTES = 16 * 1024;
 
 export type LugnDeviceServerOptions = {
   host: string;
@@ -28,6 +42,13 @@ export type LugnDeviceServerOptions = {
   allowedHosts: readonly string[];
   registry: DeviceRegistry;
   clock?: Clock;
+  /** State, commands and events; absent only in auth-focused tests. */
+  room?: {
+    sources: StateViewSources;
+    stream: Pick<StateEventStream, 'subscribe' | 'resume'>;
+    subscribeAuxiliary?: Array<(listener: () => void) => () => void>;
+    commands: DeviceCommandService;
+  };
 };
 
 type Route = {
@@ -61,6 +82,8 @@ export class LugnDeviceServer {
   private readonly routes: Route[] = [];
   private readonly anonymousLimiter: TokenBucketLimiter;
   private readonly limiters: Record<Route['limit'], TokenBucketLimiter>;
+  private readonly events: DeviceEventHub | undefined;
+  private unsubscribeRegistry: (() => void) | undefined;
 
   constructor(private readonly options: LugnDeviceServerOptions) {
     this.clock = options.clock ?? systemClock;
@@ -122,10 +145,57 @@ export class LugnDeviceServer {
         sendJson(response, 200, body);
       },
     });
+    if (options.room) {
+      this.events = new DeviceEventHub({
+        sources: options.room.sources,
+        stream: options.room.stream,
+        ...(options.room.subscribeAuxiliary
+          ? { subscribeAuxiliary: options.room.subscribeAuxiliary }
+          : {}),
+        clock: this.clock,
+      });
+      this.registerRoomRoutes(options.room);
+    }
   }
 
-  /** Additional milestones register their routes here before start(). */
-  route(route: Route): void {
+  private registerRoomRoutes(
+    room: NonNullable<LugnDeviceServerOptions['room']>,
+  ): void {
+    this.route({
+      method: 'GET',
+      path: '/api/v1/state',
+      scope: 'state:read',
+      limit: 'read',
+      handle: ({ response }) =>
+        sendJson(response, 200, buildStateView(room.sources)),
+    });
+    this.route({
+      method: 'POST',
+      path: '/api/v1/commands',
+      scope: 'commands:write',
+      limit: 'write',
+      handle: async ({ request, response, device }) => {
+        const body = await readJsonBody(request, COMMAND_MAX_BYTES);
+        sendJson(response, 200, await room.commands.execute(device!.id, body));
+      },
+    });
+    this.route({
+      method: 'GET',
+      path: '/api/v1/events',
+      scope: 'state:read',
+      limit: 'stream',
+      handle: ({ request, response, url, device }) => {
+        const header = request.headers['last-event-id'];
+        const lastEventId =
+          typeof header === 'string'
+            ? header
+            : (url.searchParams.get('lastEventId') ?? undefined);
+        this.events!.open(device!.id, request, response, lastEventId);
+      },
+    });
+  }
+
+  private route(route: Route): void {
     this.routes.push(route);
   }
 
@@ -138,6 +208,11 @@ export class LugnDeviceServer {
 
   async start(): Promise<void> {
     if (this.server) return;
+    this.unsubscribeRegistry ??= this.options.registry.subscribe((event) => {
+      if (event.type !== 'revoked') return;
+      this.events?.closeDevice(event.deviceId);
+      this.options.room?.commands.forget(event.deviceId);
+    });
     const server = createServer((request, response) => {
       void this.handleRequest(request, response);
     });
@@ -167,6 +242,9 @@ export class LugnDeviceServer {
   async stop(): Promise<void> {
     const server = this.server;
     this.server = undefined;
+    this.unsubscribeRegistry?.();
+    this.unsubscribeRegistry = undefined;
+    this.events?.closeAll();
     if (!server?.listening) return;
     const closed = new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -285,80 +363,6 @@ export class LugnDeviceServer {
       throw error;
     }
   }
-}
-
-export class DeviceRequestError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-  ) {
-    super(code);
-  }
-}
-
-export function isJsonRequest(request: IncomingMessage): boolean {
-  const contentType = request.headers['content-type'];
-  return (
-    typeof contentType === 'string' &&
-    contentType.split(';', 1)[0]?.trim().toLowerCase() === 'application/json'
-  );
-}
-
-export async function readJsonBody(
-  request: IncomingMessage,
-  maxBytes: number,
-): Promise<unknown> {
-  if (!isJsonRequest(request))
-    throw new DeviceRequestError(415, 'content_type_must_be_application_json');
-  const declared = Number(request.headers['content-length']);
-  if (Number.isFinite(declared) && declared > maxBytes)
-    throw new DeviceRequestError(413, 'request_too_large');
-  const chunks: Buffer[] = [];
-  let byteLength = 0;
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    byteLength += buffer.byteLength;
-    if (byteLength > maxBytes)
-      throw new DeviceRequestError(413, 'request_too_large');
-    chunks.push(buffer);
-  }
-  if (byteLength === 0) throw new DeviceRequestError(400, 'empty_request_body');
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
-  } catch {
-    throw new DeviceRequestError(400, 'invalid_json');
-  }
-}
-
-export function safeIssues(
-  error: ZodError,
-): Array<{ path: string; message: string }> {
-  return error.issues.slice(0, 32).map((issue) => ({
-    path: issue.path.map(String).join('.'),
-    message: issue.message,
-  }));
-}
-
-export const deviceResponseHeaders = {
-  'cache-control': 'no-store',
-  'x-content-type-options': 'nosniff',
-  'referrer-policy': 'no-referrer',
-  'x-lugn-api-version': String(DEVICE_API_VERSION),
-} as const;
-
-export function sendJson(
-  response: ServerResponse,
-  statusCode: number,
-  value: unknown,
-): void {
-  if (response.destroyed || response.headersSent) return;
-  const body = JSON.stringify(value);
-  response.writeHead(statusCode, {
-    ...deviceResponseHeaders,
-    'content-length': Buffer.byteLength(body),
-    'content-type': 'application/json; charset=utf-8',
-  });
-  response.end(body);
 }
 
 function sendError(

@@ -97,6 +97,13 @@ The detailed presence/continuity path is included in this implementation because
   revocable bearer tokens issued through a one-time operator pairing code.
   Only token digests are persisted. Reachability is Tailscale/LAN only; there
   is no WAN exposure, so there is no APNs dependency (see `docs/IOS-API.md`).
+- The app reads a purpose-built `StateView`, not `RoomState`. Its SSE stream
+  sends whole-section patches; event ids are `<instanceId>-<revision>` rather
+  than the bare revision so a restart is never mistaken for a resumable
+  position. Phone commands run through the capability registry as a human
+  `user` actor (`mobile:<deviceId>`, source `lugn.mobile`) instead of a new
+  actor type, so manual-ownership rules and persisted human provenance stay
+  readable by older builds.
 
 ### Persistence
 

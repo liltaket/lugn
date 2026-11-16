@@ -73,3 +73,95 @@ export async function findAvailablePort(): Promise<number> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return port;
 }
+
+/** Reads a server-sent event stream until closed by the test. */
+export function openStream(
+  port: number,
+  options: { token: string; host?: string; lastEventId?: string },
+) {
+  let text = '';
+  let ended = false;
+  let status = 0;
+  const waiters = new Set<() => void>();
+  const notify = () => {
+    for (const waiter of [...waiters]) waiter();
+  };
+  const request = httpRequest(
+    {
+      host: '127.0.0.1',
+      port,
+      path: '/api/v1/events',
+      setHost: false,
+      headers: {
+        host: options.host ?? `127.0.0.1:${port}`,
+        authorization: `Bearer ${options.token}`,
+        ...(options.lastEventId
+          ? { 'last-event-id': options.lastEventId }
+          : {}),
+      },
+    },
+    (response) => {
+      status = response.statusCode ?? 0;
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => {
+        text += chunk;
+        notify();
+      });
+      response.on('end', () => {
+        ended = true;
+        notify();
+      });
+      response.on('close', () => {
+        ended = true;
+        notify();
+      });
+    },
+  );
+  request.on('error', () => {
+    ended = true;
+    notify();
+  });
+  request.end();
+  const events = () =>
+    text
+      .split('\n\n')
+      .filter((block) => /^data: /m.test(block))
+      .map((block) => {
+        const field = (name: string) =>
+          block
+            .split('\n')
+            .find((line) => line.startsWith(`${name}: `))
+            ?.slice(name.length + 2);
+        return {
+          event: field('event') ?? 'message',
+          id: field('id'),
+          data: JSON.parse(field('data')!) as Record<string, unknown>,
+        };
+      });
+  const until = (predicate: () => boolean, label: string) =>
+    new Promise<void>((resolve, reject) => {
+      if (predicate()) return resolve();
+      const timer = setTimeout(() => {
+        waiters.delete(check);
+        reject(new Error(`Timed out waiting for ${label}: ${text}`));
+      }, 3_000);
+      const check = () => {
+        if (!predicate()) return;
+        clearTimeout(timer);
+        waiters.delete(check);
+        resolve();
+      };
+      waiters.add(check);
+    });
+  return {
+    status: () => status,
+    events,
+    ended: () => ended,
+    waitForEvents: (count: number) =>
+      until(() => events().length >= count, `${count} events`),
+    waitForEnd: () => until(() => ended, 'end'),
+    close: () => {
+      request.destroy();
+    },
+  };
+}

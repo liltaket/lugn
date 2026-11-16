@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import * as Api from '../core/device-api.js';
+import { CapabilitySchemas } from '../application/capabilities.js';
+import { BedtimeRequestSchema } from '../application/bedtime.js';
+import { RoutineActionSchema } from '../core/routines.js';
+import { SuggestionRequestSchema } from './intelligence-api.js';
 
 type Schema = z.ZodType;
 type Operation = {
@@ -26,7 +30,26 @@ const components: Readonly<
   PairRequest: { schema: Api.PairRequestSchema, io: 'input' },
   PairResponse: { schema: Api.PairResponseSchema, io: 'output' },
   MeResponse: { schema: Api.MeResponseSchema, io: 'output' },
+  StateView: { schema: Api.StateViewSchema, io: 'output' },
+  StatePatch: { schema: Api.StatePatchSchema, io: 'output' },
+  HeartbeatEvent: { schema: Api.HeartbeatEventSchema, io: 'output' },
+  CommandRequest: { schema: Api.CommandRequestSchema, io: 'input' },
+  CommandResponse: { schema: Api.CommandResponseSchema, io: 'output' },
+  ...Object.fromEntries(
+    Api.DeviceCommandNames.map((name) => [
+      `CommandInput.${name}`,
+      { schema: commandInputSchema(name), io: 'input' as const },
+    ]),
+  ),
 };
+
+/** The `input` each command accepts, from the same schemas the server parses. */
+function commandInputSchema(name: Api.DeviceCommandName): Schema {
+  if (name === 'routines.bedtime') return BedtimeRequestSchema;
+  if (name === 'routines.action') return RoutineActionSchema;
+  if (name === 'suggestions.respond') return SuggestionRequestSchema;
+  return CapabilitySchemas[name].input;
+}
 
 const commonErrors = {
   '401': {
@@ -77,6 +100,81 @@ const operations: readonly Operation[] = [
       ...commonErrors,
     },
   },
+  {
+    method: 'get',
+    path: '/api/v1/state',
+    operationId: 'getState',
+    summary: 'Read the compact room state view',
+    scope: 'state:read',
+    responses: {
+      '200': { description: 'Current view.', component: 'StateView' },
+      ...commonErrors,
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/commands',
+    operationId: 'postCommand',
+    summary: 'Run one typed command through the capability registry',
+    description:
+      'Idempotent by requestId per device. `input` follows the CommandInput.<command> schema named by `x-lugn-command-inputs`. `accepted` means Lugn took the intent; device feedback arrives in state.',
+    scope: 'commands:write',
+    request: { component: 'CommandRequest', maxBytes: 16 * 1024 },
+    responses: {
+      '200': {
+        description: 'Accepted or confirmed.',
+        component: 'CommandResponse',
+      },
+      '400': {
+        description: 'Invalid request or input.',
+        component: 'ApiError',
+      },
+      '404': { description: 'Unknown target or scene.', component: 'ApiError' },
+      '409': {
+        description:
+          'Request id reused with another body, or the command was refused by policy.',
+        component: 'ApiError',
+      },
+      '502': {
+        description: 'The command failed downstream.',
+        component: 'ApiError',
+      },
+      ...commonErrors,
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/events',
+    operationId: 'streamEvents',
+    summary: 'Server-sent state snapshots and section patches',
+    description:
+      'Events: `snapshot` (StateView), `patch` (StatePatch, replace listed sections), `heartbeat` (HeartbeatEvent, no id). Event ids are `<instanceId>-<revision>`; reconnect with Last-Event-ID.',
+    scope: 'state:read',
+    parameters: [
+      {
+        name: 'Last-Event-ID',
+        in: 'header',
+        required: false,
+        schema: { type: 'string', pattern: '^[A-Za-z0-9]+-[0-9]+$' },
+      },
+      {
+        name: 'lastEventId',
+        in: 'query',
+        required: false,
+        description: 'Fallback for clients that cannot set the header.',
+        schema: { type: 'string', pattern: '^[A-Za-z0-9]+-[0-9]+$' },
+      },
+    ],
+    responses: {
+      '200': {
+        description: 'An event stream.',
+        component: 'StreamText',
+        contentType: 'text/event-stream',
+      },
+      '503': { description: 'Too many streams.', component: 'ApiError' },
+      ...commonErrors,
+    },
+  },
 ];
 
 export function buildOpenApiDocument(): Record<string, unknown> {
@@ -105,9 +203,12 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             ? {
                 content: {
                   [response.contentType ?? 'application/json']: {
-                    schema: {
-                      $ref: `#/components/schemas/${response.component}`,
-                    },
+                    schema:
+                      response.component === 'StreamText'
+                        ? { type: 'string' }
+                        : {
+                            $ref: `#/components/schemas/${response.component}`,
+                          },
                   },
                 },
               }
@@ -126,6 +227,25 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             'x-lugn-scope': operation.scope,
           }),
       ...(operation.parameters ? { parameters: operation.parameters } : {}),
+      ...(operation.operationId === 'postCommand'
+        ? {
+            'x-lugn-command-inputs': Object.fromEntries(
+              Api.DeviceCommandNames.map((name) => [
+                name,
+                `#/components/schemas/CommandInput.${name}`,
+              ]),
+            ),
+          }
+        : {}),
+      ...(operation.operationId === 'streamEvents'
+        ? {
+            'x-lugn-sse-events': {
+              snapshot: '#/components/schemas/StateView',
+              patch: '#/components/schemas/StatePatch',
+              heartbeat: '#/components/schemas/HeartbeatEvent',
+            },
+          }
+        : {}),
       ...(operation.request
         ? {
             requestBody: {

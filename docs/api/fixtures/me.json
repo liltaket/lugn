@@ -1,0 +1,14 @@
+{
+  "apiVersion": 1,
+  "device": {
+    "id": "dev_qje4xv6pjiehoil6",
+    "name": "Brunos iPhone",
+    "platform": "ios",
+    "scopes": [
+      "state:read",
+      "commands:write",
+      "phone:ingest"
+    ]
+  },
+  "serverTime": 1794853801000
+}

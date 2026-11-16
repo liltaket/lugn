@@ -1,0 +1,12 @@
+{
+  "requestId": "0b7c2e1a-3d4f-4a5b-8c6d-7e8f9a0b1c2d",
+  "command": "routines.bedtime",
+  "input": {
+    "action": "plan",
+    "wakeTime": "07:00",
+    "mode": "auto",
+    "music": false,
+    "expectedGeneration": "5ce39ba3-e927-445a-98bd-5fb0e8e37085",
+    "requestId": "fixture-bedtime-plan"
+  }
+}

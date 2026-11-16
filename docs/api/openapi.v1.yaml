@@ -15,6 +15,157 @@ servers:
 security:
   - deviceToken: []
 paths:
+  "/api/v1/commands":
+    post:
+      operationId: "postCommand"
+      summary: "Run one typed command through the capability registry"
+      description: "Idempotent by requestId per device. `input` follows the CommandInput.<command> schema named by `x-lugn-command-inputs`. `accepted` means Lugn took the intent; device feedback arrives in state."
+      security:
+        - deviceToken: []
+      x-lugn-scope: "commands:write"
+      x-lugn-command-inputs:
+        "lighting.activateScene": "#/components/schemas/CommandInput.lighting.activateScene"
+        "lighting.reapplyScene": "#/components/schemas/CommandInput.lighting.reapplyScene"
+        "lighting.set": "#/components/schemas/CommandInput.lighting.set"
+        "lighting.adjust": "#/components/schemas/CommandInput.lighting.adjust"
+        "music.play": "#/components/schemas/CommandInput.music.play"
+        "music.pause": "#/components/schemas/CommandInput.music.pause"
+        "music.setVolume": "#/components/schemas/CommandInput.music.setVolume"
+        "music.fadeVolume": "#/components/schemas/CommandInput.music.fadeVolume"
+        "music.cancelFade": "#/components/schemas/CommandInput.music.cancelFade"
+        "music.selectSource": "#/components/schemas/CommandInput.music.selectSource"
+        "music.playPreset": "#/components/schemas/CommandInput.music.playPreset"
+        "music.setVolumeAuthority": "#/components/schemas/CommandInput.music.setVolumeAuthority"
+        "switch.set": "#/components/schemas/CommandInput.switch.set"
+        "presence.setCountOne": "#/components/schemas/CommandInput.presence.setCountOne"
+        "routines.bedtime": "#/components/schemas/CommandInput.routines.bedtime"
+        "routines.action": "#/components/schemas/CommandInput.routines.action"
+        "suggestions.respond": "#/components/schemas/CommandInput.suggestions.respond"
+      requestBody:
+        required: true
+        x-lugn-max-bytes: 16384
+        content:
+          "application/json":
+            schema:
+              $ref: "#/components/schemas/CommandRequest"
+      responses:
+        "200":
+          description: "Accepted or confirmed."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/CommandResponse"
+        "400":
+          description: "Invalid request or input."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: "Missing, unknown or revoked token."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: "Token lacks the scope, or the request carried a browser Origin header."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: "Unknown target or scene."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "409":
+          description: "Request id reused with another body, or the command was refused by policy."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "421":
+          description: "Host header is not allowed."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: "Rate limited; honour Retry-After."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "502":
+          description: "The command failed downstream."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  "/api/v1/events":
+    get:
+      operationId: "streamEvents"
+      summary: "Server-sent state snapshots and section patches"
+      description: "Events: `snapshot` (StateView), `patch` (StatePatch, replace listed sections), `heartbeat` (HeartbeatEvent, no id). Event ids are `<instanceId>-<revision>`; reconnect with Last-Event-ID."
+      security:
+        - deviceToken: []
+      x-lugn-scope: "state:read"
+      parameters:
+        - name: "Last-Event-ID"
+          in: "header"
+          required: false
+          schema:
+            type: "string"
+            pattern: "^[A-Za-z0-9]+-[0-9]+$"
+        - name: "lastEventId"
+          in: "query"
+          required: false
+          description: "Fallback for clients that cannot set the header."
+          schema:
+            type: "string"
+            pattern: "^[A-Za-z0-9]+-[0-9]+$"
+      x-lugn-sse-events:
+        snapshot: "#/components/schemas/StateView"
+        patch: "#/components/schemas/StatePatch"
+        heartbeat: "#/components/schemas/HeartbeatEvent"
+      responses:
+        "200":
+          description: "An event stream."
+          content:
+            "text/event-stream":
+              schema:
+                type: "string"
+        "401":
+          description: "Missing, unknown or revoked token."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: "Token lacks the scope, or the request carried a browser Origin header."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "421":
+          description: "Host header is not allowed."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: "Rate limited; honour Retry-After."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: "Too many streams."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
   "/api/v1/me":
     get:
       operationId: "getMe"
@@ -97,6 +248,44 @@ paths:
             "application/json":
               schema:
                 $ref: "#/components/schemas/ApiError"
+  "/api/v1/state":
+    get:
+      operationId: "getState"
+      summary: "Read the compact room state view"
+      security:
+        - deviceToken: []
+      x-lugn-scope: "state:read"
+      responses:
+        "200":
+          description: "Current view."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/StateView"
+        "401":
+          description: "Missing, unknown or revoked token."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: "Token lacks the scope, or the request carried a browser Origin header."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "421":
+          description: "Host header is not allowed."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: "Rate limited; honour Retry-After."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   securitySchemes:
     deviceToken:
@@ -128,6 +317,440 @@ components:
           maximum: 9007199254740991
       required:
         - "error"
+      additionalProperties: false
+    "CommandInput.lighting.activateScene":
+      type: "object"
+      properties:
+        sceneId:
+          type: "string"
+      required:
+        - "sceneId"
+    "CommandInput.lighting.adjust":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+        brightnessDelta:
+          type: "integer"
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - "target"
+        - "brightnessDelta"
+    "CommandInput.lighting.reapplyScene":
+      type: "object"
+      properties: {}
+    "CommandInput.lighting.set":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+        values:
+          type: "object"
+          properties:
+            power:
+              type: "boolean"
+            brightness:
+              type: "integer"
+              minimum: 0
+              maximum: 100
+            colorTemperature:
+              type: "integer"
+              minimum: 1000
+              maximum: 10000
+            rgb:
+              type: "array"
+              prefixItems:
+                - type: "integer"
+                  minimum: 0
+                  maximum: 255
+                - type: "integer"
+                  minimum: 0
+                  maximum: 255
+                - type: "integer"
+                  minimum: 0
+                  maximum: 255
+              items: false
+              minItems: 3
+              maxItems: 3
+        temperatureScope:
+          type: "string"
+          enum:
+            - "target"
+            - "scene"
+      required:
+        - "target"
+        - "values"
+    "CommandInput.music.cancelFade":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+          pattern: "^music\\.[a-z0-9][a-z0-9._-]*$"
+      required:
+        - "target"
+      additionalProperties: false
+    "CommandInput.music.fadeVolume":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+          pattern: "^music\\.[a-z0-9][a-z0-9._-]*$"
+        volume:
+          type: "number"
+          minimum: 0
+          maximum: 1
+        durationMs:
+          type: "integer"
+          minimum: 1000
+          maximum: 120000
+      required:
+        - "target"
+        - "volume"
+        - "durationMs"
+      additionalProperties: false
+    "CommandInput.music.pause":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+          pattern: "^music\\.[a-z0-9][a-z0-9._-]*$"
+      required:
+        - "target"
+      additionalProperties: false
+    "CommandInput.music.play":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+          pattern: "^music\\.[a-z0-9][a-z0-9._-]*$"
+      required:
+        - "target"
+      additionalProperties: false
+    "CommandInput.music.playPreset":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+          pattern: "^music\\.[a-z0-9][a-z0-9._-]*$"
+        preset:
+          type: "string"
+          enum:
+            - "spotify_dj"
+            - "optical"
+      required:
+        - "target"
+        - "preset"
+      additionalProperties: false
+    "CommandInput.music.selectSource":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+          pattern: "^music\\.[a-z0-9][a-z0-9._-]*$"
+        source:
+          type: "string"
+          minLength: 1
+      required:
+        - "target"
+        - "source"
+      additionalProperties: false
+    "CommandInput.music.setVolume":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+          pattern: "^music\\.[a-z0-9][a-z0-9._-]*$"
+        volume:
+          type: "number"
+          minimum: 0
+          maximum: 1
+      required:
+        - "target"
+        - "volume"
+      additionalProperties: false
+    "CommandInput.music.setVolumeAuthority":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+          pattern: "^music\\.[a-z0-9][a-z0-9._-]*$"
+        mode:
+          type: "string"
+          enum:
+            - "auto"
+            - "manual"
+      required:
+        - "target"
+        - "mode"
+      additionalProperties: false
+    "CommandInput.presence.setCountOne":
+      type: "object"
+      properties: {}
+      additionalProperties: false
+    "CommandInput.routines.action":
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$"
+        action:
+          type: "string"
+          enum:
+            - "start"
+            - "cancel"
+            - "snooze"
+            - "skip"
+        requestId:
+          type: "string"
+          minLength: 1
+          maxLength: 128
+        minutes:
+          type: "integer"
+          minimum: 1
+          maximum: 120
+      required:
+        - "id"
+        - "action"
+      additionalProperties: false
+    "CommandInput.routines.bedtime":
+      oneOf:
+        - type: "object"
+          properties:
+            action:
+              type: "string"
+              const: "start"
+            expectedGeneration:
+              type: "string"
+              format: "uuid"
+              pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            requestId:
+              type: "string"
+              minLength: 1
+              maxLength: 128
+            wakeTime:
+              type: "string"
+              pattern: "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+            mode:
+              type: "string"
+              enum:
+                - "auto"
+                - "button"
+                - "none"
+            music:
+              default: false
+              type: "boolean"
+          required:
+            - "action"
+            - "expectedGeneration"
+            - "requestId"
+            - "wakeTime"
+            - "mode"
+          additionalProperties: false
+        - type: "object"
+          properties:
+            action:
+              type: "string"
+              const: "plan"
+            expectedGeneration:
+              type: "string"
+              format: "uuid"
+              pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            requestId:
+              type: "string"
+              minLength: 1
+              maxLength: 128
+            wakeTime:
+              type: "string"
+              pattern: "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+            mode:
+              type: "string"
+              enum:
+                - "auto"
+                - "button"
+                - "none"
+            music:
+              default: false
+              type: "boolean"
+          required:
+            - "action"
+            - "expectedGeneration"
+            - "requestId"
+            - "wakeTime"
+            - "mode"
+          additionalProperties: false
+        - type: "object"
+          properties:
+            action:
+              type: "string"
+              const: "clear"
+            expectedGeneration:
+              type: "string"
+              format: "uuid"
+              pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            requestId:
+              type: "string"
+              minLength: 1
+              maxLength: 128
+          required:
+            - "action"
+            - "expectedGeneration"
+            - "requestId"
+          additionalProperties: false
+        - type: "object"
+          properties:
+            action:
+              type: "string"
+              const: "morning"
+            expectedGeneration:
+              type: "string"
+              format: "uuid"
+              pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            requestId:
+              type: "string"
+              minLength: 1
+              maxLength: 128
+            music:
+              default: false
+              type: "boolean"
+          required:
+            - "action"
+            - "expectedGeneration"
+            - "requestId"
+          additionalProperties: false
+    "CommandInput.suggestions.respond":
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          minLength: 1
+          maxLength: 512
+        action:
+          type: "string"
+          enum:
+            - "accept"
+            - "reject"
+            - "dismiss"
+      required:
+        - "id"
+        - "action"
+      additionalProperties: false
+    "CommandInput.switch.set":
+      type: "object"
+      properties:
+        target:
+          type: "string"
+          pattern: "^switch\\.[a-z0-9][a-z0-9._-]*$"
+        state:
+          type: "boolean"
+      required:
+        - "target"
+        - "state"
+      additionalProperties: false
+    CommandRequest:
+      type: "object"
+      properties:
+        requestId:
+          type: "string"
+          format: "uuid"
+          pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        command:
+          type: "string"
+          enum:
+            - "lighting.activateScene"
+            - "lighting.reapplyScene"
+            - "lighting.set"
+            - "lighting.adjust"
+            - "music.play"
+            - "music.pause"
+            - "music.setVolume"
+            - "music.fadeVolume"
+            - "music.cancelFade"
+            - "music.selectSource"
+            - "music.playPreset"
+            - "music.setVolumeAuthority"
+            - "switch.set"
+            - "presence.setCountOne"
+            - "routines.bedtime"
+            - "routines.action"
+            - "suggestions.respond"
+        input:
+          default: {}
+          type: "object"
+          propertyNames:
+            type: "string"
+          additionalProperties: {}
+        reason:
+          type: "string"
+          minLength: 1
+          maxLength: 200
+      required:
+        - "requestId"
+        - "command"
+      additionalProperties: false
+    CommandResponse:
+      type: "object"
+      properties:
+        requestId:
+          type: "string"
+          format: "uuid"
+          pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        command:
+          type: "string"
+          enum:
+            - "lighting.activateScene"
+            - "lighting.reapplyScene"
+            - "lighting.set"
+            - "lighting.adjust"
+            - "music.play"
+            - "music.pause"
+            - "music.setVolume"
+            - "music.fadeVolume"
+            - "music.cancelFade"
+            - "music.selectSource"
+            - "music.playPreset"
+            - "music.setVolumeAuthority"
+            - "switch.set"
+            - "presence.setCountOne"
+            - "routines.bedtime"
+            - "routines.action"
+            - "suggestions.respond"
+        status:
+          type: "string"
+          enum:
+            - "accepted"
+            - "confirmed"
+        replayed:
+          type: "boolean"
+        result: {}
+        revision:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+      required:
+        - "requestId"
+        - "command"
+        - "status"
+        - "replayed"
+        - "result"
+        - "revision"
+      additionalProperties: false
+    HeartbeatEvent:
+      type: "object"
+      properties:
+        instanceId:
+          type: "string"
+        revision:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        serverTime:
+          type: "number"
+          minimum: 0
+      required:
+        - "instanceId"
+        - "revision"
+        - "serverTime"
       additionalProperties: false
     MeResponse:
       type: "object"
@@ -227,4 +850,1591 @@ components:
         - "tokenType"
         - "scopes"
         - "issuedAt"
+      additionalProperties: false
+    StatePatch:
+      type: "object"
+      properties:
+        instanceId:
+          type: "string"
+        revision:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        generatedAt:
+          type: "number"
+          minimum: 0
+        sections:
+          type: "object"
+          properties:
+            presence:
+              type: "object"
+              properties:
+                state:
+                  type: "string"
+                  enum:
+                    - "occupied"
+                    - "confirmed_empty"
+                    - "unknown"
+                personCount:
+                  anyOf:
+                    - type: "integer"
+                      minimum: 0
+                      maximum: 9007199254740991
+                    - type: "null"
+                exitPending:
+                  anyOf:
+                    - type: "object"
+                      properties:
+                        startedAt:
+                          type: "number"
+                          minimum: 0
+                        until:
+                          type: "number"
+                          minimum: 0
+                      required:
+                        - "startedAt"
+                        - "until"
+                      additionalProperties: false
+                    - type: "null"
+                continuityExpiresAt:
+                  anyOf:
+                    - type: "number"
+                      minimum: 0
+                    - type: "null"
+                home:
+                  type: "object"
+                  properties:
+                    state:
+                      type: "string"
+                      enum:
+                        - "home"
+                        - "away"
+                        - "unknown"
+                    observedAt:
+                      anyOf:
+                        - type: "number"
+                          minimum: 0
+                        - type: "null"
+                  required:
+                    - "state"
+                    - "observedAt"
+                  additionalProperties: false
+              required:
+                - "state"
+                - "personCount"
+                - "exitPending"
+                - "continuityExpiresAt"
+                - "home"
+              additionalProperties: false
+            session:
+              type: "object"
+              properties:
+                state:
+                  type: "string"
+                  enum:
+                    - "active"
+                    - "suspended"
+                    - "ended"
+                    - "none"
+                startedAt:
+                  anyOf:
+                    - type: "number"
+                      minimum: 0
+                    - type: "null"
+                expiresAt:
+                  anyOf:
+                    - type: "number"
+                      minimum: 0
+                    - type: "null"
+              required:
+                - "state"
+                - "startedAt"
+                - "expiresAt"
+              additionalProperties: false
+            lighting:
+              type: "object"
+              properties:
+                currentSceneId:
+                  type:
+                    - "string"
+                    - "null"
+                sceneRevision:
+                  type: "integer"
+                  minimum: 0
+                  maximum: 9007199254740991
+                scenes:
+                  type: "array"
+                  items:
+                    type: "object"
+                    properties:
+                      id:
+                        type: "string"
+                      name:
+                        type: "string"
+                      icon:
+                        anyOf:
+                          - type: "string"
+                            enum:
+                              - "power"
+                              - "moon"
+                              - "sun"
+                              - "desk-lamp"
+                              - "disco-ball"
+                              - "film"
+                          - type: "null"
+                      canEdit:
+                        type: "boolean"
+                      allOff:
+                        type: "boolean"
+                    required:
+                      - "id"
+                      - "name"
+                      - "icon"
+                      - "canEdit"
+                      - "allOff"
+                    additionalProperties: false
+                lights:
+                  type: "array"
+                  items:
+                    type: "object"
+                    properties:
+                      id:
+                        type: "string"
+                      name:
+                        type: "string"
+                      availability:
+                        type: "string"
+                        enum:
+                          - "available"
+                          - "degraded"
+                          - "unavailable"
+                      observed:
+                        type: "object"
+                        properties:
+                          power:
+                            type:
+                              - "boolean"
+                              - "null"
+                          brightness:
+                            anyOf:
+                              - type: "integer"
+                                minimum: 0
+                                maximum: 100
+                              - type: "null"
+                          colorTemperature:
+                            anyOf:
+                              - type: "integer"
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              - type: "null"
+                          rgb:
+                            anyOf:
+                              - type: "array"
+                                prefixItems:
+                                  - type: "integer"
+                                    minimum: 0
+                                    maximum: 255
+                                  - type: "integer"
+                                    minimum: 0
+                                    maximum: 255
+                                  - type: "integer"
+                                    minimum: 0
+                                    maximum: 255
+                                items: false
+                                minItems: 3
+                                maxItems: 3
+                              - type: "null"
+                        required:
+                          - "power"
+                          - "brightness"
+                          - "colorTemperature"
+                          - "rgb"
+                        additionalProperties: false
+                      intent:
+                        type: "object"
+                        properties:
+                          power:
+                            type:
+                              - "boolean"
+                              - "null"
+                          brightness:
+                            anyOf:
+                              - type: "integer"
+                                minimum: 0
+                                maximum: 100
+                              - type: "null"
+                          colorTemperature:
+                            anyOf:
+                              - type: "integer"
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              - type: "null"
+                          rgb:
+                            anyOf:
+                              - type: "array"
+                                prefixItems:
+                                  - type: "integer"
+                                    minimum: 0
+                                    maximum: 255
+                                  - type: "integer"
+                                    minimum: 0
+                                    maximum: 255
+                                  - type: "integer"
+                                    minimum: 0
+                                    maximum: 255
+                                items: false
+                                minItems: 3
+                                maxItems: 3
+                              - type: "null"
+                        required:
+                          - "power"
+                          - "brightness"
+                          - "colorTemperature"
+                          - "rgb"
+                        additionalProperties: false
+                      matchesIntent:
+                        type:
+                          - "boolean"
+                          - "null"
+                      overridden:
+                        type: "array"
+                        items:
+                          type: "string"
+                          enum:
+                            - "power"
+                            - "brightness"
+                            - "colorTemperature"
+                            - "rgb"
+                      externalControl:
+                        type: "boolean"
+                    required:
+                      - "id"
+                      - "name"
+                      - "availability"
+                      - "observed"
+                      - "intent"
+                      - "matchesIntent"
+                      - "overridden"
+                      - "externalControl"
+                    additionalProperties: false
+              required:
+                - "currentSceneId"
+                - "sceneRevision"
+                - "scenes"
+                - "lights"
+              additionalProperties: false
+            music:
+              type: "object"
+              properties:
+                targets:
+                  type: "array"
+                  items:
+                    type: "object"
+                    properties:
+                      id:
+                        type: "string"
+                      availability:
+                        type: "string"
+                        enum:
+                          - "available"
+                          - "unavailable"
+                      observedAt:
+                        anyOf:
+                          - type: "number"
+                            minimum: 0
+                          - type: "null"
+                      observed:
+                        type: "object"
+                        properties:
+                          playback:
+                            type: "string"
+                            enum:
+                              - "playing"
+                              - "paused"
+                              - "idle"
+                              - "off"
+                              - "unknown"
+                          volume:
+                            anyOf:
+                              - type: "number"
+                                minimum: 0
+                                maximum: 1
+                              - type: "null"
+                          source:
+                            type:
+                              - "string"
+                              - "null"
+                          title:
+                            type:
+                              - "string"
+                              - "null"
+                          artist:
+                            type:
+                              - "string"
+                              - "null"
+                          album:
+                            type:
+                              - "string"
+                              - "null"
+                        required:
+                          - "playback"
+                          - "volume"
+                          - "source"
+                          - "title"
+                          - "artist"
+                          - "album"
+                        additionalProperties: false
+                      allowedSources:
+                        type: "array"
+                        items:
+                          type: "string"
+                      presets:
+                        type: "array"
+                        items:
+                          type: "string"
+                          enum:
+                            - "spotify_dj"
+                            - "optical"
+                      volume:
+                        anyOf:
+                          - type: "object"
+                            properties:
+                              controller:
+                                type: "string"
+                                enum:
+                                  - "you"
+                                  - "lugn"
+                              mode:
+                                type: "string"
+                                enum:
+                                  - "auto"
+                                  - "manual"
+                              policyEnabled:
+                                type: "boolean"
+                              policyActive:
+                                type: "boolean"
+                              activityReason:
+                                type: "string"
+                              target:
+                                type:
+                                  - "number"
+                                  - "null"
+                              effectiveTarget:
+                                type:
+                                  - "number"
+                                  - "null"
+                            required:
+                              - "controller"
+                              - "mode"
+                              - "policyEnabled"
+                              - "policyActive"
+                              - "activityReason"
+                              - "target"
+                              - "effectiveTarget"
+                            additionalProperties: false
+                          - type: "null"
+                      playback:
+                        anyOf:
+                          - type: "object"
+                            properties:
+                              activityReason:
+                                type: "string"
+                              quietHours:
+                                type: "boolean"
+                              manualPause:
+                                type: "boolean"
+                              entryEligible:
+                                type: "boolean"
+                              resumeExpiresAt:
+                                anyOf:
+                                  - type: "number"
+                                    minimum: 0
+                                  - type: "null"
+                            required:
+                              - "activityReason"
+                              - "quietHours"
+                              - "manualPause"
+                              - "entryEligible"
+                              - "resumeExpiresAt"
+                            additionalProperties: false
+                          - type: "null"
+                      fade:
+                        anyOf:
+                          - type: "object"
+                            properties:
+                              targetVolume:
+                                type: "number"
+                                minimum: 0
+                                maximum: 1
+                              status:
+                                type: "string"
+                            required:
+                              - "targetVolume"
+                              - "status"
+                            additionalProperties: false
+                          - type: "null"
+                    required:
+                      - "id"
+                      - "availability"
+                      - "observedAt"
+                      - "observed"
+                      - "allowedSources"
+                      - "presets"
+                      - "volume"
+                      - "playback"
+                      - "fade"
+                    additionalProperties: false
+              required:
+                - "targets"
+              additionalProperties: false
+            routines:
+              anyOf:
+                - type: "object"
+                  properties:
+                    generation:
+                      type:
+                        - "string"
+                        - "null"
+                    next:
+                      type: "array"
+                      items:
+                        type: "object"
+                        properties:
+                          routineId:
+                            type: "string"
+                          name:
+                            type: "string"
+                          kind:
+                            type: "string"
+                          at:
+                            type: "number"
+                            minimum: 0
+                        required:
+                          - "routineId"
+                          - "name"
+                          - "kind"
+                          - "at"
+                        additionalProperties: false
+                    running:
+                      type: "array"
+                      items:
+                        type: "object"
+                        properties:
+                          routineId:
+                            type: "string"
+                          runId:
+                            type: "string"
+                          startedAt:
+                            type: "number"
+                            minimum: 0
+                        required:
+                          - "routineId"
+                          - "runId"
+                          - "startedAt"
+                        additionalProperties: false
+                    bedtime:
+                      anyOf:
+                        - type: "object"
+                          properties:
+                            nightAvailable:
+                              type: "boolean"
+                            morningAvailable:
+                              type: "boolean"
+                            musicAvailable:
+                              type: "boolean"
+                            plan:
+                              anyOf:
+                                - type: "object"
+                                  properties:
+                                    at:
+                                      type: "number"
+                                      minimum: 0
+                                    time:
+                                      type: "string"
+                                    mode:
+                                      type: "string"
+                                      enum:
+                                        - "auto"
+                                        - "button"
+                                    music:
+                                      type: "boolean"
+                                  required:
+                                    - "at"
+                                    - "time"
+                                    - "mode"
+                                    - "music"
+                                  additionalProperties: false
+                                - type: "null"
+                            ready:
+                              anyOf:
+                                - type: "object"
+                                  properties:
+                                    until:
+                                      type: "number"
+                                      minimum: 0
+                                    music:
+                                      type: "boolean"
+                                  required:
+                                    - "until"
+                                    - "music"
+                                  additionalProperties: false
+                                - type: "null"
+                          required:
+                            - "nightAvailable"
+                            - "morningAvailable"
+                            - "musicAvailable"
+                            - "plan"
+                            - "ready"
+                          additionalProperties: false
+                        - type: "null"
+                  required:
+                    - "generation"
+                    - "next"
+                    - "running"
+                    - "bedtime"
+                  additionalProperties: false
+                - type: "null"
+            environment:
+              anyOf:
+                - type: "object"
+                  properties:
+                    temperature:
+                      type: "object"
+                      properties:
+                        value:
+                          type:
+                            - "number"
+                            - "null"
+                        unit:
+                          type: "string"
+                        observedAt:
+                          anyOf:
+                            - type: "number"
+                              minimum: 0
+                            - type: "null"
+                      required:
+                        - "value"
+                        - "unit"
+                        - "observedAt"
+                      additionalProperties: false
+                    humidity:
+                      type: "object"
+                      properties:
+                        value:
+                          type:
+                            - "number"
+                            - "null"
+                        unit:
+                          type: "string"
+                        observedAt:
+                          anyOf:
+                            - type: "number"
+                              minimum: 0
+                            - type: "null"
+                      required:
+                        - "value"
+                        - "unit"
+                        - "observedAt"
+                      additionalProperties: false
+                    co2:
+                      type: "object"
+                      properties:
+                        value:
+                          type:
+                            - "number"
+                            - "null"
+                        unit:
+                          type: "string"
+                        observedAt:
+                          anyOf:
+                            - type: "number"
+                              minimum: 0
+                            - type: "null"
+                      required:
+                        - "value"
+                        - "unit"
+                        - "observedAt"
+                      additionalProperties: false
+                    pm25:
+                      type: "object"
+                      properties:
+                        value:
+                          type:
+                            - "number"
+                            - "null"
+                        unit:
+                          type: "string"
+                        observedAt:
+                          anyOf:
+                            - type: "number"
+                              minimum: 0
+                            - type: "null"
+                      required:
+                        - "value"
+                        - "unit"
+                        - "observedAt"
+                      additionalProperties: false
+                  required:
+                    - "temperature"
+                    - "humidity"
+                    - "co2"
+                    - "pm25"
+                  additionalProperties: false
+                - type: "null"
+            suggestions:
+              type: "array"
+              items:
+                type: "object"
+                properties:
+                  id:
+                    type: "string"
+                  kind:
+                    type: "string"
+                    enum:
+                      - "scene"
+                      - "optical"
+                  title:
+                    type: "string"
+                  reason:
+                    type: "string"
+                  sceneId:
+                    type:
+                      - "string"
+                      - "null"
+                  createdAt:
+                    type: "number"
+                    minimum: 0
+                  expiresAt:
+                    type: "number"
+                    minimum: 0
+                required:
+                  - "id"
+                  - "kind"
+                  - "title"
+                  - "reason"
+                  - "sceneId"
+                  - "createdAt"
+                  - "expiresAt"
+                additionalProperties: false
+            computer:
+              type: "array"
+              items:
+                type: "object"
+                properties:
+                  deviceId:
+                    type: "string"
+                  availability:
+                    type: "string"
+                    enum:
+                      - "online"
+                      - "offline"
+                      - "unknown"
+                  freshness:
+                    type: "string"
+                    enum:
+                      - "fresh"
+                      - "stale"
+                      - "unknown"
+                  activity:
+                    type: "string"
+                    enum:
+                      - "gaming"
+                      - "video"
+                      - "music"
+                      - "desktop"
+                      - "idle"
+                      - "unknown"
+                  locked:
+                    type:
+                      - "boolean"
+                      - "null"
+                  idle:
+                    type:
+                      - "boolean"
+                      - "null"
+                  fullscreen:
+                    type:
+                      - "boolean"
+                      - "null"
+                  observedAt:
+                    anyOf:
+                      - type: "number"
+                        minimum: 0
+                      - type: "null"
+                required:
+                  - "deviceId"
+                  - "availability"
+                  - "freshness"
+                  - "activity"
+                  - "locked"
+                  - "idle"
+                  - "fullscreen"
+                  - "observedAt"
+                additionalProperties: false
+            health:
+              type: "object"
+              properties:
+                status:
+                  type: "string"
+                  enum:
+                    - "ok"
+                    - "degraded"
+                integrations:
+                  type: "object"
+                  propertyNames:
+                    type: "string"
+                  additionalProperties:
+                    type: "string"
+              required:
+                - "status"
+                - "integrations"
+              additionalProperties: false
+            why:
+              type: "array"
+              items:
+                type: "object"
+                properties:
+                  id:
+                    type: "string"
+                  at:
+                    type: "number"
+                    minimum: 0
+                  domain:
+                    type: "string"
+                    enum:
+                      - "presence"
+                      - "lighting"
+                      - "music"
+                      - "home"
+                      - "system"
+                  outcome:
+                    type: "string"
+                    enum:
+                      - "acted"
+                      - "skipped"
+                      - "observed"
+                      - "failed"
+                  text:
+                    type: "string"
+                  trigger:
+                    type:
+                      - "string"
+                      - "null"
+                  conditions:
+                    type: "array"
+                    items:
+                      type: "string"
+                required:
+                  - "id"
+                  - "at"
+                  - "domain"
+                  - "outcome"
+                  - "text"
+                  - "trigger"
+                  - "conditions"
+                additionalProperties: false
+          additionalProperties: false
+      required:
+        - "instanceId"
+        - "revision"
+        - "generatedAt"
+        - "sections"
+      additionalProperties: false
+    StateView:
+      type: "object"
+      properties:
+        presence:
+          type: "object"
+          properties:
+            state:
+              type: "string"
+              enum:
+                - "occupied"
+                - "confirmed_empty"
+                - "unknown"
+            personCount:
+              anyOf:
+                - type: "integer"
+                  minimum: 0
+                  maximum: 9007199254740991
+                - type: "null"
+            exitPending:
+              anyOf:
+                - type: "object"
+                  properties:
+                    startedAt:
+                      type: "number"
+                      minimum: 0
+                    until:
+                      type: "number"
+                      minimum: 0
+                  required:
+                    - "startedAt"
+                    - "until"
+                  additionalProperties: false
+                - type: "null"
+            continuityExpiresAt:
+              anyOf:
+                - type: "number"
+                  minimum: 0
+                - type: "null"
+            home:
+              type: "object"
+              properties:
+                state:
+                  type: "string"
+                  enum:
+                    - "home"
+                    - "away"
+                    - "unknown"
+                observedAt:
+                  anyOf:
+                    - type: "number"
+                      minimum: 0
+                    - type: "null"
+              required:
+                - "state"
+                - "observedAt"
+              additionalProperties: false
+          required:
+            - "state"
+            - "personCount"
+            - "exitPending"
+            - "continuityExpiresAt"
+            - "home"
+          additionalProperties: false
+        session:
+          type: "object"
+          properties:
+            state:
+              type: "string"
+              enum:
+                - "active"
+                - "suspended"
+                - "ended"
+                - "none"
+            startedAt:
+              anyOf:
+                - type: "number"
+                  minimum: 0
+                - type: "null"
+            expiresAt:
+              anyOf:
+                - type: "number"
+                  minimum: 0
+                - type: "null"
+          required:
+            - "state"
+            - "startedAt"
+            - "expiresAt"
+          additionalProperties: false
+        lighting:
+          type: "object"
+          properties:
+            currentSceneId:
+              type:
+                - "string"
+                - "null"
+            sceneRevision:
+              type: "integer"
+              minimum: 0
+              maximum: 9007199254740991
+            scenes:
+              type: "array"
+              items:
+                type: "object"
+                properties:
+                  id:
+                    type: "string"
+                  name:
+                    type: "string"
+                  icon:
+                    anyOf:
+                      - type: "string"
+                        enum:
+                          - "power"
+                          - "moon"
+                          - "sun"
+                          - "desk-lamp"
+                          - "disco-ball"
+                          - "film"
+                      - type: "null"
+                  canEdit:
+                    type: "boolean"
+                  allOff:
+                    type: "boolean"
+                required:
+                  - "id"
+                  - "name"
+                  - "icon"
+                  - "canEdit"
+                  - "allOff"
+                additionalProperties: false
+            lights:
+              type: "array"
+              items:
+                type: "object"
+                properties:
+                  id:
+                    type: "string"
+                  name:
+                    type: "string"
+                  availability:
+                    type: "string"
+                    enum:
+                      - "available"
+                      - "degraded"
+                      - "unavailable"
+                  observed:
+                    type: "object"
+                    properties:
+                      power:
+                        type:
+                          - "boolean"
+                          - "null"
+                      brightness:
+                        anyOf:
+                          - type: "integer"
+                            minimum: 0
+                            maximum: 100
+                          - type: "null"
+                      colorTemperature:
+                        anyOf:
+                          - type: "integer"
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          - type: "null"
+                      rgb:
+                        anyOf:
+                          - type: "array"
+                            prefixItems:
+                              - type: "integer"
+                                minimum: 0
+                                maximum: 255
+                              - type: "integer"
+                                minimum: 0
+                                maximum: 255
+                              - type: "integer"
+                                minimum: 0
+                                maximum: 255
+                            items: false
+                            minItems: 3
+                            maxItems: 3
+                          - type: "null"
+                    required:
+                      - "power"
+                      - "brightness"
+                      - "colorTemperature"
+                      - "rgb"
+                    additionalProperties: false
+                  intent:
+                    type: "object"
+                    properties:
+                      power:
+                        type:
+                          - "boolean"
+                          - "null"
+                      brightness:
+                        anyOf:
+                          - type: "integer"
+                            minimum: 0
+                            maximum: 100
+                          - type: "null"
+                      colorTemperature:
+                        anyOf:
+                          - type: "integer"
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          - type: "null"
+                      rgb:
+                        anyOf:
+                          - type: "array"
+                            prefixItems:
+                              - type: "integer"
+                                minimum: 0
+                                maximum: 255
+                              - type: "integer"
+                                minimum: 0
+                                maximum: 255
+                              - type: "integer"
+                                minimum: 0
+                                maximum: 255
+                            items: false
+                            minItems: 3
+                            maxItems: 3
+                          - type: "null"
+                    required:
+                      - "power"
+                      - "brightness"
+                      - "colorTemperature"
+                      - "rgb"
+                    additionalProperties: false
+                  matchesIntent:
+                    type:
+                      - "boolean"
+                      - "null"
+                  overridden:
+                    type: "array"
+                    items:
+                      type: "string"
+                      enum:
+                        - "power"
+                        - "brightness"
+                        - "colorTemperature"
+                        - "rgb"
+                  externalControl:
+                    type: "boolean"
+                required:
+                  - "id"
+                  - "name"
+                  - "availability"
+                  - "observed"
+                  - "intent"
+                  - "matchesIntent"
+                  - "overridden"
+                  - "externalControl"
+                additionalProperties: false
+          required:
+            - "currentSceneId"
+            - "sceneRevision"
+            - "scenes"
+            - "lights"
+          additionalProperties: false
+        music:
+          type: "object"
+          properties:
+            targets:
+              type: "array"
+              items:
+                type: "object"
+                properties:
+                  id:
+                    type: "string"
+                  availability:
+                    type: "string"
+                    enum:
+                      - "available"
+                      - "unavailable"
+                  observedAt:
+                    anyOf:
+                      - type: "number"
+                        minimum: 0
+                      - type: "null"
+                  observed:
+                    type: "object"
+                    properties:
+                      playback:
+                        type: "string"
+                        enum:
+                          - "playing"
+                          - "paused"
+                          - "idle"
+                          - "off"
+                          - "unknown"
+                      volume:
+                        anyOf:
+                          - type: "number"
+                            minimum: 0
+                            maximum: 1
+                          - type: "null"
+                      source:
+                        type:
+                          - "string"
+                          - "null"
+                      title:
+                        type:
+                          - "string"
+                          - "null"
+                      artist:
+                        type:
+                          - "string"
+                          - "null"
+                      album:
+                        type:
+                          - "string"
+                          - "null"
+                    required:
+                      - "playback"
+                      - "volume"
+                      - "source"
+                      - "title"
+                      - "artist"
+                      - "album"
+                    additionalProperties: false
+                  allowedSources:
+                    type: "array"
+                    items:
+                      type: "string"
+                  presets:
+                    type: "array"
+                    items:
+                      type: "string"
+                      enum:
+                        - "spotify_dj"
+                        - "optical"
+                  volume:
+                    anyOf:
+                      - type: "object"
+                        properties:
+                          controller:
+                            type: "string"
+                            enum:
+                              - "you"
+                              - "lugn"
+                          mode:
+                            type: "string"
+                            enum:
+                              - "auto"
+                              - "manual"
+                          policyEnabled:
+                            type: "boolean"
+                          policyActive:
+                            type: "boolean"
+                          activityReason:
+                            type: "string"
+                          target:
+                            type:
+                              - "number"
+                              - "null"
+                          effectiveTarget:
+                            type:
+                              - "number"
+                              - "null"
+                        required:
+                          - "controller"
+                          - "mode"
+                          - "policyEnabled"
+                          - "policyActive"
+                          - "activityReason"
+                          - "target"
+                          - "effectiveTarget"
+                        additionalProperties: false
+                      - type: "null"
+                  playback:
+                    anyOf:
+                      - type: "object"
+                        properties:
+                          activityReason:
+                            type: "string"
+                          quietHours:
+                            type: "boolean"
+                          manualPause:
+                            type: "boolean"
+                          entryEligible:
+                            type: "boolean"
+                          resumeExpiresAt:
+                            anyOf:
+                              - type: "number"
+                                minimum: 0
+                              - type: "null"
+                        required:
+                          - "activityReason"
+                          - "quietHours"
+                          - "manualPause"
+                          - "entryEligible"
+                          - "resumeExpiresAt"
+                        additionalProperties: false
+                      - type: "null"
+                  fade:
+                    anyOf:
+                      - type: "object"
+                        properties:
+                          targetVolume:
+                            type: "number"
+                            minimum: 0
+                            maximum: 1
+                          status:
+                            type: "string"
+                        required:
+                          - "targetVolume"
+                          - "status"
+                        additionalProperties: false
+                      - type: "null"
+                required:
+                  - "id"
+                  - "availability"
+                  - "observedAt"
+                  - "observed"
+                  - "allowedSources"
+                  - "presets"
+                  - "volume"
+                  - "playback"
+                  - "fade"
+                additionalProperties: false
+          required:
+            - "targets"
+          additionalProperties: false
+        routines:
+          anyOf:
+            - type: "object"
+              properties:
+                generation:
+                  type:
+                    - "string"
+                    - "null"
+                next:
+                  type: "array"
+                  items:
+                    type: "object"
+                    properties:
+                      routineId:
+                        type: "string"
+                      name:
+                        type: "string"
+                      kind:
+                        type: "string"
+                      at:
+                        type: "number"
+                        minimum: 0
+                    required:
+                      - "routineId"
+                      - "name"
+                      - "kind"
+                      - "at"
+                    additionalProperties: false
+                running:
+                  type: "array"
+                  items:
+                    type: "object"
+                    properties:
+                      routineId:
+                        type: "string"
+                      runId:
+                        type: "string"
+                      startedAt:
+                        type: "number"
+                        minimum: 0
+                    required:
+                      - "routineId"
+                      - "runId"
+                      - "startedAt"
+                    additionalProperties: false
+                bedtime:
+                  anyOf:
+                    - type: "object"
+                      properties:
+                        nightAvailable:
+                          type: "boolean"
+                        morningAvailable:
+                          type: "boolean"
+                        musicAvailable:
+                          type: "boolean"
+                        plan:
+                          anyOf:
+                            - type: "object"
+                              properties:
+                                at:
+                                  type: "number"
+                                  minimum: 0
+                                time:
+                                  type: "string"
+                                mode:
+                                  type: "string"
+                                  enum:
+                                    - "auto"
+                                    - "button"
+                                music:
+                                  type: "boolean"
+                              required:
+                                - "at"
+                                - "time"
+                                - "mode"
+                                - "music"
+                              additionalProperties: false
+                            - type: "null"
+                        ready:
+                          anyOf:
+                            - type: "object"
+                              properties:
+                                until:
+                                  type: "number"
+                                  minimum: 0
+                                music:
+                                  type: "boolean"
+                              required:
+                                - "until"
+                                - "music"
+                              additionalProperties: false
+                            - type: "null"
+                      required:
+                        - "nightAvailable"
+                        - "morningAvailable"
+                        - "musicAvailable"
+                        - "plan"
+                        - "ready"
+                      additionalProperties: false
+                    - type: "null"
+              required:
+                - "generation"
+                - "next"
+                - "running"
+                - "bedtime"
+              additionalProperties: false
+            - type: "null"
+        environment:
+          anyOf:
+            - type: "object"
+              properties:
+                temperature:
+                  type: "object"
+                  properties:
+                    value:
+                      type:
+                        - "number"
+                        - "null"
+                    unit:
+                      type: "string"
+                    observedAt:
+                      anyOf:
+                        - type: "number"
+                          minimum: 0
+                        - type: "null"
+                  required:
+                    - "value"
+                    - "unit"
+                    - "observedAt"
+                  additionalProperties: false
+                humidity:
+                  type: "object"
+                  properties:
+                    value:
+                      type:
+                        - "number"
+                        - "null"
+                    unit:
+                      type: "string"
+                    observedAt:
+                      anyOf:
+                        - type: "number"
+                          minimum: 0
+                        - type: "null"
+                  required:
+                    - "value"
+                    - "unit"
+                    - "observedAt"
+                  additionalProperties: false
+                co2:
+                  type: "object"
+                  properties:
+                    value:
+                      type:
+                        - "number"
+                        - "null"
+                    unit:
+                      type: "string"
+                    observedAt:
+                      anyOf:
+                        - type: "number"
+                          minimum: 0
+                        - type: "null"
+                  required:
+                    - "value"
+                    - "unit"
+                    - "observedAt"
+                  additionalProperties: false
+                pm25:
+                  type: "object"
+                  properties:
+                    value:
+                      type:
+                        - "number"
+                        - "null"
+                    unit:
+                      type: "string"
+                    observedAt:
+                      anyOf:
+                        - type: "number"
+                          minimum: 0
+                        - type: "null"
+                  required:
+                    - "value"
+                    - "unit"
+                    - "observedAt"
+                  additionalProperties: false
+              required:
+                - "temperature"
+                - "humidity"
+                - "co2"
+                - "pm25"
+              additionalProperties: false
+            - type: "null"
+        suggestions:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              id:
+                type: "string"
+              kind:
+                type: "string"
+                enum:
+                  - "scene"
+                  - "optical"
+              title:
+                type: "string"
+              reason:
+                type: "string"
+              sceneId:
+                type:
+                  - "string"
+                  - "null"
+              createdAt:
+                type: "number"
+                minimum: 0
+              expiresAt:
+                type: "number"
+                minimum: 0
+            required:
+              - "id"
+              - "kind"
+              - "title"
+              - "reason"
+              - "sceneId"
+              - "createdAt"
+              - "expiresAt"
+            additionalProperties: false
+        computer:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              deviceId:
+                type: "string"
+              availability:
+                type: "string"
+                enum:
+                  - "online"
+                  - "offline"
+                  - "unknown"
+              freshness:
+                type: "string"
+                enum:
+                  - "fresh"
+                  - "stale"
+                  - "unknown"
+              activity:
+                type: "string"
+                enum:
+                  - "gaming"
+                  - "video"
+                  - "music"
+                  - "desktop"
+                  - "idle"
+                  - "unknown"
+              locked:
+                type:
+                  - "boolean"
+                  - "null"
+              idle:
+                type:
+                  - "boolean"
+                  - "null"
+              fullscreen:
+                type:
+                  - "boolean"
+                  - "null"
+              observedAt:
+                anyOf:
+                  - type: "number"
+                    minimum: 0
+                  - type: "null"
+            required:
+              - "deviceId"
+              - "availability"
+              - "freshness"
+              - "activity"
+              - "locked"
+              - "idle"
+              - "fullscreen"
+              - "observedAt"
+            additionalProperties: false
+        health:
+          type: "object"
+          properties:
+            status:
+              type: "string"
+              enum:
+                - "ok"
+                - "degraded"
+            integrations:
+              type: "object"
+              propertyNames:
+                type: "string"
+              additionalProperties:
+                type: "string"
+          required:
+            - "status"
+            - "integrations"
+          additionalProperties: false
+        why:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              id:
+                type: "string"
+              at:
+                type: "number"
+                minimum: 0
+              domain:
+                type: "string"
+                enum:
+                  - "presence"
+                  - "lighting"
+                  - "music"
+                  - "home"
+                  - "system"
+              outcome:
+                type: "string"
+                enum:
+                  - "acted"
+                  - "skipped"
+                  - "observed"
+                  - "failed"
+              text:
+                type: "string"
+              trigger:
+                type:
+                  - "string"
+                  - "null"
+              conditions:
+                type: "array"
+                items:
+                  type: "string"
+            required:
+              - "id"
+              - "at"
+              - "domain"
+              - "outcome"
+              - "text"
+              - "trigger"
+              - "conditions"
+            additionalProperties: false
+        apiVersion:
+          type: "number"
+          const: 1
+        instanceId:
+          type: "string"
+        revision:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        generatedAt:
+          type: "number"
+          minimum: 0
+      required:
+        - "presence"
+        - "session"
+        - "lighting"
+        - "music"
+        - "routines"
+        - "environment"
+        - "suggestions"
+        - "computer"
+        - "health"
+        - "why"
+        - "apiVersion"
+        - "instanceId"
+        - "revision"
+        - "generatedAt"
       additionalProperties: false

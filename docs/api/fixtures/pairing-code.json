@@ -1,0 +1,9 @@
+{
+  "code": "8Z8N-Z3YX",
+  "expiresAt": 1794854101000,
+  "scopes": [
+    "state:read",
+    "commands:write",
+    "phone:ingest"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "requestId": "0b7c2e1a-3d4f-4a5b-8c6d-7e8f9a0b1c2d",
+  "command": "routines.bedtime",
+  "status": "accepted",
+  "result": {
+    "accepted": true
+  },
+  "revision": 18,
+  "replayed": false
+}

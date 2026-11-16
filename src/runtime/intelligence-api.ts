@@ -17,7 +17,7 @@ const SettingsRequest = z
     expectedGeneration: z.uuid(),
   })
   .strict();
-const SuggestionRequest = z
+export const SuggestionRequestSchema = z
   .object({
     id: z.string().min(1).max(512),
     action: z.enum(['accept', 'reject', 'dismiss']),
@@ -58,7 +58,7 @@ export class IntelligenceApi implements ExperienceApi {
         );
       }
       if (route === 'intelligence/suggestion') {
-        const input = SuggestionRequest.parse(body);
+        const input = SuggestionRequestSchema.parse(body);
         return await this.intelligence.respondSuggestion(
           input.id,
           input.action,
