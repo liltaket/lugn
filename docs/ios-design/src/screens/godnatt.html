@@ -1,0 +1,118 @@
+<!--TITLE-->Godnatt
+<!--STYLE-->
+.top { display: flex; justify-content: space-between; align-items: center; height: 44px; padding-inline: var(--gutter); }
+.top .round { background: color-mix(in srgb, var(--ink) 9%, transparent); width: 36px; height: 36px; }
+.top .round svg { width: 18px; height: 18px; stroke-width: 2.2; }
+.q { padding: 18px var(--gutter) 0; font: 400 34px/38px var(--voice); letter-spacing: -0.6px; font-variation-settings: 'opsz' 40; }
+.wake { display: flex; align-items: center; justify-content: space-between; padding: 14px var(--gutter) 0; }
+.wake .time { font: 300 92px/96px var(--voice); letter-spacing: -3.5px; font-variation-settings: 'opsz' 72; font-variant-numeric: lining-nums tabular-nums; cursor: ns-resize; touch-action: none; }
+.wake .steps { display: grid; gap: 10px; }
+.wake .steps button { width: 52px; height: 52px; border-radius: 26px; display: grid; place-items: center; }
+.wake .steps svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.until { padding: 2px var(--gutter) 0; font: 400 15px/20px var(--ui); color: var(--ink-f2); }
+.modes { margin-top: 20px; }
+.modes .row { min-height: 62px; cursor: pointer; }
+.radio { width: 24px; height: 24px; border-radius: 12px; flex: none; box-shadow: inset 0 0 0 1.5px var(--ink-3); display: grid; place-items: center; }
+.row[aria-checked='true'] .radio { box-shadow: inset 0 0 0 1.5px var(--ink); }
+.row[aria-checked='true'] .radio::after { content: ''; width: 12px; height: 12px; border-radius: 6px; background: var(--ink); }
+.extra { margin-top: 10px; }
+.cta { position: absolute; left: var(--gutter); right: var(--gutter); bottom: 46px; z-index: 5; }
+.cta p { text-align: center; margin-top: 10px; font: 400 13px/18px var(--ui); color: var(--ink-2); }
+
+/* step 2: the fade */
+.fade { position: absolute; inset: 0; display: grid; align-content: end; padding: 0 var(--gutter) 46px; opacity: 0; pointer-events: none; transition: opacity 0.6s ease; }
+.device[data-step='fade'] .fade { opacity: 1; pointer-events: auto; }
+.device[data-step='fade'] .ask { opacity: 0; pointer-events: none; }
+.ask { transition: opacity 0.4s ease; }
+.fade .say { font: 400 44px/48px var(--voice); letter-spacing: -1px; font-variation-settings: 'opsz' 60; color: color-mix(in srgb, var(--ink) 86%, transparent); }
+.fade .left { margin-top: 10px; font: 400 17px/22px var(--ui); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.bars { display: grid; grid-template-columns: repeat(15, 1fr); gap: 5px; height: 88px; margin: 30px 0 12px; align-items: end; }
+.bars i { display: block; border-radius: 4px; background: #ffa95c; min-height: 3px; transition: opacity 0.6s ease, background-color 0.6s; }
+.bars i.gone { background: var(--ink-3); opacity: 0.35; }
+.axis { display: flex; justify-content: space-between; font: 400 12px/16px var(--ui); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.plan { display: flex; align-items: center; gap: 12px; margin: 26px 0 16px; padding: 12px 14px; border-radius: 20px; background: color-mix(in srgb, var(--raised) 80%, transparent); box-shadow: inset 0 0 0 1px var(--line); }
+.plan svg { width: 22px; height: 22px; fill: none; stroke: var(--ink-2); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.plan b { display: block; font: 500 15px/20px var(--ui); }
+.plan span { display: block; font: 400 13px/18px var(--ui); color: var(--ink-2); }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+<!--SCREEN-->
+<div class="field tall"><i class="pool a"></i><i class="pool b"></i><i class="pool c"></i></div>
+<div class="scroll ask" style="padding-bottom:150px">
+  <div class="top"><span style="font:600 17px/22px var(--ui);letter-spacing:-.3px">Godnatt</span><a class="round" href="hem.html" aria-label="Stäng utan att starta"><svg viewBox="0 0 24 24"><path d="M6.500 6.500l11 11M17.500 6.500l-11 11"/></svg></a></div>
+  <h1 class="q">När vill du vakna?</h1>
+  <div class="wake">
+    <div class="time num" id="time" role="slider" aria-label="Väckningstid" tabindex="0">07:00</div>
+    <div class="steps"><button class="glass" id="up" aria-label="Fem minuter senare"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button><button class="glass" id="down" aria-label="Fem minuter tidigare"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button></div>
+  </div>
+  <p class="until" id="until">Om 9 h 13 min. Samma tid som telefonens alarm.</p>
+  <div class="card modes" role="radiogroup" aria-label="På morgonen" id="modes">
+    <div class="row" role="radio" aria-checked="true" data-m="auto" tabindex="0"><span class="radio"></span><span class="grow"><span class="t">Tänd själv</span><br><span class="d" id="mAuto">Ljuset stiger i 20 min från 07:00.</span></span></div>
+    <div class="row" role="radio" aria-checked="false" data-m="button" tabindex="0"><span class="radio"></span><span class="grow"><span class="t">Visa en knapp</span><br><span class="d">God morgon väntar en timme. Inget tänds.</span></span></div>
+    <div class="row" role="radio" aria-checked="false" data-m="none" tabindex="0"><span class="radio"></span><span class="grow"><span class="t">Ingen morgon</span><br><span class="d">Bara kvällens nedtoning.</span></span></div>
+  </div>
+  <div class="card extra"><div class="row"><span class="grow"><span class="t">Fortsätt musiken på morgonen</span><br><span class="d">Samma källa, samma volym. Aldrig före 06.</span></span><button class="switch" role="switch" aria-checked="false" id="music" aria-label="Fortsätt musiken på morgonen"></button></div></div>
+</div>
+<div class="cta ask"><button class="btn" id="start" style="width:100%">Starta Godnatt</button><p>Tonar ned på 15 min. Stänger du sparas inget.</p></div>
+
+<section class="fade" aria-live="polite">
+  <h1 class="say">Godnatt.</h1>
+  <p class="left" id="left">Släckt om 14:32</p>
+  <div class="bars" id="bars" aria-hidden="true"></div>
+  <div class="axis"><span>22:34</span><span>22:49</span></div>
+  <div class="plan"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.7"/><path d="M12 3.200v2.200M12 18.600v2.200M3.200 12h2.200M18.600 12h2.200M5.800 5.800l1.500 1.500M16.700 16.700l1.500 1.500M5.800 18.200l1.500-1.500M16.700 7.300l1.500-1.500"/></svg><div><b id="planT">Väckning 07:00</b><span id="planD">Ljuset stiger själv i 20 min.</span></div></div>
+  <div class="two"><button class="btn quiet" id="cancel">Avbryt</button><button class="btn quiet" id="now">Släck nu</button></div>
+</section>
+<!--NOTES-->
+<h2>Godnatt</h2>
+<p>En fråga, tre svar, en knapp. Tiden är satt i samma typsnitt som Lugns röst eftersom den är ett löfte, inte ett reglage.</p>
+<ul>
+  <li>Dra tiden upp eller ned, eller stega fem minuter. Hack varje hel timme.</li>
+  <li>Efter start mörknar hela appen i takt med lamporna. Femton staplar, en per minut.</li>
+  <li>Ändrar du ljuset för hand avbryts nedtoningen. Planen för morgonen ligger kvar.</li>
+</ul>
+<div class="ctl"><button id="nAsk">Frågan</button><button id="nFade">Nedtoning</button><a href="godnatt-live.html">Låsskärm</a></div>
+<!--SCRIPT-->
+Lugn.chrome({ time: '22:34' });
+const $ = (id) => document.getElementById(id);
+const dev = document.querySelector('.device');
+Lugn.setField('mys', 0.8);
+let mins = 7 * 60, mode = 'auto';
+const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const render = () => {
+  $('time').textContent = fmt(mins); $('time').setAttribute('aria-valuetext', fmt(mins));
+  let d = mins - (22 * 60 + 34); if (d <= 0) d += 1440;
+  $('until').textContent = `Om ${Math.floor(d / 60)} h ${d % 60} min.${mins === 420 ? ' Samma tid som telefonens alarm.' : ''}`;
+  $('mAuto').textContent = `Ljuset stiger i 20 min från ${fmt(mins)}.`;
+  $('planT').textContent = mode === 'none' ? 'Ingen morgon planerad' : `Väckning ${fmt(mins)}`;
+  $('planD').textContent = mode === 'auto' ? 'Ljuset stiger själv i 20 min.' : mode === 'button' ? 'God morgon-knappen väntar en timme.' : 'Lugn gör ingenting i morgon bitti.';
+};
+const step = (d) => { const was = Math.floor(mins / 60); mins = ((mins + d) % 1440 + 1440) % 1440; Lugn.haptic(Math.floor(mins / 60) !== was || mins % 60 === 0 ? 'rigid' : 'selection', 'tid'); render(); };
+$('up').addEventListener('click', () => step(5)); $('down').addEventListener('click', () => step(-5));
+let y0 = null;
+$('time').addEventListener('pointerdown', (e) => { y0 = e.clientY; try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic */ } });
+$('time').addEventListener('pointermove', (e) => { if (y0 === null) return; const d = Math.trunc((y0 - e.clientY) / 14); if (d) { step(d * 5); y0 = e.clientY; } });
+$('time').addEventListener('pointerup', () => (y0 = null));
+$('time').addEventListener('keydown', (e) => { if (e.key === 'ArrowUp') step(5); if (e.key === 'ArrowDown') step(-5); });
+$('modes').addEventListener('click', (e) => { const r = e.target.closest('.row'); if (!r) return; mode = r.dataset.m; $('modes').querySelectorAll('.row').forEach((x) => x.setAttribute('aria-checked', x === r)); Lugn.haptic('selection', 'morgonval'); render(); });
+$('music').addEventListener('click', (e) => { const b = e.currentTarget; b.setAttribute('aria-checked', b.getAttribute('aria-checked') !== 'true'); Lugn.haptic('selection', 'musik'); });
+
+$('bars').innerHTML = Array.from({ length: 15 }, (_, i) => `<i style="height:${100 - i * 6.2}%"></i>`).join('');
+let timer = 0, left = 14 * 60 + 32;
+const paintFade = () => {
+  $('left').textContent = left > 0 ? `Släckt om ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : 'Släckt. Sov gott.';
+  const gone = 15 - Math.ceil(left / 60);
+  $('bars').querySelectorAll('i').forEach((el, i) => el.classList.toggle('gone', i < gone));
+  document.documentElement.style.setProperty('--k', String(0.8 * Math.max(0.04, left / 900)));
+};
+const startFade = (quiet) => {
+  dev.dataset.step = 'fade'; if (!quiet) Lugn.haptic('heavy', 'Godnatt startad');
+  clearInterval(timer); paintFade();
+  if (!Lugn.q.has('shot')) timer = setInterval(() => { left = Math.max(0, left - 20); paintFade(); if (!left) clearInterval(timer); }, 1000); // 20x speed in the prototype
+};
+const stopFade = () => { clearInterval(timer); delete dev.dataset.step; left = 14 * 60 + 32; Lugn.setField('mys', 0.8); };
+$('start').addEventListener('click', () => startFade());
+$('cancel').addEventListener('click', () => { Lugn.haptic('light', 'avbruten'); stopFade(); });
+$('now').addEventListener('click', () => { Lugn.haptic('medium', 'släck nu'); left = 0; paintFade(); clearInterval(timer); });
+$('nAsk')?.addEventListener('click', stopFade); $('nFade')?.addEventListener('click', () => startFade());
+render();
+if (Lugn.q.get('step') === 'fade') { left = 11 * 60 + 8; startFade(true); }

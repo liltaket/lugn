@@ -1,0 +1,1706 @@
+<!doctype html>
+<html lang="sv" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=402, initial-scale=1, viewport-fit=cover">
+<title>Lugn iOS · Varför</title>
+<!-- Inter stands in for SF Pro off Apple hardware. Newsreader loads from web/fonts in this repo. -->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=block" rel="stylesheet">
+<style>
+/*
+  Lugn iOS prototypes: shared tokens and components.
+  Units are CSS px = iOS points. Viewport 402 x 874 (iPhone 17 Pro).
+  Voice (anything Lugn says) is Newsreader. Controls are SF Pro; Inter stands
+  in for SF Pro when the page is rendered off Apple hardware.
+*/
+
+@font-face {
+  font-family: 'Newsreader';
+  src:
+    local('Newsreader'),
+    url('../../../web/fonts/newsreader.woff2') format('woff2');
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: block;
+}
+
+@property --p1 {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #06090d;
+}
+@property --p2 {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #06090d;
+}
+@property --p3 {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #06090d;
+}
+@property --k {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
+:root {
+  color-scheme: dark;
+  /* Surfaces */
+  --page: #06090d;
+  --raised: #0d1319;
+  --raised-2: #121a22;
+  --raised-3: #18222c;
+  --line: rgb(214 228 238 / 0.1);
+  --line-strong: rgb(214 228 238 / 0.2);
+  /* Ink */
+  --ink: #ecf0f2;
+  --ink-2: #aab5be;
+  --ink-3: #7f8b96;
+  /* Second ink when text sits on the light field (ink-2 and ink-3 never go there). */
+  --ink-f2: #d3dade;
+  /* Signals. Mint means "Lugn did this / is live". Never decoration. */
+  --mint: #8ff0c4;
+  --mint-ink: #032015;
+  --mint-wash: rgb(143 240 196 / 0.12);
+  --warn: #f2d38c;
+  --warn-wash: rgb(242 211 140 / 0.12);
+  --bad: #ff9d94;
+  --bad-wash: rgb(255 157 148 / 0.12);
+  /* Glass (chrome only) */
+  --glass: rgb(20 28 36 / 0.58);
+  --glass-edge: rgb(255 255 255 / 0.11);
+  --glass-top: rgb(255 255 255 / 0.2);
+  --glass-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  /* Room light. Set per scene by JS. */
+  --p1: #06090d;
+  --p2: #06090d;
+  --p3: #06090d;
+  --k: 0;
+  --field-cap: 0.34; /* max mix of light colour into page under ink text */
+  --grain: 0.07;
+  /* Type */
+  --voice: 'Newsreader', 'New York', 'Iowan Old Style', Georgia, serif;
+  --ui: -apple-system, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  /* Shape */
+  --r-tile: 22px;
+  --r-card: 26px;
+  --r-control: 14px;
+  --r-sheet: 38px;
+  --gutter: 20px;
+  /* Motion */
+  --tryck: cubic-bezier(0.3, 1.25, 0.4, 1); /* spring 0.28 / 0.86 */
+  --glid: cubic-bezier(0.22, 1, 0.36, 1); /* spring 0.42 / 0.9 */
+  --sken: cubic-bezier(0.2, 0.8, 0.2, 1); /* light spreading */
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --page: #edf1f0;
+  --raised: #f8faf9;
+  --raised-2: #ffffff;
+  --raised-3: #e3e9e7;
+  --line: rgb(12 22 19 / 0.09);
+  --line-strong: rgb(12 22 19 / 0.18);
+  --ink: #0c1613;
+  --ink-2: #43514c;
+  --ink-3: #5f6c67;
+  --ink-f2: #43514c;
+  --mint: #0b7a55;
+  --mint-ink: #ffffff;
+  --mint-wash: rgb(11 122 85 / 0.1);
+  --warn: #7a5200;
+  --warn-wash: rgb(196 140 20 / 0.14);
+  --bad: #b3362b;
+  --bad-wash: rgb(179 54 43 / 0.09);
+  --glass: rgb(255 255 255 / 0.62);
+  --glass-edge: rgb(255 255 255 / 0.8);
+  --glass-top: rgb(255 255 255 / 0.95);
+  --glass-shadow: 0 10px 30px rgb(30 50 45 / 0.16);
+  --field-cap: 0.5;
+  --grain: 0.05;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+body {
+  background: #000;
+  font-family: var(--ui);
+  font-size: 17px;
+  line-height: 22px;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-synthesis: none;
+  font-feature-settings: 'cv11', 'ss03';
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: inherit;
+}
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 3px;
+}
+p,
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: inherit;
+  font-size: inherit;
+}
+[hidden] {
+  display: none !important;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* ---------- Stage: device + designer notes ---------- */
+.stage {
+  display: flex;
+  align-items: flex-start;
+  gap: 44px;
+}
+.device {
+  position: relative;
+  width: 402px;
+  height: 874px;
+  flex: none;
+  overflow: hidden;
+  background: var(--page);
+  isolation: isolate;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.notes {
+  display: none;
+}
+@media (min-width: 520px) {
+  body {
+    background: #14171a;
+    overflow: auto;
+    padding: 32px;
+  }
+  .device {
+    border-radius: 56px;
+    box-shadow:
+      0 0 0 11px #050607,
+      0 0 0 12.5px #3a3f44,
+      0 40px 80px rgb(0 0 0 / 0.5);
+  }
+}
+@media (min-width: 920px) {
+  .notes {
+    display: block;
+    width: 330px;
+    padding-top: 18px;
+    color: #c9d1d6;
+    font: 14px/21px var(--ui);
+  }
+  .notes h2 {
+    font: 500 26px/30px var(--voice);
+    color: #ecf0f2;
+    margin-bottom: 10px;
+  }
+  .notes p {
+    margin: 0 0 12px;
+    color: #9aa6ae;
+  }
+  .notes ul {
+    margin: 0 0 14px;
+    padding-left: 18px;
+    color: #9aa6ae;
+  }
+  .notes li {
+    margin-bottom: 6px;
+  }
+  .notes kbd,
+  .notes code {
+    font:
+      12.5px/1 ui-monospace,
+      Menlo,
+      monospace;
+    color: #8ff0c4;
+  }
+  .notes .ctl {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0 0 16px;
+  }
+  .notes .ctl button,
+  .notes .ctl a {
+    padding: 7px 12px;
+    border-radius: 999px;
+    border: 1px solid #2c343b;
+    color: #dfe5e8;
+    font-size: 13px;
+    text-decoration: none;
+    background: #1b2025;
+  }
+  .notes .ctl [aria-pressed='true'] {
+    background: #8ff0c4;
+    color: #032015;
+    border-color: transparent;
+  }
+  .haptic-log {
+    margin-top: 18px;
+    border-top: 1px solid #2a3138;
+    padding-top: 12px;
+    min-height: 120px;
+  }
+  .haptic-log b {
+    display: block;
+    color: #7f8b96;
+    font-weight: 500;
+    font-size: 12.5px;
+    margin-bottom: 6px;
+  }
+  .haptic-log div {
+    font:
+      12.5px/19px ui-monospace,
+      Menlo,
+      monospace;
+    color: #8ff0c4;
+    opacity: 0.95;
+  }
+  .haptic-log div + div {
+    opacity: 0.55;
+  }
+  .haptic-log div + div + div {
+    opacity: 0.3;
+  }
+}
+
+/* ---------- Room light field (ambient) ---------- */
+.field {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  background: var(--page);
+}
+:root[data-ready] .field {
+  transition:
+    --p1 1.2s ease,
+    --p2 1.2s ease,
+    --p3 1.2s ease,
+    --k 1.2s ease;
+}
+.pool {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(46px);
+  opacity: calc(var(--k) * var(--field-cap) * 2.1);
+  will-change: transform;
+}
+.pool.a {
+  width: 430px;
+  height: 400px;
+  left: -150px;
+  top: 70px;
+  background: radial-gradient(closest-side, var(--p1), transparent 78%);
+  animation: breathe-a 9s ease-in-out infinite alternate;
+}
+.pool.b {
+  width: 380px;
+  height: 420px;
+  right: -170px;
+  top: -60px;
+  background: radial-gradient(closest-side, var(--p2), transparent 76%);
+  animation: breathe-b 11s ease-in-out infinite alternate;
+}
+.pool.c {
+  width: 520px;
+  height: 300px;
+  left: -40px;
+  top: 300px;
+  background: radial-gradient(closest-side, var(--p3), transparent 74%);
+  opacity: calc(var(--k) * var(--field-cap) * 1.2);
+  animation: breathe-a 13s ease-in-out infinite alternate-reverse;
+}
+.field::before {
+  /* settles the field into the solid page where controls live */
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(
+    180deg,
+    transparent 0,
+    transparent 20%,
+    color-mix(in srgb, var(--page) 62%, transparent) 33%,
+    color-mix(in srgb, var(--page) 90%, transparent) 46%,
+    var(--page) 60%
+  );
+}
+.field.tall::before {
+  background: linear-gradient(
+    180deg,
+    transparent 0,
+    transparent 52%,
+    color-mix(in srgb, var(--page) 80%, transparent) 76%,
+    var(--page) 92%
+  );
+}
+.field::after {
+  /* grain: hides banding on OLED, makes the light feel like light on a wall */
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: var(--grain);
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .9 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.field[data-frozen] .pool {
+  animation: none;
+  filter: blur(46px) saturate(0.15);
+}
+@keyframes breathe-a {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(14px, -10px, 0) scale(1.06);
+  }
+}
+@keyframes breathe-b {
+  from {
+    transform: translate3d(0, 0, 0) scale(1.04);
+  }
+  to {
+    transform: translate3d(-12px, 14px, 0) scale(0.98);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pool {
+    animation: none !important;
+  }
+}
+
+/* ---------- System chrome ---------- */
+.statusbar {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 54px;
+  z-index: 30;
+  pointer-events: none;
+  color: var(--ink);
+}
+.statusbar .clock {
+  position: absolute;
+  left: 0;
+  width: 138px;
+  top: 19px;
+  text-align: center;
+  font: 600 17px/22px var(--ui);
+  letter-spacing: -0.2px;
+  font-variant-numeric: tabular-nums;
+}
+.statusbar .island {
+  position: absolute;
+  left: 50%;
+  top: 11px;
+  width: 126px;
+  height: 37px;
+  margin-left: -63px;
+  border-radius: 19px;
+  background: #000;
+}
+.statusbar .sys {
+  position: absolute;
+  right: 0;
+  width: 138px;
+  top: 21px;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  align-items: center;
+}
+.statusbar svg {
+  display: block;
+  fill: currentColor;
+}
+.homebar {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  width: 139px;
+  height: 5px;
+  margin-left: -69.5px;
+  border-radius: 3px;
+  background: var(--ink);
+  opacity: 0.9;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.safe {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  display: none;
+}
+:root[data-safe] .safe {
+  display: block;
+}
+.safe i {
+  position: absolute;
+  left: 0;
+  right: 0;
+  font: 600 10px/1 var(--ui);
+  font-style: normal;
+  color: #ff5fa2;
+}
+.safe .t {
+  top: 0;
+  height: 62px;
+  background: rgb(255 95 162 / 0.14);
+  border-bottom: 1px dashed #ff5fa2;
+}
+.safe .b {
+  bottom: 0;
+  height: 34px;
+  background: rgb(255 95 162 / 0.14);
+  border-top: 1px dashed #ff5fa2;
+}
+.safe .reach {
+  top: 380px;
+  bottom: 34px;
+  border-top: 1px dashed #8ff0c4;
+  background: rgb(143 240 196 / 0.05);
+  color: #8ff0c4;
+}
+.safe i span {
+  position: absolute;
+  right: 8px;
+  top: 6px;
+}
+.safe .reach span {
+  top: -15px;
+}
+.safe .b span {
+  top: auto;
+  bottom: 20px;
+}
+
+/* ---------- Glass: tab bar, accessory, sheets, round controls ---------- */
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(26px) saturate(170%);
+  backdrop-filter: blur(26px) saturate(170%);
+  border: 1px solid var(--glass-edge);
+  box-shadow:
+    inset 0 1px 0 var(--glass-top),
+    var(--glass-shadow);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background: var(--raised-2);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+:root[data-solid] .glass {
+  background: var(--raised-2);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.tabbar {
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: 25px;
+  height: 62px;
+  border-radius: 31px;
+  z-index: 35;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  padding: 4px;
+}
+.tab {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 1px;
+  border-radius: 27px;
+  color: var(--ink-2);
+  font: 500 10px/12px var(--ui);
+  letter-spacing: 0.1px;
+  text-decoration: none;
+}
+.tab svg {
+  width: 25px;
+  height: 25px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tab[aria-current='page'] {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 11%, transparent);
+  font-weight: 600;
+}
+.tab[aria-current='page'] svg {
+  stroke-width: 2;
+}
+
+.accessory {
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: 95px;
+  height: 46px;
+  border-radius: 23px;
+  z-index: 34;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 16px;
+  text-decoration: none;
+  color: var(--ink);
+}
+.accessory .q {
+  font: 500 16px/20px var(--voice);
+  color: var(--ink-2);
+  flex: none;
+}
+.accessory .a {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 500 15px/20px var(--ui);
+  letter-spacing: -0.15px;
+}
+.accessory time {
+  flex: none;
+  font: 400 13px/18px var(--ui);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  padding-right: 8px;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--mint);
+}
+.dot.skip {
+  background: none;
+  box-shadow: inset 0 0 0 1.6px var(--ink-2);
+}
+.dot.saw {
+  background: var(--ink-3);
+  width: 6px;
+  height: 6px;
+  margin: 1px;
+}
+.dot.bad {
+  background: var(--bad);
+}
+.dot.you {
+  background: var(--ink);
+}
+
+/* ---------- Layout ---------- */
+.scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 62px 0 170px;
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+}
+.scroll::-webkit-scrollbar {
+  display: none;
+}
+.pad {
+  padding-inline: var(--gutter);
+}
+.navrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+  padding-inline: var(--gutter);
+}
+.rooms {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+}
+.rooms button {
+  font: 400 17px/22px var(--ui);
+  letter-spacing: -0.3px;
+  color: var(--ink-f2);
+}
+.rooms button[aria-pressed='true'] {
+  color: var(--ink);
+  font-weight: 600;
+}
+.title {
+  font: 500 32px/36px var(--voice);
+  letter-spacing: -0.5px;
+  font-variation-settings: 'opsz' 40;
+  text-wrap: balance;
+}
+.section {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 26px var(--gutter) 10px;
+}
+.section h2 {
+  font: 600 15px/20px var(--ui);
+  letter-spacing: -0.15px;
+  color: var(--ink-2);
+}
+.section a,
+.section button {
+  font: 400 15px/20px var(--ui);
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font: 400 17px/22px var(--ui);
+  color: var(--ink);
+  text-decoration: none;
+  letter-spacing: -0.3px;
+}
+.back svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  margin-left: -7px;
+}
+.round {
+  width: 44px;
+  height: 44px;
+  border-radius: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+}
+.round svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- Scene tile ---------- */
+.tiles {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  padding-inline: var(--gutter);
+}
+.tile {
+  --x: 50%;
+  --y: 50%;
+  --fill: linear-gradient(160deg, #ffbd7c, #f29a52);
+  --lit-ink: #2b1606;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  min-height: 96px;
+  padding: 14px 14px 13px 16px;
+  border-radius: var(--r-tile);
+  background: var(--raised);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  transition:
+    transform 0.3s var(--tryck),
+    color 0.25s ease;
+  touch-action: manipulation;
+}
+.tile::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--line);
+  pointer-events: none;
+}
+.tile:is(
+    [data-state='sending'],
+    [data-state='waiting'],
+    [data-state='slow'],
+    [data-state='on']
+  )::after {
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
+}
+.tile.pressed {
+  transform: scale(0.965);
+  transition-duration: 0.12s;
+}
+.tile .fill {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--fill);
+  clip-path: circle(0% at var(--x) var(--y));
+  transition:
+    clip-path 0.46s var(--sken),
+    opacity 0.4s ease;
+}
+.tile[data-state='sending'] .fill,
+.tile[data-state='waiting'] .fill,
+.tile[data-state='slow'] .fill,
+.tile[data-state='on'] .fill {
+  clip-path: circle(150% at var(--x) var(--y));
+}
+.tile[data-state='failed'] .fill {
+  clip-path: circle(0% at var(--x) var(--y));
+  transition-duration: 0.5s;
+}
+.tile[data-state='sending'],
+.tile[data-state='waiting'],
+.tile[data-state='slow'],
+.tile[data-state='on'] {
+  color: var(--lit-ink);
+}
+.tile .pic {
+  width: 38px;
+  height: 38px;
+  border-radius: 19px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--ember, var(--ink-2)) 15%, transparent);
+  color: var(--ember, var(--ink-2));
+  transition:
+    background-color 0.25s,
+    color 0.25s;
+}
+.tile .pic svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tile:is(
+    [data-state='sending'],
+    [data-state='waiting'],
+    [data-state='slow'],
+    [data-state='on']
+  )
+  .pic {
+  background: rgb(0 0 0 / 0.1);
+  color: inherit;
+}
+.tile .nm {
+  display: block;
+  font: 600 17px/21px var(--ui);
+  letter-spacing: -0.35px;
+}
+.tile .st {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 1px;
+  font: 400 13px/17px var(--ui);
+  letter-spacing: -0.05px;
+  color: var(--ink-3);
+  min-height: 17px;
+  white-space: nowrap;
+}
+.tile:is(
+    [data-state='sending'],
+    [data-state='waiting'],
+    [data-state='slow'],
+    [data-state='on']
+  )
+  .st {
+  color: color-mix(in srgb, var(--lit-ink) 86%, transparent);
+}
+.tile[data-state='failed'] .st {
+  color: var(--bad);
+}
+.tile .st svg {
+  display: none;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tile .st svg path {
+  stroke-dasharray: 20;
+  stroke-dashoffset: 20;
+}
+.tile[data-state='on'] .st svg {
+  display: block;
+}
+.tile[data-state='on'] .st svg path {
+  stroke-dashoffset: 0;
+  transition: stroke-dashoffset 0.32s 0.05s ease-out;
+}
+.tile .wait {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+}
+.tile:is([data-state='waiting'], [data-state='slow']) .wait {
+  opacity: 1;
+}
+.tile .wait::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: var(--lit-ink);
+  opacity: 0.5;
+  animation: wait 1.4s ease-in-out infinite;
+}
+@keyframes wait {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+/* "Helt släckt" is the absence of light: no fill, an ink outline. */
+.tile[data-scene='off'] .fill {
+  display: none;
+}
+.tile[data-scene='off']:is(
+    [data-state='sending'],
+    [data-state='waiting'],
+    [data-state='on']
+  ) {
+  color: var(--ink);
+  background: var(--raised-2);
+}
+.tile[data-scene='off']:is(
+    [data-state='sending'],
+    [data-state='waiting'],
+    [data-state='on']
+  )::after {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+.tile[data-scene='off']:is(
+    [data-state='sending'],
+    [data-state='waiting'],
+    [data-state='on']
+  )
+  .st {
+  color: var(--ink-2);
+}
+.tile[data-scene='off']:is(
+    [data-state='sending'],
+    [data-state='waiting'],
+    [data-state='on']
+  )
+  .pic {
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+}
+.tile[data-scene='off'] .wait::before {
+  background: var(--ink);
+}
+/* scene light signatures */
+.tile[data-scene='mys'] {
+  --ember: #ffa95c;
+  --fill: linear-gradient(165deg, #ffb873 0%, #f0934a 100%);
+  --lit-ink: #2b1505;
+}
+.tile[data-scene='vardag'] {
+  --ember: #ffcf9a;
+  --fill: linear-gradient(165deg, #ffe0b8 0%, #ffc88c 100%);
+  --lit-ink: #2a1a08;
+}
+.tile[data-scene='film'] {
+  --ember: #e8743c;
+  --fill: linear-gradient(150deg, #a94a22 0%, #7a3224 52%, #2b3f9e 135%);
+  --lit-ink: #fff3ea;
+}
+.tile[data-scene='fokus'] {
+  --ember: #f3ede2;
+  --fill: linear-gradient(165deg, #fffaf2 0%, #ecefee 100%);
+  --lit-ink: #14181a;
+}
+.tile[data-scene='party'] {
+  --ember: #ff6fb5;
+  --fill: linear-gradient(135deg, #d81f84 0%, #7438ea 55%, #1487c9 120%);
+  --lit-ink: #ffffff;
+}
+:root[data-theme='light'] .tile[data-scene='mys'] {
+  --ember: #b85a12;
+}
+:root[data-theme='light'] .tile[data-scene='vardag'] {
+  --ember: #a86a14;
+}
+:root[data-theme='light'] .tile[data-scene='film'] {
+  --ember: #a8421a;
+}
+:root[data-theme='light'] .tile[data-scene='fokus'] {
+  --ember: #4d5a56;
+}
+:root[data-theme='light'] .tile[data-scene='party'] {
+  --ember: #b8257a;
+}
+:root[data-theme='light'] .tile[data-scene='fokus'] {
+  --fill: linear-gradient(165deg, #ffffff 0%, #ffffff 100%);
+}
+:root[data-theme='light']
+  .tile[data-scene='fokus']:is(
+    [data-state='sending'],
+    [data-state='waiting'],
+    [data-state='slow'],
+    [data-state='on']
+  )::after {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+
+/* ---------- Rows, cards, chips ---------- */
+.card {
+  margin-inline: var(--gutter);
+  border-radius: var(--r-card);
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 16px;
+  position: relative;
+}
+.row + .row::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--line);
+}
+.row .grow {
+  flex: 1;
+  min-width: 0;
+}
+.row .t {
+  font: 500 16px/21px var(--ui);
+  letter-spacing: -0.25px;
+}
+.row .d {
+  font: 400 13px/18px var(--ui);
+  color: var(--ink-2);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 15px;
+  background: var(--raised-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font: 500 13px/18px var(--ui);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.chip[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--page);
+  box-shadow: none;
+}
+.btn {
+  display: grid;
+  place-items: center;
+  height: 54px;
+  border-radius: 27px;
+  background: var(--ink);
+  color: var(--page);
+  font: 600 17px/22px var(--ui);
+  letter-spacing: -0.3px;
+  transition: transform 0.3s var(--tryck);
+}
+.btn:active {
+  transform: scale(0.975);
+}
+.btn.quiet {
+  background: var(--raised-2);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.switch {
+  width: 51px;
+  height: 31px;
+  border-radius: 16px;
+  background: var(--raised-3);
+  position: relative;
+  flex: none;
+  transition: background-color 0.25s;
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 5px rgb(0 0 0 / 0.3);
+  transition: transform 0.32s var(--tryck);
+}
+.switch[aria-checked='true'] {
+  background: var(--mint);
+}
+.switch[aria-checked='true']::after {
+  transform: translateX(20px);
+}
+:root[data-theme='light'] .switch {
+  background: #cfd8d5;
+}
+
+/* ---------- Sheet ---------- */
+.scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 44;
+  background: rgb(0 0 0 / 0.42);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+.sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 45;
+  border-radius: var(--r-sheet) var(--r-sheet) 0 0;
+  padding: 8px 0 34px;
+  transform: translateY(104%);
+  transition: transform 0.5s var(--glid);
+  background: color-mix(in srgb, var(--raised) 86%, transparent);
+}
+.sheet .grab {
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--ink-3);
+  opacity: 0.6;
+  margin: 0 auto 10px;
+}
+.device[data-sheet] .scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+.device[data-sheet] .sheet {
+  transform: none;
+}
+
+/* Screenshot mode (?shot): final states, no motion. */
+:root[data-shot] *,
+:root[data-shot] *::before,
+:root[data-shot] *::after {
+  transition: none !important;
+  animation-play-state: paused !important;
+}
+
+.head { padding: 6px var(--gutter) 0; }
+.lead { margin-top: 4px; font: 400 15px/20px var(--ui); color: var(--ink-f2); }
+.filters { display: flex; gap: 8px; padding: 16px var(--gutter) 0; }
+.day { margin: 24px var(--gutter) 2px; font: 600 15px/20px var(--ui); color: var(--ink-2); letter-spacing: -0.15px; }
+/* One moment = one cause and everything Lugn did or chose not to do because of it. */
+.moment { display: grid; grid-template-columns: 46px 1fr; padding: 14px var(--gutter) 0; }
+.moment > time { font: 500 13px/20px var(--ui); color: var(--ink-2); font-variant-numeric: tabular-nums; padding-top: 1px; }
+.cause { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.cause b { font: 600 15px/20px var(--ui); letter-spacing: -0.2px; }
+.cause span { font: 400 12px/16px var(--ui); color: var(--ink-3); white-space: nowrap; }
+.ev { position: relative; margin-top: 8px; padding: 0 0 0 20px; }
+.ev::before { content: ''; position: absolute; left: 3.5px; top: 18px; bottom: -14px; width: 1px; background: var(--line-strong); }
+.ev:last-child::before { display: none; }
+.ev .dot { position: absolute; left: 0; top: 8px; }
+.ev .dot.saw { left: 0; top: 9px; }
+.ev p { font: 400 19px/25px var(--voice); letter-spacing: -0.15px; font-variation-settings: 'opsz' 20; }
+.ev[data-o='skipped'] p { color: var(--ink-2); }
+.ev[data-o='failed'] p { color: var(--bad); }
+.ev small { display: block; margin-top: 3px; font: 400 13px/18px var(--ui); color: var(--ink-2); }
+.ev[data-open] { margin: 10px 0 2px -12px; padding: 10px 12px 12px 32px; border-radius: 16px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+.ev[data-open] .dot { left: 12px; top: 18px; }
+.ev[data-open]::before { display: none; }
+.ev ul { margin: 8px 0 0; padding: 0; list-style: none; display: none; }
+.ev[data-open] ul { display: block; }
+.ev li { font: 400 13px/18px var(--ui); color: var(--ink-2); padding: 5px 0; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; }
+.ev li b { font-weight: 500; color: var(--ink); white-space: nowrap; }
+.legend { display: flex; gap: 16px; margin: 14px var(--gutter) 0; font: 400 12px/16px var(--ui); color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.empty { margin: 60px var(--gutter); font: 400 22px/28px var(--voice); color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="stage">
+<main class="device">
+<div class="field"><i class="pool a"></i><i class="pool b"></i><i class="pool c"></i></div>
+<div class="scroll" style="padding-bottom:60px">
+  <div class="navrow"><a class="back" href="hem.html"><svg viewBox="0 0 24 24"><path d="M14.500 5.500L8 12l6.500 6.500"/></svg>Hem</a></div>
+  <div class="head"><h1 class="title">Varför?</h1><p class="lead" id="lead">Allt Lugn gjorde i dag, och det Lugn lät bli.</p></div>
+  <div class="filters" role="group" aria-label="Visa" id="filters">
+    <button class="chip" data-f="allt" aria-pressed="true">Allt</button><button class="chip" data-f="gjorde">Gjorde</button><button class="chip" data-f="avstod">Lät bli</button><button class="chip" data-f="fel">Fel</button>
+  </div>
+  <div class="legend" aria-hidden="true"><span><i class="dot"></i>Lugn gjorde</span><span><i class="dot skip"></i>Lugn lät bli</span><span><i class="dot you"></i>Du</span></div>
+  <div id="list"></div>
+</div>
+</main>
+<aside class="notes">
+<h2>Varför?</h2>
+<p>Inte en logg. Händelserna är ordnade efter orsak: först det som hände i rummet, sedan vad Lugn gjorde av det. Det Lugn valde att inte göra står på samma rad och i samma röst, bara med en tom ring.</p>
+<ul>
+  <li>Mint punkt: Lugn handlade själv. Vit punkt: du. Tom ring: Lugn avstod. Korall: gick fel.</li>
+  <li>Tryck på en rad för villkoren bakom beslutet.</li>
+  <li>Filtret ”Lät bli” är sidans poäng: det svarar på ”varför tändes det inte?”.</li>
+</ul>
+<p><kbd>s</kbd> säkra ytor och tumzon, <kbd>t</kbd> ljust/mörkt, <kbd>g</kbd> glas av (Minska genomskinlighet).</p>
+<div class="haptic-log"><b>Haptik (logg)</b></div>
+</aside>
+</div>
+<script>
+/* Lugn iOS prototypes: shared behaviour. Plain JS, no dependencies. */
+window.Lugn = (() => {
+  const root = document.documentElement;
+  const q = new URLSearchParams(location.search);
+  if (q.get('theme')) root.dataset.theme = q.get('theme');
+  if (q.has('safe')) root.dataset.safe = '';
+  if (q.has('solid')) root.dataset.solid = '';
+  if (q.has('shot')) root.dataset.shot = '';
+  else
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => (root.dataset.ready = '')),
+    );
+  const light = () => root.dataset.theme === 'light';
+
+  /* Scene pictograms: 24 grid, 1.6 stroke, round caps. Same family as the Hub. */
+  const PIC = {
+    off: '<path d="M12 3.8v7.6"/><path d="M7 6.9a7.4 7.4 0 1 0 10 0"/>',
+    mys: '<path d="M19.4 14.6A8 8 0 0 1 9.4 4.6a8 8 0 1 0 10 10z"/>',
+    vardag:
+      '<circle cx="12" cy="12" r="3.7"/><path d="M12 3.2v2.2M12 18.6v2.2M3.2 12h2.2M18.6 12h2.2M5.8 5.8l1.5 1.5M16.7 16.7l1.5 1.5M5.8 18.2l1.5-1.5M16.7 7.3l1.5-1.5"/>',
+    film: '<rect x="3.4" y="4.8" width="17.2" height="11.6" rx="2.4"/><path d="M10.5 8.4v4.4l3.8-2.2z"/><path d="M8.4 19.6h7.2"/>',
+    fokus:
+      '<path d="M5.5 20.2h8"/><path d="M9.5 20.2v-6.4l4-5"/><path d="M11.6 6.2l6.2 4.9-.9 1.2a4 4 0 0 1-6.2-4.9z"/><path d="M17.6 15.2l.9 1.2M14.6 16.4v1.5M20 12.8l1.4.5"/>',
+    party:
+      '<path d="M12 2.8v3.4"/><circle cx="12" cy="13.6" r="7.2"/><path d="M4.8 13.6h14.4M6.3 9.6h11.4M6.3 17.6h11.4"/><path d="M12 6.4c-2.6 2-2.6 12.4 0 14.4M12 6.4c2.6 2 2.6 12.4 0 14.4"/>',
+    tick: '<path d="M5 12.6l4.4 4.4L19 7.4"/>',
+    chev: '<path d="M9 5.5l6.5 6.5L9 18.5"/>',
+    back: '<path d="M14.5 5.5L8 12l6.5 6.5"/>',
+    moon: '<path d="M19.4 14.6A8 8 0 0 1 9.4 4.6a8 8 0 1 0 10 10z"/><path d="M17.2 3.6v3.2M15.6 5.2h3.2"/>',
+    warn: '<path d="M12 4.2l8.4 14.6H3.6z"/><path d="M12 10v4.2M12 16.6v.2"/>',
+    wifiOff:
+      '<path d="M4 4l16 16"/><path d="M8.6 15.4a5 5 0 0 1 6.2-.5M5.4 12a9.4 9.4 0 0 1 3.4-2.2M12.4 8.6a9.6 9.6 0 0 1 6.4 3.2M2.6 8.6a14 14 0 0 1 3-2M10.6 5a14 14 0 0 1 10.8 3.6"/><circle cx="12" cy="18.6" r=".7"/>',
+    person:
+      '<circle cx="12" cy="8" r="3.4"/><path d="M5.2 20c.6-4 3.4-6 6.8-6s6.2 2 6.8 6"/>',
+    play: '<path d="M8 5.2v13.6L19 12z" fill="currentColor"/>',
+    pause: '<path d="M8.5 5.5v13M15.5 5.5v13" stroke-width="2.6"/>',
+    next: '<path d="M6 6v12l9-6z" fill="currentColor"/><path d="M18 6v12" stroke-width="2.2"/>',
+    prev: '<path d="M18 6v12l-9-6z" fill="currentColor"/><path d="M6 6v12" stroke-width="2.2"/>',
+    bulb: '<path d="M9 17.4h6M10 20.4h4"/><path d="M8.4 14.6a6 6 0 1 1 7.2 0c-.6.5-.9 1-.9 1.6H9.3c0-.6-.3-1.1-.9-1.6z"/>',
+    plus: '<path d="M12 5.5v13M5.5 12h13"/>',
+    minus: '<path d="M5.5 12h13"/>',
+    more: '<circle cx="6" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="18" cy="12" r="1.2" fill="currentColor"/>',
+    x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  };
+  const svg = (name, extra = '') =>
+    `<svg viewBox="0 0 24 24" aria-hidden="true" ${extra}>${PIC[name]}</svg>`;
+
+  /* Room light per scene: three pools (bed lamp, desk lamp, wash) and intensity k (0..1). */
+  const SCENES = {
+    off: {
+      name: 'Helt släckt',
+      hint: 'Allt av',
+      p: ['#16263a', '#0e1a2a', '#0a121c'],
+      k: 0.55,
+      pl: ['#c9d6de', '#d6dfe4', '#dfe6e8'],
+      kl: 0.5,
+    },
+    mys: {
+      name: 'Mysljus',
+      hint: '35 %, glöd',
+      p: ['#ff9a45', '#ffb066', '#c85f2a'],
+      k: 0.9,
+      pl: ['#ffc48a', '#ffd3a6', '#ffe1c2'],
+      kl: 0.95,
+    },
+    vardag: {
+      name: 'Vardagsljus',
+      hint: '60 %, varmt',
+      p: ['#ffc07c', '#ffd29c', '#f0a45c'],
+      k: 0.8,
+      pl: ['#ffd9ae', '#ffe6c8', '#fff0dc'],
+      kl: 0.9,
+    },
+    film: {
+      name: 'Filmkväll',
+      hint: '15 %, skärmljus',
+      p: ['#c9542a', '#3f5bf0', '#7a2f22'],
+      k: 0.8,
+      pl: ['#f2b89c', '#b9c6ff', '#f3d6c8'],
+      kl: 0.8,
+    },
+    fokus: {
+      name: 'Fokus',
+      hint: '100 %, 4000 K',
+      p: ['#f6ecdc', '#dfe9f4', '#fff3df'],
+      k: 0.76,
+      pl: ['#ffffff', '#d6e4f5', '#fff1d6'],
+      kl: 1,
+    },
+    party: {
+      name: 'Party',
+      hint: 'Färg, rörelse',
+      p: ['#ff3f9a', '#3cc4ff', '#7a4cff'],
+      k: 0.95,
+      pl: ['#ffb3d8', '#b3e6ff', '#d2c2ff'],
+      kl: 0.9,
+    },
+  };
+  const ORDER = ['off', 'mys', 'vardag', 'film', 'fokus', 'party'];
+
+  function setField(scene, level = 1) {
+    const s = SCENES[scene];
+    if (!s) return;
+    const p = light() ? s.pl : s.p;
+    root.style.setProperty('--p1', p[0]);
+    root.style.setProperty('--p2', p[1]);
+    root.style.setProperty('--p3', p[2]);
+    root.style.setProperty('--k', String((light() ? s.kl : s.k) * level));
+  }
+
+  /* Haptics: logged for designers, vibrates on devices that can. */
+  const HAPTIC_MS = {
+    selection: 4,
+    soft: 8,
+    light: 10,
+    medium: 16,
+    rigid: 12,
+    heavy: 24,
+    success: [10, 60, 14],
+    warning: [14, 80, 14],
+    error: [18, 50, 18, 50, 18],
+  };
+  function haptic(type, where = '') {
+    const log = document.querySelector('.haptic-log');
+    if (log) {
+      const d = document.createElement('div');
+      d.textContent = `${type}${where ? '  · ' + where : ''}`;
+      log.querySelector('b').after(d);
+      while (log.children.length > 7) log.lastChild.remove();
+    }
+    if (navigator.vibrate)
+      try {
+        navigator.vibrate(HAPTIC_MS[type] || 8);
+      } catch {
+        /* vibration is optional */
+      }
+  }
+
+  /* Fader: follows the finger 1:1, snaps to named detents inside a magnet zone,
+     ticks softly every `tick` units. el must contain nothing that captures pointers. */
+  function fader(
+    el,
+    {
+      axis = 'y',
+      value = 50,
+      min = 0,
+      max = 100,
+      detents = [],
+      magnet = 3,
+      tick = 10,
+      name = 'reglage',
+      onChange,
+    } = {},
+  ) {
+    let v = value,
+      lastTick = Math.round(value / tick),
+      lastDetent = null,
+      t0 = 0,
+      v0 = value;
+    const set = (nv, fromUser) => {
+      v = Math.min(max, Math.max(min, nv));
+      el.style.setProperty('--v', String((v - min) / (max - min)));
+      el.setAttribute('aria-valuenow', String(Math.round(v)));
+      onChange?.(v, fromUser);
+    };
+    const read = (e) => {
+      const r = el.getBoundingClientRect();
+      const f =
+        axis === 'y'
+          ? 1 - (e.clientY - r.top) / r.height
+          : (e.clientX - r.left) / r.width;
+      return min + Math.min(1, Math.max(0, f)) * (max - min);
+    };
+    const move = (e) => {
+      let nv = read(e);
+      const now = performance.now();
+      const speed = (Math.abs(nv - v0) / Math.max(1, now - t0)) * 1000; // units per second
+      t0 = now;
+      v0 = nv;
+      const d = detents.find((x) => Math.abs(x - nv) <= magnet);
+      if (d !== undefined && speed < 220) nv = d;
+      if (d !== undefined && d !== lastDetent)
+        haptic(
+          d === min || d === max ? 'rigid' : 'selection',
+          `${name}: hack ${d}`,
+        );
+      lastDetent = d === undefined ? null : d;
+      const tk = Math.round(nv / tick);
+      if (tk !== lastTick && d === undefined && speed < 160)
+        haptic('soft', `${name}: steg`);
+      lastTick = tk;
+      set(nv, true);
+    };
+    el.setAttribute('role', 'slider');
+    el.setAttribute('aria-valuemin', min);
+    el.setAttribute('aria-valuemax', max);
+    el.tabIndex = 0;
+    el.style.touchAction = 'none';
+    el.addEventListener('pointerdown', (e) => {
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        /* synthetic events have no active pointer */
+      }
+      el.dataset.drag = '';
+      t0 = performance.now();
+      v0 = v;
+      move(e);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if ('drag' in el.dataset) move(e);
+    });
+    const end = () => {
+      delete el.dataset.drag;
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    el.addEventListener('keydown', (e) => {
+      const step = (max - min) / 20;
+      if (['ArrowUp', 'ArrowRight'].includes(e.key)) {
+        set(v + step, true);
+        haptic('selection', name);
+      }
+      if (['ArrowDown', 'ArrowLeft'].includes(e.key)) {
+        set(v - step, true);
+        haptic('selection', name);
+      }
+    });
+    set(value, false);
+    return { set: (nv) => set(nv, false), get: () => v };
+  }
+
+  function tileHTML(scene, state = 'idle', st) {
+    const s = SCENES[scene];
+    const label =
+      st || (state === 'on' ? (scene === 'off' ? 'Släckt' : 'Aktiv') : s.hint);
+    return `<button class="tile" data-scene="${scene}" data-state="${state}" aria-pressed="${state === 'on'}" aria-label="${s.name}">
+      <span class="fill"></span><span class="pic">${svg(scene)}</span>
+      <span><span class="nm">${s.name}</span><span class="st">${svg('tick')}<span class="stt">${label}</span></span></span>
+      <span class="wait"></span></button>`;
+  }
+
+  /* Scene tile: touch fills from the finger at once, device confirmation follows.
+     opts.onHold(tile) opens the hold sheet; opts.outcome(scene) returns 'ok' | 'slow' | 'fail' | 'offline'. */
+  function wireTiles(container, opts = {}) {
+    const timers = new WeakMap();
+    const setSt = (t, state, text) => {
+      t.dataset.state = state;
+      t.querySelector('.stt').textContent = text;
+      t.setAttribute('aria-pressed', state === 'on');
+    };
+    container.addEventListener('pointerdown', (e) => {
+      const t = e.target.closest('.tile');
+      if (!t) return;
+      const r = t.getBoundingClientRect();
+      t.style.setProperty('--x', ((e.clientX - r.left) / r.width) * 100 + '%');
+      t.style.setProperty('--y', ((e.clientY - r.top) / r.height) * 100 + '%');
+      t.classList.add('pressed');
+      haptic('soft', 'tryck ned');
+      t._held = false;
+      t._hold = setTimeout(() => {
+        if (!opts.onHold) return;
+        t._held = true;
+        t.classList.remove('pressed');
+        haptic('medium', 'håll: öppnar blad');
+        opts.onHold(t);
+      }, 380);
+    });
+    const cancel = (e) => {
+      const t = e.target.closest?.('.tile');
+      if (t) {
+        clearTimeout(t._hold);
+        t.classList.remove('pressed');
+      }
+    };
+    container.addEventListener('pointerleave', cancel, true);
+    container.addEventListener('pointercancel', cancel, true);
+    container.addEventListener('pointerup', (e) => {
+      const t = e.target.closest('.tile');
+      if (!t) return;
+      clearTimeout(t._hold);
+      t.classList.remove('pressed');
+      if (t._held) return;
+      const scene = t.dataset.scene;
+      const outcome = opts.outcome ? opts.outcome(scene) : 'ok';
+      if (outcome === 'offline') {
+        haptic('warning', 'offline: skickar inte');
+        opts.onOffline?.(t);
+        return;
+      }
+      container.querySelectorAll('.tile').forEach((o) => {
+        if (o !== t && o.dataset.state !== 'idle') {
+          (timers.get(o) || []).forEach(clearTimeout);
+          setSt(o, 'idle', SCENES[o.dataset.scene].hint);
+        }
+      });
+      (timers.get(t) || []).forEach(clearTimeout);
+      setSt(t, 'sending', 'Skickar');
+      setField(scene);
+      opts.onSelect?.(scene, 'sending');
+      const ts = [];
+      ts.push(setTimeout(() => setSt(t, 'waiting', 'Väntar på lamporna'), 260));
+      if (outcome === 'ok')
+        ts.push(
+          setTimeout(() => {
+            setSt(t, 'on', scene === 'off' ? 'Släckt' : 'Aktiv');
+            haptic('soft', 'bekräftat av lamporna');
+            opts.onSelect?.(scene, 'on');
+          }, 1150),
+        );
+      if (outcome === 'slow') {
+        ts.push(setTimeout(() => setSt(t, 'slow', 'Svarar långsamt'), 2500));
+        ts.push(
+          setTimeout(() => {
+            setSt(t, 'on', 'Aktiv');
+            haptic('soft', 'bekräftat (sent)');
+            opts.onSelect?.(scene, 'on');
+          }, 5200),
+        );
+      }
+      if (outcome === 'fail')
+        ts.push(
+          setTimeout(() => {
+            setSt(t, 'failed', 'Gick inte. Tryck igen.');
+            haptic('error', 'kommandot misslyckades');
+            opts.onFail?.(scene);
+          }, 2200),
+        );
+      timers.set(t, ts);
+    });
+    container.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  /* Chrome shared by every screen. */
+  const TABS = [
+    [
+      'hem',
+      'Hem',
+      'hem.html',
+      '<path d="M4.5 11.2L12 4.6l7.5 6.6"/><path d="M6.4 9.8v9.4h11.2V9.8"/>',
+    ],
+    ['belysning', 'Belysning', 'belysning.html', PIC.bulb],
+    [
+      'musik',
+      'Musik',
+      'musik.html',
+      '<path d="M9.2 17.6V6.2l9.6-1.8v11.2"/><circle cx="6.9" cy="17.6" r="2.3"/><circle cx="16.5" cy="15.6" r="2.3"/>',
+    ],
+    [
+      'rutiner',
+      'Rutiner',
+      'godnatt.html',
+      '<circle cx="12" cy="12" r="8"/><path d="M12 7.4V12l3 2"/>',
+    ],
+    [
+      'installningar',
+      'Inställningar',
+      'telefon.html',
+      '<path d="M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9"/><circle cx="15" cy="7.5" r="2"/><circle cx="9" cy="16.5" r="2"/>',
+    ],
+  ];
+  function chrome({
+    time = '21:47',
+    tab = null,
+    why = null,
+    statusInk = null,
+  } = {}) {
+    const dev = document.querySelector('.device');
+    const sb = document.createElement('div');
+    sb.className = 'statusbar';
+    if (statusInk) sb.style.color = statusInk;
+    sb.innerHTML = `<div class="clock">${time}</div><div class="island"></div><div class="sys">
+      <svg width="18" height="12" viewBox="0 0 18 12"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="5" y="5.5" width="3" height="6.5" rx=".8"/><rect x="10" y="3" width="3" height="9" rx=".8"/><rect x="15" y="0" width="3" height="12" rx=".8"/></svg>
+      <svg width="17" height="12" viewBox="0 0 17 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" style="fill:none"><path d="M1.4 4.3a10.2 10.2 0 0 1 14.2 0"/><path d="M4 7a6.5 6.5 0 0 1 9 0"/><path d="M6.7 9.6a2.7 2.7 0 0 1 3.6 0"/></svg>
+      <svg width="27" height="13" viewBox="0 0 27 13"><rect x=".5" y=".5" width="23" height="12" rx="3.6" fill="none" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="16.5" height="9" rx="2.2"/><path d="M25 4.5v4c.8-.3 1.5-1 1.5-2s-.7-1.7-1.5-2z" opacity=".45"/></svg></div>`;
+    dev.append(sb);
+    if (why) {
+      const a = document.createElement('a');
+      a.className = 'accessory glass';
+      a.href = 'varfor.html';
+      a.setAttribute('aria-label', `Varför? ${why.text}, ${why.t}`);
+      a.innerHTML = `<span class="dot ${why.kind || ''}"></span><span class="a">${why.text}</span><time>${why.t}</time>`;
+      dev.append(a);
+    }
+    if (tab) {
+      const nav = document.createElement('nav');
+      nav.className = 'tabbar glass';
+      nav.setAttribute('aria-label', 'Flikar');
+      nav.innerHTML = TABS.map(
+        ([id, name, href, d]) =>
+          `<a class="tab" href="${href}" ${id === tab ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>${name}</a>`,
+      ).join('');
+      dev.append(nav);
+    }
+    const hb = document.createElement('div');
+    hb.className = 'homebar';
+    dev.append(hb);
+    const safe = document.createElement('div');
+    safe.className = 'safe';
+    safe.innerHTML =
+      '<i class="t"><span>säker yta topp 62</span></i><i class="reach"><span>tumzon: allt du styr ligger här</span></i><i class="b"><span>säker yta botten 34</span></i>';
+    dev.append(safe);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 's') root.toggleAttribute('data-safe');
+      if (e.key === 't') root.dataset.theme = light() ? 'dark' : 'light';
+      if (e.key === 'g') root.toggleAttribute('data-solid');
+    });
+  }
+
+  return {
+    q,
+    PIC,
+    svg,
+    SCENES,
+    ORDER,
+    setField,
+    haptic,
+    fader,
+    tileHTML,
+    wireTiles,
+    chrome,
+    light,
+  };
+})();
+
+</script>
+<script>
+Lugn.chrome({ time: '21:47' });
+Lugn.setField('mys', 0.5);
+const DATA = [
+  ['I kväll', [
+    ['21:46', 'Du gick ut ur rummet', 'Närvarosensor', [
+      ['skipped', 'Släckte inte: väntar 60 s på att du kommer tillbaka', null, [['Väntetid vid utgång', '60 s'], ['Tillbaka efter', '38 s'], ['Resultat', 'Ljus och musik rördes inte']], true],
+    ]],
+    ['21:30', 'Klockan blev 21:30', 'Volymkurva', [
+      ['acted', 'Sänkte musiken till 24 %: kvällskurvan', 'Målet är 30 % minus 6 för klockan.', [['Styr volymen', 'Lugn'], ['Personer', '1']]],
+    ]],
+    ['18:42', 'Någon kom in', 'Närvarosensor', [
+      ['acted', 'Tände Mysljus: någon kom in', null, [['Vald scen', 'Mysljus'], ['Hemma', 'Ja']]],
+      ['acted', 'Startade Spotify DJ: rummet hade varit tomt i 2 h', null, [['Tyst tid 23–06', 'Nej'], ['Pausad av dig', 'Nej']]],
+      ['skipped', 'Rörde inte skrivbordslampan: du ändrade den för hand', null, [['Ändrad', '16:10, 35 %']]],
+    ]],
+    ['18:41', 'Rörelse vid dörren', 'Närvarosensor', [
+      ['acted', 'Förtände: någon var på väg in', 'Tillfälligt, tills sensorn bekräftat.', [['Rummet var', 'Mörkt och tomt']]],
+    ]],
+    ['17:58', 'Telefonen kom hem', 'Telefon', [
+      ['observed', 'Noterade att du är hemma', null, []],
+      ['skipped', 'Tände inte: rummet var fortfarande tomt', 'Telefonen är en ledtråd. Sensorn avgör.', [['Närvaro', 'Bekräftat tomt']]],
+    ]],
+  ]],
+  ['Tidigare i dag', [
+    ['14:20', 'Du valde Fokus', 'Telefon', [['you', 'Bytte till Fokus: du valde det', null, []]]],
+    ['13:05', 'Taklampan svarade inte', 'Home Assistant', [['failed', 'Kunde inte tända taklampan. Försökte tre gånger.', 'Övriga fem lampor följde scenen.', [['Senast nådd', '12:51']]]]],
+    ['08:55', 'Någon kom in', 'Närvarosensor', [
+      ['acted', 'Tände Vardagsljus: någon kom in', null, []],
+      ['skipped', 'Ingen musik: du pausade själv', 'Gäller tills du trycker på spela.', []],
+    ]],
+    ['07:00', 'God morgon', 'Rutin', [['acted', 'Tände till 40 % på 20 min', 'Planerat i går 22:34.', []]]],
+    ['02:14', 'Rörelse vid dörren', 'Närvarosensor', [['skipped', 'Förtände inte: Helt släckt gäller', null, []]]],
+  ]],
+];
+const DOT = { acted: '', skipped: 'skip', observed: 'saw', failed: 'bad', you: 'you' };
+const KEEP = { allt: () => true, gjorde: (o) => o === 'acted' || o === 'you', avstod: (o) => o === 'skipped', fel: (o) => o === 'failed' };
+const LEAD = { allt: 'Allt Lugn gjorde i dag, och det Lugn lät bli.', gjorde: 'Det Lugn och du gjorde i dag.', avstod: 'Det Lugn valde att inte göra, och varför.', fel: 'Det som inte gick som det skulle.' };
+function render(f) {
+  let html = '';
+  for (const [day, moments] of DATA) {
+    let block = '';
+    for (const [t, cause, trig, evs] of moments) {
+      const keep = evs.filter((e) => KEEP[f](e[0]));
+      if (!keep.length) continue;
+      block += `<article class="moment"><time>${t}</time><div><div class="cause"><b>${cause}</b><span>${trig}</span></div>` +
+        keep.map(([o, text, sub, cond, open]) => `<div class="ev" data-o="${o}" ${open && f !== 'gjorde' ? 'data-open' : ''} tabindex="0"><i class="dot ${DOT[o]}"></i><p>${text}</p>${sub ? `<small>${sub}</small>` : ''}${cond.length ? `<ul>${cond.map(([k, v]) => `<li><span>${k}</span><b>${v}</b></li>`).join('')}</ul>` : ''}</div>`).join('') + '</div></article>';
+    }
+    if (block) html += `<h2 class="day">${day}</h2>${block}`;
+  }
+  document.getElementById('list').innerHTML = html || '<p class="empty">Inget sådant i dag.</p>';
+  document.getElementById('lead').textContent = LEAD[f];
+  document.querySelectorAll('#filters .chip').forEach((c) => c.setAttribute('aria-pressed', c.dataset.f === f));
+}
+document.getElementById('filters').addEventListener('click', (e) => { const c = e.target.closest('.chip'); if (c) { render(c.dataset.f); Lugn.haptic('selection', 'filter'); } });
+document.getElementById('list').addEventListener('click', (e) => { const ev = e.target.closest('.ev'); if (ev && ev.querySelector('ul')) { ev.toggleAttribute('data-open'); Lugn.haptic('light', 'villkor'); } });
+render(Lugn.q.get('filter') || 'allt');
+</script>
+</body>
+</html>
