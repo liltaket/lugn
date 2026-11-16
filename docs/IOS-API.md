@@ -10,9 +10,12 @@ schemas cannot express.
 
 - One separate listener, **off by default**, configured under `device` in
   `config.json` (see [OPERATIONS.md](OPERATIONS.md#paired-device-api-native-app)).
-- It is reached over Tailscale or the LAN only. There is no WAN exposure and
-  no port forward. The listener is plain HTTP; Tailscale provides transport
-  encryption. On a LAN without Tailscale, traffic is not encrypted.
+- It is reached over Tailscale only. There is no WAN exposure and no port
+  forward. The listener itself speaks plain HTTP and binds loopback; the
+  recommended deployment puts `tailscale serve` in front of it so clients use
+  HTTPS on the MagicDNS name (see [ios/REACHABILITY.md](ios/REACHABILITY.md)).
+  Binding a LAN/Tailscale address directly stays possible but sends the token
+  unencrypted whenever the tunnel is down.
 - The client must send a Host header that exactly matches one of the
   configured `allowedHosts` (`host:port`). Anything else returns `421`.
 - The API is for native clients. Requests carrying an `Origin` header return
@@ -21,9 +24,10 @@ schemas cannot express.
 - All JSON responses carry `Cache-Control: no-store` and
   `X-Lugn-API-Version: 1`. Errors use `{ "error": "<code>" }`, with `issues`
   for validation failures and `retryAfterSeconds` for `429`.
-- iOS App Transport Security: the app needs an ATS exception for plain HTTP to
-  the configured host (for example `NSAllowsLocalNetworking` plus an exception
-  domain for the MagicDNS name).
+- iOS App Transport Security: with the recommended `tailscale serve` HTTPS URL
+  the app needs no ATS exception. Plain HTTP (for example a loopback dev
+  server in a Debug build) needs a narrowly scoped exception for that host only;
+  do not ship `NSAllowsArbitraryLoads`.
 
 ## Pairing and tokens
 
