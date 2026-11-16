@@ -279,3 +279,26 @@ restarts. A Lugn activation of Vardagsljus from OFF reported `sent` with the
 ceiling ON at 55 %/2702 K. Bruno was not in the room and did not observe it.
 The `ae193a9` sequence through Lugn, effect presets with a ring-only mask, and
 Focus after a ring preset remain visually unverified.
+
+### Fourth iteration: dim power-up and parallel zone restore
+
+The next morning Bruno reported that the whole fixture still flashed when the
+ring came on from OFF. He also reported that the main light was slow to return
+when going from Vardagsljus to Focus. Lugn's ledger showed the flash case was
+Focus → OFF → Vardagsljus 1.3 s later. The fixture lights with its stored
+mask, so it came back with the main light at Focus brightness until the cloud
+main OFF arrived. In step 6 of the attended series the stored mask was
+presumably already ring-only.
+
+Commit `80a06c1` skips staging when Lugn's last delivered mask already matches.
+Otherwise it lights the fixture at 1 % through HA and masks it once natively
+ON. The Focus restore toggles are sent alongside the HA baseline, and the
+static white follows the toggles.
+
+`npm run check` passed **127 suites / 2088 tests** (the Govee installer fixture
+again with the `rg` shim), and `npm run build` passed. Both services run
+`/home/bruno/lugn-govee-80a06c1` (archive SHA-256
+`5ade9d102187f1bfaf586ed38126ee1d41844c012eac8e270a50c59f4b090d6b`) with zero
+restarts. The restart cleared the in-memory mask, so the first ring-only ON
+from OFF uses the dim path. No physical test was run, and Bruno's observation
+is pending.
