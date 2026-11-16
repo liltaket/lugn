@@ -785,6 +785,9 @@ export async function startRuntime(
     ...config.http,
     engine,
     ...(deviceRegistry ? { deviceRegistry } : {}),
+    ...(config.device?.publicUrl
+      ? { devicePublicUrl: config.device.publicUrl }
+      : {}),
     scenePresetStore,
     volumeSettingsStore,
     capabilities,

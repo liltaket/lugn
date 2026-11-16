@@ -9,6 +9,44 @@ import {
 
 const WILDCARD_HOSTS = new Set(['0.0.0.0', '::']);
 
+/**
+ * The base URL the app should use, for example the `tailscale serve` HTTPS
+ * name. Only shown by the control panel (and written into its pairing QR
+ * code); it does not change what the listener binds or accepts.
+ */
+const DevicePublicUrlSchema = z
+  .string()
+  .max(255)
+  .superRefine((value, context) => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      context.addIssue({
+        code: 'custom',
+        message: 'device.publicUrl must be a valid URL',
+      });
+      return;
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:')
+      context.addIssue({
+        code: 'custom',
+        message: 'device.publicUrl must use HTTPS or HTTP',
+      });
+    if (
+      url.username ||
+      url.password ||
+      url.pathname !== '/' ||
+      url.search ||
+      url.hash
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'device.publicUrl must contain only the origin',
+      });
+  })
+  .transform((value) => new URL(value).origin);
+
 /** An exact `host:port` value a client sends in its Host header. */
 const AllowedHostSchema = z
   .string()
@@ -48,6 +86,7 @@ export const DeviceApiConfigSchema = z
     /** Binding 0.0.0.0 or :: must be requested explicitly. */
     allowAllInterfaces: z.boolean().default(false),
     allowedHosts: z.array(AllowedHostSchema).min(1).max(8),
+    publicUrl: DevicePublicUrlSchema.optional(),
     /** Paired-phone hints; every signal can be switched off server-side. */
     phone: z
       .object({

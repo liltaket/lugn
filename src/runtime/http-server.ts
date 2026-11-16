@@ -57,7 +57,10 @@ import {
   clerkFrontendApiOrigin,
   verifyClerkSessionToken,
 } from './clerk-auth.js';
-import { PairingCodeRequestSchema } from '../core/device-api.js';
+import {
+  PairingCodeRequestSchema,
+  type DeviceListResponse,
+} from '../core/device-api.js';
 import { DeviceRegistryError, type DeviceRegistry } from './device-registry.js';
 
 const MAX_REQUEST_BYTES = 64 * 1024;
@@ -99,6 +102,8 @@ export type LugnHttpServerOptions = {
   volumeSettingsStore?: MusicVolumeSettingsStore;
   /** Paired native clients; present only when the device listener is enabled. */
   deviceRegistry?: DeviceRegistry;
+  /** `device.publicUrl`; the panel writes it into the pairing QR code. */
+  devicePublicUrl?: string;
   webAssetsDirectory?: string;
   trustedOrigins?: string[];
   clerk?: {
@@ -1411,7 +1416,12 @@ export class LugnHttpServer {
     }
     try {
       if (method === 'GET' && subpath === '') {
-        sendJson(response, 200, { devices: registry.list() });
+        const body: DeviceListResponse = {
+          devices: registry.list(),
+          publicUrl: this.options.devicePublicUrl ?? null,
+          lastSeenSince: registry.lastSeenSince(),
+        };
+        sendJson(response, 200, body);
         return;
       }
       if (method === 'POST' && subpath === '/pairing') {
