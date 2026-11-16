@@ -1429,7 +1429,11 @@ window.Lugn = (() => {
     el.tabIndex = 0;
     el.style.touchAction = 'none';
     el.addEventListener('pointerdown', (e) => {
-      el.setPointerCapture(e.pointerId);
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        /* synthetic events have no active pointer */
+      }
       el.dataset.drag = '';
       t0 = performance.now();
       v0 = v;

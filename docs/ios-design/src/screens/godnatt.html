@@ -89,7 +89,7 @@ const render = () => {
 const step = (d) => { const was = Math.floor(mins / 60); mins = ((mins + d) % 1440 + 1440) % 1440; Lugn.haptic(Math.floor(mins / 60) !== was || mins % 60 === 0 ? 'rigid' : 'selection', 'tid'); render(); };
 $('up').addEventListener('click', () => step(5)); $('down').addEventListener('click', () => step(-5));
 let y0 = null;
-$('time').addEventListener('pointerdown', (e) => { y0 = e.clientY; e.currentTarget.setPointerCapture(e.pointerId); });
+$('time').addEventListener('pointerdown', (e) => { y0 = e.clientY; try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic */ } });
 $('time').addEventListener('pointermove', (e) => { if (y0 === null) return; const d = Math.trunc((y0 - e.clientY) / 14); if (d) { step(d * 5); y0 = e.clientY; } });
 $('time').addEventListener('pointerup', () => (y0 = null));
 $('time').addEventListener('keydown', (e) => { if (e.key === 'ArrowUp') step(5); if (e.key === 'ArrowDown') step(-5); });
