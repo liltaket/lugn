@@ -316,3 +316,11 @@ the "ring, then whole" result of step 1.
 The next commit powers a matching stored mask with the ring's cloud ON. This
 is step 6 without the ignored dark OFF. At Bruno's suggestion, an unchanged
 static white is also skipped.
+
+`npm run check` passed **127 suites / 2089 tests** (the Govee installer fixture
+again with the `rg` shim), and `npm run build` passed. Both services run
+`/home/bruno/lugn-govee-6d50dbf` (archive SHA-256
+`14b45a1b6eec26b6e599701aef240f40d3f18552defd9439fd01dbd8526c1f7e`) with zero
+restarts. The restart cleared the in-memory mask and white again, so the first
+ring-only ON from OFF uses the 1 % path. No physical test was run, and Bruno's
+observation is pending.
