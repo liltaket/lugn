@@ -7,6 +7,17 @@ today. Server-side ingest (`POST /api/v1/phone/observations`) is not
 implemented yet; the `phone:ingest` scope already exists (see
 [IOS-API.md](../IOS-API.md)).
 
+> **Wire contract note (added after the server shipped):** the server endpoint
+> now exists and is authoritative. Where the payload sketches below differ,
+> `docs/api/openapi.v1.yaml`, `docs/api/fixtures/phone-observations-*.json` and
+> `src/core/phone.ts` win. The real request is
+> `{sessionId, observations: [{eventId, sequence, observedAt (ms), type, ...}]}`
+> with `type` one of `app`, `geofence`, `power`, `focus`, `wake_alarm`, `motion`,
+> `network` (`kind`: wifi/cellular/none/unknown, `homeNetwork`), not the
+> `{deviceId, batchId, events:[{kind,payload}]}` shape proposed here. The design
+> rationale (queueing, ordering, retries, permissions, free-team limits) still
+> applies.
+
 Phone signals are **hints, never ground truth.** The LiDAR presence sensor
 decides whether the room is occupied ([PRESENCE.md](../PRESENCE.md)). A phone
 observation never runs a command, never creates a wake plan by itself, and
