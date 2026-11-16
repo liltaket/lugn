@@ -334,3 +334,9 @@ sent before the main OFF. The fixture itself therefore relights the main light
 after a cloud ring ON from dark, and a ring-only stored mask does not help. The
 next commit always lights the fixture at 1 % through HA, then sends the main
 OFF once natively ON, so the unavoidable main light is barely visible.
+
+`npm run check` passed **127 suites / 2089 tests** (the Govee installer fixture
+again with the `rg` shim), and `npm run build` passed. Both services run
+`/home/bruno/lugn-govee-221c985` (archive SHA-256
+`c41c8226d26353e1c2e24e98a27dcf53f5e809c9185c6361d1ec75d50f36e70f`) with zero
+restarts. No physical test was run, and Bruno's observation is pending.
