@@ -22,8 +22,9 @@
     "src/**/*.ts",
     "tests/**/*.ts",
     "bench/**/*.ts",
+    "scripts/device-sim/**/*.ts",
     "eslint.config.js",
     "vitest.config.ts"
   ],
-  "exclude": ["node_modules", "dist", "dist-bench"]
+  "exclude": ["node_modules", "dist", "dist-bench", "dist-devsim"]
 }

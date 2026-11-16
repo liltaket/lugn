@@ -224,6 +224,11 @@ view builder, registry and HTTP listener with simulated devices
 generations differ per run. A test validates every fixture against the
 schemas. Copy them into the app's test fixtures.
 
+For live, changing data during app development, run the device simulator
+(`npm run device-sim`, see [ios/DEVSIM.md](ios/DEVSIM.md)). It serves this
+same API from the real engine with simulated devices and a scripted day, and
+can record and replay sessions for deterministic UI tests.
+
 ## Phone observations
 
 `GET /api/v1/phone/config` tells the app which signals Lugn accepts, the

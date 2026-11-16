@@ -123,6 +123,14 @@ Instrument at least:
 
 The fast lighting path should be benchmarked independently from database/UI workload.
 
+## Device simulator
+
+`npm run device-sim` runs the real engine and paired-device API against
+simulated devices with a scripted, looping day, for iOS app development
+without hardware. See [ios/DEVSIM.md](ios/DEVSIM.md). Its scenario and startup
+tests (`tests/device-sim-*.test.ts`) run with `npm test`. Like the other
+simulators, it proves app and logic behaviour, not device behaviour.
+
 ## Hardware validation
 
 ### Missing music feedback: software checks
