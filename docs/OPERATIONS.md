@@ -442,6 +442,48 @@ with the same schema used by the in-process capability registry. Invalid
 requests return `400`; unknown operations return `404`. There is no arbitrary
 Home Assistant service-call endpoint.
 
+## Paired-device API (native app)
+
+The `/api/v1` listener for the native iOS app is **off by default**. It is a
+separate plain-HTTP listener, intended for the Tailscale interface (or the
+LAN) only. Never port-forward it or expose it to the internet. Enable it with
+an explicit section in `config.json`; Lugn refuses a section that lacks the
+interface address, port or Host allowlist:
+
+```json
+"device": {
+  "enabled": true,
+  "host": "<tailscale-ip-of-this-host>",
+  "port": 8789,
+  "allowedHosts": ["<tailscale-ip-of-this-host>:8789", "<magicdns-name>:8789"]
+}
+```
+
+`host` must be an IP literal. Binding `0.0.0.0` or `::` also requires
+`"allowAllInterfaces": true`. Every request's Host header must exactly match
+one `allowedHosts` entry (with port). Requests that carry a browser `Origin`
+header are refused and no CORS headers are ever sent.
+
+Paired devices are stored in `<statePath>.devices.json` (mode `0600`), which
+holds only SHA-256 digests of the device tokens. Create a one-time pairing
+code (five minutes by default) from the authenticated loopback API or the
+control panel session API, then enter it in the app:
+
+```sh
+curl -sS -X POST -H "Authorization: Bearer $LUGN_API_TOKEN" \
+  -H 'Content-Type: application/json' -d '{}' \
+  http://127.0.0.1:8787/devices/pairing
+curl -sS -H "Authorization: Bearer $LUGN_API_TOKEN" http://127.0.0.1:8787/devices
+curl -sS -X POST -H "Authorization: Bearer $LUGN_API_TOKEN" \
+  -H 'Content-Type: application/json' -d '{}' \
+  http://127.0.0.1:8787/devices/<device-id>/revoke
+```
+
+The same routes exist under `/ui/api/devices` with the panel's cookie session,
+same-origin and CSRF checks. Pairing codes are memory-only, so a restart
+invalidates unused codes. Revocation is immediate and persistent. See
+[IOS-API.md](IOS-API.md) for the client contract.
+
 ## Control panel authentication
 
 The operational control panel at `/ui/` can use Clerk for human sign-in. Add

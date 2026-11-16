@@ -18,6 +18,7 @@
     "config:check": "npm run build --silent && node dist/runtime/config-check.js",
     "ha:discover": "npm run build --silent && node dist/runtime/ha-discover.js",
     "onboard": "if [ ! -f dist/runtime/onboard.js ]; then npm run build --silent || exit 1; fi; node dist/runtime/onboard.js",
+    "api:generate": "npm run build --silent && node dist/runtime/device-api-generate.js",
     "preflight": "npm run build --silent && node dist/runtime/preflight.js",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
     "format": "prettier --write .",

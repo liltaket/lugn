@@ -9,6 +9,10 @@ import { HomeAssistantButtonMappingsSchema } from '../adapters/home-assistant-bu
 import { HomeAssistantBilresaConfigSchema } from '../adapters/home-assistant-bilresa.js';
 import { WledCctMappingsSchema } from '../adapters/wled-cct.js';
 import { PresenceControlConfigSchema } from '../adapters/stl27l-presence-control.js';
+import {
+  DeviceApiConfigSchema,
+  type DeviceApiConfig,
+} from './device-config.js';
 import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -323,6 +327,7 @@ const FileConfigSchema = z
     presenceControl: PresenceControlConfigSchema.optional(),
     presenceFeedback: PresenceFeedbackConfigSchema.optional(),
     display: DisplayConfigSchema.optional(),
+    device: DeviceApiConfigSchema.optional(),
     cameraDashboard: CameraDashboardConfigSchema.optional(),
     prelight: z
       .object({
@@ -349,6 +354,16 @@ const FileConfigSchema = z
   })
   .strict()
   .superRefine((config, context) => {
+    if (
+      config.device &&
+      (config.device.port === config.http.port ||
+        config.device.port === config.display?.port)
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['device', 'port'],
+        message: 'device.port must differ from the http and display ports',
+      });
     const configuredComputers = new Set(
       (config.mqtt?.computers ?? []).map((computer) => computer.deviceId),
     );
@@ -538,6 +553,8 @@ export type RuntimeConfig = {
       token: string;
     }>;
   };
+  /** Present only when the paired-device listener is explicitly enabled. */
+  device?: DeviceApiConfig;
   cameraDashboard?: CameraDashboardConfig;
   prelight: {
     targets: Record<string, LightingValues>;
@@ -691,6 +708,7 @@ export function loadRuntimeConfig(
       ? {}
       : { presenceFeedback: fileConfig.presenceFeedback }),
     ...(display === undefined ? {} : { display }),
+    ...(fileConfig.device?.enabled ? { device: fileConfig.device } : {}),
     ...(fileConfig.cameraDashboard === undefined
       ? {}
       : { cameraDashboard: fileConfig.cameraDashboard }),

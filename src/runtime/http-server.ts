@@ -57,6 +57,8 @@ import {
   clerkFrontendApiOrigin,
   verifyClerkSessionToken,
 } from './clerk-auth.js';
+import { PairingCodeRequestSchema } from '../core/device-api.js';
+import { DeviceRegistryError, type DeviceRegistry } from './device-registry.js';
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const UI_SESSION_COOKIE = 'lugn_ui_session';
@@ -95,6 +97,8 @@ export type LugnHttpServerOptions = {
   musicObservationTrustProvider?: () => Record<string, boolean>;
   scenePresetStore?: ScenePresetStore;
   volumeSettingsStore?: MusicVolumeSettingsStore;
+  /** Paired native clients; present only when the device listener is enabled. */
+  deviceRegistry?: DeviceRegistry;
   webAssetsDirectory?: string;
   trustedOrigins?: string[];
   clerk?: {
@@ -219,6 +223,22 @@ export class LugnHttpServer {
             lighting: this.options.engine.state.lighting,
           });
         } else sendJson(response, 200, this.options.engine.state);
+        return;
+      }
+
+      if (url.pathname === '/devices' || url.pathname.startsWith('/devices/')) {
+        if (request.method === 'POST' && !isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        await this.handleDeviceAdmin(
+          request.method,
+          url.pathname.slice('/devices'.length),
+          request,
+          response,
+        );
         return;
       }
 
@@ -918,6 +938,38 @@ export class LugnHttpServer {
       }
       return true;
     }
+    if (
+      pathname === '/ui/api/devices' ||
+      pathname.startsWith('/ui/api/devices/')
+    ) {
+      if (request.method === 'POST') {
+        if (!this.isSameOrigin(request)) {
+          sendJson(response, 403, { error: 'same_origin_required' });
+          return true;
+        }
+        const csrfHeader = request.headers['x-lugn-csrf'];
+        if (
+          typeof csrfHeader !== 'string' ||
+          !this.constantTimeEqual(csrfHeader, session.csrfToken)
+        ) {
+          sendJson(response, 403, { error: 'csrf_failed' });
+          return true;
+        }
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return true;
+        }
+      }
+      await this.handleDeviceAdmin(
+        request.method,
+        pathname.slice('/ui/api/devices'.length),
+        request,
+        response,
+      );
+      return true;
+    }
     const capabilityMatch = /^\/ui\/api\/capabilities\/([^/]+)$/.exec(pathname);
     if (request.method === 'POST' && capabilityMatch) {
       if (!this.isSameOrigin(request)) {
@@ -1343,6 +1395,55 @@ export class LugnHttpServer {
       leftBytes.length === rightBytes.length &&
       timingSafeEqual(leftBytes, rightBytes)
     );
+  }
+
+  /** Operator-only pairing and revocation; callers have already authenticated. */
+  private async handleDeviceAdmin(
+    method: string | undefined,
+    subpath: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    const registry = this.options.deviceRegistry;
+    if (!registry) {
+      sendJson(response, 404, { error: 'device_api_disabled' });
+      return;
+    }
+    try {
+      if (method === 'GET' && subpath === '') {
+        sendJson(response, 200, { devices: registry.list() });
+        return;
+      }
+      if (method === 'POST' && subpath === '/pairing') {
+        const parsed = PairingCodeRequestSchema.safeParse(
+          await readJsonBody(request),
+        );
+        if (!parsed.success) {
+          sendJson(response, 400, {
+            error: 'invalid_request',
+            issues: safeIssues(parsed.error),
+          });
+          return;
+        }
+        sendJson(response, 201, registry.createPairingCode(parsed.data));
+        return;
+      }
+      const revoke = /^\/(dev_[a-z2-7]{16})\/revoke$/.exec(subpath);
+      if (method === 'POST' && revoke) {
+        sendJson(response, 200, { device: await registry.revoke(revoke[1]!) });
+        return;
+      }
+      if (method !== 'GET' && method !== 'POST') {
+        response.setHeader('allow', 'GET, POST');
+        sendJson(response, 405, { error: 'method_not_allowed' });
+        return;
+      }
+      sendJson(response, 404, { error: 'not_found' });
+    } catch (error) {
+      if (error instanceof DeviceRegistryError)
+        sendJson(response, error.status, { error: error.code });
+      else throw error;
+    }
   }
 
   private async invokeCapability(

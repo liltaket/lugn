@@ -4,3 +4,4 @@ coverage
 agents/linux/target
 dist-bench
 bench/results
+docs/api

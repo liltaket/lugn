@@ -93,6 +93,10 @@ The detailed presence/continuity path is included in this implementation because
 
 - Clerk authenticates human web-app access.
 - Clerk is not machine/device authentication.
+- Native clients use a separate, default-off `/api/v1` listener with per-device
+  revocable bearer tokens issued through a one-time operator pairing code.
+  Only token digests are persisted. Reachability is Tailscale/LAN only; there
+  is no WAN exposure, so there is no APNs dependency (see `docs/IOS-API.md`).
 
 ### Persistence
 

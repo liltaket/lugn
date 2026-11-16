@@ -65,6 +65,8 @@ import { DashCastManager } from './dashcast-manager.js';
 import { LightingIntentStore } from './lighting-intent-store.js';
 import { ScenePresetStore } from './scene-preset-store.js';
 import { LugnHttpServer } from './http-server.js';
+import { DeviceRegistry } from './device-registry.js';
+import { LugnDeviceServer } from './device-server.js';
 import {
   MqttJsSubscriber,
   type MqttSubscriberConfig,
@@ -762,9 +764,16 @@ export async function startRuntime(
     });
   }
 
+  const deviceRegistry = config.device
+    ? new DeviceRegistry(`${lightingIntentPath}.devices.json`, {
+        onWarning: (message) => console.warn(`[lugn] ${message}`),
+      })
+    : undefined;
+  await deviceRegistry?.load();
   const http = new LugnHttpServer({
     ...config.http,
     engine,
+    ...(deviceRegistry ? { deviceRegistry } : {}),
     scenePresetStore,
     volumeSettingsStore,
     capabilities,
@@ -859,6 +868,15 @@ export async function startRuntime(
       })
     : undefined;
   displayRefs.castManager = castManager;
+  const deviceServer =
+    config.device && deviceRegistry
+      ? new LugnDeviceServer({
+          host: config.device.host,
+          port: config.device.port,
+          allowedHosts: config.device.allowedHosts,
+          registry: deviceRegistry,
+        })
+      : undefined;
 
   try {
     sensorAdapter?.start();
@@ -882,6 +900,7 @@ export async function startRuntime(
     homeAssistantSocket.start();
     await http.start();
     await displayServer?.start();
+    await deviceServer?.start();
     castManager?.start();
     // One shared upstream connection keeps the retrospective window warm even
     // when no browser is open; viewers reuse this same validated frame stream.
@@ -896,6 +915,7 @@ export async function startRuntime(
     cameraService?.dispose();
     artwork?.dispose();
     await castManager?.stop();
+    await deviceServer?.stop();
     await displayServer?.stop();
     await http.stop();
     presenceSensorStream?.close();
@@ -921,6 +941,11 @@ export async function startRuntime(
       `[lugn] custom Nest display surface listening at http://${config.display.host}:${config.display.port} (${config.display.hubs.length} Hub${config.display.hubs.length === 1 ? '' : 's'} monitored via DashCast)`,
     );
   }
+  if (config.device) {
+    console.info(
+      `[lugn] paired-device API listening at http://${config.device.host}:${config.device.port}/api/v1`,
+    );
+  }
   return {
     engine,
     async stop() {
@@ -931,6 +956,7 @@ export async function startRuntime(
       cameraService?.dispose();
       artwork?.dispose();
       await castManager?.stop();
+      await deviceServer?.stop();
       await displayServer?.stop();
       await http.stop();
       presenceSensorStream?.close();
