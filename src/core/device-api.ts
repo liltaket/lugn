@@ -78,8 +78,19 @@ export const DeviceSummarySchema = z
 export type DeviceSummary = z.infer<typeof DeviceSummarySchema>;
 
 export const DeviceListResponseSchema = z
-  .object({ devices: z.array(DeviceSummarySchema) })
+  .object({
+    devices: z.array(DeviceSummarySchema),
+    /** `device.publicUrl` from the configuration, or null when unset. */
+    publicUrl: z.string().nullable(),
+    /**
+     * When this process started tracking `lastSeenAt`. A null `lastSeenAt`
+     * on a device created before this time means "not seen since restart",
+     * not "never seen".
+     */
+    lastSeenSince: z.number().int().nonnegative(),
+  })
   .strict();
+export type DeviceListResponse = z.infer<typeof DeviceListResponseSchema>;
 
 export const PairingCodeRequestSchema = z
   .object({

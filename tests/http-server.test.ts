@@ -361,6 +361,14 @@ describe('local capability HTTP API', () => {
       expect(image.headers.get('content-type')).toBe(icon.type);
       expect((await image.arrayBuffer()).byteLength).toBeGreaterThan(0);
     }
+    for (const path of ['/ui/presence.js', '/ui/phones.js', '/ui/qr.js']) {
+      const script = await fetch(`${baseUrl}${path}`);
+      expect(script.status).toBe(200);
+      expect(script.headers.get('content-type')).toBe(
+        'text/javascript; charset=utf-8',
+      );
+      await script.arrayBuffer();
+    }
     for (const path of [
       '/ui/sw.js',
       '/ui/offline.html',

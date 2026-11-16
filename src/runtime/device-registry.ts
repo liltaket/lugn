@@ -89,6 +89,7 @@ export class DeviceRegistry {
   private readonly listeners = new Set<(event: RegistryEvent) => void>();
   private failedPairingAttempts = 0;
   private loaded = false;
+  private trackingSince = 0;
   private writable = true;
   private pending: Promise<unknown> = Promise.resolve();
   private readonly dummyHash = randomBytes(32);
@@ -139,7 +140,13 @@ export class DeviceRegistry {
     } finally {
       await handle?.close();
       this.loaded = true;
+      this.trackingSince = this.clock.now();
     }
+  }
+
+  /** Last-seen times are process-local; they are tracked from this moment. */
+  lastSeenSince(): number {
+    return this.trackingSince;
   }
 
   subscribe(listener: (event: RegistryEvent) => void): () => void {

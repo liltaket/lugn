@@ -14,6 +14,7 @@ import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { FakeClock } from '../src/core/clock.js';
 import {
+  DeviceListResponseSchema,
   MeResponseSchema,
   PairResponseSchema,
   type DeviceScope,
@@ -197,6 +198,34 @@ describe('device API configuration', () => {
       }).allowAllInterfaces,
     ).toBe(true);
   });
+
+  it('accepts an optional public URL for the panel and keeps only its origin', () => {
+    expect(DeviceApiConfigSchema.parse(device).publicUrl).toBeUndefined();
+    expect(
+      DeviceApiConfigSchema.parse({
+        ...device,
+        publicUrl: 'https://lugn.example.ts.net:8789/',
+      }).publicUrl,
+    ).toBe('https://lugn.example.ts.net:8789');
+    expect(
+      DeviceApiConfigSchema.parse({
+        ...device,
+        publicUrl: 'http://127.0.0.1:8789',
+      }).publicUrl,
+    ).toBe('http://127.0.0.1:8789');
+    for (const publicUrl of [
+      'lugn.example.ts.net:8789',
+      'ftp://lugn.example.ts.net',
+      'https://lugn.example.ts.net:8789/api/v1',
+      'https://lugn.example.ts.net:8789/?x=1',
+      'https://lugn.example.ts.net:8789/#x',
+      'https://user:pass@lugn.example.ts.net:8789',
+      '',
+    ])
+      expect(() =>
+        DeviceApiConfigSchema.parse({ ...device, publicUrl }),
+      ).toThrow();
+  });
 });
 
 describe('device API listener', () => {
@@ -347,12 +376,15 @@ describe('operator device administration', () => {
     const { code } = created.json() as { code: string };
     const paired = await value.pair({ code, name: 'iPad', platform: 'ios' });
     expect(paired.scopes).toEqual(['state:read']);
-    const listed = (await call(port, { path: '/devices', token })).json() as {
-      devices: Array<{ id: string }>;
-    };
+    const listed = DeviceListResponseSchema.parse(
+      (await call(port, { path: '/devices', token })).json(),
+    );
     expect(listed.devices.map((device) => device.id)).toEqual([
       paired.deviceId,
     ]);
+    // Without device.publicUrl the panel asks for the address itself.
+    expect(listed.publicUrl).toBeNull();
+    expect(listed.lastSeenSince).toBe(value.lastSeenSince());
     const revoked = await call(port, {
       path: `/devices/${paired.deviceId}/revoke`,
       token,
@@ -405,6 +437,54 @@ describe('operator device administration', () => {
         })
       ).status,
     ).toBe(200);
+  });
+
+  it('gives the panel the configured public URL and when last-seen tracking began', async () => {
+    const port = await findAvailablePort();
+    const engine = new LugnEngine(new FakeClock(), {
+      deviceIds: ['lighting.ceiling'],
+      scenes: [],
+    });
+    cleanups.push(() => engine.dispose());
+    const clock = new FakeClock(2_000_000);
+    const { registry: value } = await registry(clock);
+    const server = new LugnHttpServer({
+      host: '127.0.0.1',
+      port,
+      bearerToken: 'operator-test',
+      engine,
+      capabilities: new CapabilityRegistry(engine),
+      integrations: () => ({}),
+      deviceRegistry: value,
+      devicePublicUrl: 'https://lugn.example.ts.net:8789',
+    });
+    await server.start();
+    cleanups.push(() => server.stop());
+    const paired = await pairDevice(value);
+    clock.advanceBy(1000);
+    value.authenticate(paired.token);
+    const session = await call(port, {
+      path: '/ui/api/session',
+      body: { token: 'operator-test' },
+      headers: { origin: `http://127.0.0.1:${port}` },
+    });
+    const cookie = String(session.headers['set-cookie']).split(';')[0]!;
+    const listed = DeviceListResponseSchema.parse(
+      (
+        await call(port, { path: '/ui/api/devices', headers: { cookie } })
+      ).json(),
+    );
+    expect(listed).toEqual({
+      devices: [
+        expect.objectContaining({
+          id: paired.deviceId,
+          createdAt: 2_000_000,
+          lastSeenAt: 2_001_000,
+        }),
+      ],
+      publicUrl: 'https://lugn.example.ts.net:8789',
+      lastSeenSince: 2_000_000,
+    });
   });
 
   it('reports the device API as disabled without a registry', async () => {

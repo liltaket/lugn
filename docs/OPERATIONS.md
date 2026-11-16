@@ -464,6 +464,12 @@ interface address, port or Host allowlist:
 one `allowedHosts` entry (with port). Requests that carry a browser `Origin`
 header are refused and no CORS headers are ever sent.
 
+The optional `"publicUrl"` (for example `"https://<magicdns-name>:8789"`, an
+origin without a path) is the address the app should use. The control panel
+writes it into its pairing QR code. It does not change what the listener
+binds or accepts. Without it, the panel asks for the address once and
+remembers it in that browser only.
+
 Optional phone settings (shown with their defaults) live under `device.phone`:
 
 ```json
@@ -498,8 +504,16 @@ curl -sS -X POST -H "Authorization: Bearer $LUGN_API_TOKEN" \
 
 The same routes exist under `/ui/api/devices` with the panel's cookie session,
 same-origin and CSRF checks. Pairing codes are memory-only, so a restart
-invalidates unused codes. Revocation is immediate and persistent. See
+invalidates unused codes. Revocation is immediate and persistent. The device
+list (`GET /devices`) returns `{ devices, publicUrl, lastSeenSince }`:
+`publicUrl` is `device.publicUrl` or null, and `lastSeenSince` is when this
+process started tracking `lastSeenAt` (last-seen times are memory-only). See
 [IOS-API.md](IOS-API.md) for the client contract.
+
+On **Inställningar → Telefoner** the control panel uses these routes: it
+creates a code and shows it with a countdown and a QR code, lists paired
+phones and revokes them after a confirm step. With `device.enabled` false or
+no `device` section, the page says that the device API is off.
 
 ## Control panel authentication
 

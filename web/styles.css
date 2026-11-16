@@ -643,6 +643,7 @@ a.hero-chip:hover {
 .music-settings-section,
 .presence-section,
 .computer-section,
+.phones-section,
 .lights-section,
 .routines-section,
 .intelligence-section,
@@ -819,6 +820,7 @@ dl {
 /* ---------- Form controls ---------- */
 
 input[type='text'],
+input[type='url'],
 input[type='password'],
 input[type='number'],
 input[type='time'],
@@ -1756,7 +1758,8 @@ details[open] > summary::before {
 
 .dashboard[data-page='musik'] #music-title,
 .dashboard[data-section='settings'] #music-settings-title,
-.dashboard[data-section='settings'] #computer-title {
+.dashboard[data-section='settings'] #computer-title,
+.dashboard[data-section='settings'] #phones-title {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -2391,6 +2394,206 @@ details[open] > summary::before {
 
 .optical-limit {
   grid-column: 1 / -1;
+}
+
+/* ---------- Phones ---------- */
+
+.phones-content {
+  display: grid;
+  gap: 40px;
+}
+
+.phones-pair,
+.phones-paired {
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+}
+
+.phones-pair > *,
+.phones-paired > * {
+  width: 100%;
+}
+
+.phones-pair .button-row {
+  width: auto;
+}
+
+.phones-pair h3,
+.phones-paired h3 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.phones-server {
+  display: grid;
+  gap: 6px;
+  max-width: 44ch;
+}
+
+.phones-server label {
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+
+.field-help[data-tone='bad'],
+.phones-status-line[data-tone='bad'] {
+  color: var(--bad);
+}
+
+.phones-status-line[data-tone='good'] {
+  color: var(--good);
+}
+
+.phones-status-line[data-tone='warn'] {
+  color: var(--warn);
+}
+
+.phones-status-line:empty {
+  display: none;
+}
+
+.phones-code-card {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+  align-items: center;
+  gap: 24px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.phones-code-card:has(.phones-qr[hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.phones-code-card[data-state='expired'] .phones-code {
+  color: var(--ink-subtle);
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+}
+
+/* Scanners want dark modules on a light field, also in the dark theme. */
+.phones-qr {
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--radius-small);
+  background: #fff;
+}
+
+.phones-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.phones-qr path {
+  fill: #000;
+}
+
+.phones-code-text {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.phones-code {
+  font-size: clamp(2.25rem, 7vw, 3.25rem);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.phones-countdown {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.phones-countdown[data-tone='warn'] {
+  color: var(--warn);
+}
+
+.reading dd[data-tone='bad'] {
+  color: var(--bad);
+}
+
+.reading dd[data-tone='good'] {
+  color: var(--good);
+}
+
+.phones-list {
+  display: grid;
+  gap: 12px;
+}
+
+.phone-row {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.phone-row-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.phone-row-heading h3 {
+  min-width: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.phone-readings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 10px 16px;
+}
+
+.phones-revoked summary {
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.phone-revoked-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-muted);
+}
+
+.phone-revoked-time {
+  color: var(--ink-subtle);
+  font-size: 0.875rem;
+}
+
+@media (max-width: 639px) {
+  .phones-code-card {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    text-align: center;
+  }
+
+  .phones-qr {
+    width: min(100%, 240px);
+  }
+
+  .phones-code-text .button-row {
+    justify-content: center;
+  }
 }
 
 /* ---------- Computers ---------- */

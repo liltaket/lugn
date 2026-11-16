@@ -195,6 +195,33 @@ disabled-by-default intelligence preferences. Integration topology, home-presenc
 mapping and receiver roles still use runtime configuration. See
 [web behavior and contracts](lugn-2/WEB.md).
 
+### Telefoner
+
+**Inställningar → Telefoner** pairs the native app without curl. It uses the
+existing `/ui/api/devices` routes with the panel's session, same-origin and
+CSRF checks; nothing about device authentication changes.
+
+- **Para ihop ny telefon** creates a one-time code (five minutes, all
+  scopes) and shows it large with a countdown on the server clock. When the
+  server URL is known it also shows a QR code holding
+  `lugn://pair?server=<url>&code=<code>` (see
+  [IOS-API.md](IOS-API.md#pairing-link-and-qr-code)). The QR code is drawn in
+  the browser by `web/qr.js`; nothing is fetched from elsewhere.
+- The server URL comes from `device.publicUrl`. Without it, the page asks for
+  the address once and keeps it in that browser's local storage only.
+- While a code is shown the list is re-read every three seconds; a new phone
+  replaces the code with "<namn> är ihopparad."
+- Each paired phone shows its name, when Lugn last saw it, phone hints
+  (fresh and older signals from the live overview), what it may do and when
+  it was paired. Last-seen times are memory-only: a phone paired after the
+  restart and never seen says "Aldrig sedd", an older one says "Inte sedd
+  sedan omstart".
+- **Spärra** asks once more ("Bekräfta spärr", six seconds) before revoking.
+  Revoked phones are listed under a closed "Spärrade telefoner".
+- With `device.enabled` false or no `device` section, the page says
+  "Enhets-API:t är avstängt" and names the config key. Read failures keep the
+  last list and say so.
+
 ### Music automation settings
 
 The web panel's **Musikautomatik** section edits a fixed Auto base for each player,
