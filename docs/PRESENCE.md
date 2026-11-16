@@ -28,6 +28,37 @@ The gate applies to automation. Explicit dashboard scene, light and music
 requests remain usable while away. That lets a person intentionally control a
 room remotely without allowing a passer-by sensor event to reactivate it.
 
+## Phone hints
+
+A paired phone (see [IOS-API.md](IOS-API.md)) can report app activity,
+geofence transitions, charging, Focus, a wake time, motion and a network
+hint. These are **hints about the resident**, stored as observations in
+`state.phone.devices`. The LiDAR sensor remains the only source of room
+`occupied` / `confirmed_empty`. The fusion rules are:
+
+- No phone event marks the room occupied, empty or unknown, and none starts a
+  room session, a scene, music or a continuity timer.
+- "Phone home" plus "sensor empty" is an empty room, not away and not
+  occupied. "Phone away" does not override Home Assistant home/away either.
+- Absence of phone events is not "still home". Each signal has a freshness
+  window after which it reads stale, and a retention window after which it is
+  forgotten and reads unknown (for example a geofence `inside` is forgotten
+  after 24 hours without a newer transition). Unknown is never false.
+- The only behavioural consumer is the optional arrival hint
+  (`device.phone.arrivalPrelight`, **off by default**). A geofence `enter` for
+  the configured zone, observed within the window (default 10 minutes,
+  bounded to 1–30), lets the sensor's own prelight signal run while Home
+  Assistant still reports `away`. It waives only that away check for
+  prelight: the sensor must still report a possible entry, the other prelight
+  gates still apply, the light is temporary, and a geofence `exit` or the end
+  of the window removes the hint. Confirmed entry keeps the existing away
+  gate, so if Home Assistant still reports away when the sensor confirms
+  occupancy, the prelight is restored and the room stays dark until Home
+  Assistant reports home (which then reconciles immediately, as above).
+- Wake time, Focus and charging are exposed as typed facts
+  (`phoneFacts`, and `phone.facts` in the app's state view) for future
+  bedtime and routine use. Nothing acts on them yet.
+
 ## Normalized presence state
 
 At minimum:

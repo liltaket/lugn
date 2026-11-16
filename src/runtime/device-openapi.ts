@@ -4,6 +4,7 @@ import { CapabilitySchemas } from '../application/capabilities.js';
 import { BedtimeRequestSchema } from '../application/bedtime.js';
 import { RoutineActionSchema } from '../core/routines.js';
 import { SuggestionRequestSchema } from './intelligence-api.js';
+import * as Phone from '../core/phone.js';
 
 type Schema = z.ZodType;
 type Operation = {
@@ -35,6 +36,18 @@ const components: Readonly<
   HeartbeatEvent: { schema: Api.HeartbeatEventSchema, io: 'output' },
   CommandRequest: { schema: Api.CommandRequestSchema, io: 'input' },
   CommandResponse: { schema: Api.CommandResponseSchema, io: 'output' },
+  PhoneObservationBatch: {
+    schema: Phone.PhoneObservationBatchSchema,
+    io: 'input',
+  },
+  PhoneObservationResponse: {
+    schema: Phone.PhoneObservationResponseSchema,
+    io: 'output',
+  },
+  PhoneConfigResponse: {
+    schema: Phone.PhoneConfigResponseSchema,
+    io: 'output',
+  },
   ...Object.fromEntries(
     Api.DeviceCommandNames.map((name) => [
       `CommandInput.${name}`,
@@ -139,6 +152,38 @@ const operations: readonly Operation[] = [
         description: 'The command failed downstream.',
         component: 'ApiError',
       },
+      ...commonErrors,
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/phone/config',
+    operationId: 'getPhoneConfig',
+    summary: 'Which phone signals Lugn accepts, with age limits',
+    scope: 'phone:ingest',
+    responses: {
+      '200': {
+        description: 'Signal settings.',
+        component: 'PhoneConfigResponse',
+      },
+      ...commonErrors,
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/phone/observations',
+    operationId: 'postPhoneObservations',
+    summary: 'Submit batched, idempotent phone observations (hints only)',
+    description:
+      'Each observation has a UUID eventId, a per-session sequence and the device timestamp. Results report applied, duplicate, superseded, rejected or ignored per event. Observations never set room presence.',
+    scope: 'phone:ingest',
+    request: { component: 'PhoneObservationBatch', maxBytes: 64 * 1024 },
+    responses: {
+      '200': {
+        description: 'Per-event results.',
+        component: 'PhoneObservationResponse',
+      },
+      '400': { description: 'Invalid batch.', component: 'ApiError' },
       ...commonErrors,
     },
   },

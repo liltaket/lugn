@@ -1,7 +1,7 @@
 {
   "apiVersion": 1,
-  "deviceId": "dev_qje4xv6pjiehoil6",
-  "token": "lgn1.dev_qje4xv6pjiehoil6.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "deviceId": "dev_uft4sjxccma4c3b2",
+  "token": "lgn1.dev_uft4sjxccma4c3b2.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
   "tokenType": "Bearer",
   "scopes": [
     "state:read",

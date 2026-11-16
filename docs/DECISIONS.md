@@ -81,6 +81,15 @@ The detailed presence/continuity path is included in this implementation because
 - deliberate external casting should temporarily override the dashboard.
 - The current runtime serves custom Bed/Desk Hub dashboards through DashCast and an optional Clerk-authenticated operational control panel; visual configuration editing remains future work.
 
+### Phone
+
+- Phone signals are hints in an observation-only `phone` domain; the LiDAR
+  sensor stays ground truth for room presence and unknown is never false.
+- The only behavioural use is an opt-in, bounded arrival hint that waives the
+  Home Assistant away check for sensor prelight; confirmed entry keeps the
+  away gate. Wake time, Focus and charging are typed facts with no consumer
+  yet.
+
 ### Computer
 
 - computer integration remains important.

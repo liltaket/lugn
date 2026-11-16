@@ -1,0 +1,43 @@
+{
+  "signals": {
+    "app": true,
+    "geofence": true,
+    "power": true,
+    "focus": true,
+    "wakeAlarm": true,
+    "motion": false,
+    "network": false
+  },
+  "maxObservationAgeSeconds": 21600,
+  "maxBatchSize": 100,
+  "windows": {
+    "app": {
+      "freshSeconds": 600,
+      "retainSeconds": 86400
+    },
+    "geofence": {
+      "freshSeconds": 1800,
+      "retainSeconds": 86400
+    },
+    "power": {
+      "freshSeconds": 7200,
+      "retainSeconds": 86400
+    },
+    "focus": {
+      "freshSeconds": 43200,
+      "retainSeconds": 86400
+    },
+    "wakeAlarm": {
+      "freshSeconds": 129600,
+      "retainSeconds": 129600
+    },
+    "motion": {
+      "freshSeconds": 600,
+      "retainSeconds": 3600
+    },
+    "network": {
+      "freshSeconds": 1800,
+      "retainSeconds": 21600
+    }
+  }
+}

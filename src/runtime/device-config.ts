@@ -1,5 +1,11 @@
 import { isIP } from 'node:net';
 import { z } from 'zod';
+import {
+  PhoneSignalSettingsSchema,
+  PhoneSignalWindows,
+  PhoneZoneIdSchema,
+  type PhoneConfigResponseSchema,
+} from '../core/phone.js';
 
 const WILDCARD_HOSTS = new Set(['0.0.0.0', '::']);
 
@@ -42,6 +48,32 @@ export const DeviceApiConfigSchema = z
     /** Binding 0.0.0.0 or :: must be requested explicitly. */
     allowAllInterfaces: z.boolean().default(false),
     allowedHosts: z.array(AllowedHostSchema).min(1).max(8),
+    /** Paired-phone hints; every signal can be switched off server-side. */
+    phone: z
+      .object({
+        signals: PhoneSignalSettingsSchema.prefault({}),
+        /** Older device timestamps are rejected as stale. */
+        maxObservationAgeSeconds: z
+          .number()
+          .int()
+          .min(60)
+          .max(86_400)
+          .default(21_600),
+        /**
+         * A recent geofence arrival lets the sensor's prelight run while
+         * Home Assistant still reports away. Off unless enabled.
+         */
+        arrivalPrelight: z
+          .object({
+            enabled: z.boolean().default(false),
+            zoneId: PhoneZoneIdSchema.default('home'),
+            windowSeconds: z.number().int().min(60).max(1_800).default(600),
+          })
+          .strict()
+          .prefault({}),
+      })
+      .strict()
+      .prefault({}),
   })
   .strict()
   .superRefine((config, context) => {
@@ -69,3 +101,23 @@ export const DeviceApiConfigSchema = z
     }
   });
 export type DeviceApiConfig = z.output<typeof DeviceApiConfigSchema>;
+
+/** What the app may collect, sent so it never gathers disabled signals. */
+export function phoneConfigResponse(
+  phone: DeviceApiConfig['phone'],
+): z.infer<typeof PhoneConfigResponseSchema> {
+  return {
+    signals: { ...phone.signals },
+    maxObservationAgeSeconds: phone.maxObservationAgeSeconds,
+    maxBatchSize: 100,
+    windows: Object.fromEntries(
+      Object.entries(PhoneSignalWindows).map(([name, window]) => [
+        name,
+        {
+          freshSeconds: window.freshMs / 1000,
+          retainSeconds: window.retainMs / 1000,
+        },
+      ]),
+    ) as z.infer<typeof PhoneConfigResponseSchema>['windows'],
+  };
+}

@@ -68,6 +68,8 @@ import { LugnHttpServer } from './http-server.js';
 import { DeviceRegistry } from './device-registry.js';
 import { LugnDeviceServer } from './device-server.js';
 import { DeviceCommandService } from './device-commands.js';
+import { phoneConfigResponse } from './device-config.js';
+import { PhoneIngress } from '../adapters/phone-ingress.js';
 import { randomBytes } from 'node:crypto';
 import {
   MqttJsSubscriber,
@@ -871,6 +873,21 @@ export async function startRuntime(
       })
     : undefined;
   displayRefs.castManager = castManager;
+  const phoneIngress = config.device
+    ? new PhoneIngress({
+        clock: systemClock,
+        signals: config.device.phone.signals,
+        maxObservationAgeMs:
+          config.device.phone.maxObservationAgeSeconds * 1000,
+        arrivalPrelight: {
+          enabled: config.device.phone.arrivalPrelight.enabled,
+          zoneId: config.device.phone.arrivalPrelight.zoneId,
+          windowMs: config.device.phone.arrivalPrelight.windowSeconds * 1000,
+        },
+        onState: (state) => engine.acceptPhoneState(state),
+        onArrivalHint: (hint) => engine.setPrelightArrivalHint(hint),
+      })
+    : undefined;
   const deviceServer =
     config.device && deviceRegistry
       ? new LugnDeviceServer({
@@ -897,6 +914,14 @@ export async function startRuntime(
               clock: systemClock,
             }),
           },
+          ...(phoneIngress
+            ? {
+                phone: {
+                  ingress: phoneIngress,
+                  config: phoneConfigResponse(config.device.phone),
+                },
+              }
+            : {}),
         })
       : undefined;
 
@@ -938,6 +963,7 @@ export async function startRuntime(
     artwork?.dispose();
     await castManager?.stop();
     await deviceServer?.stop();
+    phoneIngress?.dispose();
     await displayServer?.stop();
     await http.stop();
     presenceSensorStream?.close();
@@ -979,6 +1005,7 @@ export async function startRuntime(
       artwork?.dispose();
       await castManager?.stop();
       await deviceServer?.stop();
+      phoneIngress?.dispose();
       await displayServer?.stop();
       await http.stop();
       presenceSensorStream?.close();

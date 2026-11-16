@@ -1,7 +1,7 @@
 {
   "apiVersion": 1,
   "instanceId": "f1x7e5a3c0de",
-  "revision": 18,
+  "revision": 19,
   "generatedAt": 1794853803000,
   "presence": {
     "state": "occupied",
@@ -180,7 +180,7 @@
     ]
   },
   "routines": {
-    "generation": "679d9aa3-05a6-4e7e-a92f-638cbe25f341",
+    "generation": "c593d194-1f46-4ae5-ba1f-f15126825f93",
     "next": [
       {
         "routineId": "bedtime-morning",
@@ -227,6 +227,70 @@
   },
   "suggestions": [],
   "computer": [],
+  "phone": {
+    "devices": [
+      {
+        "deviceId": "dev_uft4sjxccma4c3b2",
+        "name": "Brunos iPhone",
+        "lastSeenAt": 1794853803000,
+        "signals": {
+          "app": {
+            "observedAt": 1794853743000,
+            "receivedAt": 1794853803000,
+            "fresh": true,
+            "state": "foreground"
+          },
+          "geofence": {
+            "home": {
+              "observedAt": 1794853683000,
+              "receivedAt": 1794853803000,
+              "fresh": true,
+              "inside": true
+            }
+          },
+          "power": {
+            "observedAt": 1794853743000,
+            "receivedAt": 1794853803000,
+            "fresh": true,
+            "charging": true,
+            "batteryLevel": 0.62
+          },
+          "focus": {
+            "observedAt": 1794853773000,
+            "receivedAt": 1794853803000,
+            "fresh": true,
+            "mode": "none"
+          },
+          "wakeAlarm": {
+            "observedAt": 1794853773000,
+            "receivedAt": 1794853803000,
+            "fresh": true,
+            "at": 1794895200000,
+            "source": "sleep_schedule"
+          },
+          "motion": null,
+          "network": null
+        }
+      }
+    ],
+    "facts": {
+      "wakeAlarm": {
+        "at": 1794895200000,
+        "deviceId": "dev_uft4sjxccma4c3b2",
+        "observedAt": 1794853773000
+      },
+      "focus": {
+        "mode": "none",
+        "deviceId": "dev_uft4sjxccma4c3b2",
+        "observedAt": 1794853773000
+      },
+      "charging": {
+        "charging": true,
+        "deviceId": "dev_uft4sjxccma4c3b2",
+        "observedAt": 1794853743000
+      }
+    }
+  },
   "health": {
     "status": "ok",
     "integrations": {

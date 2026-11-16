@@ -1,0 +1,67 @@
+{
+  "sessionId": "5d0c4b9a-8e7f-4a6b-9c1d-2e3f4a5b6c7d",
+  "observations": [
+    {
+      "eventId": "1a2b3c4d-0001-4e5f-8a9b-0c1d2e3f4a5b",
+      "sequence": 1,
+      "observedAt": 1794853683000,
+      "type": "geofence",
+      "zoneId": "home",
+      "transition": "enter"
+    },
+    {
+      "eventId": "1a2b3c4d-0002-4e5f-8a9b-0c1d2e3f4a5b",
+      "sequence": 2,
+      "observedAt": 1794853743000,
+      "type": "app",
+      "state": "foreground"
+    },
+    {
+      "eventId": "1a2b3c4d-0003-4e5f-8a9b-0c1d2e3f4a5b",
+      "sequence": 3,
+      "observedAt": 1794853743000,
+      "type": "power",
+      "charging": true,
+      "batteryLevel": 0.62
+    },
+    {
+      "eventId": "1a2b3c4d-0004-4e5f-8a9b-0c1d2e3f4a5b",
+      "sequence": 4,
+      "observedAt": 1794853773000,
+      "type": "focus",
+      "mode": "none"
+    },
+    {
+      "eventId": "1a2b3c4d-0005-4e5f-8a9b-0c1d2e3f4a5b",
+      "sequence": 5,
+      "observedAt": 1794853773000,
+      "type": "wake_alarm",
+      "at": 1794895200000,
+      "source": "sleep_schedule"
+    },
+    {
+      "eventId": "1a2b3c4d-0006-4e5f-8a9b-0c1d2e3f4a5b",
+      "sequence": 6,
+      "observedAt": 1794853773000,
+      "type": "motion",
+      "activity": "walking",
+      "confidence": "high"
+    },
+    {
+      "eventId": "1a2b3c4d-0001-4e5f-8a9b-0c1d2e3f4a5b",
+      "sequence": 1,
+      "observedAt": 1794853683000,
+      "type": "geofence",
+      "zoneId": "home",
+      "transition": "enter"
+    },
+    {
+      "eventId": "1a2b3c4d-0007-4e5f-8a9b-0c1d2e3f4a5b",
+      "sequence": 7,
+      "observedAt": 1794825003000,
+      "type": "network",
+      "kind": "wifi",
+      "homeNetwork": true
+    }
+  ]
+}

@@ -25,6 +25,9 @@ import {
 import type { StateEventStream } from '../core/event-stream.js';
 import type { DeviceCommandService } from './device-commands.js';
 import { DeviceEventHub } from './device-events.js';
+import type { PhoneIngress } from '../adapters/phone-ingress.js';
+import type { z } from 'zod';
+import type { PhoneConfigResponseSchema } from '../core/phone.js';
 import {
   DeviceRequestError,
   readJsonBody,
@@ -34,6 +37,7 @@ import {
 
 const PAIR_MAX_BYTES = 2 * 1024;
 const COMMAND_MAX_BYTES = 16 * 1024;
+const OBSERVATIONS_MAX_BYTES = 64 * 1024;
 
 export type LugnDeviceServerOptions = {
   host: string;
@@ -48,6 +52,10 @@ export type LugnDeviceServerOptions = {
     stream: Pick<StateEventStream, 'subscribe' | 'resume'>;
     subscribeAuxiliary?: Array<(listener: () => void) => () => void>;
     commands: DeviceCommandService;
+  };
+  phone?: {
+    ingress: Pick<PhoneIngress, 'accept' | 'forget'>;
+    config: z.infer<typeof PhoneConfigResponseSchema>;
   };
 };
 
@@ -156,6 +164,30 @@ export class LugnDeviceServer {
       });
       this.registerRoomRoutes(options.room);
     }
+    if (options.phone) {
+      const phone = options.phone;
+      this.route({
+        method: 'GET',
+        path: '/api/v1/phone/config',
+        scope: 'phone:ingest',
+        limit: 'read',
+        handle: ({ response }) => sendJson(response, 200, phone.config),
+      });
+      this.route({
+        method: 'POST',
+        path: '/api/v1/phone/observations',
+        scope: 'phone:ingest',
+        limit: 'ingest',
+        handle: async ({ request, response, device }) => {
+          const body = await readJsonBody(request, OBSERVATIONS_MAX_BYTES);
+          sendJson(
+            response,
+            200,
+            phone.ingress.accept(device!.id, device!.name, body),
+          );
+        },
+      });
+    }
   }
 
   private registerRoomRoutes(
@@ -212,6 +244,7 @@ export class LugnDeviceServer {
       if (event.type !== 'revoked') return;
       this.events?.closeDevice(event.deviceId);
       this.options.room?.commands.forget(event.deviceId);
+      this.options.phone?.ingress.forget(event.deviceId);
     });
     const server = createServer((request, response) => {
       void this.handleRequest(request, response);

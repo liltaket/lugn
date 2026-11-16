@@ -17,6 +17,7 @@ import {
   type StateUpdate,
 } from '../core/schemas.js';
 import type { LugnEngine } from './lugn-engine.js';
+import { phoneFacts } from '../core/phone.js';
 import type { ExperienceApi } from './experience-api.js';
 
 export type StateViewSources = {
@@ -60,6 +61,7 @@ const DOMAIN_SECTIONS: Record<
   switches: [],
   music: ['music', 'why'],
   computer: ['computer'],
+  phone: ['phone'],
   intent: ['lighting', 'music'],
   commands: ['lighting'],
   diagnostics: ['why'],
@@ -127,6 +129,12 @@ export function buildSections(sources: StateViewSources): StateViewSections {
       fullscreen: device.observed.fullscreen,
       observedAt: device.observedAt,
     })),
+    phone: {
+      devices: Object.values(state.phone.devices)
+        .sort((a, b) => a.deviceId.localeCompare(b.deviceId))
+        .map((device) => structuredClone(device)),
+      facts: phoneFacts(state.phone, sources.now()),
+    },
     health: healthView(sources.integrations()),
     why: whyFeed(state),
   };
@@ -503,6 +511,18 @@ function diagnosticEntry(diagnostic: Diagnostic): WhyEntry | null {
         text: 'Förtände ljuset: möjlig entré',
         trigger: 'Närvarosensor',
         conditions: ['Tillfälligt tills entrén bekräftas'],
+      };
+    case 'presence.prelight_arrival_hint':
+      return {
+        ...base,
+        domain: 'lighting',
+        outcome: 'acted',
+        text: 'Förtände trots borta: telefonen kom hem nyss',
+        trigger: 'Telefon',
+        conditions: [
+          'Sensorn såg en möjlig entré',
+          'Home Assistant rapporterade fortfarande borta',
+        ],
       };
     case 'presence.prelight_suppressed': {
       const reason = String(details['reason'] ?? '');

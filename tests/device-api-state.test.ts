@@ -20,6 +20,11 @@ import {
   StateViewSchema,
   type DeviceScope,
 } from '../src/core/device-api.js';
+import {
+  PhoneConfigResponseSchema,
+  PhoneObservationBatchSchema,
+  PhoneObservationResponseSchema,
+} from '../src/core/phone.js';
 import { DeviceCommandService } from '../src/runtime/device-commands.js';
 import { DeviceRegistry } from '../src/runtime/device-registry.js';
 import { LugnDeviceServer } from '../src/runtime/device-server.js';
@@ -377,6 +382,14 @@ describe('committed device API fixtures', () => {
     CommandResponseSchema.parse(read('command-response.json'));
     CommandResponseSchema.parse(read('command-bedtime-response.json'));
     PairResponseSchema.parse(read('pair-response.json'));
+    PhoneObservationBatchSchema.parse(read('phone-observations-request.json'));
+    PhoneObservationResponseSchema.parse(
+      read('phone-observations-response.json'),
+    );
+    PhoneConfigResponseSchema.parse(read('phone-config.json'));
+    expect(
+      StateViewSchema.parse(read('state.json')).phone.devices,
+    ).toHaveLength(1);
     expect(
       readFileSync(new URL('pair-response.json', directory), 'utf8'),
     ).toMatch(/"token": "lgn1\.dev_[a-z2-7]{16}\.x{43}"/);

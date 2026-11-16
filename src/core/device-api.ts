@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PhoneDeviceStateSchema } from './phone.js';
 
 /**
  * Versioned contract for paired native clients (`/api/v1`). These schemas are
@@ -382,6 +383,34 @@ export const WhyEntrySchema = z
   .strict();
 export type WhyEntry = z.infer<typeof WhyEntrySchema>;
 
+const PhoneFactStamp = { deviceId: z.string(), observedAt: Time };
+/** Paired-phone hints. Never room presence; a missing signal is unknown. */
+export const PhoneViewSchema = z
+  .object({
+    devices: z.array(PhoneDeviceStateSchema),
+    /** Typed facts for bedtime and routines; nothing acts on them yet. */
+    facts: z
+      .object({
+        wakeAlarm: z
+          .object({ ...PhoneFactStamp, at: Time })
+          .strict()
+          .nullable(),
+        focus: z
+          .object({
+            ...PhoneFactStamp,
+            mode: z.enum(['sleep', 'dnd', 'other', 'none', 'unknown']),
+          })
+          .strict()
+          .nullable(),
+        charging: z
+          .object({ ...PhoneFactStamp, charging: z.boolean() })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const StateViewSectionsSchema = z
   .object({
     presence: PresenceViewSchema,
@@ -392,6 +421,7 @@ export const StateViewSectionsSchema = z
     environment: EnvironmentViewSchema,
     suggestions: z.array(SuggestionViewSchema),
     computer: z.array(ComputerViewSchema),
+    phone: PhoneViewSchema,
     health: HealthViewSchema,
     why: z.array(WhyEntrySchema),
   })

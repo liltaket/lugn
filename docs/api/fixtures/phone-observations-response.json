@@ -1,0 +1,39 @@
+{
+  "serverTime": 1794853803000,
+  "results": [
+    {
+      "eventId": "1a2b3c4d-0001-4e5f-8a9b-0c1d2e3f4a5b",
+      "status": "applied"
+    },
+    {
+      "eventId": "1a2b3c4d-0002-4e5f-8a9b-0c1d2e3f4a5b",
+      "status": "applied"
+    },
+    {
+      "eventId": "1a2b3c4d-0003-4e5f-8a9b-0c1d2e3f4a5b",
+      "status": "applied"
+    },
+    {
+      "eventId": "1a2b3c4d-0004-4e5f-8a9b-0c1d2e3f4a5b",
+      "status": "applied"
+    },
+    {
+      "eventId": "1a2b3c4d-0005-4e5f-8a9b-0c1d2e3f4a5b",
+      "status": "applied"
+    },
+    {
+      "eventId": "1a2b3c4d-0006-4e5f-8a9b-0c1d2e3f4a5b",
+      "status": "ignored",
+      "reason": "signal_disabled"
+    },
+    {
+      "eventId": "1a2b3c4d-0001-4e5f-8a9b-0c1d2e3f4a5b",
+      "status": "duplicate"
+    },
+    {
+      "eventId": "1a2b3c4d-0007-4e5f-8a9b-0c1d2e3f4a5b",
+      "status": "rejected",
+      "reason": "stale"
+    }
+  ]
+}

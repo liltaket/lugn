@@ -248,6 +248,96 @@ paths:
             "application/json":
               schema:
                 $ref: "#/components/schemas/ApiError"
+  "/api/v1/phone/config":
+    get:
+      operationId: "getPhoneConfig"
+      summary: "Which phone signals Lugn accepts, with age limits"
+      security:
+        - deviceToken: []
+      x-lugn-scope: "phone:ingest"
+      responses:
+        "200":
+          description: "Signal settings."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/PhoneConfigResponse"
+        "401":
+          description: "Missing, unknown or revoked token."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: "Token lacks the scope, or the request carried a browser Origin header."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "421":
+          description: "Host header is not allowed."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: "Rate limited; honour Retry-After."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  "/api/v1/phone/observations":
+    post:
+      operationId: "postPhoneObservations"
+      summary: "Submit batched, idempotent phone observations (hints only)"
+      description: "Each observation has a UUID eventId, a per-session sequence and the device timestamp. Results report applied, duplicate, superseded, rejected or ignored per event. Observations never set room presence."
+      security:
+        - deviceToken: []
+      x-lugn-scope: "phone:ingest"
+      requestBody:
+        required: true
+        x-lugn-max-bytes: 65536
+        content:
+          "application/json":
+            schema:
+              $ref: "#/components/schemas/PhoneObservationBatch"
+      responses:
+        "200":
+          description: "Per-event results."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/PhoneObservationResponse"
+        "400":
+          description: "Invalid batch."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: "Missing, unknown or revoked token."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: "Token lacks the scope, or the request carried a browser Origin header."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "421":
+          description: "Host header is not allowed."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: "Rate limited; honour Retry-After."
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/ApiError"
   "/api/v1/state":
     get:
       operationId: "getState"
@@ -850,6 +940,379 @@ components:
         - "tokenType"
         - "scopes"
         - "issuedAt"
+      additionalProperties: false
+    PhoneConfigResponse:
+      type: "object"
+      properties:
+        signals:
+          type: "object"
+          propertyNames:
+            type: "string"
+            enum:
+              - "app"
+              - "geofence"
+              - "power"
+              - "focus"
+              - "wakeAlarm"
+              - "motion"
+              - "network"
+          additionalProperties:
+            type: "boolean"
+          required:
+            - "app"
+            - "geofence"
+            - "power"
+            - "focus"
+            - "wakeAlarm"
+            - "motion"
+            - "network"
+        maxObservationAgeSeconds:
+          type: "integer"
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        maxBatchSize:
+          type: "integer"
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        windows:
+          type: "object"
+          propertyNames:
+            type: "string"
+            enum:
+              - "app"
+              - "geofence"
+              - "power"
+              - "focus"
+              - "wakeAlarm"
+              - "motion"
+              - "network"
+          additionalProperties:
+            type: "object"
+            properties:
+              freshSeconds:
+                type: "integer"
+                exclusiveMinimum: 0
+                maximum: 9007199254740991
+              retainSeconds:
+                type: "integer"
+                exclusiveMinimum: 0
+                maximum: 9007199254740991
+            required:
+              - "freshSeconds"
+              - "retainSeconds"
+            additionalProperties: false
+          required:
+            - "app"
+            - "geofence"
+            - "power"
+            - "focus"
+            - "wakeAlarm"
+            - "motion"
+            - "network"
+      required:
+        - "signals"
+        - "maxObservationAgeSeconds"
+        - "maxBatchSize"
+        - "windows"
+      additionalProperties: false
+    PhoneObservationBatch:
+      type: "object"
+      properties:
+        sessionId:
+          type: "string"
+          format: "uuid"
+          pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        observations:
+          minItems: 1
+          maxItems: 100
+          type: "array"
+          items:
+            oneOf:
+              - type: "object"
+                properties:
+                  eventId:
+                    type: "string"
+                    format: "uuid"
+                    pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  sequence:
+                    type: "integer"
+                    minimum: 1
+                    maximum: 9007199254740991
+                  observedAt:
+                    type: "integer"
+                    minimum: 0
+                    maximum: 9007199254740991
+                  type:
+                    type: "string"
+                    const: "app"
+                  state:
+                    type: "string"
+                    enum:
+                      - "foreground"
+                      - "background"
+                      - "heartbeat"
+                required:
+                  - "eventId"
+                  - "sequence"
+                  - "observedAt"
+                  - "type"
+                  - "state"
+                additionalProperties: false
+              - type: "object"
+                properties:
+                  eventId:
+                    type: "string"
+                    format: "uuid"
+                    pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  sequence:
+                    type: "integer"
+                    minimum: 1
+                    maximum: 9007199254740991
+                  observedAt:
+                    type: "integer"
+                    minimum: 0
+                    maximum: 9007199254740991
+                  type:
+                    type: "string"
+                    const: "geofence"
+                  zoneId:
+                    type: "string"
+                    pattern: "^[a-z0-9][a-z0-9_-]{0,31}$"
+                  transition:
+                    type: "string"
+                    enum:
+                      - "enter"
+                      - "exit"
+                required:
+                  - "eventId"
+                  - "sequence"
+                  - "observedAt"
+                  - "type"
+                  - "zoneId"
+                  - "transition"
+                additionalProperties: false
+              - type: "object"
+                properties:
+                  eventId:
+                    type: "string"
+                    format: "uuid"
+                    pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  sequence:
+                    type: "integer"
+                    minimum: 1
+                    maximum: 9007199254740991
+                  observedAt:
+                    type: "integer"
+                    minimum: 0
+                    maximum: 9007199254740991
+                  type:
+                    type: "string"
+                    const: "power"
+                  charging:
+                    type:
+                      - "boolean"
+                      - "null"
+                  batteryLevel:
+                    anyOf:
+                      - type: "number"
+                        minimum: 0
+                        maximum: 1
+                      - type: "null"
+                required:
+                  - "eventId"
+                  - "sequence"
+                  - "observedAt"
+                  - "type"
+                  - "charging"
+                  - "batteryLevel"
+                additionalProperties: false
+              - type: "object"
+                properties:
+                  eventId:
+                    type: "string"
+                    format: "uuid"
+                    pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  sequence:
+                    type: "integer"
+                    minimum: 1
+                    maximum: 9007199254740991
+                  observedAt:
+                    type: "integer"
+                    minimum: 0
+                    maximum: 9007199254740991
+                  type:
+                    type: "string"
+                    const: "focus"
+                  mode:
+                    type: "string"
+                    enum:
+                      - "sleep"
+                      - "dnd"
+                      - "other"
+                      - "none"
+                      - "unknown"
+                required:
+                  - "eventId"
+                  - "sequence"
+                  - "observedAt"
+                  - "type"
+                  - "mode"
+                additionalProperties: false
+              - type: "object"
+                properties:
+                  eventId:
+                    type: "string"
+                    format: "uuid"
+                    pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  sequence:
+                    type: "integer"
+                    minimum: 1
+                    maximum: 9007199254740991
+                  observedAt:
+                    type: "integer"
+                    minimum: 0
+                    maximum: 9007199254740991
+                  type:
+                    type: "string"
+                    const: "wake_alarm"
+                  at:
+                    anyOf:
+                      - type: "integer"
+                        minimum: 0
+                        maximum: 9007199254740991
+                      - type: "null"
+                  source:
+                    type: "string"
+                    enum:
+                      - "sleep_schedule"
+                      - "shortcut"
+                      - "manual"
+                      - "unknown"
+                required:
+                  - "eventId"
+                  - "sequence"
+                  - "observedAt"
+                  - "type"
+                  - "at"
+                  - "source"
+                additionalProperties: false
+              - type: "object"
+                properties:
+                  eventId:
+                    type: "string"
+                    format: "uuid"
+                    pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  sequence:
+                    type: "integer"
+                    minimum: 1
+                    maximum: 9007199254740991
+                  observedAt:
+                    type: "integer"
+                    minimum: 0
+                    maximum: 9007199254740991
+                  type:
+                    type: "string"
+                    const: "motion"
+                  activity:
+                    type: "string"
+                    enum:
+                      - "stationary"
+                      - "walking"
+                      - "running"
+                      - "cycling"
+                      - "automotive"
+                      - "unknown"
+                  confidence:
+                    type: "string"
+                    enum:
+                      - "low"
+                      - "medium"
+                      - "high"
+                required:
+                  - "eventId"
+                  - "sequence"
+                  - "observedAt"
+                  - "type"
+                  - "activity"
+                  - "confidence"
+                additionalProperties: false
+              - type: "object"
+                properties:
+                  eventId:
+                    type: "string"
+                    format: "uuid"
+                    pattern: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  sequence:
+                    type: "integer"
+                    minimum: 1
+                    maximum: 9007199254740991
+                  observedAt:
+                    type: "integer"
+                    minimum: 0
+                    maximum: 9007199254740991
+                  type:
+                    type: "string"
+                    const: "network"
+                  kind:
+                    type: "string"
+                    enum:
+                      - "wifi"
+                      - "cellular"
+                      - "none"
+                      - "unknown"
+                  homeNetwork:
+                    type:
+                      - "boolean"
+                      - "null"
+                required:
+                  - "eventId"
+                  - "sequence"
+                  - "observedAt"
+                  - "type"
+                  - "kind"
+                  - "homeNetwork"
+                additionalProperties: false
+      required:
+        - "sessionId"
+        - "observations"
+      additionalProperties: false
+    PhoneObservationResponse:
+      type: "object"
+      properties:
+        serverTime:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        results:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              eventId:
+                type: "string"
+              status:
+                type: "string"
+                enum:
+                  - "applied"
+                  - "duplicate"
+                  - "superseded"
+                  - "rejected"
+                  - "ignored"
+              reason:
+                type: "string"
+                enum:
+                  - "stale"
+                  - "future_timestamp"
+                  - "sequence_reused"
+                  - "signal_disabled"
+                  - "older_than_current"
+            required:
+              - "eventId"
+              - "status"
+            additionalProperties: false
+      required:
+        - "serverTime"
+        - "results"
       additionalProperties: false
     StatePatch:
       type: "object"
@@ -1571,6 +2034,332 @@ components:
                   - "fullscreen"
                   - "observedAt"
                 additionalProperties: false
+            phone:
+              type: "object"
+              properties:
+                devices:
+                  type: "array"
+                  items:
+                    type: "object"
+                    properties:
+                      deviceId:
+                        type: "string"
+                        pattern: "^dev_[a-z2-7]{16}$"
+                      name:
+                        type: "string"
+                      lastSeenAt:
+                        anyOf:
+                          - type: "integer"
+                            minimum: 0
+                            maximum: 9007199254740991
+                          - type: "null"
+                      signals:
+                        type: "object"
+                        properties:
+                          app:
+                            anyOf:
+                              - type: "object"
+                                properties:
+                                  observedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  receivedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  fresh:
+                                    type: "boolean"
+                                  state:
+                                    type: "string"
+                                    enum:
+                                      - "foreground"
+                                      - "background"
+                                      - "heartbeat"
+                                required:
+                                  - "observedAt"
+                                  - "receivedAt"
+                                  - "fresh"
+                                  - "state"
+                                additionalProperties: false
+                              - type: "null"
+                          geofence:
+                            type: "object"
+                            propertyNames:
+                              type: "string"
+                              pattern: "^[a-z0-9][a-z0-9_-]{0,31}$"
+                            additionalProperties:
+                              type: "object"
+                              properties:
+                                observedAt:
+                                  type: "integer"
+                                  minimum: 0
+                                  maximum: 9007199254740991
+                                receivedAt:
+                                  type: "integer"
+                                  minimum: 0
+                                  maximum: 9007199254740991
+                                fresh:
+                                  type: "boolean"
+                                inside:
+                                  type: "boolean"
+                              required:
+                                - "observedAt"
+                                - "receivedAt"
+                                - "fresh"
+                                - "inside"
+                              additionalProperties: false
+                          power:
+                            anyOf:
+                              - type: "object"
+                                properties:
+                                  observedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  receivedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  fresh:
+                                    type: "boolean"
+                                  charging:
+                                    type:
+                                      - "boolean"
+                                      - "null"
+                                  batteryLevel:
+                                    anyOf:
+                                      - type: "number"
+                                        minimum: 0
+                                        maximum: 1
+                                      - type: "null"
+                                required:
+                                  - "observedAt"
+                                  - "receivedAt"
+                                  - "fresh"
+                                  - "charging"
+                                  - "batteryLevel"
+                                additionalProperties: false
+                              - type: "null"
+                          focus:
+                            anyOf:
+                              - type: "object"
+                                properties:
+                                  observedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  receivedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  fresh:
+                                    type: "boolean"
+                                  mode:
+                                    type: "string"
+                                    enum:
+                                      - "sleep"
+                                      - "dnd"
+                                      - "other"
+                                      - "none"
+                                      - "unknown"
+                                required:
+                                  - "observedAt"
+                                  - "receivedAt"
+                                  - "fresh"
+                                  - "mode"
+                                additionalProperties: false
+                              - type: "null"
+                          wakeAlarm:
+                            anyOf:
+                              - type: "object"
+                                properties:
+                                  observedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  receivedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  fresh:
+                                    type: "boolean"
+                                  at:
+                                    anyOf:
+                                      - type: "integer"
+                                        minimum: 0
+                                        maximum: 9007199254740991
+                                      - type: "null"
+                                  source:
+                                    type: "string"
+                                    enum:
+                                      - "sleep_schedule"
+                                      - "shortcut"
+                                      - "manual"
+                                      - "unknown"
+                                required:
+                                  - "observedAt"
+                                  - "receivedAt"
+                                  - "fresh"
+                                  - "at"
+                                  - "source"
+                                additionalProperties: false
+                              - type: "null"
+                          motion:
+                            anyOf:
+                              - type: "object"
+                                properties:
+                                  observedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  receivedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  fresh:
+                                    type: "boolean"
+                                  activity:
+                                    type: "string"
+                                    enum:
+                                      - "stationary"
+                                      - "walking"
+                                      - "running"
+                                      - "cycling"
+                                      - "automotive"
+                                      - "unknown"
+                                  confidence:
+                                    type: "string"
+                                    enum:
+                                      - "low"
+                                      - "medium"
+                                      - "high"
+                                required:
+                                  - "observedAt"
+                                  - "receivedAt"
+                                  - "fresh"
+                                  - "activity"
+                                  - "confidence"
+                                additionalProperties: false
+                              - type: "null"
+                          network:
+                            anyOf:
+                              - type: "object"
+                                properties:
+                                  observedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  receivedAt:
+                                    type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  fresh:
+                                    type: "boolean"
+                                  kind:
+                                    type: "string"
+                                    enum:
+                                      - "wifi"
+                                      - "cellular"
+                                      - "none"
+                                      - "unknown"
+                                  homeNetwork:
+                                    type:
+                                      - "boolean"
+                                      - "null"
+                                required:
+                                  - "observedAt"
+                                  - "receivedAt"
+                                  - "fresh"
+                                  - "kind"
+                                  - "homeNetwork"
+                                additionalProperties: false
+                              - type: "null"
+                        required:
+                          - "app"
+                          - "geofence"
+                          - "power"
+                          - "focus"
+                          - "wakeAlarm"
+                          - "motion"
+                          - "network"
+                        additionalProperties: false
+                    required:
+                      - "deviceId"
+                      - "name"
+                      - "lastSeenAt"
+                      - "signals"
+                    additionalProperties: false
+                facts:
+                  type: "object"
+                  properties:
+                    wakeAlarm:
+                      anyOf:
+                        - type: "object"
+                          properties:
+                            deviceId:
+                              type: "string"
+                            observedAt:
+                              type: "number"
+                              minimum: 0
+                            at:
+                              type: "number"
+                              minimum: 0
+                          required:
+                            - "deviceId"
+                            - "observedAt"
+                            - "at"
+                          additionalProperties: false
+                        - type: "null"
+                    focus:
+                      anyOf:
+                        - type: "object"
+                          properties:
+                            deviceId:
+                              type: "string"
+                            observedAt:
+                              type: "number"
+                              minimum: 0
+                            mode:
+                              type: "string"
+                              enum:
+                                - "sleep"
+                                - "dnd"
+                                - "other"
+                                - "none"
+                                - "unknown"
+                          required:
+                            - "deviceId"
+                            - "observedAt"
+                            - "mode"
+                          additionalProperties: false
+                        - type: "null"
+                    charging:
+                      anyOf:
+                        - type: "object"
+                          properties:
+                            deviceId:
+                              type: "string"
+                            observedAt:
+                              type: "number"
+                              minimum: 0
+                            charging:
+                              type: "boolean"
+                          required:
+                            - "deviceId"
+                            - "observedAt"
+                            - "charging"
+                          additionalProperties: false
+                        - type: "null"
+                  required:
+                    - "wakeAlarm"
+                    - "focus"
+                    - "charging"
+                  additionalProperties: false
+              required:
+                - "devices"
+                - "facts"
+              additionalProperties: false
             health:
               type: "object"
               properties:
@@ -2348,6 +3137,332 @@ components:
               - "fullscreen"
               - "observedAt"
             additionalProperties: false
+        phone:
+          type: "object"
+          properties:
+            devices:
+              type: "array"
+              items:
+                type: "object"
+                properties:
+                  deviceId:
+                    type: "string"
+                    pattern: "^dev_[a-z2-7]{16}$"
+                  name:
+                    type: "string"
+                  lastSeenAt:
+                    anyOf:
+                      - type: "integer"
+                        minimum: 0
+                        maximum: 9007199254740991
+                      - type: "null"
+                  signals:
+                    type: "object"
+                    properties:
+                      app:
+                        anyOf:
+                          - type: "object"
+                            properties:
+                              observedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              receivedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              fresh:
+                                type: "boolean"
+                              state:
+                                type: "string"
+                                enum:
+                                  - "foreground"
+                                  - "background"
+                                  - "heartbeat"
+                            required:
+                              - "observedAt"
+                              - "receivedAt"
+                              - "fresh"
+                              - "state"
+                            additionalProperties: false
+                          - type: "null"
+                      geofence:
+                        type: "object"
+                        propertyNames:
+                          type: "string"
+                          pattern: "^[a-z0-9][a-z0-9_-]{0,31}$"
+                        additionalProperties:
+                          type: "object"
+                          properties:
+                            observedAt:
+                              type: "integer"
+                              minimum: 0
+                              maximum: 9007199254740991
+                            receivedAt:
+                              type: "integer"
+                              minimum: 0
+                              maximum: 9007199254740991
+                            fresh:
+                              type: "boolean"
+                            inside:
+                              type: "boolean"
+                          required:
+                            - "observedAt"
+                            - "receivedAt"
+                            - "fresh"
+                            - "inside"
+                          additionalProperties: false
+                      power:
+                        anyOf:
+                          - type: "object"
+                            properties:
+                              observedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              receivedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              fresh:
+                                type: "boolean"
+                              charging:
+                                type:
+                                  - "boolean"
+                                  - "null"
+                              batteryLevel:
+                                anyOf:
+                                  - type: "number"
+                                    minimum: 0
+                                    maximum: 1
+                                  - type: "null"
+                            required:
+                              - "observedAt"
+                              - "receivedAt"
+                              - "fresh"
+                              - "charging"
+                              - "batteryLevel"
+                            additionalProperties: false
+                          - type: "null"
+                      focus:
+                        anyOf:
+                          - type: "object"
+                            properties:
+                              observedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              receivedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              fresh:
+                                type: "boolean"
+                              mode:
+                                type: "string"
+                                enum:
+                                  - "sleep"
+                                  - "dnd"
+                                  - "other"
+                                  - "none"
+                                  - "unknown"
+                            required:
+                              - "observedAt"
+                              - "receivedAt"
+                              - "fresh"
+                              - "mode"
+                            additionalProperties: false
+                          - type: "null"
+                      wakeAlarm:
+                        anyOf:
+                          - type: "object"
+                            properties:
+                              observedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              receivedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              fresh:
+                                type: "boolean"
+                              at:
+                                anyOf:
+                                  - type: "integer"
+                                    minimum: 0
+                                    maximum: 9007199254740991
+                                  - type: "null"
+                              source:
+                                type: "string"
+                                enum:
+                                  - "sleep_schedule"
+                                  - "shortcut"
+                                  - "manual"
+                                  - "unknown"
+                            required:
+                              - "observedAt"
+                              - "receivedAt"
+                              - "fresh"
+                              - "at"
+                              - "source"
+                            additionalProperties: false
+                          - type: "null"
+                      motion:
+                        anyOf:
+                          - type: "object"
+                            properties:
+                              observedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              receivedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              fresh:
+                                type: "boolean"
+                              activity:
+                                type: "string"
+                                enum:
+                                  - "stationary"
+                                  - "walking"
+                                  - "running"
+                                  - "cycling"
+                                  - "automotive"
+                                  - "unknown"
+                              confidence:
+                                type: "string"
+                                enum:
+                                  - "low"
+                                  - "medium"
+                                  - "high"
+                            required:
+                              - "observedAt"
+                              - "receivedAt"
+                              - "fresh"
+                              - "activity"
+                              - "confidence"
+                            additionalProperties: false
+                          - type: "null"
+                      network:
+                        anyOf:
+                          - type: "object"
+                            properties:
+                              observedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              receivedAt:
+                                type: "integer"
+                                minimum: 0
+                                maximum: 9007199254740991
+                              fresh:
+                                type: "boolean"
+                              kind:
+                                type: "string"
+                                enum:
+                                  - "wifi"
+                                  - "cellular"
+                                  - "none"
+                                  - "unknown"
+                              homeNetwork:
+                                type:
+                                  - "boolean"
+                                  - "null"
+                            required:
+                              - "observedAt"
+                              - "receivedAt"
+                              - "fresh"
+                              - "kind"
+                              - "homeNetwork"
+                            additionalProperties: false
+                          - type: "null"
+                    required:
+                      - "app"
+                      - "geofence"
+                      - "power"
+                      - "focus"
+                      - "wakeAlarm"
+                      - "motion"
+                      - "network"
+                    additionalProperties: false
+                required:
+                  - "deviceId"
+                  - "name"
+                  - "lastSeenAt"
+                  - "signals"
+                additionalProperties: false
+            facts:
+              type: "object"
+              properties:
+                wakeAlarm:
+                  anyOf:
+                    - type: "object"
+                      properties:
+                        deviceId:
+                          type: "string"
+                        observedAt:
+                          type: "number"
+                          minimum: 0
+                        at:
+                          type: "number"
+                          minimum: 0
+                      required:
+                        - "deviceId"
+                        - "observedAt"
+                        - "at"
+                      additionalProperties: false
+                    - type: "null"
+                focus:
+                  anyOf:
+                    - type: "object"
+                      properties:
+                        deviceId:
+                          type: "string"
+                        observedAt:
+                          type: "number"
+                          minimum: 0
+                        mode:
+                          type: "string"
+                          enum:
+                            - "sleep"
+                            - "dnd"
+                            - "other"
+                            - "none"
+                            - "unknown"
+                      required:
+                        - "deviceId"
+                        - "observedAt"
+                        - "mode"
+                      additionalProperties: false
+                    - type: "null"
+                charging:
+                  anyOf:
+                    - type: "object"
+                      properties:
+                        deviceId:
+                          type: "string"
+                        observedAt:
+                          type: "number"
+                          minimum: 0
+                        charging:
+                          type: "boolean"
+                      required:
+                        - "deviceId"
+                        - "observedAt"
+                        - "charging"
+                      additionalProperties: false
+                    - type: "null"
+              required:
+                - "wakeAlarm"
+                - "focus"
+                - "charging"
+              additionalProperties: false
+          required:
+            - "devices"
+            - "facts"
+          additionalProperties: false
         health:
           type: "object"
           properties:
@@ -2431,6 +3546,7 @@ components:
         - "environment"
         - "suggestions"
         - "computer"
+        - "phone"
         - "health"
         - "why"
         - "apiVersion"

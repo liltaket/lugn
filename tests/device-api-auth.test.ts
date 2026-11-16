@@ -163,9 +163,9 @@ describe('device API configuration', () => {
   };
   const device = {
     enabled: true,
-    host: '100.64.0.10',
+    host: '192.0.2.10',
     port: 8789,
-    allowedHosts: ['100.64.0.10:8789', 'lugn.example.ts.net:8789'],
+    allowedHosts: ['192.0.2.10:8789', 'lugn.example.ts.net:8789'],
   };
 
   it('is absent by default and requires an explicit interface, port and Host allowlist', () => {
@@ -180,9 +180,9 @@ describe('device API configuration', () => {
       { ...device, enabled: undefined },
       { ...device, host: 'lugn.local' },
       { ...device, host: '0.0.0.0' },
-      { ...device, allowedHosts: ['100.64.0.10:9999'] },
-      { ...device, allowedHosts: ['100.64.0.10'] },
-      { ...device, allowedHosts: ['user@100.64.0.10:8789'] },
+      { ...device, allowedHosts: ['192.0.2.10:9999'] },
+      { ...device, allowedHosts: ['192.0.2.10'] },
+      { ...device, allowedHosts: ['user@192.0.2.10:8789'] },
       { ...device, port: 8787 },
       { ...device, unexpected: true },
     ])

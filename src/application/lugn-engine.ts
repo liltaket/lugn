@@ -1,3 +1,4 @@
+import { PhoneStateSchema, type PhoneState } from '../core/phone.js';
 import { randomUUID } from 'node:crypto';
 import { type MusicVolumeSettings } from '../core/music-volume-settings.js';
 import {
@@ -626,6 +627,8 @@ export class LugnEngine {
   private activePrelightFastPathEventId: string | undefined;
   private confirmedEmptyFastPathEventId: string | undefined;
   private prelightActive = false;
+  private prelightArrivalHint:
+    { until: number; deviceId: string; zoneId: string } | undefined;
   private prelightPreviewActive = false;
   private prelightTimer: TimerHandle | undefined;
   private prelightStartedAt = 0;
@@ -1195,6 +1198,7 @@ export class LugnEngine {
       switches: { devices: switches, commands: [] },
       music: this.musicController.state,
       computer: { devices: {} },
+      phone: { devices: {} },
       intent: { holds: [] },
       commands: this.ledger.records,
       diagnostics: [],
@@ -1487,6 +1491,34 @@ export class LugnEngine {
     this.computerPlayback?.observe();
     this.musicAutomation.reconcileComputerPlayback();
     this.publish(['computer']);
+  }
+
+  /**
+   * Replaces paired-phone observations. They are hints shown to clients and
+   * typed facts for later consumers; they never change presence, lighting or
+   * music by themselves.
+   */
+  acceptPhoneState(phone: PhoneState): void {
+    this.state.phone = PhoneStateSchema.parse(structuredClone(phone));
+    this.publish(['phone']);
+  }
+
+  /**
+   * A recent phone geofence arrival lets the sensor's own prelight signal
+   * light the approach while Home Assistant still reports away. It never
+   * starts prelight, marks the room occupied, or affects confirmed entry.
+   */
+  setPrelightArrivalHint(
+    hint: { until: number; deviceId: string; zoneId: string } | null,
+  ): void {
+    this.prelightArrivalHint = hint ?? undefined;
+  }
+
+  private prelightArrivalHintActive(): boolean {
+    return (
+      this.prelightArrivalHint !== undefined &&
+      this.prelightArrivalHint.until > this.clock.now()
+    );
   }
 
   notifyComputerPlaybackChanged(): void {
@@ -3171,7 +3203,10 @@ export class LugnEngine {
     const explicitlyOff =
       !allLightsOffScene && Object.keys(targetValues).length === 0;
     const roomAlreadyLit = this.hasAnyLightOn();
-    const homeAway = this.state.presence.home.state === 'away';
+    const arrivalHint =
+      this.state.presence.home.state === 'away' &&
+      this.prelightArrivalHintActive();
+    const homeAway = this.state.presence.home.state === 'away' && !arrivalHint;
     if (
       allLightsOffScene ||
       explicitlyOff ||
@@ -3199,6 +3234,16 @@ export class LugnEngine {
       return;
     }
 
+    if (arrivalHint)
+      this.addDiagnostic(
+        'presence.prelight_arrival_hint',
+        'Home Assistant still reports away, but a recent phone arrival allows this sensor prelight',
+        {
+          deviceId: this.prelightArrivalHint!.deviceId,
+          zoneId: this.prelightArrivalHint!.zoneId,
+          until: this.prelightArrivalHint!.until,
+        },
+      );
     this.terminateAllFastPathEvents();
     this.prelightActive = true;
     const eventId = `prelight-${++this.nextEventId}`;
@@ -5182,6 +5227,7 @@ export class LugnEngine {
       | 'switches'
       | 'music'
       | 'computer'
+      | 'phone'
       | 'intent'
       | 'commands'
       | 'diagnostics'
@@ -5203,6 +5249,18 @@ export class LugnEngine {
         at: this.state.updatedAt,
         domains: ['computer'],
         patch: { computer: structuredClone(this.state.computer) },
+      });
+      return;
+    }
+    if (domains.length === 1 && domains[0] === 'phone') {
+      this.state.revision += 1;
+      this.state.updatedAt = this.clock.now();
+      RoomStateSchema.parse(this.state);
+      this.stream.publish({
+        revision: this.state.revision,
+        at: this.state.updatedAt,
+        domains: ['phone'],
+        patch: { phone: structuredClone(this.state.phone) },
       });
       return;
     }

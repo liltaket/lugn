@@ -9,6 +9,8 @@ import { withRoomPresets } from '../application/dashboard-scenes.js';
 import { defaultScenes, LugnEngine } from '../application/lugn-engine.js';
 import { FakeClock } from '../core/clock.js';
 import { RoutineService } from '../application/routines.js';
+import { PhoneIngress } from '../adapters/phone-ingress.js';
+import { DeviceApiConfigSchema, phoneConfigResponse } from './device-config.js';
 import { createRoutineTemplates } from '../core/routines.js';
 import { DeviceCommandService } from './device-commands.js';
 import { RoutineApi } from './routine-api.js';
@@ -64,6 +66,25 @@ export async function buildDeviceApiFixtures(): Promise<Fixture[]> {
     },
   });
   const experience = new RoutineApi(routines, routineStore);
+  const phoneConfig = DeviceApiConfigSchema.parse({
+    enabled: true,
+    host: '127.0.0.1',
+    port: 8789,
+    allowedHosts: ['lugn.example.ts.net:8789'],
+    phone: { arrivalPrelight: { enabled: true } },
+  }).phone;
+  const phone = new PhoneIngress({
+    clock,
+    signals: phoneConfig.signals,
+    maxObservationAgeMs: phoneConfig.maxObservationAgeSeconds * 1000,
+    arrivalPrelight: {
+      enabled: phoneConfig.arrivalPrelight.enabled,
+      zoneId: phoneConfig.arrivalPrelight.zoneId,
+      windowMs: phoneConfig.arrivalPrelight.windowSeconds * 1000,
+    },
+    onState: (state) => engine.acceptPhoneState(state),
+    onArrivalHint: (hint) => engine.setPrelightArrivalHint(hint),
+  });
   const fixtures: Fixture[] = [];
   let server: LugnDeviceServer | undefined;
   try {
@@ -117,6 +138,7 @@ export async function buildDeviceApiFixtures(): Promise<Fixture[]> {
           clock,
         }),
       },
+      phone: { ingress: phone, config: phoneConfigResponse(phoneConfig) },
     });
     await server.start();
     const port = server.address!.port;
@@ -200,7 +222,89 @@ export async function buildDeviceApiFixtures(): Promise<Fixture[]> {
       name: 'command-bedtime-response',
       content: (await api('/api/v1/commands', { token, body: bedtime })).json,
     });
-    await events.waitFor(3);
+    fixtures.push({
+      name: 'phone-config',
+      content: (await api('/api/v1/phone/config', { token })).json,
+    });
+    const now = clock.now();
+    const observations = {
+      sessionId: '5d0c4b9a-8e7f-4a6b-9c1d-2e3f4a5b6c7d',
+      observations: [
+        {
+          eventId: '1a2b3c4d-0001-4e5f-8a9b-0c1d2e3f4a5b',
+          sequence: 1,
+          observedAt: now - 120_000,
+          type: 'geofence',
+          zoneId: 'home',
+          transition: 'enter',
+        },
+        {
+          eventId: '1a2b3c4d-0002-4e5f-8a9b-0c1d2e3f4a5b',
+          sequence: 2,
+          observedAt: now - 60_000,
+          type: 'app',
+          state: 'foreground',
+        },
+        {
+          eventId: '1a2b3c4d-0003-4e5f-8a9b-0c1d2e3f4a5b',
+          sequence: 3,
+          observedAt: now - 60_000,
+          type: 'power',
+          charging: true,
+          batteryLevel: 0.62,
+        },
+        {
+          eventId: '1a2b3c4d-0004-4e5f-8a9b-0c1d2e3f4a5b',
+          sequence: 4,
+          observedAt: now - 30_000,
+          type: 'focus',
+          mode: 'none',
+        },
+        {
+          eventId: '1a2b3c4d-0005-4e5f-8a9b-0c1d2e3f4a5b',
+          sequence: 5,
+          observedAt: now - 30_000,
+          type: 'wake_alarm',
+          at: Date.parse('2026-11-17T07:00:00+01:00'),
+          source: 'sleep_schedule',
+        },
+        {
+          eventId: '1a2b3c4d-0006-4e5f-8a9b-0c1d2e3f4a5b',
+          sequence: 6,
+          observedAt: now - 30_000,
+          type: 'motion',
+          activity: 'walking',
+          confidence: 'high',
+        },
+        {
+          eventId: '1a2b3c4d-0001-4e5f-8a9b-0c1d2e3f4a5b',
+          sequence: 1,
+          observedAt: now - 120_000,
+          type: 'geofence',
+          zoneId: 'home',
+          transition: 'enter',
+        },
+        {
+          eventId: '1a2b3c4d-0007-4e5f-8a9b-0c1d2e3f4a5b',
+          sequence: 7,
+          observedAt: now - 8 * 60 * 60_000,
+          type: 'network',
+          kind: 'wifi',
+          homeNetwork: true,
+        },
+      ],
+    };
+    fixtures.push({
+      name: 'phone-observations-request',
+      content: observations,
+    });
+    fixtures.push({
+      name: 'phone-observations-response',
+      content: (
+        await api('/api/v1/phone/observations', { token, body: observations })
+      ).json,
+    });
+    await events.waitFor(4);
     fixtures.push({
       name: 'state',
       content: (await api('/api/v1/state', { token })).json,
@@ -219,6 +323,7 @@ export async function buildDeviceApiFixtures(): Promise<Fixture[]> {
   } finally {
     await server?.stop();
     routines.dispose();
+    phone.dispose();
     engine.dispose();
     await rm(directory, { recursive: true, force: true });
   }

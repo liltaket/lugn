@@ -89,6 +89,7 @@ timings. Top-level sections:
 | `environment` | Temperature, humidity, CO₂ and PM2.5 with `observedAt` (null values when unavailable).                                                                                                            |
 | `suggestions` | Active computer-context suggestions. They only suggest; nothing is applied without a command.                                                                                                     |
 | `computer`    | Desktop availability, freshness and activity summary.                                                                                                                                             |
+| `phone`       | Paired phones' latest hint signals with `fresh` flags, and typed `facts`. Never room presence.                                                                                                    |
 | `health`      | Integration status.                                                                                                                                                                               |
 | `why`         | Up to 30 newest plain-Swedish explanations, see below.                                                                                                                                            |
 
@@ -195,3 +196,59 @@ view builder, registry and HTTP listener with simulated devices
 (`npm run api:generate`). Tokens are redacted; ids, session UUIDs and
 generations differ per run. A test validates every fixture against the
 schemas. Copy them into the app's test fixtures.
+
+## Phone observations
+
+`GET /api/v1/phone/config` tells the app which signals Lugn accepts, the
+maximum observation age and each signal's freshness and retention windows.
+Do not collect disabled signals.
+
+`POST /api/v1/phone/observations` takes a batch (1–100, ≤64 KiB):
+
+```json
+{
+  "sessionId": "5d0c4b9a-8e7f-4a6b-9c1d-2e3f4a5b6c7d",
+  "observations": [
+    {
+      "eventId": "1a2b3c4d-0001-4e5f-8a9b-0c1d2e3f4a5b",
+      "sequence": 1,
+      "observedAt": 1794853683000,
+      "type": "geofence",
+      "zoneId": "home",
+      "transition": "enter"
+    }
+  ]
+}
+```
+
+| `type`       | Fields                                                                                |
+| ------------ | ------------------------------------------------------------------------------------- |
+| `app`        | `state`: `foreground`, `background`, `heartbeat` (last-seen)                          |
+| `geofence`   | `zoneId` (`[a-z0-9_-]`, ≤32), `transition`: `enter` / `exit`                          |
+| `power`      | `charging` (bool or null), `batteryLevel` 0–1 or null                                 |
+| `focus`      | `mode`: `sleep`, `dnd`, `other`, `none`, `unknown`                                    |
+| `wake_alarm` | `at` (ms epoch or null), `source`: `sleep_schedule`, `shortcut`, `manual`, `unknown`  |
+| `motion`     | `activity` (`stationary` … `automotive`, `unknown`), `confidence`                     |
+| `network`    | `kind`: `wifi`, `cellular`, `none`, `unknown`; `homeNetwork` (bool or null; no SSIDs) |
+
+- `sessionId` is a UUID per app launch; `sequence` increases within it.
+  `eventId` is a UUID per observation. Queue observations while offline and
+  resend the same events: duplicates are harmless.
+- `observedAt` is the device clock. Events older than
+  `maxObservationAgeSeconds` (6 h by default) or more than 5 minutes in the
+  future are rejected. Use `serverTime` in the response to estimate skew.
+- Each result is `applied`, `duplicate`, `superseded` (`older_than_current`),
+  `rejected` (`stale`, `future_timestamp`, `sequence_reused`) or `ignored`
+  (`signal_disabled`). Drop rejected and ignored events from the queue; do not
+  retry them.
+- Lugn derives provenance from the token. Observations never mark the room
+  occupied or empty and never run commands. See
+  [PRESENCE.md](PRESENCE.md#phone-hints) for the fusion rules, including the
+  optional, default-off arrival prelight hint.
+- The `phone` section of the state view shows each device's latest signals
+  with `fresh` flags and `facts` (wake alarm, Focus, charging). Stale signals
+  are forgotten after their retention window: absence of events is unknown,
+  not "still home". Phone state is memory-only and resets on restart.
+- Without APNs, send observations when iOS wakes the app (geofence region
+  events, background refresh, foreground). A `heartbeat` on foreground and on
+  background refresh keeps `app` fresh.

@@ -464,6 +464,23 @@ interface address, port or Host allowlist:
 one `allowedHosts` entry (with port). Requests that carry a browser `Origin`
 header are refused and no CORS headers are ever sent.
 
+Optional phone settings (shown with their defaults) live under `device.phone`:
+
+```json
+"phone": {
+  "signals": {
+    "app": true, "geofence": true, "power": true, "focus": true,
+    "wakeAlarm": true, "motion": false, "network": false
+  },
+  "maxObservationAgeSeconds": 21600,
+  "arrivalPrelight": { "enabled": false, "zoneId": "home", "windowSeconds": 600 }
+}
+```
+
+Disabled signals are acknowledged but discarded. Phone observations stay in
+memory only. See [PRESENCE.md](PRESENCE.md#phone-hints) for what the arrival
+hint may and may not do.
+
 Paired devices are stored in `<statePath>.devices.json` (mode `0600`), which
 holds only SHA-256 digests of the device tokens. Create a one-time pairing
 code (five minutes by default) from the authenticated loopback API or the
