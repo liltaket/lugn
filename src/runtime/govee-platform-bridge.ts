@@ -99,14 +99,22 @@ export function platformZoneMaskControls(
   device: PlatformDevice,
   zones: readonly PlatformZone[],
   mask: { main: boolean; ring: boolean },
-  order: 'enable-first' | 'disable-first' | 'disable-only' = 'enable-first',
+  order:
+    | 'enable-first'
+    | 'disable-first'
+    | 'disable-only'
+    | 'enable-only' = 'enable-first',
 ): PlatformControl[] {
   if (!mask.main && !mask.ring) throw new Error('Use ordinary whole power OFF');
   const desired = [
     { instance: 'mainLightToggle' as const, on: mask.main },
     { instance: 'backgroundLightToggle' as const, on: mask.ring },
   ]
-    .filter((value) => order !== 'disable-only' || !value.on)
+    .filter(
+      (value) =>
+        (order !== 'disable-only' || !value.on) &&
+        (order !== 'enable-only' || value.on),
+    )
     .sort((a, b) =>
       order === 'enable-first'
         ? Number(b.on) - Number(a.on)

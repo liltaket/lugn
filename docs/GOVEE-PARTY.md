@@ -302,3 +302,17 @@ again with the `rg` shim), and `npm run build` passed. Both services run
 restarts. The restart cleared the in-memory mask, so the first ring-only ON
 from OFF uses the dim path. No physical test was run, and Bruno's observation
 is pending.
+
+### Fifth iteration: cloud ring ON into the stored mask
+
+Bruno then reported a whole-fixture flash every time the ring came on from OFF,
+while the end state was reliable. The ledger showed only one such transition
+after `80a06c1`: Vardagsljus (lit) → OFF → Vardagsljus at 11:59:42. It took the
+matching-stored-mask path, which sent a Matter ON, then the safety main OFF and
+the API white. In attended steps 4 and 6, an API white never relit the main
+light. The Matter ON from dark is therefore the likely trigger, which also fits
+the "ring, then whole" result of step 1.
+
+The next commit powers a matching stored mask with the ring's cloud ON. This
+is step 6 without the ignored dark OFF. At Bruno's suggestion, an unchanged
+static white is also skipped.

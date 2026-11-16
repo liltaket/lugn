@@ -441,6 +441,16 @@ describe('Govee Unix command server', () => {
         })
       ).status,
     ).toBe(200);
+    expect(
+      (
+        await call(f.socketPath, '/apply', {
+          ...command,
+          effect: undefined,
+          zones: { main: false, ring: true },
+          zoneOrder: 'enable-only',
+        })
+      ).status,
+    ).toBe(200);
     for (const input of [
       { ...reset, effect: 'Forest' },
       { ...reset, modeOnly: true },
@@ -449,7 +459,7 @@ describe('Govee Unix command server', () => {
       { ...reset, staticColor: { colorTemperature: 4000, brightness: 50 } },
     ])
       expect((await call(f.socketPath, '/apply', input)).status).toBe(400);
-    expect(f.options.apply).toHaveBeenCalledTimes(3);
+    expect(f.options.apply).toHaveBeenCalledTimes(4);
   });
 
   it('rejects superseded ownership and sanitizes unavailable/error responses', async () => {

@@ -157,9 +157,12 @@ brightness. Earlier versions powered the fixture with a cloud ring ON
 (disable-first) and sent the main OFF once lit. That flashed the whole lamp
 for 1–2 s whenever the stored mask still had the main light.
 
-- **Stored mask already matches:** no staging. The baseline lights the fixture
-  straight into its stored mask, and the final apply repeats only the unwanted
-  OFF as a safety net.
+- **Stored mask already matches:** the wanted zone's cloud ON
+  (`zoneOrder:"enable-only"`) powers the fixture into its stored mask. A local
+  Matter ON from dark lights the whole fixture (seen through Lugn on
+  2026-11-16), so it is not used here. Once natively ON, the unwanted zone's OFF
+  is repeated, because otherwise the next Matter write relights it (attended
+  steps 1 and 6). After a 1.5 s settle the baseline follows.
 - **Stored mask differs or is unknown:** the adapter first lights the fixture
   through HA at 1 % (with the scene's white or RGB). It then waits for a fresh
   native ON report (at most 4 s), because a toggle sent while dark is ignored.
@@ -177,7 +180,9 @@ plus main OFF masks, flashed the main light.
 For an already lit fixture, zones already lit get no ON toggle, so only the
 needed OFF toggles are sent, or none. An unknown or dark wanted zone still uses
 the enable-first mask, and the engine forgets the mask on an external handoff.
-The platform bridge sends a static white after the zone toggles.
+The platform bridge sends a static white after the zone toggles. The engine also remembers the static
+white or RGB it last delivered. A zones-only preset skips an unchanged one, and
+an effect or external handoff makes it unknown again.
 
 Staging is best effort. If it fails or
 no ON report arrives, the baseline and final mask still run, and a final failure
@@ -243,7 +248,7 @@ an available Govee API; Matter state alone is not proof that an app scene stoppe
 HTTP over the protected Unix socket, with no network listener:
 
 - `GET /capabilities` → `{targets: Record<target,{effects:string[],zones:boolean,colorTemperature?:{min,max}}>}`.
-- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,zoneOrder?,modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation. `zoneOrder` (`disable-first` for OFF before ON, `disable-only` for OFF toggles only) requires `zones`.
+- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,zoneOrder?,modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation. `zoneOrder` (`disable-first` for OFF before ON, `disable-only` for OFF toggles only, `enable-only` for ON toggles only) requires `zones`.
 - `POST /cancel` ← `{target,controlId?}` → `{status:"drained"}`.
 
 Capabilities can include optional `staticColor:true`. A color reset uses

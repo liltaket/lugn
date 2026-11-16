@@ -178,6 +178,20 @@ describe('Govee scene intent in the lighting engine', () => {
     });
     // The vendor scene supplies its own colors.
     expect(effect.govee?.staticColor).toBeUndefined();
+    // After an effect the ring color is unknown, so the white is sent again.
+    await engine.activateScene('scene.ring_white', user);
+    expect(adapter.dispatched.at(-1)?.govee?.staticColor).toEqual({
+      colorTemperature: 3000,
+    });
+    // An unchanged white is not resent when the fixture comes back from OFF.
+    await engine.activateScene('scene.all_off', user);
+    await engine.activateScene('scene.ring_white', user);
+    expect(adapter.dispatched.at(-1)?.govee).toMatchObject({
+      zones: { main: false, ring: true },
+      stageZones: true,
+      knownZones: { main: false, ring: true },
+    });
+    expect(adapter.dispatched.at(-1)?.govee?.staticColor).toBeUndefined();
   });
 
   it('restores both remembered zones once when an ordinary scene follows a ring-only mask', async () => {

@@ -49,7 +49,9 @@ export const GoveeControlRequestSchema = z
       .optional(),
     /** Staged or already-lit masks may disable the unwanted zone first. */
     /** disable-only sends only OFF toggles, for a fixture whose wanted zones are lit. */
-    zoneOrder: z.enum(['disable-first', 'disable-only']).optional(),
+    zoneOrder: z
+      .enum(['disable-first', 'disable-only', 'enable-only'])
+      .optional(),
   })
   .strict()
   .refine(

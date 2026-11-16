@@ -554,28 +554,30 @@ it('continues to the scene and the final mask when the lit mask fails', async ()
   ]);
   expect(f.bodies[1]).toEqual(f.bodies[0]);
 });
-it('lights straight into a stored mask that already matches', async () => {
-  const f = staticFixture();
-  await f.adapter.dispatch({
+it('powers a matching stored mask with the wanted cloud ON, then repeats the OFF once lit', async () => {
+  const f = poweredFixture();
+  const done = f.adapter.dispatch({
     ...ringOnly,
     govee: {
       ...ringOnly.govee!,
       stageZones: true,
       knownZones: { main: false, ring: true },
-      staticColor: { colorTemperature: 2700 },
     },
   });
-  // The fixture restores its own ring-only mask; the OFF is only a safety net.
-  expect(f.events).toEqual(['cancel:all', scene, 'apply']);
+  // A local Matter ON would light the whole fixture; the ring ON keeps its mask.
+  await vi.waitFor(() => expect(f.events).toEqual(['cancel:all', 'apply']));
+  f.observe(true);
+  await done;
+  expect(f.events).toEqual(['cancel:all', 'apply', 'apply', scene]);
+  const mask = {
+    requestId: 'c-ring',
+    target,
+    controlId: 'g-ring',
+    zones: { main: false, ring: true },
+  };
   expect(f.bodies).toEqual([
-    {
-      requestId: 'c-ring',
-      target,
-      controlId: 'g-ring',
-      zones: { main: false, ring: true },
-      zoneOrder: 'disable-only',
-      staticColor: { colorTemperature: 2700 },
-    },
+    { ...mask, zoneOrder: 'enable-only' },
+    { ...mask, zoneOrder: 'disable-only' },
   ]);
 });
 it('falls back to the scene when dim power is never reported', async () => {

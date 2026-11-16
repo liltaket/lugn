@@ -22,7 +22,7 @@ export interface GoveeControlClient {
     staticColor?: GoveeStaticColor | undefined;
     modeOnly?: true | undefined;
     zones?: { main: boolean; ring: boolean } | undefined;
-    zoneOrder?: 'disable-first' | 'disable-only' | undefined;
+    zoneOrder?: 'disable-first' | 'disable-only' | 'enable-only' | undefined;
   }): Promise<void>;
   cancel(target: string, controlId?: string): Promise<void>;
 }
@@ -230,44 +230,50 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
       color.colorTemperature === undefined
         ? color
         : { colorTemperature: kelvin(color.colorTemperature) };
-    // An ON from OFF restores the fixture's stored zone mask, which persists
-    // through whole OFF/ON. The H60A6 ignores zone toggles while dark, so a mask
-    // that differs from the stored one can only change once lit. A known matching
-    // mask needs no staging. Otherwise the fixture is lit at 1 % first, so the
-    // unwanted zone is barely visible, then masked once its own ON report
-    // arrives. Cloud acceptance precedes delivery, so the mask gets time to
-    // arrive before the scene brightness. A zone ON while lit relights an OFF
-    // zone, so no toggle follows the mask.
+    // The H60A6 ignores zone toggles while dark. A cloud toggle ON powers it
+    // with its stored mask, which persists through whole OFF, but a local Matter
+    // ON lights the whole fixture. A stored mask that already matches is
+    // therefore powered by the wanted zone's cloud ON. An unknown or different
+    // one is lit through HA at 1 %, so the unwanted zone is barely visible.
+    // Either way the unwanted zone's OFF follows its own ON report, because
+    // otherwise the next Matter write relights it. Cloud acceptance precedes
+    // delivery, so the OFF gets time to arrive before the scene brightness. A
+    // zone ON while lit relights an OFF zone, so no toggle follows the OFF.
     const known = intent?.knownZones;
     const covers = (
       mask: { main: boolean; ring: boolean },
       lit?: { main: boolean; ring: boolean },
     ) => Boolean(lit && (!mask.main || lit.main) && (!mask.ring || lit.ring));
     let stagedLit = false;
-    if (
-      intent?.stageZones &&
-      intent.zones &&
-      !(
+    if (intent?.stageZones && intent.zones) {
+      const stored = Boolean(
         known &&
         known.main === intent.zones.main &&
-        known.ring === intent.zones.ring
-      )
-    ) {
+        known.ring === intent.zones.ring,
+      );
       const powered = this.waitForPower(command.target, current);
       try {
-        await this.ordinary.dispatch({
-          id: command.id,
-          target: command.target,
-          values: {
-            power: true,
-            brightness: 1,
-            ...(values.rgb
-              ? { rgb: values.rgb }
-              : values.colorTemperature !== undefined
-                ? { colorTemperature: values.colorTemperature }
-                : {}),
-          },
-        });
+        if (stored)
+          await this.applyGuarded(
+            command,
+            intent.controlId,
+            { zones: intent.zones, zoneOrder: 'enable-only' },
+            current,
+          );
+        else
+          await this.ordinary.dispatch({
+            id: command.id,
+            target: command.target,
+            values: {
+              power: true,
+              brightness: 1,
+              ...(values.rgb
+                ? { rgb: values.rgb }
+                : values.colorTemperature !== undefined
+                  ? { colorTemperature: values.colorTemperature }
+                  : {}),
+            },
+          });
         if ((await powered.wait) && current()) {
           await this.applyGuarded(
             command,
