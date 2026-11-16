@@ -340,3 +340,20 @@ again with the `rg` shim), and `npm run build` passed. Both services run
 `/home/bruno/lugn-govee-221c985` (archive SHA-256
 `c41c8226d26353e1c2e24e98a27dcf53f5e809c9185c6361d1ec75d50f36e70f`) with zero
 restarts. No physical test was run, and Bruno's observation is pending.
+
+### Direct-control probe
+
+At Bruno's request, Lugn's host probed the H60A6 for a faster local zone path.
+
+- **LAN:** `turn` works, but LAN `ptReal` silently drops non-scene frames: the
+  zone frame `33 30 <zone> <state>`, `33 04` brightness and `33 01` power, plain
+  or PSK-encrypted. The frame bytes come from the BLE library govee-ble-local
+  1.10.0.
+- **Device surface:** the lamp has no open TCP ports. Its Matter node is one
+  plain extended color light without vendor clusters.
+- **Bluetooth:** this was out of scope at Bruno's request. Home Assistant's BLE
+  link timed out at −86…−90 dBm.
+- **Attended tests:** a cloud ring ON from Matter OFF lit the whole fixture at
+  once, both after a whole-fixture scene and after a lit main OFF. With the
+  available channels every power-on lights the main light. The `221c985` 1 %
+  power-up remains the mitigation.
