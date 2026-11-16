@@ -1,0 +1,135 @@
+<!--TITLE-->Hem
+<!--STYLE-->
+.hero { padding: 30px var(--gutter) 0; }
+.say { font: 400 38px/42px var(--voice); letter-spacing: -0.75px; font-variation-settings: 'opsz' 48; text-wrap: pretty; max-width: 350px; }
+.say span { display: inline; }
+.say .then { color: color-mix(in srgb, var(--ink) 100%, transparent); }
+.inst { display: grid; grid-template-columns: repeat(3, auto) 1fr; column-gap: 26px; margin-top: 22px; }
+.inst div { display: grid; }
+.inst b { font: 500 21px/25px var(--ui); letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
+.inst b small { font: 400 13px/17px var(--ui); letter-spacing: 0; color: var(--ink-f2); margin-left: 2px; }
+.inst span { font: 400 12px/16px var(--ui); color: var(--ink-f2); }
+.inst .stale b { color: var(--ink-f2); text-decoration: underline dotted 1.5px; text-underline-offset: 5px; text-decoration-color: var(--ink-3); }
+.inst .note { grid-column: 1 / -1; margin-top: 8px; font: 400 12px/16px var(--ui); color: var(--ink-f2); }
+.who { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 12px 0 9px; border-radius: 16px; font: 500 14px/18px var(--ui); color: var(--ink); text-decoration: none; background: color-mix(in srgb, var(--ink) 9%, transparent); }
+.who svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.notice { display: flex; align-items: center; gap: 12px; margin: 22px var(--gutter) 0; padding: 11px 12px 11px 12px; min-height: 60px; border-radius: 20px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); text-decoration: none; color: var(--ink); }
+.notice .ic { width: 36px; height: 36px; border-radius: 18px; flex: none; display: grid; place-items: center; background: color-mix(in srgb, var(--ink) 9%, transparent); color: var(--ink); }
+.notice .ic svg, .notice .go svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.notice[data-kind='bad'] .ic { background: var(--bad-wash); color: var(--bad); }
+.notice[data-kind='warn'] .ic { background: var(--warn-wash); color: var(--warn); }
+.notice .tx { flex: 1; min-width: 0; }
+.notice .tx b { display: block; font: 600 15px/20px var(--ui); letter-spacing: -0.2px; }
+.notice .tx span { display: block; font: 400 13px/18px var(--ui); color: var(--ink-2); }
+.notice .go { color: var(--ink-3); flex: none; }
+.notice .go svg { width: 16px; height: 16px; stroke-width: 2.2; }
+.tiles { margin-top: 20px; }
+.tile[data-state='stale'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ember) 55%, transparent); }
+.tile.nope { animation: nope 0.42s var(--glid); }
+@keyframes nope { 30% { transform: scale(0.97); } 60% { transform: scale(1.012); } }
+.np { display: flex; align-items: center; gap: 12px; margin: 10px var(--gutter) 0; padding: 10px 10px 10px 10px; border-radius: 22px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+.np .art { width: 46px; height: 46px; border-radius: 12px; flex: none; background: conic-gradient(from 210deg at 68% 36%, #1f4a43, #e7b35a 28%, #b8452f 52%, #23303c 78%, #1f4a43); }
+.np .tx { flex: 1; min-width: 0; }
+.np .tx b { display: block; font: 600 15px/20px var(--ui); letter-spacing: -0.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np .tx span { display: block; font: 400 13px/18px var(--ui); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np .vol { font: 500 14px/18px var(--ui); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.np .pp { width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; background: color-mix(in srgb, var(--ink) 9%, transparent); }
+.np .pp svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-linecap: round; }
+.np[data-dim] > * { opacity: 0.45; }
+<!--SCREEN-->
+<div class="field"><i class="pool a"></i><i class="pool b"></i><i class="pool c"></i></div>
+<div class="scroll">
+  <div class="navrow">
+    <div class="rooms" role="group" aria-label="Rum"><button id="r1" aria-pressed="true">Sovrum</button><button id="r2" aria-pressed="false">Skrivbord</button></div>
+    <a class="who" id="who" href="narvaro.html"></a>
+  </div>
+  <section class="hero">
+    <h1 class="say" id="say"></h1>
+    <div class="inst" id="inst"></div>
+  </section>
+  <a class="notice" id="notice" href="#"></a>
+  <div class="tiles" id="tiles"></div>
+  <div class="np" id="np"></div>
+</div>
+<!--NOTES-->
+<h2>Hem</h2>
+<p>Rummet säger en mening. Bakgrunden är rummets eget ljus: byt scen och se fältet följa efter.</p>
+<ul>
+  <li>Tryck på en scen: brickan fylls från fingret direkt, bekräftas när lamporna svarat.</li>
+  <li>Raden under meningen finns bara när något är fel, på väg eller behöver dig.</li>
+  <li>Varför-raden ovanför flikarna är alltid senaste beslutet.</li>
+</ul>
+<div class="ctl"><a href="hem.html">Kväll</a><a href="hem-ljus.html">Dag, ljust</a><a href="offline.html">Offline</a><a href="?safe">Säkra ytor</a></div>
+<!--SCRIPT-->
+const variant = document.documentElement.dataset.variant || 'kvall';
+const V = {
+  kvall: {
+    time: '21:47', room: 0, scene: 'mys', count: '1',
+    say: ['Mysljus i sovrummet.', 'Du är här.', 'Musiken spelar lågt.'],
+    inst: [['21,4', '°', 'Temperatur'], ['38', '%', 'Luftfuktighet'], ['612', 'ppm', 'Koldioxid, bra luft']],
+    notice: { kind: 'next', icon: 'moon', t: 'Godnatt i kväll', d: 'Väckning 07:00. Lamporna tänder själva.', href: 'godnatt.html' },
+    tiles: ['off', 'mys', 'film', 'vardag'],
+    np: { t: 'Heartbeats', d: 'José González, Spotify DJ', vol: '24 %', playing: true },
+    why: { text: 'Tände: någon kom in', t: '18:42' },
+  },
+  dag: {
+    time: '09:12', room: 1, scene: 'fokus', count: '1',
+    say: ['Fokus vid skrivbordet.', 'Du är här.', 'Det är tyst.'],
+    inst: [['20,9', '°', 'Temperatur'], ['41', '%', 'Luftfuktighet'], ['548', 'ppm', 'Koldioxid, bra luft']],
+    notice: { kind: 'bad', icon: 'warn', t: 'Taklampan svarar inte', d: 'Fem av sex lampor lyser. Försöker igen.', href: 'belysning.html' },
+    tiles: ['fokus', 'vardag', 'mys', 'off'],
+    np: { t: 'Pausad', d: 'Optisk ingång, datorn', vol: '30 %', playing: false },
+    why: { text: 'Ingen musik: du pausade själv', t: '08:55', kind: 'skip' },
+  },
+  offline: {
+    time: '14:09', room: 0, scene: 'mys', count: '?', frozen: true,
+    say: ['Når inte Lugn.', 'Senast 14:02: Mysljus, en person här.'],
+    inst: [['21,4', '°', 'Temperatur'], ['38', '%', 'Luftfuktighet'], ['612', 'ppm', 'Koldioxid']], instNote: 'Mätt 14:02. Visas tills Lugn svarar igen.',
+    notice: { kind: 'warn', icon: 'wifiOff', t: 'Offline sedan 14:02', d: 'Nytt försök om 8 s, eller tryck här.', href: '#' },
+    tiles: ['off', 'mys', 'film', 'vardag'],
+    np: { t: 'Heartbeats', d: 'Spelade 14:02', vol: '24 %', playing: true, dim: true },
+    why: { text: 'Tappade kontakten med Lugn', t: '14:02', kind: 'saw' },
+  },
+}[variant];
+
+Lugn.chrome({ time: V.time, tab: 'hem', why: V.why });
+const $ = (id) => document.getElementById(id);
+$('r1').setAttribute('aria-pressed', V.room === 0); $('r2').setAttribute('aria-pressed', V.room === 1);
+$('who').innerHTML = `${Lugn.svg('person')}<span class="num">${V.count}</span>`;
+$('who').setAttribute('aria-label', V.count === '?' ? 'Närvaro okänd' : `${V.count} person i rummet`);
+const say = (lines) => { $('say').innerHTML = lines.map((l) => `<span>${l}</span>`).join(' '); };
+say(V.say);
+$('inst').innerHTML = V.inst.map(([v, u, l]) => `<div class="${V.frozen ? 'stale' : ''}"><b>${v}${u === '°' ? '°' : `<small> ${u}</small>`}</b><span>${l}</span></div>`).join('') + (V.instNote ? `<p class="note">${V.instNote}</p>` : '');
+const n = V.notice;
+$('notice').dataset.kind = n.kind; $('notice').href = n.href;
+$('notice').innerHTML = `<span class="ic">${Lugn.svg(n.icon)}</span><span class="tx"><b>${n.t}</b><span>${n.d}</span></span><span class="go">${Lugn.svg('chev')}</span>`;
+$('tiles').innerHTML = V.tiles.map((s) => {
+  if (V.frozen) return Lugn.tileHTML(s, s === V.scene ? 'stale' : 'idle', s === V.scene ? 'Senast 14:02' : undefined);
+  return Lugn.tileHTML(s, s === V.scene ? 'on' : 'idle');
+}).join('');
+$('np').innerHTML = `<span class="art"></span><span class="tx"><b>${V.np.t}</b><span>${V.np.d}</span></span><span class="vol">${V.np.vol}</span><button class="pp" aria-label="${V.np.playing ? 'Pausa' : 'Spela'}">${Lugn.svg(V.np.playing ? 'pause' : 'play')}</button>`;
+if (V.frozen) { $('np').hidden = true; $('say').firstElementChild.style.display = 'block'; }
+if (V.frozen) document.querySelector('.field').dataset.frozen = '';
+Lugn.setField(V.scene, V.frozen ? 0.55 : 1);
+
+const where = V.room === 0 ? 'i sovrummet' : 'vid skrivbordet';
+Lugn.wireTiles($('tiles'), {
+  outcome: () => (V.frozen ? 'offline' : 'ok'),
+  onOffline: (t) => {
+    t.classList.remove('nope'); void t.offsetWidth; t.classList.add('nope');
+    const st = t.querySelector('.stt'); const was = st.textContent;
+    st.textContent = 'Når inte Lugn'; setTimeout(() => (st.textContent = was), 2000);
+  },
+  onSelect: (scene, phase) => {
+    if (phase !== 'sending') return;
+    const name = Lugn.SCENES[scene].name;
+    say([scene === 'off' ? `Släckt ${where}.` : `${name} ${where}.`, ...V.say.slice(1)]);
+    const a = document.querySelector('.accessory');
+    a.querySelector('.a').textContent = scene === 'off' ? 'Släckte: du valde Helt släckt' : `Bytte till ${name}: du valde det`;
+    a.querySelector('.dot').className = 'dot you'; a.querySelector('time').textContent = V.time;
+  },
+});
+$('np').querySelector('.pp').addEventListener('click', (e) => {
+  if (V.frozen) return Lugn.haptic('warning', 'offline');
+  V.np.playing = !V.np.playing; e.currentTarget.innerHTML = Lugn.svg(V.np.playing ? 'pause' : 'play'); Lugn.haptic('light', 'spela/pausa');
+});

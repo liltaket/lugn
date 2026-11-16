@@ -1,0 +1,79 @@
+<!--TITLE-->Godnatt: låsskärm, Live Activity, Dynamic Island
+<!--STYLE-->
+.device { background: #020304; }
+.wall { position: absolute; inset: 0; z-index: -1; background: radial-gradient(120% 60% at 30% 108%, rgb(255 150 70 / 0.2), transparent 70%), #020304; }
+.lockdate { position: absolute; top: 84px; left: 0; right: 0; text-align: center; font: 500 20px/24px var(--ui); color: rgb(236 240 242 / 0.82); letter-spacing: -0.2px; }
+.locktime { position: absolute; top: 106px; left: 0; right: 0; text-align: center; font: 600 104px/112px var(--ui); letter-spacing: -4px; color: rgb(236 240 242 / 0.9); font-variant-numeric: tabular-nums; }
+/* Dynamic Island, compact: leading pictogram, trailing countdown */
+.di { position: absolute; top: 11px; left: 50%; height: 37px; width: 188px; margin-left: -94px; border-radius: 19px; background: #000; z-index: 40; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 11px; color: #ffa95c; }
+.di svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.di b { font: 600 15px/20px var(--ui); font-variant-numeric: tabular-nums; letter-spacing: -0.2px; }
+.statusbar .island, .statusbar .sys svg:first-child { display: none; }
+/* Live Activity on the lock screen */
+.la { position: absolute; left: 12px; right: 12px; bottom: 132px; border-radius: 28px; padding: 16px 18px 16px; background: rgb(18 22 26 / 0.92); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.07); color: #ecf0f2; }
+.la .r1 { display: flex; align-items: center; gap: 12px; }
+.la .ic { width: 40px; height: 40px; border-radius: 20px; background: #ffa95c; color: #2b1505; display: grid; place-items: center; flex: none; }
+.la .ic svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.la h2 { font: 500 23px/27px var(--voice); letter-spacing: -0.3px; }
+.la .sub { font: 400 14px/18px var(--ui); color: #aab5be; }
+.la .cd { margin-left: auto; text-align: right; font: 500 30px/32px var(--ui); letter-spacing: -1px; font-variant-numeric: tabular-nums; color: #ffa95c; }
+.la .cd small { display: block; font: 400 12px/15px var(--ui); letter-spacing: 0; color: #aab5be; }
+.la .bars { display: grid; grid-template-columns: repeat(15, 1fr); gap: 4px; height: 26px; align-items: end; margin: 14px 0 12px; }
+.la .bars i { border-radius: 2.5px; background: #ffa95c; min-height: 3px; }
+.la .bars i.gone { background: #5c6670; opacity: 0.5; }
+.la .r3 { display: flex; gap: 8px; }
+.la .r3 button { flex: 1; height: 40px; border-radius: 20px; background: rgb(255 255 255 / 0.1); text-align: center; font: 600 15px/20px var(--ui); letter-spacing: -0.2px; }
+.lockbtns { position: absolute; left: 46px; right: 46px; bottom: 50px; display: flex; justify-content: space-between; }
+.lockbtns i { width: 50px; height: 50px; border-radius: 25px; background: rgb(40 44 48 / 0.7); }
+/* Expanded island, shown as a second state */
+.dix { position: absolute; top: 11px; left: 11px; right: 11px; height: 168px; border-radius: 44px; background: #000; z-index: 41; padding: 20px 22px; color: #ecf0f2; display: none; }
+.device[data-di] .dix { display: block; }
+.device[data-di] .di, .device[data-di] .lockdate, .device[data-di] .locktime, .device[data-di] .la, .device[data-di] .lockbtns, .device[data-di] .label.l1 { display: none; }
+.label.l2 { display: none; top: 200px; }
+.device[data-di] .label.l2 { display: block; }
+.dix .r1 { display: flex; align-items: center; gap: 12px; }
+.dix .r1 svg { width: 26px; height: 26px; fill: none; stroke: #ffa95c; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.dix h2 { font: 500 22px/26px var(--voice); }
+.dix .cd { margin-left: auto; font: 500 26px/30px var(--ui); color: #ffa95c; font-variant-numeric: tabular-nums; letter-spacing: -0.8px; }
+.dix .bars { display: grid; grid-template-columns: repeat(15, 1fr); gap: 4px; height: 22px; align-items: end; margin: 12px 0 12px; }
+.dix .bars i { border-radius: 2.5px; background: #ffa95c; min-height: 3px; }
+.dix .bars i.gone { background: #5c6670; opacity: 0.5; }
+.dix .r3 { display: flex; justify-content: space-between; align-items: center; font: 400 14px/18px var(--ui); color: #aab5be; }
+.dix .r3 button { height: 36px; padding: 0 16px; border-radius: 18px; background: rgb(255 255 255 / 0.12); color: #ecf0f2; font: 600 14px/18px var(--ui); }
+.label { position: absolute; left: 0; right: 0; text-align: center; font: 500 12px/16px var(--ui); color: rgb(236 240 242 / 0.42); }
+<!--SCREEN-->
+<div class="wall"></div>
+<div class="di" aria-label="Dynamic Island, kompakt"><svg viewBox="0 0 24 24"><path d="M19.4 14.6A8 8 0 0 1 9.4 4.6a8 8 0 1 0 10 10z"/></svg><b>11:08</b></div>
+<div class="dix" aria-label="Dynamic Island, utfälld">
+  <div class="r1"><svg viewBox="0 0 24 24"><path d="M19.4 14.6A8 8 0 0 1 9.4 4.6a8 8 0 1 0 10 10z"/></svg><h2>Godnatt</h2><span class="cd">11:08</span></div>
+  <div class="bars" id="b2"></div>
+  <div class="r3"><span>Väckning 07:00, tänder själv</span><button>Släck nu</button></div>
+</div>
+<p class="lockdate">måndag 16 november</p>
+<p class="locktime">22:38</p>
+<section class="la" aria-label="Live Activity">
+  <div class="r1"><span class="ic"><svg viewBox="0 0 24 24"><path d="M19.4 14.6A8 8 0 0 1 9.4 4.6a8 8 0 1 0 10 10z"/></svg></span><div><h2>Godnatt</h2><p class="sub">Väckning 07:00, tänder själv</p></div><span class="cd">11:08<small>till släckt</small></span></div>
+  <div class="bars" id="b1"></div>
+  <div class="r3"><button>Släck nu</button><button>Avbryt</button></div>
+</section>
+<p class="label l1" style="bottom:112px">Live Activity (kräver betalt utvecklarkonto, kommer senare)</p>
+<p class="label l2">Utfälld ö: håll på ön i vilken app som helst</p>
+<div class="lockbtns"><i></i><i></i></div>
+<!--NOTES-->
+<h2>Låsskärm och Dynamic Island</h2>
+<p>Skiss för senare (Live Activities kräver betalt konto och widget-tillägg). Samma femton staplar som i appen, så nedräkningen känns igen utan text.</p>
+<ul>
+  <li>Kompakt ö: måne och nedräkning, inget annat.</li>
+  <li>Räkna ned med <code>Text(timerInterval:)</code> så den tickar utan uppdateringar från servern.</li>
+  <li>StandBy nattläge blir rött och enfärgat: allt bygger på ljushet, ingen information ligger bara i färgen.</li>
+</ul>
+<div class="ctl"><button id="nLock">Låsskärm</button><button id="nDi">Utfälld ö</button><a href="godnatt.html">Tillbaka till flödet</a></div>
+<!--SCRIPT-->
+Lugn.chrome({ time: '22:38', statusInk: 'rgb(236 240 242 / .9)' });
+document.querySelector('.statusbar .clock').textContent = '';
+const bars = (id) => (document.getElementById(id).innerHTML = Array.from({ length: 15 }, (_, i) => `<i class="${i < 3 ? 'gone' : ''}" style="height:${100 - i * 6.2}%"></i>`).join(''));
+bars('b1'); bars('b2');
+const dev = document.querySelector('.device');
+document.getElementById('nDi')?.addEventListener('click', () => (dev.dataset.di = ''));
+document.getElementById('nLock')?.addEventListener('click', () => delete dev.dataset.di);
+if (Lugn.q.has('di')) dev.dataset.di = '';

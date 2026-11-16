@@ -1,0 +1,187 @@
+<!--TITLE-->Belysning
+<!--STYLE-->
+.lead { margin: 4px var(--gutter) 0; font: 400 15px/20px var(--ui); color: var(--ink-f2); letter-spacing: -0.1px; }
+.head { padding: 14px var(--gutter) 0; }
+.tiles { margin-top: 20px; }
+.hint { margin: 12px var(--gutter) 0; font: 400 13px/18px var(--ui); color: var(--ink-3); }
+/* Lamp rows: the row itself is the dimmer. Drag sideways. */
+.lamps { display: grid; gap: 8px; padding-inline: var(--gutter); }
+.lamp { --v: 0.3; --c: #ffa95c; position: relative; height: 58px; border-radius: 18px; overflow: hidden; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); display: flex; align-items: center; padding: 0 16px; gap: 10px; cursor: ew-resize; }
+.lamp::before { content: ''; position: absolute; inset: 0; width: calc(var(--v) * 100%); background: color-mix(in srgb, var(--c) 30%, var(--raised)); border-right: 2px solid var(--c); transition: width 0.08s linear; }
+.lamp[data-off]::before { width: 0; border: 0; }
+.lamp > * { position: relative; pointer-events: none; }
+.lamp .t { flex: 1; font: 500 16px/21px var(--ui); letter-spacing: -0.25px; }
+.lamp .t small { display: block; font: 400 12px/15px var(--ui); color: var(--ink-2); letter-spacing: 0; }
+.lamp .v { font: 500 15px/20px var(--ui); color: var(--ink); font-variant-numeric: tabular-nums; }
+.lamp[data-off] .v { color: var(--ink-3); }
+.lamp[data-bad] .t small { color: var(--bad); }
+
+/* Hold sheet: three faders, like a small mixing desk. Colour is never buried. */
+.sheet { padding-bottom: 30px; }
+.sh-head { display: flex; align-items: center; gap: 12px; padding: 6px 14px 0 var(--gutter); }
+.sh-head .pic { width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; background: var(--sw, #ffa95c); color: #2b1505; flex: none; transition: background-color 0.2s; }
+.sh-head .pic svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.sh-head h2 { font: 500 26px/30px var(--voice); letter-spacing: -0.4px; font-variation-settings: 'opsz' 30; }
+.sh-head p { font: 400 13px/17px var(--ui); color: var(--ink-2); }
+.sh-head .grow { flex: 1; min-width: 0; }
+.sh-head .round { background: color-mix(in srgb, var(--ink) 9%, transparent); width: 36px; height: 36px; }
+.sh-head .round svg { width: 18px; height: 18px; stroke-width: 2.2; }
+.scope { display: flex; gap: 8px; padding: 16px var(--gutter) 0; overflow-x: auto; scrollbar-width: none; }
+.desk { display: grid; grid-template-columns: 22px 138px 78px 78px; gap: 0 12px; padding: 18px var(--gutter) 0; justify-content: start; }
+.desk .read { grid-row: 1; align-self: end; padding-bottom: 10px; }
+.desk .read b { display: block; font: 500 30px/34px var(--ui); letter-spacing: -0.9px; font-variant-numeric: tabular-nums; }
+.desk .read.sm b { font: 500 17px/22px var(--ui); letter-spacing: -0.3px; }
+.desk .read span { display: block; font: 400 12px/16px var(--ui); color: var(--ink-2); }
+.scale { grid-row: 2; grid-column: 1; position: relative; height: 292px; }
+.scale i { position: absolute; right: 0; height: 1.5px; width: 7px; background: var(--ink-3); border-radius: 1px; transform: translateY(50%); }
+.scale i.big { width: 13px; background: var(--ink-2); }
+.scale i.at { background: var(--ink); width: 18px; height: 2px; }
+.fd { grid-row: 2; position: relative; height: 292px; border-radius: 30px; overflow: hidden; background: var(--raised-3); cursor: ns-resize; --v: 0.35; box-shadow: inset 0 0 0 1px var(--line); }
+.fd.lvl::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--v) * 100%); background: var(--sw, #ffa95c); transition: background-color 0.2s; }
+.fd.lvl::after { content: ''; position: absolute; left: 50%; width: 38px; height: 5px; margin-left: -19px; border-radius: 3px; background: rgb(0 0 0 / 0.28); bottom: calc(var(--v) * 100% - 15px); opacity: clamp(0, calc((var(--v) - 0.08) * 20), 1); }
+.fd.kel { background: linear-gradient(180deg, #dfe9ff 0%, #f7f3ee 26%, #ffe9cf 46%, #ffc58a 74%, #ffa24f 92%, #ff8c3a 100%); }
+.fd.hue { background: linear-gradient(180deg, #ff5a6e, #ff9f43, #ffd84d, #6fe39a, #3cc4ff, #6a7dff, #c267ff, #ff5aa8); }
+.fd.kel::after, .fd.hue::after { content: ''; position: absolute; left: 7px; right: 7px; height: 12px; border-radius: 6px; bottom: calc(var(--v) * (100% - 26px) + 7px); background: #fff; box-shadow: 0 0 0 1.5px rgb(0 0 0 / 0.5), 0 3px 8px rgb(0 0 0 / 0.35); }
+.fd[data-idle] { opacity: 0.38; }
+.fd[data-idle]::after { background: transparent; box-shadow: 0 0 0 1.5px rgb(0 0 0 / 0.55); }
+.desk .lbl { grid-row: 3; padding-top: 9px; font: 500 13px/17px var(--ui); color: var(--ink-2); text-align: center; }
+.sh-foot { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 20px var(--gutter) 0; }
+.sh-foot .quiet { padding: 0 22px; }
+.sh-note { padding: 10px var(--gutter) 0; font: 400 13px/18px var(--ui); color: var(--ink-2); }
+<!--SCREEN-->
+<div class="field"><i class="pool a"></i><i class="pool b"></i><i class="pool c"></i></div>
+<div class="scroll" id="scroll">
+  <div class="navrow">
+    <div class="rooms"><button aria-pressed="true">Sovrum</button><button aria-pressed="false">Skrivbord</button></div>
+    <button class="round glass" aria-label="Ny scen"><svg viewBox="0 0 24 24"><path d="M12 5.5v13M5.500 12h13"/></svg></button>
+  </div>
+  <div class="head">
+    <h1 class="title">Belysning</h1>
+  </div>
+  <p class="lead" id="lead">Mysljus. Fyra av sex lampor lyser.</p>
+  <div class="tiles" id="tiles"></div>
+  <p class="hint">Håll kvar på en scen för att justera den.</p>
+  <div class="section"><h2>Lampor</h2><button>Dra i sidled för att dimma</button></div>
+  <div class="lamps" id="lamps"></div>
+</div>
+<div class="scrim" id="scrim"></div>
+<section class="sheet glass" id="sheet" aria-label="Justera scen" role="dialog">
+  <div class="grab"></div>
+  <div class="sh-head">
+    <span class="pic" id="shPic"></span>
+    <div class="grow"><h2 id="shName">Mysljus</h2><p id="shSub">Fyra lampor. Ändringar syns direkt i rummet.</p></div>
+    <button class="round" id="shClose" aria-label="Stäng"><svg viewBox="0 0 24 24"><path d="M6.500 6.500l11 11M17.500 6.500l-11 11"/></svg></button>
+  </div>
+  <div class="scope" id="scope"></div>
+  <div class="desk">
+    <div class="read" style="grid-column:2"><b id="rdL">35 %</b><span>Ljusstyrka</span></div>
+    <div class="read sm" style="grid-column:3"><b id="rdK">2200 K</b><span id="rdKn">Glöd</span></div>
+    <div class="read sm" style="grid-column:4"><b id="rdH">Av</b><span>Färg</span></div>
+    <div class="scale" id="scale"></div>
+    <div class="fd lvl" id="fdL" aria-label="Ljusstyrka"></div>
+    <div class="fd kel" id="fdK" aria-label="Värme"></div>
+    <div class="fd hue" id="fdH" aria-label="Färg" data-idle></div>
+  </div>
+  <div class="sh-foot"><button class="btn" id="shSave">Spara i Mysljus</button><button class="btn quiet" id="shReset">Ångra</button></div>
+  <p class="sh-note" id="shNote">Osparat gäller tills du byter scen.</p>
+</section>
+<!--NOTES-->
+<h2>Belysning</h2>
+<p>Sex scener i två kolumner. Varje bricka visar sitt eget ljus som en glöd innan den tänds.</p>
+<ul>
+  <li><b>Tryck</b>: tänds från fingret, bekräftas när lamporna svarat.</li>
+  <li><b>Håll 0,38 s</b>: bladet öppnas med tre reglage sida vid sida. Färg ligger aldrig bakom en meny.</li>
+  <li>Ljusreglaget har hack vid 0, 1, 25, 50, 75 och 100 %. Dra långsamt och känn (se loggen).</li>
+  <li>Lampraderna är reglage: dra i sidled.</li>
+</ul>
+<div class="ctl"><button id="nOpen">Öppna blad</button><button id="nFail">Nästa tryck misslyckas</button><button id="nSlow">Nästa tryck går långsamt</button></div>
+<!--SCRIPT-->
+Lugn.chrome({ time: '21:47', tab: 'belysning', why: { text: 'Tände: någon kom in', t: '18:42' } });
+const $ = (id) => document.getElementById(id);
+const dev = document.querySelector('.device');
+let current = 'mys', nextOutcome = 'ok';
+$('tiles').innerHTML = Lugn.ORDER.map((s) => Lugn.tileHTML(s, s === current ? 'on' : 'idle')).join('');
+Lugn.setField(current);
+
+const LAMPS = [
+  ['Sänglampa', 12, '#ffa24f', ''], ['Skrivbordslampa', 35, '#ffa24f', 'Ändrad för hand, Lugn rör den inte'],
+  ['Golvlampa', 30, '#ffa24f', ''], ['Ljuslist', 20, '#ffb066', ''], ['Skärmljus', 0, '#5b7cff', ''], ['Taklampa', 0, '#ffe9cf', ''],
+];
+$('lamps').innerHTML = LAMPS.map(([n, v, c, d], i) => `<div class="lamp" data-i="${i}" ${v ? '' : 'data-off'} style="--v:${v / 100};--c:${c}" aria-label="${n}"><span class="t">${n}${d ? `<small>${d}</small>` : ''}</span><span class="v">${v ? v + ' %' : 'Av'}</span></div>`).join('');
+document.querySelectorAll('.lamp').forEach((el) => {
+  const i = +el.dataset.i;
+  Lugn.fader(el, { axis: 'x', value: LAMPS[i][1], detents: [0, 25, 50, 75, 100], name: LAMPS[i][0], onChange: (v, user) => {
+    if (!user) return;
+    const r = Math.round(v);
+    el.toggleAttribute('data-off', r === 0);
+    el.querySelector('.v').textContent = r ? r + ' %' : 'Av';
+  } });
+});
+
+Lugn.wireTiles($('tiles'), {
+  outcome: () => { const o = nextOutcome; nextOutcome = 'ok'; document.querySelectorAll('.notes .ctl button').forEach((b) => b.setAttribute('aria-pressed', 'false')); return o; },
+  onSelect: (scene, phase) => {
+    current = scene;
+    const lit = { off: 'Släckt. Ingen lampa lyser.', mys: 'Mysljus. Fyra av sex lampor lyser.', vardag: 'Vardagsljus. Fyra av sex lampor lyser.', film: 'Filmkväll. Tre lampor och skärmljuset.', fokus: 'Fokus. Alla sex lampor på 100 %.', party: 'Party. Alla lampor, färg i rörelse.' };
+    $('lead').textContent = lit[scene];
+  },
+  onFail: () => { $('lead').textContent = 'Kunde inte byta scen. Förra ljuset gäller.'; Lugn.setField('mys'); },
+  onHold: (t) => openSheet(t.dataset.scene),
+});
+
+/* ----- hold sheet ----- */
+const KEL = [[2000, 'Glöd'], [2200, 'Glöd'], [2700, 'Varmt'], [3000, 'Varmt'], [4000, 'Neutralt'], [5000, 'Svalt'], [6500, 'Dagsljus']];
+const kelName = (k) => KEL.reduce((a, b) => (Math.abs(b[0] - k) < Math.abs(a[0] - k) ? b : a))[1];
+const kelColor = (k) => { // UI-tuned kelvin ramp, same stops as the fader gradient
+  const stops = [[2000, [255, 140, 58]], [2200, [255, 162, 79]], [2700, [255, 190, 125]], [4000, [255, 233, 207]], [5000, [247, 243, 238]], [6500, [223, 233, 255]]];
+  for (let i = 1; i < stops.length; i++) if (k <= stops[i][0]) { const [a, ca] = stops[i - 1], [b, cb] = stops[i]; const f = (k - a) / (b - a); return `rgb(${ca.map((x, j) => Math.round(x + (cb[j] - x) * f)).join(' ')})`; }
+  return 'rgb(223 233 255)';
+};
+const HUES = ['#ff5aa8', '#c267ff', '#6a7dff', '#3cc4ff', '#6fe39a', '#ffd84d', '#ff9f43', '#ff5a6e'];
+const HUE_NAMES = ['Rosa', 'Lila', 'Blått', 'Himmel', 'Grönt', 'Gult', 'Orange', 'Rött'];
+const sheet = $('sheet');
+$('scale').innerHTML = Array.from({ length: 21 }, (_, i) => `<i class="${i % 5 === 0 ? 'big' : ''}" style="bottom:${i * 5}%"></i>`).join('');
+const PRESET = { off: [0, 2700], mys: [35, 2200], vardag: [60, 2700], film: [15, 2000], fokus: [100, 4000], party: [80, 2700] };
+let fL, fK, fH, sheetScene = 'mys';
+const paint = (c) => sheet.style.setProperty('--sw', c);
+function openSheet(scene) {
+  sheetScene = scene;
+  const s = Lugn.SCENES[scene];
+  $('shName').textContent = s.name; $('shPic').innerHTML = Lugn.svg(scene); $('shSave').textContent = `Spara i ${s.name}`;
+  $('shSub').textContent = scene === 'off' ? 'Släckt är alltid släckt. Reglagen gäller bara nu.' : scene === current ? 'Ändringar syns direkt i rummet.' : 'Förhandsvisas inte. Tryck på scenen för att tända.';
+  $('scope').innerHTML = ['Alla lampor', 'Säng', 'Skrivbord', 'Golv', 'Ljuslist', 'Tak'].map((n, i) => `<button class="chip" aria-pressed="${i === 0}">${n}</button>`).join('');
+  const [l, k] = PRESET[scene];
+  const colour = scene === 'party';
+  $('fdH').toggleAttribute('data-idle', !colour); $('fdK').toggleAttribute('data-idle', colour);
+  fL.set(l); fK.set((k - 2000) / 45); fH.set(colour ? 12 : 50);
+  if (colour) { paint(HUES[0]); $('rdH').textContent = 'Rosa'; $('rdK').textContent = 'Av'; $('rdKn').textContent = 'Värme'; }
+  else { paint(kelColor(k)); $('rdH').textContent = 'Av'; $('rdK').textContent = `${k} K`; $('rdKn').textContent = kelName(k); }
+  $('shNote').textContent = 'Osparat gäller tills du byter scen.';
+  dev.dataset.sheet = '';
+}
+const closeSheet = () => { delete dev.dataset.sheet; };
+fL = Lugn.fader($('fdL'), { value: 35, detents: [0, 1, 25, 50, 75, 100], magnet: 2.5, tick: 5, name: 'ljus', onChange: (v, user) => {
+  const r = Math.round(v); $('rdL').textContent = r === 0 ? 'Av' : `${r} %`;
+  $('scale').querySelectorAll('i').forEach((el, i) => el.classList.toggle('at', i * 5 === Math.round(r / 5) * 5 && [0, 25, 50, 75, 100].includes(i * 5) && Math.abs(i * 5 - r) < 1));
+  if (user && sheetScene === current) document.documentElement.style.setProperty('--k', String(Lugn.SCENES[current].k * (0.35 + r / 100 * 0.75)));
+} });
+fK = Lugn.fader($('fdK'), { value: 4.4, detents: [4.44, 15.56, 44.44, 100], magnet: 3, tick: 200, name: 'värme', onChange: (v, user) => {
+  if (!user) return;
+  const k = Math.round((2000 + v * 45) / 50) * 50;
+  $('fdK').removeAttribute('data-idle'); $('fdH').setAttribute('data-idle', '');
+  $('rdK').textContent = `${k} K`; $('rdKn').textContent = kelName(k); $('rdH').textContent = 'Av'; paint(kelColor(k));
+} });
+fH = Lugn.fader($('fdH'), { value: 50, detents: [], tick: 12.5, name: 'färg', onChange: (v, user) => {
+  if (!user) return;
+  const i = Math.min(7, Math.floor(v / 12.5));
+  $('fdH').removeAttribute('data-idle'); $('fdK').setAttribute('data-idle', '');
+  $('rdH').textContent = HUE_NAMES[i]; $('rdK').textContent = 'Av'; $('rdKn').textContent = 'Värme'; paint(HUES[i]);
+} });
+$('shClose').addEventListener('click', closeSheet); $('scrim').addEventListener('click', closeSheet);
+$('scope').addEventListener('click', (e) => { const c = e.target.closest('.chip'); if (!c) return; $('scope').querySelectorAll('.chip').forEach((x) => x.setAttribute('aria-pressed', x === c)); Lugn.haptic('selection', 'omfång'); });
+$('shSave').addEventListener('click', () => { Lugn.haptic('success', 'sparat i scenen'); $('shNote').textContent = `Sparat i ${Lugn.SCENES[sheetScene].name}.`; setTimeout(closeSheet, 700); });
+$('shReset').addEventListener('click', () => { Lugn.haptic('light', 'ångra'); openSheet(sheetScene); });
+$('nOpen')?.addEventListener('click', () => openSheet(current));
+$('nFail')?.addEventListener('click', (e) => { nextOutcome = 'fail'; e.currentTarget.setAttribute('aria-pressed', 'true'); });
+$('nSlow')?.addEventListener('click', (e) => { nextOutcome = 'slow'; e.currentTarget.setAttribute('aria-pressed', 'true'); });
+if (Lugn.q.get('sheet')) { const sc = Lugn.q.get('sheet'); if (sc !== current) { current = sc; $('tiles').innerHTML = Lugn.ORDER.map((s) => Lugn.tileHTML(s, s === current ? 'on' : 'idle')).join(''); Lugn.setField(sc); } openSheet(sc); }

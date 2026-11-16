@@ -1,0 +1,51 @@
+<!--TITLE-->Tillstånd
+<!--STYLE-->
+.head { padding: 6px var(--gutter) 0; }
+.lead { margin-top: 4px; font: 400 15px/20px var(--ui); color: var(--ink-f2); }
+.cap { margin: 4px 2px 5px; white-space: nowrap; font: 400 12px/16px var(--ui); color: var(--ink-2); }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 10px; padding: 14px var(--gutter) 0; }
+.grid .tile { min-height: 82px; width: 100%; padding-top: 11px; padding-bottom: 10px; }
+.grid .tile .pic { width: 32px; height: 32px; }
+.tile[data-state='stale'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ember) 55%, transparent); }
+.banners { display: grid; gap: 6px; padding: 8px var(--gutter) 0; }
+.bn { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 18px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+.bn .ic { width: 34px; height: 34px; border-radius: 17px; display: grid; place-items: center; flex: none; background: color-mix(in srgb, var(--ink) 9%, transparent); }
+.bn .ic svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.bn[data-k='bad'] .ic { background: var(--bad-wash); color: var(--bad); }
+.bn[data-k='warn'] .ic { background: var(--warn-wash); color: var(--warn); }
+.bn b { display: block; font: 600 15px/20px var(--ui); letter-spacing: -0.2px; }
+.bn span { display: block; font: 400 13px/18px var(--ui); color: var(--ink-2); }
+<!--SCREEN-->
+<div class="field"><i class="pool a"></i><i class="pool b"></i><i class="pool c"></i></div>
+<div class="scroll" style="padding-bottom:40px">
+  <div class="navrow"><span style="font:600 17px/22px var(--ui);letter-spacing:-.3px">Komponentblad</span></div>
+  <div class="head"><h1 class="title">Tillstånd</h1><p class="lead">Scenbrickans liv, från tryck till svar.</p></div>
+  <div class="grid" id="grid"></div>
+  <div class="banners" id="bn"></div>
+</div>
+<!--NOTES-->
+<h2>Tillstånd</h2>
+<p>Varje tillstånd har ett eget utseende och en egen mening. Inget av dem är en snurra.</p>
+<ul>
+  <li>Skickar (0–0,26 s) och Väntar ser nästan likadana ut med flit: du har redan fått ditt svar.</li>
+  <li>Långsamt efter 2,5 s. Misslyckat tömmer brickan och säger vad du kan göra.</li>
+  <li>Inaktuellt: kontur i scenens färg, aldrig fylld. Appen påstår inte det den inte vet.</li>
+</ul>
+<div class="ctl"><a href="?theme=dark">Mörkt</a><a href="?theme=light">Ljust</a></div>
+<!--SCRIPT-->
+Lugn.chrome({ time: '21:47' });
+Lugn.setField('mys', 0.4);
+const cells = [
+  ['mys', 'idle', null, 'Vila: glöden visar ljuset'],
+  ['mys', 'sending', 'Skickar', 'Skickar: fylls från fingret'],
+  ['mys', 'waiting', 'Väntar på lamporna', 'Väntar: löpare i nederkant'],
+  ['mys', 'on', 'Aktiv', 'Bekräftat: bock, mjuk haptik'],
+  ['mys', 'slow', 'Svarar långsamt', 'Långsamt: efter 2,5 s'],
+  ['mys', 'failed', 'Gick inte. Tryck igen.', 'Fel: fyllnaden rinner ur'],
+  ['mys', 'stale', 'Senast 14:02', 'Inaktuellt: bara kontur'],
+  ['off', 'on', 'Släckt', 'Helt släckt: ingen fyllnad'],
+];
+document.getElementById('grid').innerHTML = cells.map(([s, st, label, cap]) => `<div>${Lugn.tileHTML(s, st, label || undefined)}<p class="cap">${cap}</p></div>`).join('');
+document.querySelectorAll('.tile').forEach((t) => { t.style.setProperty('--x', '30%'); t.style.setProperty('--y', '40%'); });
+const BN = [['next', 'moon', 'Godnatt i kväll', 'På väg: neutral, ingen färg.'], ['warn', 'wifiOff', 'Offline sedan 14:02', 'Behöver dig: bärnsten.'], ['bad', 'warn', 'Taklampan svarar inte', 'Fel: korall, med vad som fortfarande fungerar.']];
+document.getElementById('bn').innerHTML = BN.map(([k, ic, t, d]) => `<div class="bn" data-k="${k}"><span class="ic">${Lugn.svg(ic)}</span><div><b>${t}</b><span>${d}</span></div></div>`).join('');

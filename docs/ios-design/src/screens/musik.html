@@ -1,0 +1,94 @@
+<!--TITLE-->Musik
+<!--STYLE-->
+.head { padding: 14px var(--gutter) 0; }
+.lead { margin: 4px var(--gutter) 0; font: 400 15px/20px var(--ui); color: var(--ink-f2); }
+.now { margin: 20px var(--gutter) 0; padding: 14px; border-radius: var(--r-card); background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+.now .top { display: flex; gap: 14px; align-items: center; }
+.now .art { width: 92px; height: 92px; border-radius: 16px; flex: none; background: conic-gradient(from 210deg at 68% 36%, #1f4a43, #e7b35a 28%, #b8452f 52%, #23303c 78%, #1f4a43); box-shadow: 0 8px 22px rgb(0 0 0 / 0.35); }
+.now h2 { font: 500 26px/30px var(--voice); letter-spacing: -0.4px; font-variation-settings: 'opsz' 30; }
+.now .by { font: 400 15px/20px var(--ui); color: var(--ink-2); margin-top: 2px; }
+.now .src { margin-top: 8px; display: inline-flex; align-items: center; gap: 6px; font: 500 13px/18px var(--ui); color: var(--ink-2); }
+.now .src i { width: 6px; height: 6px; border-radius: 3px; background: var(--mint); }
+.transport { display: flex; justify-content: center; align-items: center; gap: 22px; margin-top: 14px; }
+.transport button { width: 52px; height: 52px; border-radius: 26px; display: grid; place-items: center; color: var(--ink); }
+.transport svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+.transport .pp { width: 68px; height: 68px; border-radius: 34px; background: var(--ink); color: var(--page); transition: transform 0.3s var(--tryck); }
+.transport .pp:active { transform: scale(0.94); }
+.transport .pp svg { width: 30px; height: 30px; }
+.volhead { display: flex; justify-content: space-between; align-items: baseline; margin: 24px var(--gutter) 10px; }
+.volhead b { font: 500 30px/34px var(--ui); letter-spacing: -0.9px; font-variant-numeric: tabular-nums; }
+.volhead span { font: 400 13px/18px var(--ui); color: var(--ink-2); text-align: right; }
+.vol { --v: 0.24; --t: 0.24; position: relative; height: 56px; margin-inline: var(--gutter); border-radius: 20px; overflow: hidden; background: var(--raised-3); box-shadow: inset 0 0 0 1px var(--line); cursor: ew-resize; }
+.vol::before { content: ''; position: absolute; inset: 0; width: calc(var(--v) * 100%); background: var(--ink); }
+.vol::after { content: ''; position: absolute; top: 19px; height: 18px; width: 4px; border-radius: 2px; left: calc(var(--v) * 100% - 12px); background: var(--page); opacity: clamp(0, calc((var(--v) - 0.06) * 30), 0.4); }
+.vol .target { position: absolute; top: 0; bottom: 0; left: calc(var(--t) * 100%); width: 2px; background: var(--mint); }
+.vol .target::after { content: ''; position: absolute; top: 6px; left: -3px; width: 8px; height: 8px; border-radius: 4px; background: var(--mint); }
+.auth { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 12px var(--gutter) 0; padding: 4px; border-radius: 18px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+.auth button { height: 40px; border-radius: 14px; text-align: center; font: 500 15px/20px var(--ui); color: var(--ink-2); letter-spacing: -0.15px; transition: background-color 0.2s, color 0.2s; }
+.auth button[aria-pressed='true'] { background: var(--raised-3); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.because { margin: 10px var(--gutter) 0; font: 400 16px/22px var(--voice); font-variation-settings: 'opsz' 16; color: var(--ink-2); letter-spacing: -0.05px; }
+.srcs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px var(--gutter) 0; }
+.srcs button { height: 64px; border-radius: 20px; padding: 0 16px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); display: grid; align-content: center; }
+.srcs b { font: 600 16px/20px var(--ui); letter-spacing: -0.25px; }
+.srcs span { font: 400 13px/17px var(--ui); color: var(--ink-2); }
+.srcs button[aria-pressed='true'] { background: var(--ink); color: var(--page); box-shadow: none; }
+.srcs button[aria-pressed='true'] span { color: color-mix(in srgb, var(--page) 70%, transparent); }
+<!--SCREEN-->
+<div class="field"><i class="pool a"></i><i class="pool b"></i><i class="pool c"></i></div>
+<div class="scroll">
+  <div class="navrow"><div class="rooms"><button aria-pressed="true">Sovrum</button><button aria-pressed="false">Skrivbord</button></div></div>
+  <div class="head"><h1 class="title">Musik</h1></div>
+  <p class="lead" id="lead">Spelar lågt. Lugn sköter volymen.</p>
+  <div class="now">
+    <div class="top">
+      <span class="art" role="img" aria-label="Omslag"></span>
+      <div><h2>Heartbeats</h2><p class="by">José González</p><p class="src"><i></i>Spotify DJ</p></div>
+    </div>
+    <div class="transport">
+      <button aria-label="Föregående" id="prev"></button><button class="pp" id="pp" aria-label="Pausa"></button><button aria-label="Nästa" id="next"></button>
+    </div>
+  </div>
+  <div class="volhead"><b id="vnum">24 %</b><span id="vside">Lugns mål 24 %</span></div>
+  <div class="vol" id="vol" aria-label="Volym"><i class="target" id="target"></i></div>
+  <div class="auth" role="group" aria-label="Vem styr volymen"><button id="aAuto" aria-pressed="true">Lugn styr</button><button id="aMan" aria-pressed="false">Jag styr</button></div>
+  <p class="because" id="because">Kvällskurvan: 30 % i grunden, minus 6 efter 21:30.</p>
+  <div class="srcs" role="group" aria-label="Källa">
+    <button aria-pressed="true" id="sDj"><b>Spotify DJ</b><span>Spelar nu</span></button>
+    <button aria-pressed="false" id="sOpt"><b>Optisk ingång</b><span>Datorns ljud</span></button>
+  </div>
+</div>
+<!--NOTES-->
+<h2>Musik</h2>
+<p>En sak är viktigast här: vem som styr volymen. Den mintfärgade markören är Lugns mål, stapeln är det högtalaren faktiskt rapporterar.</p>
+<ul>
+  <li>Dra i volymen: du tar över, väljaren byter till ”Jag styr” utan att du behöver trycka.</li>
+  <li>”Lugn styr” lämnar tillbaka och förklarar målet i en mening.</li>
+  <li>Hack var femte procent (samma steg som Hubben).</li>
+  <li>Bakgrunden är fortfarande rummets ljus. Omslaget färgar bara sitt eget kort.</li>
+  <li>Regeln ”ingen musik startar själv 23–06” visas först när den gäller, som sidans mening.</li>
+</ul>
+<!--SCRIPT-->
+Lugn.chrome({ time: '21:47', tab: 'musik', why: { text: 'Sänkte till 24 %: kvällskurvan', t: '21:30' } });
+Lugn.setField('mys');
+const $ = (id) => document.getElementById(id);
+$('prev').innerHTML = Lugn.svg('prev'); $('next').innerHTML = Lugn.svg('next'); $('pp').innerHTML = Lugn.svg('pause');
+let playing = true, auto = true;
+$('pp').addEventListener('click', () => {
+  playing = !playing; $('pp').innerHTML = Lugn.svg(playing ? 'pause' : 'play'); $('pp').setAttribute('aria-label', playing ? 'Pausa' : 'Spela');
+  Lugn.haptic('light', 'spela/pausa');
+  $('lead').textContent = playing ? (auto ? 'Spelar lågt. Lugn sköter volymen.' : 'Spelar. Du sköter volymen.') : 'Pausad av dig. Lugn startar den inte igen.';
+});
+const setAuth = (a, said) => {
+  auto = a; $('aAuto').setAttribute('aria-pressed', a); $('aMan').setAttribute('aria-pressed', !a);
+  $('target').style.opacity = a ? 1 : 0.35;
+  $('because').textContent = a ? 'Kvällskurvan: 30 % i grunden, minus 6 efter 21:30.' : said || 'Du styr. Lugn tar tillbaka volymen när rummet varit tomt i 20 min.';
+  if (playing) $('lead').textContent = a ? 'Spelar lågt. Lugn sköter volymen.' : 'Spelar. Du sköter volymen.';
+};
+const vol = Lugn.fader($('vol'), { axis: 'x', value: 24, detents: [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100], magnet: 1.2, tick: 1000, name: 'volym', onChange: (v, user) => {
+  $('vnum').textContent = `${Math.round(v)} %`;
+  if (user && auto) setAuth(false);
+} });
+$('aAuto').addEventListener('click', () => { setAuth(true); vol.set(24); Lugn.haptic('selection', 'Lugn styr'); });
+$('aMan').addEventListener('click', () => { setAuth(false); Lugn.haptic('selection', 'Jag styr'); });
+const src = (dj) => { $('sDj').setAttribute('aria-pressed', dj); $('sOpt').setAttribute('aria-pressed', !dj); $('sDj').lastChild.textContent = dj ? 'Spelar nu' : 'Förval 1'; $('sOpt').lastChild.textContent = dj ? 'Datorns ljud' : 'Spelar nu'; Lugn.haptic('light', 'källa'); };
+$('sDj').addEventListener('click', () => src(true)); $('sOpt').addEventListener('click', () => src(false));

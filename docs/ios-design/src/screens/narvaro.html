@@ -1,0 +1,138 @@
+<!--TITLE-->Närvaro
+<!--STYLE-->
+.head { padding: 6px var(--gutter) 0; }
+.say { font: 400 34px/38px var(--voice); letter-spacing: -0.6px; font-variation-settings: 'opsz' 40; }
+.sub { margin-top: 6px; font: 400 15px/20px var(--ui); color: var(--ink-f2); min-height: 40px; max-width: 340px; }
+.radar { position: relative; margin: 14px var(--gutter) 0; height: 318px; border-radius: var(--r-card); background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; }
+.radar canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.radar .tag { position: absolute; left: 16px; bottom: 14px; font: 400 12px/16px var(--ui); color: var(--ink-2); }
+.radar .tag.r { left: auto; right: 16px; }
+.pend { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--line); }
+.pend i { display: block; height: 100%; width: 70%; background: var(--warn); }
+.count { display: flex; align-items: center; gap: 12px; margin: 12px var(--gutter) 0; padding: 10px 10px 10px 16px; border-radius: 22px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+.count .grow { flex: 1; }
+.count .t { font: 500 16px/21px var(--ui); letter-spacing: -0.25px; }
+.count .d { font: 400 13px/18px var(--ui); color: var(--ink-2); }
+.count .n { width: 34px; text-align: center; font: 500 26px/30px var(--ui); font-variant-numeric: tabular-nums; letter-spacing: -0.6px; }
+.count button { width: 46px; height: 46px; border-radius: 23px; display: grid; place-items: center; background: color-mix(in srgb, var(--ink) 9%, transparent); transition: transform 0.25s var(--tryck); }
+.count button:active { transform: scale(0.92); }
+.count button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.facts { margin-top: 12px; }
+.facts .row { min-height: 50px; }
+.facts .row .v { font: 400 15px/20px var(--ui); color: var(--ink-2); }
+<!--SCREEN-->
+<div class="field"><i class="pool a"></i><i class="pool b"></i><i class="pool c"></i></div>
+<div class="scroll">
+  <div class="navrow"><a class="back" href="hem.html"><svg viewBox="0 0 24 24"><path d="M14.5 5.5L8 12l6.500 6.500"/></svg>Hem</a><span style="font:600 17px/22px var(--ui);letter-spacing:-.3px">Närvaro</span><span style="width:58px"></span></div>
+  <div class="head">
+    <h1 class="say" id="say"></h1>
+    <p class="sub" id="sub"></p>
+  </div>
+  <div class="radar" id="radar">
+    <canvas id="cv" width="724" height="636" role="img" aria-label="Rummet sett uppifrån"></canvas>
+    <span class="tag" id="tagL"></span><span class="tag r" id="tagR">Sensorn: säker</span>
+    <div class="pend" id="pend" hidden><i id="pendBar"></i></div>
+  </div>
+  <div class="count">
+    <div class="grow"><p class="t">Personer i rummet</p><p class="d" id="cnote">Fel antal? Rätta här.</p></div>
+    <button id="minus" aria-label="En färre"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
+    <span class="n" id="n" aria-live="polite">1</span>
+    <button id="plus" aria-label="En till"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button>
+  </div>
+  <div class="card facts">
+    <div class="row"><span class="grow t">Hemma</span><span class="v">Ja, enligt Home Assistant</span></div>
+    <div class="row"><span class="grow t">Väntar innan släckning</span><span class="v">60 s</span></div>
+    <div class="row"><span class="grow t">Ljud när någon kommer och går</span><span class="v">Av</span></div>
+  </div>
+</div>
+<!--NOTES-->
+<h2>Närvaro</h2>
+<p>Radarn ritar bara när något rör sig. Står någon still fryser bilden med en hållen ring: stillhet är inte frånvaro, och skärmen ska inte låtsas veta mer än sensorn.</p>
+<div class="ctl"><button data-s="rorelse">Rörelse</button><button data-s="stilla">Någon är kvar</button><button data-s="tomt">Verkar tomt</button><button data-s="okand">Okänt</button></div>
+<ul>
+  <li>Spår tonar bort på 6 s. Ingen svepande radarstråle: den vore dekoration.</li>
+  <li>Rättning av antal ger haptik direkt, men siffran byts först när sensorn kvitterat.</li>
+</ul>
+<!--SCRIPT-->
+Lugn.chrome({ time: '21:47' });
+Lugn.setField('mys', 0.7);
+const $ = (id) => document.getElementById(id);
+const cv = $('cv'), g = cv.getContext('2d');
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const W = 362, H = 318;
+g.scale(2, 2);
+let state = Lugn.q.get('state') || 'rorelse', count = 1, t0 = performance.now(), raf = 0;
+const STATES = {
+  rorelse: { say: 'En person i rummet.', sub: 'Rör sig vid skrivbordet. Sedd nyss.', tag: 'Spår: senaste 6 s' },
+  stilla: { say: 'Någon är kvar.', sub: 'Ingen rörelse på 12 min. Rummet räknas som upptaget tills någon går ut genom dörren.', tag: 'Stilla sedan 21:35' },
+  tomt: { say: 'Rummet verkar tomt.', sub: 'Släcker om 42 s om ingen kommer tillbaka. Musiken pausas samtidigt.', tag: 'Senast sedd vid dörren 21:46' },
+  okand: { say: 'Vet inte om någon är här.', sub: 'Sensorn lär om bakgrunden. Lugn släcker ingenting så länge.', tag: 'Ingen bild just nu' },
+};
+/* a walk from the door to the desk */
+const path = (u) => [300 - 78 * u + Math.sin(u * 5) * 18, 240 - 136 * u];
+function room() {
+  g.clearRect(0, 0, W, H);
+  const line = css('--line-strong'), ink3 = css('--ink-3');
+  g.lineWidth = 1.5; g.strokeStyle = line; g.lineCap = 'round'; g.lineJoin = 'round';
+  // walls with a door gap bottom right
+  g.beginPath(); g.moveTo(286, 268); g.lineTo(26, 268); g.lineTo(26, 22); g.lineTo(336, 22); g.lineTo(336, 268); g.lineTo(326, 268); g.stroke();
+  // door swing
+  g.setLineDash([3, 4]); g.beginPath(); g.arc(286, 268, 40, -Math.PI / 2, 0); g.stroke(); g.setLineDash([]);
+  // bed, desk
+  g.fillStyle = css('--raised-2'); g.strokeStyle = line;
+  const rr = (x, y, w, h, r) => { g.beginPath(); g.roundRect(x, y, w, h, r); g.fill(); g.stroke(); };
+  rr(40, 134, 96, 120, 10); rr(48, 142, 80, 28, 6);
+  rr(170, 34, 150, 46, 8);
+  g.fillStyle = ink3; g.font = '500 11px Inter, -apple-system, sans-serif';
+  g.fillText('Säng', 74, 216); g.fillText('Skrivbord', 218, 61); g.fillText('Dörr', 294, 258);
+  // sensor
+  g.fillStyle = css('--ink-2'); g.beginPath(); g.arc(26, 96, 4, 0, 7); g.fill();
+  g.fillStyle = ink3; g.fillText('Sensor', 36, 100);
+}
+function person(x, y, held, ghost) {
+  const mint = css('--mint');
+  if (ghost) { g.strokeStyle = css('--ink-3'); g.lineWidth = 1.5; g.setLineDash([3, 4]); g.beginPath(); g.arc(x, y, 11, 0, 7); g.stroke(); g.setLineDash([]); return; }
+  if (held) { g.strokeStyle = mint; g.globalAlpha = 0.35; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, 24, 0, 7); g.stroke(); g.globalAlpha = 0.7; g.beginPath(); g.arc(x, y, 16, 0, 7); g.stroke(); g.globalAlpha = 1; }
+  g.fillStyle = mint; g.beginPath(); g.arc(x, y, 8, 0, 7); g.fill();
+}
+function draw(now) {
+  room();
+  if (state === 'rorelse') {
+    const u = Lugn.q.has('shot') ? 0.78 : ((now - t0) / 9000) % 1.25;
+    const head = Math.min(1, u);
+    g.lineCap = 'round'; g.strokeStyle = css('--mint');
+    for (let i = 0; i < 26; i++) { // trail fades over ~6 s
+      const a = head - i * 0.022, b = head - (i + 1) * 0.022; if (b < 0) break;
+      const [x1, y1] = path(a), [x2, y2] = path(b);
+      g.globalAlpha = 0.55 * (1 - i / 26) ** 1.6; g.lineWidth = 7 * (1 - i / 30);
+      g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+    }
+    g.globalAlpha = 1; person(...path(head));
+    if (!Lugn.q.has('shot')) {
+      if (u >= 1.02) return go('stilla', true); // arrives and sits: drawing stops
+      raf = requestAnimationFrame(draw);
+    }
+  } else if (state === 'stilla') person(...path(1), true);
+  else if (state === 'tomt') person(300, 232, false, true);
+}
+function go(s, quiet) {
+  cancelAnimationFrame(raf); state = s; t0 = performance.now();
+  const S = STATES[s];
+  $('say').textContent = s === 'rorelse' && count > 1 ? `${['', 'En', 'Två', 'Tre', 'Fyra'][count] || count} personer i rummet.` : S.say;
+  $('sub').textContent = S.sub; $('tagL').textContent = S.tag;
+  $('tagR').textContent = s === 'okand' ? 'Sensorn: osäker' : 'Sensorn: säker';
+  $('pend').hidden = s !== 'tomt';
+  $('n').textContent = s === 'tomt' ? '0' : s === 'okand' ? '?' : count;
+  document.querySelectorAll('.notes .ctl button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.s === s));
+  Lugn.setField('mys', s === 'tomt' ? 0.45 : s === 'okand' ? 0.3 : 0.7);
+  draw(performance.now());
+}
+document.querySelectorAll('.notes .ctl button').forEach((b) => b.addEventListener('click', () => go(b.dataset.s)));
+const correct = (d) => {
+  const next = Math.max(0, Math.min(4, count + d)); if (next === count) return Lugn.haptic('rigid', 'antal: stopp');
+  Lugn.haptic('light', 'antal ' + (d > 0 ? '+1' : '−1'));
+  $('cnote').textContent = 'Skickar till sensorn';
+  setTimeout(() => { count = next; $('cnote').textContent = `Sensorn räknar nu ${count}.`; Lugn.haptic('soft', 'sensorn kvitterade'); go(count === 0 ? 'tomt' : state === 'tomt' ? 'stilla' : state, true); }, 700);
+};
+$('minus').addEventListener('click', () => correct(-1)); $('plus').addEventListener('click', () => correct(1));
+document.fonts.ready.then(() => go(state));
