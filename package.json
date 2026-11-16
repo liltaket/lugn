@@ -26,6 +26,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run && bash tests/install-user-service.test.sh && bash tests/install-govee-effects-service.test.sh",
+    "device-sim": "tsc -p tsconfig.devsim.json && node dist-devsim/scripts/device-sim/cli.js",
+    "device-replay": "tsc -p tsconfig.devsim.json && node dist-devsim/scripts/device-sim/cli.js replay",
     "bench:lighting": "tsc -p tsconfig.bench.json && node dist-bench/bench/lighting-latency.js"
   },
   "engines": {
