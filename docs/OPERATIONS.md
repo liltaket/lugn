@@ -510,6 +510,11 @@ list (`GET /devices`) returns `{ devices, publicUrl, lastSeenSince }`:
 process started tracking `lastSeenAt` (last-seen times are memory-only). See
 [IOS-API.md](IOS-API.md) for the client contract.
 
+On **Inställningar → Telefoner** the control panel uses these routes: it
+creates a code and shows it with a countdown and a QR code, lists paired
+phones and revokes them after a confirm step. With `device.enabled` false or
+no `device` section, the page says that the device API is off.
+
 ## Control panel authentication
 
 The operational control panel at `/ui/` can use Clerk for human sign-in. Add

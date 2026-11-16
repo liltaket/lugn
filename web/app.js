@@ -1244,10 +1244,8 @@ function exitPendingStatus() {
   // on every presence report, so it never outlives the wait.
   const pending = overview?.state?.presence?.exitPending;
   if (!pending) return null;
-  const serverNow =
-    (overview.generatedAt ?? Date.now()) + (Date.now() - overviewReceivedAt);
   return {
-    remainingMs: Math.max(0, pending.until - serverNow),
+    remainingMs: Math.max(0, pending.until - serverNow()),
     totalMs: Math.max(1, pending.until - pending.startedAt),
   };
 }
@@ -1257,12 +1255,22 @@ function exitCountdownText(status) {
   return seconds > 0 ? `om ${seconds} s` : 'nu';
 }
 
-// Read-only handle for presence.js, which owns the Närvaro page.
+// Server clock as of the latest overview plus the time since it arrived.
+function serverNow() {
+  if (!overview) return Date.now();
+  return (
+    (overview.generatedAt ?? Date.now()) + (Date.now() - overviewReceivedAt)
+  );
+}
+
+// Read-only handle for presence.js and phones.js, which own the Närvaro and
+// Telefoner pages.
 window.lugnPanel = {
   csrfToken: () => csrfToken,
   overview: () => overview,
   refresh: () => refreshOverview(),
   exitPending: exitPendingStatus,
+  serverNow,
 };
 
 function render() {
@@ -3823,6 +3831,7 @@ function initializeLugn2() {
     kameror: 'Kameror',
     narvaro: 'Närvaro',
     datorer: 'Datorer',
+    telefoner: 'Telefoner',
     anslutningar: 'Anslutningar',
     system: 'System',
   };
@@ -3834,6 +3843,7 @@ function initializeLugn2() {
     'kameror',
     'narvaro',
     'datorer',
+    'telefoner',
     'anslutningar',
     'system',
   ];

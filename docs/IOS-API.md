@@ -44,6 +44,29 @@ appVersion? }`. Codes are case-insensitive and the dash is optional.
 4. Send `Authorization: Bearer <token>` on every other request.
    `GET /api/v1/me` confirms the token and returns the server clock.
 
+### Pairing link and QR code
+
+The control panel (Inställningar → Telefoner) shows the code as text and,
+when it knows the server URL, as a QR code (byte mode, level M) that holds:
+
+```text
+lugn://pair?server=https%3A%2F%2Flugn.example.ts.net%3A8789&code=7K3Q-M9TD
+```
+
+- `server` is the percent-encoded base URL: an origin only
+  (`https://host[:port]`, no path, no trailing slash). It comes from
+  `device.publicUrl` in `config.json`, or from a field the operator fills in
+  the panel. `code` is the pairing code with its dash.
+- Scanning it with the system camera opens the app through the `lugn` URL
+  scheme; the app's own scanner can read the same payload. Typing the code
+  by hand stays supported, so the QR code is a convenience, not a
+  requirement.
+- Treat both values as untrusted input. Accept only `https` (or `http` for a
+  loopback development server) origins, validate `code` with the same pattern
+  as `PairRequest.code`, show the host before pairing, and never send an
+  existing token to a server URL that came from a link.
+- The link carries no secret beyond the five-minute, one-time code.
+
 Tokens look like `lgn1.<deviceId>.<secret>` and are compared in constant time.
 A `401` means the token is unknown or was revoked: discard it and ask the
 user to pair again. Revocation also closes that device's live streams.

@@ -52,6 +52,7 @@
     <link rel="stylesheet" href="/ui/styles.css" />
     <script type="module" src="/ui/app.js"></script>
     <script type="module" src="/ui/presence.js"></script>
+    <script type="module" src="/ui/phones.js"></script>
   </head>
   <body>
     <!--
@@ -451,7 +452,7 @@
         <div class="system-alert" id="system-alert" role="status" hidden></div>
         <nav
           class="settings-index"
-          data-pages="installningar musikautomatik intelligens kameror narvaro datorer anslutningar system"
+          data-pages="installningar musikautomatik intelligens kameror narvaro datorer telefoner anslutningar system"
           aria-label="Inställningar"
         >
           <h2 class="settings-group-title">Rummet</h2>
@@ -581,6 +582,30 @@
                 ><span
                   class="settings-row-value"
                   id="settings-value-datorer"
+                ></span
+              ></a>
+            </li>
+            <li>
+              <a
+                class="settings-row"
+                href="#telefoner"
+                data-settings-page="telefoner"
+                ><span class="settings-row-icon" data-hue="mint"
+                  ><svg
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                    focusable="false"
+                  >
+                    <rect x="6.5" y="2.8" width="11" height="18.4" rx="2.4" />
+                    <path d="M10.5 17.8h3" /></svg></span
+                ><span class="settings-row-text"
+                  ><span class="settings-row-label">Telefoner</span
+                  ><span class="settings-row-detail"
+                    >Para ihop appen och spärra telefoner</span
+                  ></span
+                ><span
+                  class="settings-row-value"
+                  id="settings-value-telefoner"
                 ></span
               ></a>
             </li>
@@ -1252,6 +1277,128 @@
             </div>
           </div>
           <div class="computer-list" id="computer-list"></div>
+        </section>
+
+        <section
+          class="phones-section"
+          id="phones-section"
+          data-pages="telefoner"
+          aria-labelledby="phones-title"
+        >
+          <div class="section-heading">
+            <div>
+              <h2 id="phones-title">Telefoner</h2>
+              <p>
+                Telefoner med Lugn-appen styr rummet och ger Lugn ledtrådar.
+                Närvarosensorn avgör alltid om någon är här.
+              </p>
+            </div>
+            <span
+              class="state-chip"
+              id="phones-status"
+              data-tone="neutral"
+              role="status"
+              >Hämtar</span
+            >
+          </div>
+          <p class="empty-note" id="phones-unavailable" hidden></p>
+          <div class="phones-content" id="phones-content" hidden>
+            <div class="phones-pair">
+              <h3 id="phones-pair-title">Para ihop ny telefon</h3>
+              <p class="field-help">
+                Lugn skapar en kod som gäller i fem minuter. Skanna QR-koden med
+                telefonens kamera, eller skriv in koden i appen.
+              </p>
+              <div class="phones-server" id="phones-server-field">
+                <label for="phones-server-url">Serveradress för appen</label>
+                <input
+                  id="phones-server-url"
+                  type="url"
+                  inputmode="url"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="https://lugn.example.ts.net:8789"
+                />
+                <p
+                  class="field-help"
+                  id="phones-server-help"
+                  aria-live="polite"
+                ></p>
+              </div>
+              <div class="phones-server" id="phones-server-configured" hidden>
+                <dl>
+                  <div class="reading">
+                    <dt>Serveradress för appen</dt>
+                    <dd id="phones-server-configured-url"></dd>
+                  </div>
+                </dl>
+                <p class="field-help">Från device.publicUrl i config.json.</p>
+              </div>
+              <div class="button-row">
+                <button
+                  class="button button-primary"
+                  id="phones-pair-button"
+                  type="button"
+                  disabled
+                >
+                  Skapa kod
+                </button>
+              </div>
+              <div class="phones-code-card" id="phones-code-card" hidden>
+                <figure class="phones-qr" id="phones-qr" hidden></figure>
+                <div class="phones-code-text">
+                  <p class="phones-code" id="phones-code"></p>
+                  <p
+                    class="phones-countdown"
+                    id="phones-countdown"
+                    role="timer"
+                  ></p>
+                  <dl>
+                    <div class="reading">
+                      <dt>Serveradress</dt>
+                      <dd id="phones-code-server"></dd>
+                    </div>
+                  </dl>
+                  <p class="field-help" id="phones-qr-missing" hidden>
+                    Fyll i serveradressen för att visa en QR-kod. Koden går att
+                    skriva in ändå.
+                  </p>
+                  <div class="button-row">
+                    <button
+                      class="button button-quiet button-small"
+                      id="phones-code-hide"
+                      type="button"
+                    >
+                      Dölj koden
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <p
+                class="field-help phones-status-line"
+                id="phones-pair-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+            </div>
+            <div class="phones-paired">
+              <h3 id="phones-paired-title">Ihopparade</h3>
+              <div class="phones-list" id="phones-list"></div>
+              <p class="empty-note" id="phones-empty" hidden>
+                Inga telefoner är ihopparade än.
+              </p>
+              <details class="phones-revoked" id="phones-revoked" hidden>
+                <summary id="phones-revoked-summary"></summary>
+                <div id="phones-revoked-list"></div>
+              </details>
+              <p
+                class="field-help phones-status-line"
+                id="phones-list-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+            </div>
+          </div>
         </section>
 
         <section

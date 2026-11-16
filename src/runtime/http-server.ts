@@ -310,6 +310,14 @@ export class LugnHttpServer {
         name: 'presence.js',
         contentType: 'text/javascript; charset=utf-8',
       },
+      '/ui/phones.js': {
+        name: 'phones.js',
+        contentType: 'text/javascript; charset=utf-8',
+      },
+      '/ui/qr.js': {
+        name: 'qr.js',
+        contentType: 'text/javascript; charset=utf-8',
+      },
       '/ui/styles.css': {
         name: 'styles.css',
         contentType: 'text/css; charset=utf-8',
