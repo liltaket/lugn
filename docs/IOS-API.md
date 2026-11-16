@@ -24,10 +24,13 @@ schemas cannot express.
 - All JSON responses carry `Cache-Control: no-store` and
   `X-Lugn-API-Version: 1`. Errors use `{ "error": "<code>" }`, with `issues`
   for validation failures and `retryAfterSeconds` for `429`.
-- iOS App Transport Security: with the recommended `tailscale serve` HTTPS URL
-  the app needs no ATS exception. Plain HTTP (for example a loopback dev
-  server in a Debug build) needs a narrowly scoped exception for that host only;
-  do not ship `NSAllowsArbitraryLoads`.
+- iOS App Transport Security: over HTTPS (a future relay URL) the app needs no
+  ATS exception. The LAN prototype uses plain HTTP to a private address, which
+  needs only `NSAllowsLocalNetworking` (verified on the iOS 27.2 Simulator:
+  loopback, RFC1918 and `*.local` are allowed, public and Tailscale 100.x
+  addresses stay blocked) plus the Local Network permission on a real iPhone.
+  The app also refuses http to anything outside loopback, RFC1918, link-local,
+  `*.local` and single-label names. Do not ship `NSAllowsArbitraryLoads`.
 
 ## Pairing and tokens
 
