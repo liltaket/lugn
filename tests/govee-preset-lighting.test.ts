@@ -510,7 +510,7 @@ it('masks a dimly lit fixture once natively ON and settles before the scene', as
     },
   ]);
 });
-it('sends the full mask once lit when the stored mask is unknown', async () => {
+it('sends only the OFF once lit when the stored mask is unknown', async () => {
   const f = poweredFixture();
   const done = f.adapter.dispatch({
     ...ringOnly,
@@ -526,6 +526,8 @@ it('sends the full mask once lit when the stored mask is unknown', async () => {
       target,
       controlId: 'g-ring',
       zones: { main: false, ring: true },
+      // Power-on lights both zones; a ring ON while lit would relight main.
+      zoneOrder: 'disable-only',
     },
   ]);
 });
@@ -552,9 +554,14 @@ it('continues to the scene and the final mask when the lit mask fails', async ()
     scene,
     'apply',
   ]);
-  expect(f.bodies[1]).toEqual(f.bodies[0]);
+  expect(f.bodies[1]).toEqual({
+    requestId: 'c-ring',
+    target,
+    controlId: 'g-ring',
+    zones: { main: false, ring: true },
+  });
 });
-it('powers a matching stored mask with the wanted cloud ON, then repeats the OFF once lit', async () => {
+it('lights dimly even when the stored mask already matches', async () => {
   const f = poweredFixture();
   const done = f.adapter.dispatch({
     ...ringOnly,
@@ -564,20 +571,19 @@ it('powers a matching stored mask with the wanted cloud ON, then repeats the OFF
       knownZones: { main: false, ring: true },
     },
   });
-  // A local Matter ON would light the whole fixture; the ring ON keeps its mask.
-  await vi.waitFor(() => expect(f.events).toEqual(['cancel:all', 'apply']));
+  // A cloud ring ON from dark also brought the main light back on the H60A6.
+  await vi.waitFor(() => expect(f.events).toEqual(['cancel:all', dim]));
   f.observe(true);
   await done;
-  expect(f.events).toEqual(['cancel:all', 'apply', 'apply', scene]);
-  const mask = {
-    requestId: 'c-ring',
-    target,
-    controlId: 'g-ring',
-    zones: { main: false, ring: true },
-  };
+  expect(f.events).toEqual(['cancel:all', dim, 'apply', scene]);
   expect(f.bodies).toEqual([
-    { ...mask, zoneOrder: 'enable-only' },
-    { ...mask, zoneOrder: 'disable-only' },
+    {
+      requestId: 'c-ring',
+      target,
+      controlId: 'g-ring',
+      zones: { main: false, ring: true },
+      zoneOrder: 'disable-only',
+    },
   ]);
 });
 it('falls back to the scene when dim power is never reported', async () => {

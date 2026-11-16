@@ -324,3 +324,13 @@ again with the `rg` shim), and `npm run build` passed. Both services run
 restarts. The restart cleared the in-memory mask and white again, so the first
 ring-only ON from OFF uses the 1 % path. No physical test was run, and Bruno's
 observation is pending.
+
+### Sixth iteration: always light dimly
+
+With `6d50dbf`, Bruno saw the ring light first, then the whole fixture, and
+then the main light switch off. The ledger shows Vardagsljus from OFF at
+12:15:51 on the cloud ring ON path, with HA ON at 12:15:52.2. Nothing else was
+sent before the main OFF. The fixture itself therefore relights the main light
+after a cloud ring ON from dark, and a ring-only stored mask does not help. The
+next commit always lights the fixture at 1 % through HA, then sends the main
+OFF once natively ON, so the unavoidable main light is barely visible.

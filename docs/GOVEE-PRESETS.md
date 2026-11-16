@@ -157,19 +157,16 @@ brightness. Earlier versions powered the fixture with a cloud ring ON
 (disable-first) and sent the main OFF once lit. That flashed the whole lamp
 for 1–2 s whenever the stored mask still had the main light.
 
-- **Stored mask already matches:** the wanted zone's cloud ON
-  (`zoneOrder:"enable-only"`) powers the fixture into its stored mask. A local
-  Matter ON from dark lights the whole fixture (seen through Lugn on
-  2026-11-16), so it is not used here. Once natively ON, the unwanted zone's OFF
-  is repeated, because otherwise the next Matter write relights it (attended
-  steps 1 and 6). After a 1.5 s settle the baseline follows.
-- **Stored mask differs or is unknown:** the adapter first lights the fixture
-  through HA at 1 % (with the scene's white or RGB). It then waits for a fresh
-  native ON report (at most 4 s), because a toggle sent while dark is ignored.
-  Once lit, it sends only the unwanted OFF (`zoneOrder:"disable-only"`) when the
-  stored mask has the wanted zone, otherwise the enable-first mask. It waits
-  1.5 s for cloud delivery before the baseline raises the brightness, and sends
-  no later zone toggle.
+The H60A6 always powers on with the main light. A local Matter ON lights the
+whole fixture at once. A cloud ring ON from a ring-only stored mask lit the
+ring, then the whole fixture, and the main OFF then left the ring (Bruno,
+2026-11-16). The adapter therefore lights the fixture through HA at 1 % (with
+the scene's white or RGB), so the main light is barely visible. It waits for a
+fresh native ON report (at most 4 s), because a toggle sent while dark is
+ignored. Once lit, it sends only the unwanted OFF (`zoneOrder:"disable-only"`).
+It waits 1.5 s for cloud delivery before the baseline raises the brightness,
+and sends no later zone toggle. Removing the brief dim main light would need a
+faster local zone command than the official cloud API offers.
 
 An attended test series with Bruno isolated these rules. A Matter level/CT
 write after a dark zone OFF relit the main light (immediately, after 2 s and
@@ -248,7 +245,7 @@ an available Govee API; Matter state alone is not proof that an app scene stoppe
 HTTP over the protected Unix socket, with no network listener:
 
 - `GET /capabilities` → `{targets: Record<target,{effects:string[],zones:boolean,colorTemperature?:{min,max}}>}`.
-- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,zoneOrder?,modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation. `zoneOrder` (`disable-first` for OFF before ON, `disable-only` for OFF toggles only, `enable-only` for ON toggles only) requires `zones`.
+- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,zoneOrder?,modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation. `zoneOrder` (`disable-first` for OFF before ON, `disable-only` for OFF toggles only, `enable-only` for ON toggles only, currently unused by Lugn) requires `zones`.
 - `POST /cancel` ← `{target,controlId?}` → `{status:"drained"}`.
 
 Capabilities can include optional `staticColor:true`. A color reset uses

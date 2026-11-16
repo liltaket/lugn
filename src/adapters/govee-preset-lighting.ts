@@ -230,57 +230,37 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
       color.colorTemperature === undefined
         ? color
         : { colorTemperature: kelvin(color.colorTemperature) };
-    // The H60A6 ignores zone toggles while dark. A cloud toggle ON powers it
-    // with its stored mask, which persists through whole OFF, but a local Matter
-    // ON lights the whole fixture. A stored mask that already matches is
-    // therefore powered by the wanted zone's cloud ON. An unknown or different
-    // one is lit through HA at 1 %, so the unwanted zone is barely visible.
-    // Either way the unwanted zone's OFF follows its own ON report, because
-    // otherwise the next Matter write relights it. Cloud acceptance precedes
-    // delivery, so the OFF gets time to arrive before the scene brightness. A
-    // zone ON while lit relights an OFF zone, so no toggle follows the OFF.
-    const known = intent?.knownZones;
-    const covers = (
-      mask: { main: boolean; ring: boolean },
-      lit?: { main: boolean; ring: boolean },
-    ) => Boolean(lit && (!mask.main || lit.main) && (!mask.ring || lit.ring));
+    // The H60A6 ignores zone toggles while dark and always powers on with the
+    // main light, whether a local Matter ON or a cloud ring ON wakes it (Bruno
+    // saw ring, then whole, then ring only after the cloud ON). The fixture is
+    // therefore lit through HA at 1 %, so the unwanted zone is barely visible,
+    // and the unwanted zone's OFF follows its own ON report. Cloud acceptance
+    // precedes delivery, so the OFF gets time to arrive before the scene
+    // brightness. A zone ON while lit relights an OFF zone, so no toggle
+    // follows the OFF.
     let stagedLit = false;
     if (intent?.stageZones && intent.zones) {
-      const stored = Boolean(
-        known &&
-        known.main === intent.zones.main &&
-        known.ring === intent.zones.ring,
-      );
       const powered = this.waitForPower(command.target, current);
       try {
-        if (stored)
-          await this.applyGuarded(
-            command,
-            intent.controlId,
-            { zones: intent.zones, zoneOrder: 'enable-only' },
-            current,
-          );
-        else
-          await this.ordinary.dispatch({
-            id: command.id,
-            target: command.target,
-            values: {
-              power: true,
-              brightness: 1,
-              ...(values.rgb
-                ? { rgb: values.rgb }
-                : values.colorTemperature !== undefined
-                  ? { colorTemperature: values.colorTemperature }
-                  : {}),
-            },
-          });
+        await this.ordinary.dispatch({
+          id: command.id,
+          target: command.target,
+          values: {
+            power: true,
+            brightness: 1,
+            ...(values.rgb
+              ? { rgb: values.rgb }
+              : values.colorTemperature !== undefined
+                ? { colorTemperature: values.colorTemperature }
+                : {}),
+          },
+        });
         if ((await powered.wait) && current()) {
           await this.applyGuarded(
             command,
             intent.controlId,
-            covers(intent.zones, known)
-              ? { zones: intent.zones, zoneOrder: 'disable-only' }
-              : { zones: intent.zones },
+            // Power-on lights both zones, so only the OFF is needed.
+            { zones: intent.zones, zoneOrder: 'disable-only' },
             current,
           );
           stagedLit = true;
@@ -329,12 +309,13 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     const controlId = (intent ?? staticReset)!.controlId;
     const color = intent?.staticColor ?? staticReset?.color;
     const zones = restore ? undefined : (intent?.zones ?? staticReset?.zones);
+    const known = intent?.knownZones;
     // Wanted zones already lit get no ON toggle: on the H60A6 it would relight
     // an OFF zone. Unknown or dark zones still use the enable-first mask.
     const zoneBody =
       !zones || stagedLit
         ? {}
-        : covers(zones, known)
+        : known && (!zones.main || known.main) && (!zones.ring || known.ring)
           ? zones.main && zones.ring
             ? {}
             : { zones, zoneOrder: 'disable-only' as const }
