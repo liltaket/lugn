@@ -5,6 +5,7 @@ export default tseslint.config(
     ignores: [
       'dist/**',
       'dist-bench/**',
+      'dist-devsim/**',
       'bench/results/**',
       'node_modules/**',
       'agents/linux/target/**',

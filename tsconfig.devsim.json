@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist-devsim",
+    "declaration": false,
+    "incremental": true,
+    "tsBuildInfoFile": "dist-devsim/.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts", "scripts/device-sim/**/*.ts"],
+  "exclude": ["node_modules", "dist", "dist-bench", "dist-devsim"]
+}
