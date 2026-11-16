@@ -33,6 +33,16 @@ tailscaled on the Lugn host  ── listens only on the tailscale0 addresses
 Lugn device listener  device.host = 127.0.0.1
 ```
 
+> **Decision update (2026-11-16, owner):** Tailscale will **not** be installed on
+> the Lugn host (BrunoCAM). The first prototype runs over the **LAN only**:
+> the device listener binds the host's LAN address (plain HTTP, token auth) and
+> the app uses a narrowly scoped ATS exception (`NSAllowsLocalNetworking`) plus
+> the Local Network permission. Remote access, later, goes through a machine
+> that already has Tailscale (option B below: SSH tunnel + `tailscale serve`
+> on that machine). Option A is kept as reference only. Treat the "no ATS
+> exception / no Local Network" claims below as applying to A/B, not to the
+> LAN prototype.
+
 - The app stores one base URL. The same URL works at home and away. At home,
   traffic goes through the tunnel too, normally on a direct LAN path between
   the two peers [unverified, check with `tailscale ping`].
