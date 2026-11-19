@@ -335,6 +335,44 @@ describe('runtime music observation trust', () => {
     },
   );
 
+  it('resumes live events when the state query never settles, and ignores its late answer', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ui = await setup();
+    const playback = () =>
+      ui.runtime.engine.state.music.devices['music.room']!.observed.playback;
+    try {
+      const live = ui.connect();
+      live.emit(reported('room', 'paused', '2026-10-02T12:00:00Z'));
+      await settle();
+      // Buffered behind the pending query, so not yet applied.
+      expect(playback()).toBe('playing');
+      await ui.trust({ 'music.room': false, 'music.other': false });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await settle();
+      expect(playback()).toBe('paused');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('did not finish in time'),
+      );
+      // Later events are applied directly instead of piling up in the buffer.
+      live.emit(reported('room', 'playing', '2026-10-02T13:00:00Z'));
+      await settle();
+      expect(playback()).toBe('playing');
+      await ui.trust({ 'music.room': true, 'music.other': false });
+      // The abandoned query cannot overwrite newer live observations.
+      ui.requests[0]!.resolve(
+        new Response(
+          JSON.stringify([reported('room', 'off', '2026-10-03T12:00:00Z')]),
+        ),
+      );
+      await settle();
+      expect(playback()).toBe('playing');
+      await ui.trust({ 'music.room': true, 'music.other': false });
+    } finally {
+      warn.mockRestore();
+      await ui.cleanup();
+    }
+  });
+
   it('does not apply a completed reconciliation from a lost connection, even while the next sync is pending or failed', async () => {
     const ui = await setup();
     try {
