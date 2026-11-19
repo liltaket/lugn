@@ -59,7 +59,7 @@ import {
   withRoomPresets,
 } from '../application/dashboard-scenes.js';
 import { defaultScenes, LugnEngine } from '../application/lugn-engine.js';
-import { systemClock } from '../core/clock.js';
+import { systemClock, type TimerHandle } from '../core/clock.js';
 import { LugnDisplayServer } from './display-server.js';
 import { DashCastManager } from './dashcast-manager.js';
 import { LightingIntentStore } from './lighting-intent-store.js';
@@ -98,6 +98,9 @@ export type LugnRuntimeDependencies = {
   createDashCastAdapter?: () => DashCastAdapter;
   createSensorSocket?: SensorSocketFactory;
 };
+
+/** Upper bound on the post-connect state query, beyond its own fetch timeout. */
+const homeAssistantSyncDeadlineMs = 15_000;
 
 /** Starts the local Lugn host and its configured Home Assistant/MQTT links. */
 export async function startRuntime(
@@ -612,32 +615,57 @@ export async function startRuntime(
     syncingHomeAssistantStates = true;
     bufferedHomeAssistantEvents.length = 0;
     let cameraSeed: unknown[] | undefined;
-    const reconciled = await seedHomeAssistantObservations(
-      config.homeAssistant.baseUrl,
-      config.homeAssistant.token,
-      homeAssistantLighting,
-      homeAssistantSwitch,
-      homeAssistantMusic,
-      homeAssistantEnvironment,
-      homeAssistantHomePresence,
-      homeAssistantFetch,
-      () => connection.isCurrent(),
-      (states) => {
-        cameraSeed = states;
-        for (const state of states) homeAssistantSun.acceptState(state);
-      },
-    );
+    // A stalled query must not leave live events buffered forever: after the
+    // deadline the connection continues on WebSocket observations, exactly as
+    // after a failed query, and a late response can no longer be applied.
+    let queryExpired = false;
+    let deadline: TimerHandle | undefined;
+    const reconciled = await Promise.race([
+      seedHomeAssistantObservations(
+        config.homeAssistant.baseUrl,
+        config.homeAssistant.token,
+        homeAssistantLighting,
+        homeAssistantSwitch,
+        homeAssistantMusic,
+        homeAssistantEnvironment,
+        homeAssistantHomePresence,
+        homeAssistantFetch,
+        () => !queryExpired && connection.isCurrent(),
+        (states) => {
+          cameraSeed = states;
+          for (const state of states) homeAssistantSun.acceptState(state);
+        },
+      ),
+      new Promise<boolean>((resolve) => {
+        deadline = systemClock.setTimeout(() => {
+          queryExpired = true;
+          console.warn(
+            '[lugn] initial Home Assistant state query did not finish in time; waiting for WebSocket observations',
+          );
+          resolve(false);
+        }, homeAssistantSyncDeadlineMs);
+      }),
+    ]);
+    if (deadline !== undefined) systemClock.clearTimeout(deadline);
     if (homeAssistantConnection !== connection || !connection.isCurrent())
       return;
-    if (reconciled && cameraSeed) {
-      cameraService?.setConnected(true);
-      cameraService?.seedStates(cameraSeed);
+    try {
+      if (reconciled && cameraSeed) {
+        cameraService?.setConnected(true);
+        cameraService?.seedStates(cameraSeed);
+      }
+      if (reconciled)
+        for (const target of reconciledMusicTargets)
+          trustedMusicTargets.add(target);
+    } catch {
+      console.warn(
+        '[lugn] applying the Home Assistant state query failed; waiting for WebSocket observations',
+      );
+    } finally {
+      // Whatever happened above, live events must flow again.
+      reconciledMusicTargets.clear();
+      syncingHomeAssistantStates = false;
     }
-    if (reconciled)
-      for (const target of reconciledMusicTargets)
-        trustedMusicTargets.add(target);
-    reconciledMusicTargets.clear();
-    syncingHomeAssistantStates = false;
     for (const event of bufferedHomeAssistantEvents.splice(0))
       forwardHomeAssistantEvent(event, false);
     computerPlayback?.observe();
