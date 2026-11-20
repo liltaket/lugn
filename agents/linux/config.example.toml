@@ -37,3 +37,14 @@ display_backend = "auto"
 # Idle time (seconds, 10-3600) after which `input_idle` becomes true. It follows
 # keyboard/pointer input only and ignores idle inhibitors such as video players.
 display_input_idle_secs = 120
+
+# Optional fast WiiM Optical switching (see README). The agent talks to the WiiM
+# directly: when the computer plays sustained, audible sound and the WiiM is paused
+# or idle, it switches the WiiM to Optical. Needs pw-record from pipewire-bin.
+optical_switch_enabled = false
+# wiim_host = "192.168.1.50"
+# Exact PipeWire sink node name wired to the WiiM (pactl list short sinks).
+# Leave unset to follow the default sink.
+# optical_audio_sink = "alsa_output.pci-0000_00_1f.3.iec958-stereo"
+# Sustained sound needed before switching, in milliseconds (200-5000).
+optical_min_audible_ms = 400

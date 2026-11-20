@@ -34,6 +34,12 @@ pub struct Config {
     #[serde(default = "display_input_idle")]
     pub display_input_idle_secs: u32,
     #[serde(default)]
+    pub optical_switch_enabled: bool,
+    pub wiim_host: Option<String>,
+    pub optical_audio_sink: Option<String>,
+    #[serde(default = "optical_min_audible")]
+    pub optical_min_audible_ms: u32,
+    #[serde(default)]
     pub video_app_ids: Vec<String>,
     #[serde(default)]
     pub music_app_ids: Vec<String>,
@@ -52,6 +58,9 @@ fn idle() -> u32 {
 }
 fn display_input_idle() -> u32 {
     120
+}
+fn optical_min_audible() -> u32 {
+    400
 }
 impl Config {
     pub fn load(path: &std::path::Path) -> Result<Self> {
@@ -100,6 +109,20 @@ impl Config {
         ensure!(
             (10..=3600).contains(&self.display_input_idle_secs),
             "display_input_idle_secs must be 10–3600"
+        );
+        ensure!(
+            (200..=5000).contains(&self.optical_min_audible_ms),
+            "optical_min_audible_ms must be 200–5000"
+        );
+        if let Some(host) = &self.wiim_host {
+            crate::optical::validate_host(host)?;
+        }
+        if let Some(sink) = &self.optical_audio_sink {
+            crate::optical::validate_sink(sink)?;
+        }
+        ensure!(
+            !self.optical_switch_enabled || self.wiim_host.is_some(),
+            "optical_switch_enabled requires wiim_host"
         );
         ensure!(
             self.mqtt_username.is_some() || self.mqtt_password.is_none(),
@@ -162,6 +185,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn optical_switching_is_opt_in_and_needs_a_valid_host() {
+        let mut c: Config = toml::from_str("device_id='desktop'\nmqtt_host='localhost'").unwrap();
+        assert!(!c.optical_switch_enabled);
+        assert_eq!(c.optical_min_audible_ms, 400);
+        c.optical_switch_enabled = true;
+        assert!(c.validate().is_err());
+        c.wiim_host = Some("http://wiim".into());
+        assert!(c.validate().is_err());
+        c.wiim_host = Some("192.168.1.50".into());
+        assert!(c.validate().is_ok());
+        c.optical_min_audible_ms = 50;
+        assert!(c.validate().is_err());
     }
     #[test]
     fn rejects_wildcards_and_invalid_intervals() {

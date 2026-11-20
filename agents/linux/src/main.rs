@@ -9,6 +9,7 @@ mod display;
 mod idle;
 mod kwin;
 mod mqtt;
+mod optical;
 mod state;
 use anyhow::Result;
 use tokio::sync::{mpsc, watch};
@@ -35,6 +36,13 @@ async fn main() -> Result<()> {
             .display_control_enabled
             .then_some((input_idle_tx, config.display_input_idle_secs)),
     );
+    if let (true, Some(host)) = (config.optical_switch_enabled, config.wiim_host.clone()) {
+        tokio::spawn(optical::run(optical::Settings {
+            host,
+            sink: config.optical_audio_sink.clone(),
+            min_audible_ms: config.optical_min_audible_ms,
+        }));
+    }
     tokio::spawn(audio::run(tx.clone()));
     tokio::spawn(dbus::session(tx.clone(), config.collect_artwork));
     tokio::spawn(dbus::network(tx.clone()));

@@ -5,7 +5,8 @@ computer telemetry over MQTT and does not depend on the Lugn runtime. Default
 operation is observation-only. Optional authenticated MQTT control supports exact
 MPRIS Pause and lease-bound Resume; it provides no shell commands, input injection,
 screen capture or window control. A second opt-in, `display_control_enabled`,
-accepts display sleep/wake requests (see below). Lugn-side consumption belongs to a
+accepts display sleep/wake requests (see below). A third opt-in switches a WiiM to
+its Optical input when the computer plays sound (see below). Lugn-side consumption belongs to a
 separate PR.
 
 ## Install as the desktop user
@@ -157,6 +158,42 @@ PowerDevil lists as holding the machine awake: for example "Playing video" or
 "Playing audio") so it can tell a film from music. Read the [DISPLAY v1 contract](protocol/DISPLAY.md) for
 topics, freshness rules and what each acknowledgment does and does not prove. No
 command text from configuration or MQTT ever reaches a process.
+
+## Optional fast WiiM Optical switching
+
+Disabled by default. Set `optical_switch_enabled = true` and `wiim_host` (the WiiM's
+LAN address). When the computer plays real, sustained sound and the WiiM is not
+playing its own music, the agent switches the WiiM to Optical itself over the WiiM
+HTTP API. It does not use MQTT or Lugn, so the switch lands about
+`optical_min_audible_ms` (default 400) plus one LAN round trip after the sound starts.
+
+- **Audibility:** the agent captures the sink monitor with `pw-record` and keeps only
+  a loudness decision per 20 ms frame; samples are never stored, logged or sent. A
+  run counts when it lasts at least `optical_min_audible_ms` (200–5000), is mostly
+  above -55 dBFS and tolerates gaps up to 200 ms, so a notification blip or a few
+  clicks never switch the input. This is the only source that checks real samples:
+  the PipeWire stream observation above does not.
+- **Which sink:** by default the default sink is followed. Set `optical_audio_sink` to
+  the exact node name of the sink wired to the WiiM (`pactl list short sinks`) so
+  sound on other outputs, such as HDMI, is ignored.
+- **WiiM state:** it is read as soon as sound starts, before confirmation. Already on
+  Optical: nothing happens. Playing or loading its own source: nothing happens, and
+  the WiiM is re-read every two seconds while the computer keeps playing, so pausing
+  it switches. Paused, stopped or idle: the switch is sent and then confirmed by
+  reading the WiiM's input back.
+- **One decision per run of sound:** after a switch, or after deciding not to, the
+  agent waits for the sound to stop (1.5 s of silence) before it acts again, so a
+  deliberate input choice is not fought. After three failed switches it gives up
+  until the sound has stopped.
+- **Security:** the WiiM serves HTTPS with a self-signed certificate, so the chain is
+  not validated (handshake signatures are). Only the two fixed commands
+  `getPlayerStatus` and `setPlayerCmd:switchmode:optical` are ever sent; `wiim_host`
+  accepts a hostname or IPv4 address with an optional port only. Use a trusted LAN.
+- The change shows up in Home Assistant, and therefore in Lugn, as an ordinary
+  source change on the WiiM.
+
+Journal lines name only fixed events and timings, for example
+`WiiM switched to Optical 386 ms after the sound started`.
 
 ## Validate
 
