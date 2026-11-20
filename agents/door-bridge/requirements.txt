@@ -1,0 +1,2 @@
+# Bridge runtime (BrunoCAM). Pinned; aioesphomeapi pulls its own pinned-range deps.
+aioesphomeapi==46.25.1

@@ -1,0 +1,2 @@
+# STT worker (a stronger LAN machine, Linux or Windows). Not installed on the Pi.
+faster-whisper==1.2.1

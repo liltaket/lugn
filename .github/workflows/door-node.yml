@@ -1,0 +1,35 @@
+name: Door node
+on:
+  push:
+    paths:
+      [
+        'agents/esp32-door/**',
+        'agents/door-bridge/**',
+        '.github/workflows/door-node.yml',
+      ]
+  pull_request:
+    paths:
+      [
+        'agents/esp32-door/**',
+        'agents/door-bridge/**',
+        '.github/workflows/door-node.yml',
+      ]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: audio_bands DSP host test
+        working-directory: agents/esp32-door/components/audio_bands/test
+        run: g++ -std=c++20 -O2 -Wall -Wextra -Werror -I.. test_band_analyzer.cpp ../band_analyzer.cpp -o test_band_analyzer && ./test_band_analyzer
+      - name: Door bridge tests and types
+        working-directory: agents/door-bridge
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pytest -q
+          python -m mypy door_bridge

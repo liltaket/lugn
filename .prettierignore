@@ -6,3 +6,5 @@ dist-bench
 bench/results
 agents/esp32-door/.esphome
 agents/esp32-door/secrets.yaml
+agents/door-bridge/.pytest_cache
+agents/door-bridge/.mypy_cache

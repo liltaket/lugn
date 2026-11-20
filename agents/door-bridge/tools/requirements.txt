@@ -1,0 +1,5 @@
+# Dev-machine tools (Piper prompts, STT smoke test). Not for the Pi.
+piper-tts==1.8.0
+faster-whisper==1.2.1
+# PyAV 16+ removed an argument faster-whisper 1.2.1's decode_audio passes.
+av==15.1.0

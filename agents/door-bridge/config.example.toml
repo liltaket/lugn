@@ -1,0 +1,76 @@
+# Lugn door bridge configuration. Copy to ~/.config/lugn-door-bridge/config.toml.
+# Secrets are never written here: name an environment variable or a file.
+
+[node]
+host = "lugn-door.local"
+port = 6053
+name = "lugn-door"
+# The node's native-API noise key. Either a file holding the bare key (mode 600)
+# or an ESPHome secrets.yaml (its `api_encryption_key:` line is used) ...
+encryption_key_file = "~/.config/lugn-door-bridge/node-api-key"
+# ... or an environment variable (leave encryption_key_file empty then).
+# encryption_key_env = "LUGN_DOOR_API_KEY"
+ambient_sensor_name = "Ljudnivå RMS"
+
+[lugn]
+url = "http://127.0.0.1:8787"
+# Same convention as Lugn: a name ending in _B64 holds a base64url-encoded value.
+token_env = "LUGN_HTTP_TOKEN_B64"
+timeout_s = 2.0
+ceiling_target = "lighting.ceiling"
+music_target = "music.room"
+# "Tänd allt": Fokus is the only built-in preset that turns every light on.
+all_on_scene = "scene.focus_light"
+brightness_step = 10
+volume_step = 0.05
+max_voice_volume = 0.6
+
+[stt]
+# Tried in order; a worker that fails is skipped for failure_cooldown_s while
+# another remains. Prefer IP addresses: a missing .local name can stall
+# resolution for seconds.
+workers = ["http://192.168.1.20:8790", "http://192.168.1.30:8790"]
+# token_env = "LUGN_STT_TOKEN"
+connect_timeout_s = 0.8
+request_timeout_s = 6.0
+total_budget_s = 8.0
+failure_cooldown_s = 60.0
+min_avg_logprob = -0.7
+max_no_speech_prob = 0.5
+
+[voice]
+dry_run = false
+speech_margin_db = 9.0
+# The node amplifies the voice stream (gain_factor 4 = +12 dB) but not the
+# ambient level sensor.
+stream_gain_db = 12.0
+min_speech_dbfs = -50.0
+min_speech_ms = 150
+silence_end_ms = 700
+max_utterance_ms = 6000
+no_speech_timeout_ms = 3000
+run_timeout_s = 20.0
+journal_path = "~/.local/state/lugn-door-bridge/voice.jsonl"
+keep_audio = 0
+audio_dir = "~/.local/state/lugn-door-bridge/audio"
+
+[earcons]
+enabled = true
+# ALSA device for `aplay -D`; empty uses the default (BrunoCAM's 3.5 mm jack).
+audio_device = ""
+volume = 0.35
+# A tone at the wake word. Off by default: the node's mic hears it.
+listening = false
+# Optional pre-rendered speech (tools/render_prompts.py): <kind>.wav replaces a tone.
+prompts_dir = ""
+
+[features]
+enabled = true
+directory = "~/.local/state/lugn-door-bridge/features"
+interval_s = 1.0
+lugn_poll_s = 8.0
+sensor_max_age_s = 2.5
+retention_days = 30
+max_total_bytes = 2147483648
+min_free_bytes = 1073741824
+flush_every_s = 10.0

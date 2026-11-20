@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lugn-door-bridge"
+version = "0.1.0"
+description = "Host-side bridge between Lugn's ESP32-S3 door node and Lugn's capability API"
+requires-python = ">=3.11"
+dependencies = ["aioesphomeapi==46.25.1"]
+
+[project.optional-dependencies]
+dev = ["pytest==9.2.0", "pytest-asyncio==1.5.0"]
+worker = ["faster-whisper==1.2.1"]
+# PyAV 16+ breaks faster-whisper 1.2.1 decode_audio (used by the tools only).
+tools = ["piper-tts==1.8.0", "faster-whisper==1.2.1", "av==15.1.0"]
+
+[project.scripts]
+lugn-door-bridge = "door_bridge.__main__:main"
+lugn-stt-worker = "stt_worker.__main__:main"
+
+[tool.setuptools]
+packages = ["door_bridge", "stt_worker"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
