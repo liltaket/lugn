@@ -115,6 +115,19 @@ column narrows and the room controls widen; it shows a resting record and the
 two sources as play buttons. An open camera takes the top of the music column
 and music becomes a compact card under it.
 
+The right column holds at most two live activities: a top card and the music
+card under it. While the optional 3D printer (see
+[3D printer](CONFIGURATION.md#3d-printer)) prepares, prints or is paused, and
+for `resultVisibleMinutes` after it finishes or fails, the print takes the top
+card: the model's cover image on a pale plate, the printer's name and stage,
+the task name, the percentage, time left with the estimated finish, a green
+progress bar, and the layer count (nozzle and bed temperatures while it heats).
+A paused print turns amber and a failed one red. A camera has priority and
+borrows the top card; the print and the music then share the lower card. Music
+keeps it while it plays, unless the print is paused, finished or failed; a chip
+on the camera (`A1 45 %` or `Musik`) swaps the two until the camera closes.
+The Hub never controls the printer.
+
 There are no individual light sliders on this Hub view.
 Home/away gates automatic lighting and music behavior only; the explicit
 preset, playback and volume controls remain available while away.

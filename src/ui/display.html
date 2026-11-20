@@ -412,6 +412,56 @@
           </div>
         </section>
         <section
+          id="print-activity"
+          class="print-activity"
+          aria-labelledby="print-title"
+          data-status="idle"
+          data-image="missing"
+          hidden
+        >
+          <div class="print-plate" aria-hidden="true">
+            <svg
+              class="print-fallback"
+              viewBox="0 0 24 24"
+              width="34"
+              height="34"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linejoin="round"
+            >
+              <path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z" />
+              <path d="M4 7.5 12 12l8-4.5M12 12v9" />
+            </svg>
+            <img id="print-image" alt="" decoding="async" hidden />
+          </div>
+          <div class="print-copy">
+            <span class="print-kicker"
+              ><span id="print-name">3D-skrivare</span>
+              <span id="print-state" role="status">Skriver ut</span></span
+            >
+            <strong id="print-title">Utskrift</strong>
+          </div>
+          <div class="print-figures">
+            <strong id="print-percent">—</strong>
+            <span id="print-time"></span>
+          </div>
+          <div
+            id="print-progress"
+            class="print-progress"
+            role="progressbar"
+            aria-label="Utskriftens förlopp"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          ></div>
+          <span id="print-detail" class="print-detail"></span>
+        </section>
+        <button id="activity-swap" class="activity-swap" type="button" hidden>
+          <span class="activity-swap-mark" aria-hidden="true"></span
+          ><span id="activity-swap-label"></span>
+        </button>
+        <section
           class="music-details"
           id="music-details"
           aria-labelledby="music-details-heading"

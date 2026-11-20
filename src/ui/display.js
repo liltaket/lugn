@@ -66,6 +66,17 @@ const refs = {
   cameraPlaceholder: document.querySelector('#camera-placeholder'),
   cameraStatus: document.querySelector('#camera-status'),
   musicSection: document.querySelector('.music-section'),
+  printActivity: document.querySelector('#print-activity'),
+  printImage: document.querySelector('#print-image'),
+  printName: document.querySelector('#print-name'),
+  printState: document.querySelector('#print-state'),
+  printTitle: document.querySelector('#print-title'),
+  printProgress: document.querySelector('#print-progress'),
+  printPercent: document.querySelector('#print-percent'),
+  printTime: document.querySelector('#print-time'),
+  printDetail: document.querySelector('#print-detail'),
+  activitySwap: document.querySelector('#activity-swap'),
+  activitySwapLabel: document.querySelector('#activity-swap-label'),
   musicHeading: document.querySelector('#music-heading'),
   contextStrip: document.querySelector('#context-strip'),
   contextTitle: document.querySelector('#context-title'),
@@ -183,6 +194,10 @@ const metricRefs = new Map(
   ]),
 );
 
+// The 3D print shown as a live activity, and which card the user put below a camera.
+let printActivity = null;
+let printSwapChoice = null;
+let printImageKey = null;
 let cameraActive = null;
 const cameraDismissedIds = new Set();
 let cameraCloseHoldUntil = 0;
@@ -475,6 +490,7 @@ function progressSample(values) {
 function setClock() {
   renderMusicProgress();
   updateCameraCountdown();
+  renderPrintTime();
   if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
     setConnection('offline', 'Inga färska uppdateringar från Lugn.');
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
@@ -2871,6 +2887,7 @@ function render(payload) {
   renderPresenceCorrection(payload);
   renderMusic(payload);
   renderCamera(payload);
+  renderPrinter(payload);
   setClock();
 }
 
@@ -3172,13 +3189,198 @@ function syncMusicPresentation() {
 }
 
 // Reflow only between gestures: a state update must not move a target under a finger.
+// The right column holds at most two live activities: a top card (camera, else
+// the print) and the music card under it. With a camera, music and a print at
+// once, the camera keeps the top and the print and music share the lower card.
 function syncExpandedLighting() {
   if (interactionPointers.size) return;
-  root.dataset.lightingExpanded = String(
-    root.dataset.musicVisible === 'false' &&
-      root.dataset.cameraVisible === 'false',
-  );
+  const camera = root.dataset.cameraVisible === 'true';
+  const music = root.dataset.musicVisible === 'true';
+  const print = !!printActivity;
+  if (!print || !camera) printSwapChoice = null;
+  const lower =
+    camera && print
+      ? (printSwapChoice ??
+        (music && !printNeedsAttention(printActivity) ? 'music' : 'print'))
+      : 'music';
+  root.dataset.printSlot = !print
+    ? 'none'
+    : camera
+      ? lower === 'print'
+        ? 'lower'
+        : 'none'
+      : 'top';
+  root.dataset.stacked = String(camera || print);
+  root.dataset.lowerCard = lower;
+  if (refs.printActivity)
+    refs.printActivity.hidden = root.dataset.printSlot === 'none';
+  if (refs.activitySwap) {
+    refs.activitySwap.hidden = !(camera && print);
+    if (camera && print) {
+      const other = lower === 'print' ? 'music' : 'print';
+      refs.activitySwap.dataset.shows = other;
+      setText(
+        refs.activitySwapLabel,
+        other === 'print'
+          ? `${printActivity.name} ${printPercentText(printActivity)}`.trim()
+          : 'Musik',
+      );
+      refs.activitySwap.setAttribute(
+        'aria-label',
+        other === 'print' ? 'Visa utskriften' : 'Visa musiken',
+      );
+    }
+  }
+  root.dataset.lightingExpanded = String(!music && !camera && !print);
 }
+
+// ── 3D print live activity ──
+// Shown while the printer prepares, prints or pauses, and for a short while
+// after a result. Read-only: the Hub never controls the printer.
+const printStageWords = [
+  [/^paused_filament_runout$/, 'Filamentet är slut'],
+  [/^paused_/, 'Pausad'],
+  [/heatbed|heat_bed/, 'Värmer bädden'],
+  [/hotend|extruder_temperature|nozzle_temp/, 'Värmer munstycket'],
+  [/bed_leveling|scanning_bed/, 'Nivellerar bädden'],
+  [/first_layer/, 'Kontrollerar första lagret'],
+  [/build_plate|foreign_object/, 'Kontrollerar plattan'],
+  [/filament/, 'Byter filament'],
+  [/cleaning_nozzle/, 'Rengör munstycket'],
+  [/calibrat|homing|sweeping|motor_noise|lidar/, 'Kalibrerar'],
+  [/cooling/, 'Svalnar'],
+];
+
+function printNeedsAttention(activity) {
+  return ['paused', 'failed', 'finished'].includes(activity?.status);
+}
+
+function printPercentText(activity) {
+  return Number.isFinite(activity?.progress) ? `${activity.progress} %` : '';
+}
+
+function printStateText(activity) {
+  if (activity.status === 'finished') return 'Klar';
+  if (activity.status === 'failed') return 'Misslyckades';
+  if (activity.status === 'paused') {
+    const words = printStageWords.find(([pattern]) =>
+      pattern.test(activity.stage ?? ''),
+    );
+    // The amber card already says paused; a known cause replaces the word.
+    return words ? words[1] : 'Pausad';
+  }
+  if (activity.stage && activity.stage !== 'printing') {
+    const words = printStageWords.find(([pattern]) =>
+      pattern.test(activity.stage),
+    );
+    if (words) return words[1];
+  }
+  return activity.status === 'preparing' ? 'Förbereder' : 'Skriver ut';
+}
+
+function printDurationText(minutes) {
+  if (minutes < 1) return 'under en minut';
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} h ${rest} min` : `${hours} h`;
+}
+
+function renderPrintTime() {
+  const activity = printActivity;
+  if (!activity || !refs.printTime) return;
+  let text = '';
+  if (activity.status === 'finished') {
+    text = Number.isFinite(activity.statusSince)
+      ? `Klar ${timeFormat.format(new Date(activity.statusSince))}`
+      : 'Klar';
+  } else if (activity.status === 'failed') {
+    text = 'Kolla skrivaren';
+  } else if (activity.status === 'paused') {
+    text = Number.isFinite(activity.remainingMinutes)
+      ? `${printDurationText(activity.remainingMinutes)} kvar`
+      : '';
+  } else if (Number.isFinite(activity.endsAt)) {
+    const minutes = Math.max(
+      0,
+      Math.round((activity.endsAt - estimatedServerNow()) / 60000),
+    );
+    text = `${printDurationText(minutes)} kvar · ${timeFormat.format(new Date(activity.endsAt))}`;
+  } else if (Number.isFinite(activity.remainingMinutes)) {
+    text = `${printDurationText(activity.remainingMinutes)} kvar`;
+  }
+  setText(refs.printTime, text);
+}
+
+function renderPrinter(payload) {
+  const activity =
+    payload?.printer && typeof payload.printer === 'object'
+      ? payload.printer
+      : null;
+  printActivity = activity;
+  if (!refs.printActivity) return;
+  if (activity) {
+    refs.printActivity.dataset.status = activity.status;
+    setText(refs.printName, activity.name);
+    setText(refs.printState, printStateText(activity));
+    setText(refs.printTitle, activity.task || 'Utskrift');
+    const progress = Number.isFinite(activity.progress) ? activity.progress : 0;
+    root.style.setProperty('--print-progress', `${progress}%`);
+    refs.printProgress.setAttribute('aria-valuenow', String(progress));
+    setText(refs.printPercent, printPercentText(activity) || '—');
+    const detail = [];
+    if (
+      activity.status === 'preparing' &&
+      activity.nozzle &&
+      Number.isFinite(activity.nozzle.target) &&
+      activity.nozzle.target > 0
+    )
+      detail.push(
+        `Munstycke ${activity.nozzle.current}/${activity.nozzle.target}°`,
+      );
+    if (
+      activity.status === 'preparing' &&
+      activity.bed &&
+      Number.isFinite(activity.bed.target) &&
+      activity.bed.target > 0
+    )
+      detail.push(`Bädd ${activity.bed.current}/${activity.bed.target}°`);
+    if (
+      !detail.length &&
+      Number.isFinite(activity.layer) &&
+      Number.isFinite(activity.totalLayers) &&
+      activity.totalLayers > 0
+    )
+      detail.push(`Lager ${activity.layer} av ${activity.totalLayers}`);
+    setText(refs.printDetail, detail.join(' · '));
+    const imageKey = activity.imageUrl || null;
+    if (imageKey !== printImageKey) {
+      printImageKey = imageKey;
+      refs.printActivity.dataset.image = 'missing';
+      refs.printImage.hidden = true;
+      if (imageKey) {
+        refs.printImage.onload = () => {
+          if (printImageKey !== imageKey) return;
+          refs.printImage.hidden = false;
+          refs.printActivity.dataset.image = 'ready';
+        };
+        refs.printImage.onerror = () => {
+          if (printImageKey === imageKey) refs.printImage.hidden = true;
+        };
+        refs.printImage.src = imageKey;
+      } else refs.printImage.removeAttribute('src');
+    }
+    renderPrintTime();
+  }
+  syncExpandedLighting();
+}
+
+if (refs.activitySwap)
+  refs.activitySwap.addEventListener('click', () => {
+    printSwapChoice =
+      refs.activitySwap.dataset.shows === 'print' ? 'print' : 'music';
+    syncExpandedLighting();
+  });
 
 refs.musicMenu.addEventListener('click', () => {
   musicMenuOpen = !musicMenuOpen;

@@ -2432,7 +2432,9 @@ h2 {
 }
 /* Camera appears automatically even when music/routines are open. */
 .screen[data-camera-visible='true'] .context-strip,
-.screen[data-camera-visible='true'] .bedtime-dock {
+.screen[data-camera-visible='true'] .bedtime-dock,
+.screen[data-stacked='true'] .context-strip,
+.screen[data-stacked='true'] .bedtime-dock {
   display: none;
 }
 .screen .context-panel,
@@ -3392,7 +3394,7 @@ h2 {
 }
 #app-root .music-section .music-feature,
 #app-root[data-feedback='true'] .music-section .music-feature,
-#app-root[data-camera-visible='true'] .music-section .music-feature {
+#app-root[data-stacked='true'] .music-section .music-feature {
   display: block;
   position: absolute;
   left: var(--rx);
@@ -3441,10 +3443,10 @@ h2 {
   -webkit-mask-image: linear-gradient(to bottom, #000 74%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 74%, transparent 100%);
 }
-#app-root[data-camera-visible='true'] .music-section .music-artwork::before {
+#app-root[data-stacked='true'] .music-section .music-artwork::before {
   display: none;
 }
-#app-root[data-camera-visible='true'] .music-section .music-artwork img {
+#app-root[data-stacked='true'] .music-section .music-artwork img {
   height: 100%;
   object-fit: cover;
   -webkit-mask-image: none;
@@ -3879,12 +3881,12 @@ h2 {
   display: none;
 }
 /* Music becomes a compact card under the camera; pause and authority stay. */
-#app-root[data-camera-visible='true'] .music-section .music-feature {
+#app-root[data-stacked='true'] .music-section .music-feature {
   top: 302px;
   height: 278px;
   background: rgba(238, 241, 232, 0.05);
 }
-#app-root[data-camera-visible='true'] .music-section .music-artwork {
+#app-root[data-stacked='true'] .music-section .music-artwork {
   left: 14px;
   top: 14px;
   width: 72px;
@@ -3892,25 +3894,25 @@ h2 {
   border-radius: 16px;
   overflow: hidden;
 }
-#app-root[data-camera-visible='true'] .music-feature::after {
+#app-root[data-stacked='true'] .music-feature::after {
   display: none;
 }
-#app-root[data-camera-visible='true'] .music-section .music-now-playing {
+#app-root[data-stacked='true'] .music-section .music-now-playing {
   display: flex;
   left: 100px;
   top: 22px;
   bottom: auto;
   width: calc(100% - 180px);
 }
-#app-root[data-camera-visible='true'] .music-section .music-now-playing strong {
+#app-root[data-stacked='true'] .music-section .music-now-playing strong {
   font-size: 20px;
   line-height: 24px;
   -webkit-line-clamp: 1;
 }
-#app-root[data-camera-visible='true'] .music-section .music-now-playing span {
+#app-root[data-stacked='true'] .music-section .music-now-playing span {
   font-size: 14px;
 }
-#app-root[data-camera-visible='true'] .music-section .music-volume-policy {
+#app-root[data-stacked='true'] .music-section .music-volume-policy {
   display: block;
   top: 404px;
   height: 66px;
@@ -3918,32 +3920,32 @@ h2 {
   background: none;
   box-shadow: none;
 }
-#app-root[data-camera-visible='true'] .music-section .music-transport {
+#app-root[data-stacked='true'] .music-section .music-transport {
   display: contents;
 }
-#app-root[data-camera-visible='true'] .play-button {
+#app-root[data-stacked='true'] .play-button {
   left: calc(var(--rx) + var(--rw) - 14px - 58px);
   top: 316px;
   width: 58px;
   height: 58px;
 }
-#app-root[data-camera-visible='true'] .volume-control {
+#app-root[data-stacked='true'] .volume-control {
   top: 476px;
 }
-#app-root[data-camera-visible='true'] .music-presets {
+#app-root[data-stacked='true'] .music-presets {
   left: calc(var(--rx) + 14px);
   top: 522px;
   width: calc(var(--rw) - 28px);
   height: 44px;
 }
-#app-root[data-camera-visible='true'] .music-preset-button {
+#app-root[data-stacked='true'] .music-preset-button {
   flex: 1;
 }
-#app-root[data-camera-visible='true'][data-music-visible='false']
+#app-root[data-stacked='true'][data-music-visible='false']
   .music-feature::before {
   display: none;
 }
-#app-root[data-camera-visible='true'][data-music-visible='false']
+#app-root[data-stacked='true'][data-music-visible='false']
   .music-section
   .music-now-playing {
   left: 20px;
@@ -3952,14 +3954,13 @@ h2 {
   text-align: left;
   align-items: flex-start;
 }
-#app-root[data-camera-visible='true'][data-music-visible='false']
-  .music-presets {
+#app-root[data-stacked='true'][data-music-visible='false'] .music-presets {
   top: 384px;
   height: 182px;
   grid-template-rows: none;
   grid-template-columns: 1fr 1fr;
 }
-#app-root[data-camera-visible='true'][data-music-visible='false']
+#app-root[data-stacked='true'][data-music-visible='false']
   .music-preset-button {
   flex-direction: column;
   justify-content: center;
@@ -3970,7 +3971,7 @@ h2 {
   font-size: 16px;
   text-align: center;
 }
-#app-root[data-camera-visible='true'][data-music-visible='false']
+#app-root[data-stacked='true'][data-music-visible='false']
   .music-preset-button::before {
   width: 60px;
   height: 60px;
@@ -4213,7 +4214,7 @@ body {
   flex: 1 1 0;
 }
 #app-root[data-music-visible='false'] .music-presets::before,
-#app-root[data-camera-visible='true'][data-music-visible='false']
+#app-root[data-stacked='true'][data-music-visible='false']
   .music-presets::before {
   display: none;
 }
@@ -4501,27 +4502,24 @@ body {
   bottom: 176px;
 }
 /* With a camera open the compact card offers the other source the same way. */
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .music-presets {
+#app-root[data-stacked='true'][data-music-visible='true'] .music-presets {
   right: auto;
   left: calc(var(--rx) + 14px);
   top: 522px;
   height: 44px;
   width: calc(var(--rw) - 28px);
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .music-preset-button {
+#app-root[data-stacked='true'][data-music-visible='true'] .music-preset-button {
   flex: 1;
   justify-content: center;
   height: 44px;
   border-radius: 22px;
   font-size: 14px;
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .volume-control {
+#app-root[data-stacked='true'][data-music-visible='true'] .volume-control {
   width: calc(var(--rw) - 48px);
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
+#app-root[data-stacked='true'][data-music-visible='true']
   .music-section
   .music-now-playing {
   top: 22px;
@@ -4575,28 +4573,25 @@ body {
 }
 /* Compact card under a camera (y 302–580): artwork 316–388, selector 403–463,
    volume bar centered between selector and the source row 522–566. */
-#app-root[data-camera-visible='true'] .music-section .music-volume-policy {
+#app-root[data-stacked='true'] .music-section .music-volume-policy {
   top: 400px;
 }
-#app-root[data-camera-visible='true'] .play-button {
+#app-root[data-stacked='true'] .play-button {
   top: 323px;
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .volume-control,
-#app-root[data-camera-visible='true'] .volume-control {
+#app-root[data-stacked='true'][data-music-visible='true'] .volume-control,
+#app-root[data-stacked='true'] .volume-control {
   left: calc(var(--rx) + 22px);
   top: 491px;
   width: calc(var(--rw) - 44px);
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .music-presets {
+#app-root[data-stacked='true'][data-music-visible='true'] .music-presets {
   right: auto;
   left: calc(var(--rx) + 14px);
   top: 522px;
   width: calc(var(--rw) - 28px);
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .music-preset-button {
+#app-root[data-stacked='true'][data-music-visible='true'] .music-preset-button {
   width: auto;
 }
 #app-root .clock-date {
@@ -4790,7 +4785,7 @@ body {
   -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
 }
-#app-root[data-camera-visible='true'] .music-artwork[data-aspect] img {
+#app-root[data-stacked='true'] .music-artwork[data-aspect] img {
   aspect-ratio: auto;
   height: 100%;
   -webkit-mask-image: none;
@@ -4805,4 +4800,274 @@ body {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* ── 3D print live activity, 2026-11-20 ──
+   The print takes the top card of the right column (y 20–288), the music card
+   stays under it (y 302–580). A camera borrows the top card: the print then
+   shares the lower card with music, and a chip on the camera swaps them. The
+   model sits on a pale plate so a black filament render still reads. */
+#app-root .print-activity {
+  position: absolute;
+  left: var(--rx);
+  top: 20px;
+  width: var(--rw);
+  height: 268px;
+  border-radius: 30px;
+  overflow: hidden;
+  z-index: 3;
+  color: var(--ink);
+  background:
+    radial-gradient(
+      120% 90% at 0% 0%,
+      rgba(132, 201, 141, 0.2),
+      transparent 62%
+    ),
+    var(--panel);
+  box-shadow:
+    inset 0 0 0 1px rgba(150, 214, 158, 0.16),
+    0 10px 30px rgba(0, 0, 0, 0.18);
+  --print-ink: #9fdca6;
+  --print-fill: linear-gradient(90deg, #5fbf74, #a8e6a0);
+  animation: redesign-cam-in 0.5s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+#app-root .print-activity[hidden] {
+  display: none;
+}
+#app-root[data-print-slot='lower'] .print-activity {
+  top: 302px;
+  height: 278px;
+  box-shadow: inset 0 0 0 1px rgba(150, 214, 158, 0.16);
+}
+#app-root .print-activity[data-status='paused'] {
+  --print-ink: #e7bc78;
+  --print-fill: linear-gradient(90deg, #c99a52, #e7bc78);
+}
+#app-root .print-activity[data-status='failed'] {
+  --print-ink: #ee9a86;
+  --print-fill: linear-gradient(90deg, #c4644f, #ee9a86);
+}
+#app-root .print-plate {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  width: 104px;
+  height: 104px;
+  border-radius: 22px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: rgba(24, 32, 31, 0.5);
+  background: radial-gradient(
+    85% 85% at 50% 40%,
+    #eef3ea,
+    #c9d8c6 70%,
+    #b4c6b1
+  );
+}
+#app-root[data-time='night'] .print-plate {
+  filter: brightness(0.72);
+}
+#app-root .print-plate img {
+  position: absolute;
+  inset: 4px;
+  width: calc(100% - 8px);
+  height: calc(100% - 8px);
+  object-fit: contain;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.22));
+}
+#app-root .print-activity[data-image='ready'] .print-fallback {
+  display: none;
+}
+#app-root .print-copy {
+  position: absolute;
+  left: 134px;
+  right: 16px;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#app-root .print-kicker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+#app-root .print-kicker::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--print-ink);
+  box-shadow: 0 0 0 4px rgba(159, 220, 166, 0.14);
+}
+#app-root .print-activity[data-status='printing'] .print-kicker::before {
+  animation: print-pulse 2.4s ease-in-out infinite;
+}
+@keyframes print-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+#app-root #print-name {
+  font-weight: 650;
+  color: var(--ink);
+}
+#app-root #print-state::before {
+  content: '·';
+  margin-right: 7px;
+  color: var(--ink-3);
+}
+#app-root #print-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--print-ink);
+}
+#app-root #print-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  font-size: 18px;
+  line-height: 23px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+#app-root .print-figures {
+  position: absolute;
+  left: 20px;
+  right: 18px;
+  top: 136px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+#app-root #print-percent {
+  font-size: 44px;
+  line-height: 48px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+#app-root #print-time {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+#app-root .print-progress {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 198px;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(238, 241, 232, 0.09);
+}
+#app-root .print-progress::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--print-progress, 0%);
+  min-width: 12px;
+  border-radius: inherit;
+  background: var(--print-fill);
+  transition: width 1.2s ease;
+}
+#app-root .print-detail {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 224px;
+  font-size: 13.5px;
+  line-height: 20px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+#app-root[data-print-slot='lower'] .print-detail {
+  top: 230px;
+}
+
+/* The print in the lower card hides the music card it shares that place with. */
+#app-root[data-stacked='true'][data-lower-card='print'][data-print-slot='lower']
+  .music-section
+  .music-feature,
+#app-root[data-stacked='true'][data-lower-card='print'][data-print-slot='lower']
+  .music-section
+  .music-volume-policy,
+#app-root[data-stacked='true'][data-lower-card='print'][data-print-slot='lower']
+  .music-section
+  .music-presets,
+#app-root[data-stacked='true'][data-lower-card='print'][data-print-slot='lower']
+  .music-section
+  .play-button,
+#app-root[data-stacked='true'][data-lower-card='print'][data-print-slot='lower']
+  .music-section
+  .volume-control {
+  display: none;
+}
+
+/* Camera + print + music: the chip on the camera shows the hidden one. */
+#app-root .activity-swap {
+  position: absolute;
+  left: calc(var(--rx) + 20px);
+  top: 224px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: calc(var(--rw) - 110px);
+  height: 40px;
+  padding: 0 16px 0 10px;
+  border: 0;
+  border-radius: 20px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: rgba(14, 19, 20, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+#app-root .activity-swap[hidden] {
+  display: none;
+}
+#app-root .activity-swap > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#app-root .activity-swap-mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(14, 19, 20, 1) 54%, transparent 56%),
+    conic-gradient(
+      #9fdca6 var(--print-progress, 0%),
+      rgba(238, 241, 232, 0.18) 0
+    );
+}
+#app-root .activity-swap[data-shows='music'] .activity-swap-mark {
+  background: none;
+}
+#app-root .activity-swap[data-shows='music'] .activity-swap-mark::before {
+  content: '♪';
+  display: block;
+  font-size: 17px;
+  line-height: 22px;
+  text-align: center;
 }
