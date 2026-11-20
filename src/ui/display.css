@@ -4808,7 +4808,8 @@ body {
    shares the lower card with music, and a chip on the camera swaps them.
    Card rows: plate + name/title (14–118), percent · time · lamp (136–184),
    progress (206–216), layer line (230–248). Flat like the music card: the
-   status color lives in the stage word and the bar, nowhere else. The model
+   status color lives in the bar, and in the words only when a print needs
+   you (paused, failed). The model
    sits on a pale plate so a black filament render still reads. */
 #app-root .print-activity {
   --print-ink: #9fdca6;
@@ -4892,22 +4893,13 @@ body {
   gap: 6px;
 }
 #app-root .print-kicker {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-  font-size: 13px;
-  line-height: 18px;
-  white-space: nowrap;
-}
-#app-root #print-name {
-  font-weight: 600;
-  color: var(--ink-2);
-}
-#app-root #print-state {
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--print-ink);
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--ink-2);
 }
 #app-root #print-title {
   display: -webkit-box;
@@ -4965,6 +4957,11 @@ body {
   font-size: 13px;
   line-height: 18px;
   color: var(--ink-3);
+}
+/* Only a print that needs you colors its words. */
+#app-root .print-activity[data-status='paused'] #print-eta,
+#app-root .print-activity[data-status='failed'] #print-eta {
+  color: var(--print-ink);
 }
 #app-root .print-progress {
   position: absolute;

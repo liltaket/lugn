@@ -70,7 +70,6 @@ const refs = {
   printActivity: document.querySelector('#print-activity'),
   printImage: document.querySelector('#print-image'),
   printName: document.querySelector('#print-name'),
-  printState: document.querySelector('#print-state'),
   printTitle: document.querySelector('#print-title'),
   printProgress: document.querySelector('#print-progress'),
   printPercent: document.querySelector('#print-percent'),
@@ -3265,23 +3264,13 @@ function printPercentText(activity) {
   return Number.isFinite(activity?.progress) ? `${activity.progress} %` : '';
 }
 
-function printStateText(activity) {
-  if (activity.status === 'finished') return 'Klar';
-  if (activity.status === 'failed') return 'Misslyckades';
-  if (activity.status === 'paused') {
-    const words = printStageWords.find(([pattern]) =>
-      pattern.test(activity.stage ?? ''),
-    );
-    // The amber card already says paused; a known cause replaces the word.
-    return words ? words[1] : 'Pausad';
-  }
-  if (activity.stage && activity.stage !== 'printing') {
-    const words = printStageWords.find(([pattern]) =>
-      pattern.test(activity.stage),
-    );
-    if (words) return words[1];
-  }
-  return activity.status === 'preparing' ? 'Förbereder' : 'Skriver ut';
+// The stage only when it says more than the bar does, e.g. `värmer bädden`.
+function printStageText(activity) {
+  if (!activity.stage || activity.stage === 'printing') return '';
+  const words = printStageWords.find(([pattern]) =>
+    pattern.test(activity.stage),
+  );
+  return words ? words[1].toLowerCase() : '';
 }
 
 function printDurationText(minutes) {
@@ -3295,29 +3284,34 @@ function printDurationText(minutes) {
 function renderPrintTime() {
   const activity = printActivity;
   if (!activity || !refs.printTime) return;
-  // Two short lines: how long is left, then when it is done.
+  // Two short lines: how long is left, then when it is done, or the stage
+  // when the printer is doing something other than printing.
   let text = '';
   let eta = '';
+  const stage = printStageText(activity);
   if (activity.status === 'finished') {
-    // The stage word already says Klar; this says when, and what is next.
+    text = 'Klar';
     if (Number.isFinite(activity.statusSince))
-      text = `kl. ${timeFormat.format(new Date(activity.statusSince))}`;
-    eta = 'hämta den';
+      eta = `kl. ${timeFormat.format(new Date(activity.statusSince))}`;
   } else if (activity.status === 'failed') {
-    text = 'Kolla skrivaren';
+    text = 'Misslyckades';
+    eta = 'kolla skrivaren';
   } else if (activity.status === 'paused') {
     if (Number.isFinite(activity.remainingMinutes))
       text = `${printDurationText(activity.remainingMinutes)} kvar`;
-    eta = 'väntar på dig';
+    eta = stage || 'pausad';
   } else if (Number.isFinite(activity.endsAt)) {
     const minutes = Math.max(
       0,
       Math.round((activity.endsAt - estimatedServerNow()) / 60000),
     );
     text = `${printDurationText(minutes)} kvar`;
-    eta = `klar ${timeFormat.format(new Date(activity.endsAt))}`;
+    eta = stage || `klar ${timeFormat.format(new Date(activity.endsAt))}`;
   } else if (Number.isFinite(activity.remainingMinutes)) {
     text = `${printDurationText(activity.remainingMinutes)} kvar`;
+    eta = stage;
+  } else {
+    text = stage ? stage[0].toUpperCase() + stage.slice(1) : '';
   }
   setText(refs.printTime, text);
   setText(refs.printEta, eta);
@@ -3333,7 +3327,6 @@ function renderPrinter(payload) {
   if (activity) {
     refs.printActivity.dataset.status = activity.status;
     setText(refs.printName, activity.name);
-    setText(refs.printState, printStateText(activity));
     setText(refs.printTitle, activity.task || 'Utskrift');
     const progress = Number.isFinite(activity.progress) ? activity.progress : 0;
     root.style.setProperty('--print-progress', `${progress}%`);

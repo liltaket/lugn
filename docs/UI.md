@@ -119,8 +119,9 @@ The right column holds at most two live activities: a top card and the music
 card under it. While the optional 3D printer (see
 [3D printer](CONFIGURATION.md#3d-printer)) prepares, prints or is paused, and
 for `resultVisibleMinutes` after it finishes or fails, the print takes the top
-card: the model's cover image on a pale plate, the printer's name and stage,
-the task name, the percentage, time left with the estimated finish, a green
+card: the model's cover image on a pale plate, the printer's name, the task
+name, the percentage, time left with the estimated finish (or the stage, such
+as `värmer bädden`, when the printer is not simply printing), a green
 progress bar, and the layer count (nozzle and bed temperatures while it heats).
 The task name fits two lines: one name keeps up to 60 characters, and several
 parts read `Stand + Box + 5 till`, with the names shortened first so the count
@@ -129,7 +130,8 @@ the printer's chamber light; it appears only while Home Assistant reports the
 light on or off, shows the tapped state at once and pulses until Home
 Assistant confirms it. While the light is on, the button fills warm and the
 plate the model stands on turns warm too. The card is flat like the music
-card; the status color appears only in the stage word and the progress bar.
+card; the status color appears in the progress bar, and in the words only
+for a paused or failed print.
 A paused print turns amber and a failed one red. A camera has priority and
 borrows the top card; the print and the music then share the lower card. Music
 keeps it while it plays, unless the print is paused, finished or failed; a chip
