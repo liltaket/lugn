@@ -2322,6 +2322,7 @@ mod composition_tests {
         drop(listener);
         let directory = tempfile::tempdir().unwrap();
         let broker_config = directory.path().join("mosquitto.conf");
+        let broker_log = directory.path().join("mosquitto.log");
         std::fs::write(
             &broker_config,
             format!("listener {port} 127.0.0.1\nallow_anonymous true\npersistence false\n"),
@@ -2334,7 +2335,7 @@ mod composition_tests {
         .arg(&broker_config)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::fs::File::create(&broker_log).unwrap())
         .kill_on_drop(true)
         .spawn()
         .unwrap();
@@ -2348,7 +2349,8 @@ mod composition_tests {
                 }
                 assert!(
                     broker.try_wait().unwrap().is_none(),
-                    "fixture broker exited"
+                    "fixture broker exited: {}",
+                    std::fs::read_to_string(&broker_log).unwrap_or_default()
                 );
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
