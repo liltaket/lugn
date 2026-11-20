@@ -41,11 +41,11 @@ max_no_speech_prob = 0.5
 
 [voice]
 dry_run = false
-speech_margin_db = 9.0
-# The node amplifies the voice stream (gain_factor 4 = +12 dB) but not the
+speech_margin_db = 7.0
+# The node amplifies the voice stream (gain_factor 8 = +18 dB) but not the
 # ambient level sensor.
-stream_gain_db = 12.0
-min_speech_dbfs = -50.0
+stream_gain_db = 18.0
+min_speech_dbfs = -62.0
 min_speech_ms = 150
 silence_end_ms = 700
 max_utterance_ms = 6000

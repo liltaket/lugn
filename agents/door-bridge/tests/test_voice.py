@@ -283,14 +283,40 @@ async def test_volume_execution(tmp_path: Path, text: str, volume: float | None,
 
 async def test_ambient_floor_is_raised_by_stream_gain(tmp_path: Path) -> None:
     # Measured on the node: the level sensor (gain 1) reads about -43 dBFS while
-    # the voice stream (gain 4, +12 dB) carries the same room noise at about
-    # -31 dBFS. Without the gain offset that noise would count as speech.
-    room = tone(3500, -31, freq=1000.0)
+    # the amplified voice stream carries the same room noise about 12-18 dB
+    # higher. Without the gain offset that noise would count as speech.
+    room = tone(3500, -43 + VoiceConfig().stream_gain_db, freq=1000.0)
     pipeline, t, lugn, _, stt = make(tmp_path, transport=FakeTransport(floor=-43.0))
     run = await start(pipeline)
-    assert run.endpointer.threshold_dbfs == pytest.approx(-43.0 + 12.0 + 9.0)
+    cfg = VoiceConfig()
+    assert run.endpointer.threshold_dbfs == pytest.approx(-43.0 + cfg.stream_gain_db + cfg.speech_margin_db)
     await speak(pipeline, room)
     await run.wait()
     assert stt.calls == [] and lugn.calls == []
     assert journal(tmp_path)[0]["outcome"] == "no_speech"
     assert run_ends(t) == 1
+
+
+async def test_weak_speech_goes_to_stt(tmp_path: Path) -> None:
+    # Distant speech: short bursts above the threshold but never min_speech_ms
+    # in a row. STT gets the whole buffer; its gates and the grammar decide.
+    burst = tone(90, -30) + silence(120)
+    pcm = silence(300) + burst * 6 + silence(2600)
+    pipeline, t, lugn, _, stt = make(tmp_path)
+    run = await start(pipeline)
+    await speak(pipeline, pcm)
+    await run.wait()
+    rec = journal(tmp_path)[0]
+    assert rec["endpoint"]["end_reason"] == "no_speech"
+    assert rec.get("weak_speech") is True
+    assert len(stt.calls) == 1 and rec["outcome"] == "done"
+    assert run_ends(t) == 1
+
+
+async def test_silence_keeps_audio_without_stt(tmp_path: Path) -> None:
+    pipeline, t, lugn, _, stt = make(tmp_path, keep_audio=2, audio_dir=str(tmp_path / "audio"))
+    run = await start(pipeline)
+    await speak(pipeline, silence(3500))
+    await run.wait()
+    assert stt.calls == [] and journal(tmp_path)[0]["outcome"] == "no_speech"
+    assert len(list((tmp_path / "audio").glob("*.wav"))) == 1

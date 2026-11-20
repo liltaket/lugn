@@ -96,12 +96,15 @@ the error earcon and a journal line. A transcript is acted on only when
 1. Node sends start (after its wake word): the bridge answers port 0 (API
    audio) and sends `RUN_START`, `STT_START`.
 2. Audio is buffered and endpointed: threshold = max(`min_speech_dbfs`,
-   ambient + `speech_margin_db`), where ambient is the quietest `Ljudnivå RMS`
+   ambient + `stream_gain_db` + `speech_margin_db`), where ambient is the quietest `Ljudnivå RMS`
    value of the last 6 s (the newest one may contain the wake word). Speech
    starts after `min_speech_ms` voiced audio; it ends after `silence_end_ms`
    (700 ms) of silence; at most `max_utterance_ms` (6 s); no speech within
    `no_speech_timeout_ms` (3 s) ends the run. `STT_VAD_START`/`STT_VAD_END` are
-   sent; `STT_VAD_END` is what stops the node's microphone.
+   sent; `STT_VAD_END` is what stops the node's microphone. When no frame run
+   counts as speech but the loudest frame cleared the threshold (distant speech),
+   the whole buffer still goes to STT (`weak_speech` in the journal); STT's gates
+   and the grammar decide. `keep_audio` also keeps runs without speech.
 3. Transcribe, gate on confidence, `STT_END`; parse, `INTENT_START`/`INTENT_END`;
    execute; earcon; `RUN_END`.
 

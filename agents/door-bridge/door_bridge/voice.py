@@ -176,11 +176,18 @@ class VoiceRun:
         snap = self.endpointer.snapshot()
         self.record["endpoint"] = snap.__dict__
         if snap.end_reason == "no_speech" or snap.speech_start_ms is None:
-            self.outcome = "no_speech"
-            return
-
-        start_byte = max(0, snap.speech_start_ms - 300) * SAMPLE_RATE // 1000 * 2
-        pcm = bytes(self._audio[start_byte:])
+            # Quiet or distant speech can stay below the frame threshold while
+            # its peaks clear it. Let STT decide then: its no-speech and
+            # confidence gates and the grammar still guard every action.
+            if snap.peak_dbfs is None or snap.peak_dbfs < self.endpointer.threshold_dbfs:
+                self.p.keep_audio(self.id, bytes(self._audio))
+                self.outcome = "no_speech"
+                return
+            self.record["weak_speech"] = True
+            pcm = bytes(self._audio)
+        else:
+            start_byte = max(0, snap.speech_start_ms - 300) * SAMPLE_RATE // 1000 * 2
+            pcm = bytes(self._audio[start_byte:])
         self.record["audio_ms"] = len(pcm) * 1000 // (SAMPLE_RATE * 2)
         self.p.keep_audio(self.id, pcm)
         try:

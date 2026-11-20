@@ -61,12 +61,14 @@ class SttConfig:
 class VoiceConfig:
     dry_run: bool = False
     frame_ms: int = 30
-    speech_margin_db: float = 9.0
-    # The voice stream is amplified on the node (voice_assistant gain_factor 4
-    # = +12 dB) but the ambient level sensor is not; this is added to the
+    speech_margin_db: float = 7.0
+    # The voice stream is amplified on the node (voice_assistant gain_factor 8
+    # = +18 dB) but the ambient level sensor is not; this is added to the
     # sensor's level before it is compared with the stream.
-    stream_gain_db: float = 12.0
-    min_speech_dbfs: float = -50.0
+    stream_gain_db: float = 18.0
+    # Absolute floor under the ambient-relative threshold. In a quiet room the
+    # ambient level decides; -50 dBFS here rejected speech from 2 m away.
+    min_speech_dbfs: float = -62.0
     min_speech_ms: int = 150
     silence_end_ms: int = 700
     max_utterance_ms: int = 6000
