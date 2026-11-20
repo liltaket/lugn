@@ -1,7 +1,7 @@
 //! xdg-desktop-portal InputCapture calls, each bounded by a timeout so a
 //! stuck portal can never stall the event loop indefinitely.
 
-use std::{future::Future, os::fd::OwnedFd, time::Duration};
+use std::{cell::Cell, future::Future, os::fd::OwnedFd, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use ashpd::desktop::{
@@ -77,6 +77,9 @@ pub struct Portal {
     pub session: Session<InputCapture>,
     /// Object path of `session`, to pick our signals out of the portal's.
     pub session_path: String,
+    /// Index into [`barrier_lines`] of the line the compositor accepted last,
+    /// tried first from then on.
+    accepted_line: Cell<Option<usize>>,
 }
 
 impl Portal {
@@ -120,6 +123,7 @@ impl Portal {
                 ic,
                 session,
                 session_path,
+                accepted_line: Cell::new(None),
             },
             fd,
         ))
@@ -149,11 +153,18 @@ impl Portal {
     }
 
     /// Places the barrier and enables capture. Fails if the compositor
-    /// rejects the barrier, since then nothing could ever activate.
+    /// rejects every candidate line, since then nothing could ever activate.
     pub async fn arm(&self, zone_set: u32, zone: Zone) -> Result<()> {
         let id = BarrierID::new(BARRIER_ID).expect("non-zero");
+        let lines = barrier_lines(zone);
+        let mut order: Vec<usize> = (0..lines.len()).collect();
+        if let Some(i) = self.accepted_line.get() {
+            order.retain(|&j| j != i);
+            order.insert(0, i);
+        }
         let mut accepted = None;
-        for line in barrier_lines(zone) {
+        for i in order {
+            let line = lines[i];
             let barriers = [Barrier::new(id, line)];
             let request = bounded(
                 "SetPointerBarriers",
@@ -171,16 +182,18 @@ impl Portal {
                 .context("SetPointerBarriers response")?
                 .failed_barriers()
                 .to_vec();
-            log!(
-                "portal: SetPointerBarriers {line:?} zone_set {zone_set} failed_barriers {failed:?}"
-            );
             if failed.is_empty() {
+                if self.accepted_line.replace(Some(i)) != Some(i) {
+                    log!("portal: SetPointerBarriers {line:?} zone_set {zone_set} accepted");
+                }
                 accepted = Some(line);
                 break;
             }
+            log!("portal: SetPointerBarriers {line:?} zone_set {zone_set} rejected ({failed:?})");
         }
         if accepted.is_none() {
-            bail!("compositor rejected every left-edge barrier for {zone:?}");
+            self.accepted_line.set(None);
+            bail!("compositor rejected every bottom-edge barrier for {zone:?}");
         }
         bounded(
             "Enable",

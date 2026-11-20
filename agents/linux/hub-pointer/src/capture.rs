@@ -6,7 +6,7 @@ use crate::protocol::{AgentMsg, ButtonName};
 /// Desktop px per wheel notch; libei reports 120 units per notch.
 const NOTCH_PX: f64 = 48.0;
 const DISCRETE_PER_NOTCH: f64 = 120.0;
-/// How far inside the monitor's left edge the pointer comes back, so it does
+/// How far above the monitor's bottom edge the pointer comes back, so it does
 /// not immediately hit the barrier again.
 const RETURN_INSET: f64 = 2.0;
 
@@ -24,9 +24,14 @@ impl Zone {
     pub fn bottom(&self) -> i32 {
         self.y + self.height as i32
     }
+
+    /// One past the last column.
+    pub fn right(&self) -> i32 {
+        self.x + self.width as i32
+    }
 }
 
-/// The monitor the Hub stands next to: the leftmost zone, and the lowest of
+/// The monitor the Hub stands below: the leftmost zone, and the lowest of
 /// those if several share that x.
 pub fn leftmost_zone(zones: &[Zone]) -> Option<Zone> {
     zones
@@ -35,52 +40,61 @@ pub fn leftmost_zone(zones: &[Zone]) -> Option<Zone> {
         .min_by_key(|z| (z.x, std::cmp::Reverse(z.bottom())))
 }
 
-/// Vertical barriers on the zone's whole left edge, most likely first. KDE
-/// rejects a barrier that does not fill the edge ("doesnt fill or on edge to
-/// another screen"), so the lower entry zone is enforced on activation
-/// instead (see [`in_entry_zone`]). Whether the end point is the last row or
-/// one past it is not documented, so the caller tries both.
-pub fn barrier_lines(zone: Zone) -> [(i32, i32, i32, i32); 2] {
+/// Horizontal barriers on the zone's whole bottom edge, in the order to try.
+/// KDE rejects a barrier that does not fill the edge ("doesnt fill or on edge
+/// to another screen"), so the entry corner is enforced on activation instead
+/// (see [`in_entry_zone`]). Whether the line sits on the last row or one past
+/// it, and whether its end is the last column or one past it, is not
+/// documented, so the caller tries these in order and remembers the winner.
+pub fn barrier_lines(zone: Zone) -> [(i32, i32, i32, i32); 4] {
+    let (x, r, b) = (zone.x, zone.right(), zone.bottom());
     [
-        (zone.x, zone.y, zone.x, zone.bottom() - 1),
-        (zone.x, zone.y, zone.x, zone.bottom()),
+        (x, b, r - 1, b),
+        (x, b - 1, r - 1, b - 1),
+        (x, b, r, b),
+        (x, b - 1, r, b - 1),
     ]
 }
 
-/// Whether an activation at `cursor_y` lies in the bottom `zone_height` rows
-/// of the left edge, the part level with the Hub. Unknown positions count as
-/// inside, so a missing hint never blocks entry.
-pub fn in_entry_zone(zone: Zone, zone_height: u32, cursor_y: Option<f64>) -> bool {
-    let top = (zone.bottom() - zone_height.min(zone.height) as i32).max(zone.y);
-    cursor_y.is_none_or(|y| y >= f64::from(top))
+/// Whether an activation at `cursor_x` lies in the entry corner: from the
+/// zone's left edge to `reach` px right of it (the Hub's width plus slack).
+/// Unknown positions count as inside, so a missing hint never blocks entry.
+pub fn in_entry_zone(zone: Zone, reach: u32, cursor_x: Option<f64>) -> bool {
+    let (left, right) = (f64::from(zone.x), f64::from(zone.x) + f64::from(reach));
+    cursor_x.is_none_or(|x| (left..=right).contains(&x))
 }
 
-/// Maps between the zone's left edge and the Hub viewport. The Hub's bottom
-/// edge is level with the monitor's bottom edge, so heights are measured up
-/// from the bottom on both sides.
+/// Maps between the zone's bottom edge and the Hub viewport. The Hub stands
+/// below the monitor with its left edge level with the monitor's, and is
+/// `hub_width` desktop px wide physically, so positions along the edge scale
+/// by `w / hub_width`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Mapping {
     pub zone: Zone,
-    pub gain: f64,
+    pub hub_width: f64,
     pub w: f64,
     pub h: f64,
 }
 
 impl Mapping {
-    pub fn enter_point(&self, cursor_y: Option<f64>) -> (f64, f64) {
-        let y = match cursor_y {
-            Some(cy) => self.h - 1.0 - (self.zone.bottom() as f64 - 1.0 - cy) * self.gain,
-            None => self.h / 2.0,
+    /// The cursor enters on the Hub's top row.
+    pub fn enter_point(&self, cursor_x: Option<f64>) -> (f64, f64) {
+        let x = match cursor_x {
+            Some(cx) => (cx - self.zone.x as f64) * self.w / self.hub_width,
+            None => self.w / 2.0,
         };
-        (self.w - 1.0, y.clamp(0.0, self.h - 1.0))
+        (x.clamp(0.0, self.w - 1.0), 0.0)
     }
 
-    pub fn return_point(&self, hub_y: f64) -> (f64, f64) {
-        let bottom = self.zone.bottom() as f64 - 1.0;
-        let y = bottom - (self.h - 1.0 - hub_y) / self.gain;
+    /// Where the desktop pointer comes back when the cursor leaves the Hub's
+    /// top at `hub_x`: just above the monitor's bottom edge, at the matching x.
+    pub fn return_point(&self, hub_x: f64) -> (f64, f64) {
+        let left = self.zone.x as f64;
+        let x = left + hub_x * self.hub_width / self.w;
+        let y = self.zone.bottom() as f64 - 1.0 - RETURN_INSET;
         (
-            self.zone.x as f64 + RETURN_INSET,
-            y.clamp(self.zone.y as f64, bottom),
+            x.clamp(left, self.zone.right() as f64 - 1.0),
+            y.max(self.zone.y as f64),
         )
     }
 }
@@ -112,7 +126,7 @@ pub struct ReleaseTo {
 #[derive(Debug, Default, PartialEq)]
 pub struct FrameOutcome {
     pub msgs: Vec<AgentMsg>,
-    /// Set when the pointer left the Hub on the right; `msgs` then ends with
+    /// Set when the pointer left the Hub's top; `msgs` then ends with
     /// `leave` and the caller must Release.
     pub release: Option<ReleaseTo>,
 }
@@ -122,6 +136,7 @@ pub struct FrameOutcome {
 #[derive(Debug)]
 pub struct Pointer {
     gain: f64,
+    hub_width: f64,
     zone: Option<Zone>,
     viewport: Option<(f64, f64)>,
     active: Option<Active>,
@@ -129,9 +144,10 @@ pub struct Pointer {
 }
 
 impl Pointer {
-    pub fn new(gain: f64) -> Self {
+    pub fn new(gain: f64, hub_width: f64) -> Self {
         Self {
             gain,
+            hub_width,
             zone: None,
             viewport: None,
             active: None,
@@ -139,7 +155,6 @@ impl Pointer {
         }
     }
 
-    #[cfg(test)]
     pub fn is_active(&self) -> bool {
         self.active.is_some()
     }
@@ -165,7 +180,7 @@ impl Pointer {
         let (w, h) = self.viewport?;
         Some(Mapping {
             zone: self.zone?,
-            gain: self.gain,
+            hub_width: self.hub_width,
             w,
             h,
         })
@@ -186,7 +201,7 @@ impl Pointer {
                 cursor: None,
             });
         };
-        let (x, y) = map.enter_point(cursor.map(|c| c.1));
+        let (x, y) = map.enter_point(cursor.map(|c| c.0));
         self.active = Some(Active {
             activation_id,
             x,
@@ -212,7 +227,7 @@ impl Pointer {
     /// Ends capture from our side (disconnect, timeout, shutdown).
     pub fn end(&mut self) -> Option<ReleaseTo> {
         let a = self.active.take()?;
-        let cursor = self.mapping().map(|m| m.return_point(a.y));
+        let cursor = self.mapping().map(|m| m.return_point(a.x));
         Some(ReleaseTo {
             activation_id: a.activation_id,
             cursor,
@@ -249,19 +264,19 @@ impl Pointer {
         };
 
         if f.dx != 0.0 || f.dy != 0.0 {
-            let nx = a.x + f.dx * self.gain;
-            let ny = (a.y + f.dy * self.gain).clamp(0.0, map.h - 1.0);
-            if nx >= map.w {
+            let nx = (a.x + f.dx * self.gain).clamp(0.0, map.w - 1.0);
+            let ny = (a.y + f.dy * self.gain).min(map.h - 1.0);
+            if ny < 0.0 {
+                // Out through the top, anywhere along it: back to the desktop.
                 let release = ReleaseTo {
                     activation_id: a.activation_id,
-                    cursor: Some(map.return_point(ny)),
+                    cursor: Some(map.return_point(nx)),
                 };
                 self.active = None;
                 out.msgs.push(AgentMsg::Leave);
                 out.release = Some(release);
                 return out;
             }
-            let nx = nx.max(0.0);
             if (nx, ny) != (a.x, a.y) {
                 (a.x, a.y) = (nx, ny);
                 out.msgs.push(AgentMsg::Move { x: nx, y: ny });
@@ -295,21 +310,31 @@ mod tests {
     const MONITOR: Zone = Zone {
         x: 0,
         y: 0,
-        width: 3658,
+        width: 3657,
         height: 1029,
     };
+    const HUB_WIDTH: f64 = 560.0;
 
     fn hub() -> Pointer {
-        let mut p = Pointer::new(1.0);
+        let mut p = Pointer::new(1.0, HUB_WIDTH);
         p.set_zone(Some(MONITOR));
         p.set_viewport(Some((1280.0, 800.0)));
         p
     }
 
+    fn map() -> Mapping {
+        Mapping {
+            zone: MONITOR,
+            hub_width: HUB_WIDTH,
+            w: 1280.0,
+            h: 800.0,
+        }
+    }
+
     #[test]
     fn picks_leftmost_then_lowest_zone() {
         let right = Zone {
-            x: 3658,
+            x: 3657,
             y: 0,
             width: 1920,
             height: 1080,
@@ -326,124 +351,136 @@ mod tests {
     }
 
     #[test]
-    fn barriers_fill_the_left_edge() {
-        assert_eq!(barrier_lines(MONITOR), [(0, 0, 0, 1028), (0, 0, 0, 1029)]);
+    fn barriers_fill_the_bottom_edge() {
+        assert_eq!(
+            barrier_lines(MONITOR),
+            [
+                (0, 1029, 3656, 1029),
+                (0, 1028, 3656, 1028),
+                (0, 1029, 3657, 1029),
+                (0, 1028, 3657, 1028),
+            ]
+        );
         let offset = Zone {
             x: -100,
             y: 50,
             width: 100,
             height: 200,
         };
-        assert_eq!(barrier_lines(offset)[0], (-100, 50, -100, 249));
+        assert_eq!(barrier_lines(offset)[0], (-100, 250, -1, 250));
+        assert_eq!(barrier_lines(offset)[3], (-100, 249, 0, 249));
     }
 
     #[test]
-    fn entry_zone_is_the_bottom_of_the_edge() {
-        assert!(in_entry_zone(MONITOR, 420, Some(1028.0)));
-        assert!(in_entry_zone(MONITOR, 420, Some(609.0)));
-        assert!(!in_entry_zone(MONITOR, 420, Some(608.9)));
-        assert!(!in_entry_zone(MONITOR, 420, Some(0.0)));
-        assert!(in_entry_zone(MONITOR, 420, None));
-        // Taller than the monitor: the whole edge.
-        assert!(in_entry_zone(MONITOR, 5000, Some(0.0)));
+    fn entry_zone_is_the_bottom_left_corner() {
+        let reach = 560 + 160;
+        assert!(in_entry_zone(MONITOR, reach, Some(0.0)));
+        assert!(in_entry_zone(MONITOR, reach, Some(300.5)));
+        assert!(in_entry_zone(MONITOR, reach, Some(720.0)));
+        assert!(!in_entry_zone(MONITOR, reach, Some(720.5)));
+        assert!(!in_entry_zone(MONITOR, reach, Some(2000.0)));
+        assert!(in_entry_zone(MONITOR, reach, None));
+        let offset = Zone { x: 1000, ..MONITOR };
+        assert!(!in_entry_zone(offset, reach, Some(999.0)));
+        assert!(in_entry_zone(offset, reach, Some(1720.0)));
+        assert!(!in_entry_zone(offset, reach, Some(1721.0)));
     }
 
     #[test]
-    fn enter_maps_height_from_bottom() {
-        let map = Mapping {
-            zone: MONITOR,
-            gain: 1.0,
-            w: 1280.0,
-            h: 800.0,
+    fn enter_maps_x_along_the_hub_width() {
+        let m = map();
+        assert_eq!(m.enter_point(Some(0.0)), (0.0, 0.0));
+        assert_eq!(m.enter_point(Some(280.0)), (640.0, 0.0));
+        assert_eq!(m.enter_point(Some(140.0)), (320.0, 0.0));
+        // The slack past the Hub's right edge clamps to its last column.
+        assert_eq!(m.enter_point(Some(600.0)), (1279.0, 0.0));
+        assert_eq!(m.enter_point(Some(720.0)), (1279.0, 0.0));
+        assert_eq!(m.enter_point(None), (640.0, 0.0));
+        let offset = Mapping {
+            zone: Zone { x: -500, ..MONITOR },
+            ..m
         };
-        assert_eq!(map.enter_point(Some(1028.0)), (1279.0, 799.0));
-        assert_eq!(map.enter_point(Some(828.0)), (1279.0, 599.0));
-        // Above the Hub's height clamps to its top row.
-        assert_eq!(map.enter_point(Some(100.0)), (1279.0, 0.0));
-        assert_eq!(map.enter_point(None), (1279.0, 400.0));
-        let fast = Mapping { gain: 2.0, ..map };
-        assert_eq!(fast.enter_point(Some(928.0)), (1279.0, 599.0));
+        assert_eq!(offset.enter_point(Some(-220.0)), (640.0, 0.0));
     }
 
     #[test]
     fn return_inverts_enter() {
-        for gain in [0.5, 1.0, 1.7] {
-            let map = Mapping {
-                zone: MONITOR,
-                gain,
-                w: 1280.0,
-                h: 800.0,
-            };
-            for cy in [1028.0, 900.5, 700.0] {
-                let (_, hy) = map.enter_point(Some(cy));
-                let (rx, ry) = map.return_point(hy);
-                assert_eq!(rx, 2.0);
-                assert!((ry - cy).abs() < 1e-9, "gain {gain} cy {cy} -> {ry}");
-            }
+        let m = map();
+        for cx in [0.0, 1.0, 100.25, 280.0, 559.0] {
+            let (hx, _) = m.enter_point(Some(cx));
+            let (rx, ry) = m.return_point(hx);
+            assert!((rx - cx).abs() < 1e-9, "cx {cx} -> {rx}");
+            assert_eq!(ry, 1026.0);
         }
-        // A cursor at the Hub's top maps above the monitor's top: clamp.
-        let map = Mapping {
-            zone: MONITOR,
-            gain: 0.5,
-            w: 1280.0,
-            h: 800.0,
+        // The last column comes back just inside the Hub's width.
+        let (rx, _) = m.return_point(1279.0);
+        assert!((rx - 559.5625).abs() < 1e-9);
+        // A Hub mapped wider than the monitor clamps into the zone.
+        let tiny = Zone {
+            width: 300,
+            ..MONITOR
         };
-        assert_eq!(map.return_point(0.0), (2.0, 0.0));
+        let narrow = Mapping { zone: tiny, ..m };
+        assert_eq!(narrow.return_point(1279.0).0, 299.0);
+    }
+
+    #[test]
+    fn enters_at_the_top_row() {
+        let mut p = hub();
+        assert_eq!(
+            p.activate(Some(5), Some((280.0, 1028.0))),
+            Ok(AgentMsg::Enter { x: 640.0, y: 0.0 })
+        );
+        assert!(p.is_active());
     }
 
     #[test]
     fn motion_moves_clamps_and_sends_once_per_frame() {
         let mut p = hub();
-        assert_eq!(
-            p.activate(Some(5), Some((0.0, 1028.0))),
-            Ok(AgentMsg::Enter {
-                x: 1279.0,
-                y: 799.0
-            })
-        );
-        p.motion(-10.0, -5.0);
+        p.activate(Some(5), Some((280.0, 1028.0))).unwrap();
+        p.motion(-10.0, 5.0);
         p.motion(-10.0, 100.0);
         let out = p.frame();
+        assert_eq!(out.msgs, [AgentMsg::Move { x: 620.0, y: 105.0 }]);
+        assert_eq!(out.release, None);
+
+        p.motion(5000.0, 5000.0);
         assert_eq!(
-            out.msgs,
+            p.frame().msgs,
             [AgentMsg::Move {
-                x: 1259.0,
+                x: 1279.0,
                 y: 799.0
             }]
         );
-        assert_eq!(out.release, None);
-
-        p.motion(-5000.0, -5000.0);
-        assert_eq!(p.frame().msgs, [AgentMsg::Move { x: 0.0, y: 0.0 }]);
         // Pushing further against a clamped corner sends nothing.
-        p.motion(-1.0, -1.0);
+        p.motion(1.0, 1.0);
         assert_eq!(p.frame(), FrameOutcome::default());
+        // Left and right edges clamp; they do not end capture.
+        p.motion(-5000.0, 0.0);
+        assert_eq!(p.frame().msgs, [AgentMsg::Move { x: 0.0, y: 799.0 }]);
         assert!(p.is_active());
     }
 
     #[test]
     fn gain_scales_motion() {
-        let mut p = Pointer::new(2.0);
+        let mut p = Pointer::new(2.0, HUB_WIDTH);
         p.set_zone(Some(MONITOR));
         p.set_viewport(Some((1280.0, 800.0)));
-        p.activate(None, Some((0.0, 1028.0))).unwrap();
-        p.motion(-10.0, -3.0);
-        assert_eq!(
-            p.frame().msgs,
-            [AgentMsg::Move {
-                x: 1259.0,
-                y: 793.0
-            }]
-        );
+        p.activate(None, Some((280.0, 1028.0))).unwrap();
+        p.motion(-10.0, 3.0);
+        assert_eq!(p.frame().msgs, [AgentMsg::Move { x: 620.0, y: 6.0 }]);
     }
 
     #[test]
-    fn leaving_right_releases_at_matching_height() {
+    fn leaving_the_top_releases_at_matching_x() {
         let mut p = hub();
-        p.activate(Some(9), Some((0.0, 828.0))).unwrap();
-        p.motion(-100.0, 0.0);
+        p.activate(Some(9), Some((280.0, 1028.0))).unwrap();
+        p.motion(320.0, 50.0);
         p.frame();
-        p.motion(101.0, -50.0);
+        // Sideways motion in the same frame still counts toward the exit x.
+        p.motion(0.0, -50.0);
+        assert_eq!(p.frame().msgs, [AgentMsg::Move { x: 960.0, y: 0.0 }]);
+        p.motion(-320.0, -0.5);
         p.button(0x110, true);
         let out = p.frame();
         assert_eq!(out.msgs, [AgentMsg::Leave]);
@@ -451,7 +488,7 @@ mod tests {
             out.release,
             Some(ReleaseTo {
                 activation_id: Some(9),
-                cursor: Some((2.0, 778.0)),
+                cursor: Some((280.0, 1026.0)),
             })
         );
         assert!(!p.is_active());
@@ -461,10 +498,24 @@ mod tests {
     }
 
     #[test]
+    fn exit_is_only_through_the_top() {
+        let mut p = hub();
+        p.activate(Some(1), Some((0.0, 1028.0))).unwrap();
+        p.motion(-100.0, 0.0);
+        assert_eq!(p.frame(), FrameOutcome::default());
+        p.motion(10000.0, 10000.0);
+        assert!(p.frame().release.is_none());
+        p.motion(0.0, -799.0);
+        assert!(p.frame().release.is_none());
+        p.motion(0.0, -0.01);
+        assert!(p.frame().release.is_some());
+    }
+
+    #[test]
     fn buttons_and_wheel_report_at_cursor() {
         let mut p = hub();
         p.activate(None, Some((0.0, 1028.0))).unwrap();
-        p.motion(-79.0, -99.0);
+        p.motion(1200.0, 700.0);
         p.button(0x110, true);
         p.button(0x111, false);
         p.button(0x113, true);
@@ -516,10 +567,10 @@ mod tests {
 
     #[test]
     fn activation_without_page_geometry_is_refused() {
-        let mut p = Pointer::new(1.0);
+        let mut p = Pointer::new(1.0, HUB_WIDTH);
         p.set_zone(Some(MONITOR));
         assert_eq!(
-            p.activate(Some(1), Some((0.0, 900.0))),
+            p.activate(Some(1), Some((100.0, 1028.0))),
             Err(ReleaseTo {
                 activation_id: Some(1),
                 cursor: None
@@ -544,21 +595,21 @@ mod tests {
     fn end_and_deactivate() {
         let mut p = hub();
         assert_eq!(p.end(), None);
-        p.activate(Some(3), Some((0.0, 1000.0))).unwrap();
+        p.activate(Some(3), Some((140.0, 1028.0))).unwrap();
         assert_eq!(
             p.end(),
             Some(ReleaseTo {
                 activation_id: Some(3),
-                cursor: Some((2.0, 1000.0)),
+                cursor: Some((140.0, 1026.0)),
             })
         );
 
-        p.activate(Some(4), Some((0.0, 1000.0))).unwrap();
+        p.activate(Some(4), Some((0.0, 1028.0))).unwrap();
         assert!(!p.deactivated(Some(3)));
         assert!(p.is_active());
         assert!(p.deactivated(Some(4)));
         assert!(!p.deactivated(Some(4)));
-        p.activate(None, Some((0.0, 1000.0))).unwrap();
+        p.activate(None, Some((0.0, 1028.0))).unwrap();
         assert!(p.deactivated(Some(8)));
     }
 
@@ -566,6 +617,8 @@ mod tests {
     fn resize_pulls_cursor_inside() {
         let mut p = hub();
         p.activate(None, Some((0.0, 1028.0))).unwrap();
+        p.motion(1279.0, 799.0);
+        p.frame();
         assert_eq!(
             p.set_viewport(Some((800.0, 600.0))),
             Some(AgentMsg::Move { x: 799.0, y: 599.0 })

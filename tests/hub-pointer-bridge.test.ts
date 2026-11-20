@@ -68,10 +68,13 @@ class FakeElement extends Listeners {
   get isConnected(): boolean {
     return [...this.path()].at(-1) === this.document.documentElement;
   }
+  attributeWrites = 0;
   setAttribute(name: string, value: string): void {
+    this.attributeWrites += 1;
     this.attributes.set(name, value);
   }
   removeAttribute(name: string): void {
+    this.attributeWrites += 1;
     this.attributes.delete(name);
   }
   hasAttribute(name: string): boolean {
@@ -124,10 +127,13 @@ class FakeDocument extends Listeners {
     this.body = this.documentElement.appendChild(new FakeElement(this, 'body'));
     this.activeElement = this.body;
   }
+  created = 0;
   createElementNS(_ns: string, tag: string): FakeElement {
+    this.created += 1;
     return new FakeElement(this, tag);
   }
   createElement(tag: string): FakeElement {
+    this.created += 1;
     return new FakeElement(this, tag);
   }
   elementFromPoint(): FakeElement | null {
@@ -170,17 +176,48 @@ async function settle(): Promise<void> {
     await new Promise((resolve) => setImmediate(resolve));
 }
 
+type Timer = {
+  id: number;
+  delay: number;
+  due: number;
+  callback: () => void;
+  cleared: boolean;
+};
+
 async function load(status = 200, pointerEvents = true) {
   const document = new FakeDocument();
   const frames: Array<() => void> = [];
-  const timers: Array<{ delay: number; callback: () => void }> = [];
+  const timers: Timer[] = [];
   const fetches: string[] = [];
   const windowListeners = new Listeners();
   const sockets: FakeWebSocket[] = [];
+  const clock = { now: 1000 };
+  const observers: Array<
+    (list: { getEntries: () => Array<Record<string, number>> }) => void
+  > = [];
+  const hitTimes: number[] = [];
+  const elementFromPoint = document.elementFromPoint.bind(document);
+  document.elementFromPoint = () => {
+    hitTimes.push(clock.now);
+    return elementFromPoint();
+  };
   class Socket extends FakeWebSocket {
     constructor(url: string) {
       super(url);
       sockets.push(this);
+    }
+  }
+  class Observer {
+    constructor(
+      callback: (list: {
+        getEntries: () => Array<Record<string, number>>;
+      }) => void,
+    ) {
+      observers.push(callback);
+    }
+    observe(options: { entryTypes: string[] }): void {
+      if (!options.entryTypes.includes('longtask'))
+        throw new Error('unexpected entry types');
     }
   }
   const context = createContext({
@@ -198,6 +235,8 @@ async function load(status = 200, pointerEvents = true) {
             : { error: 'pointer_bridge_not_configured' },
       };
     },
+    performance: { now: () => clock.now },
+    PerformanceObserver: Observer,
     WebSocket: Socket,
     MouseEvent: FakeMouseEvent,
     ...(pointerEvents ? { PointerEvent: FakePointerEvent } : {}),
@@ -208,13 +247,24 @@ async function load(status = 200, pointerEvents = true) {
       return frames.length;
     },
     setTimeout: (callback: () => void, delay: number) => {
-      timers.push({ delay, callback });
-      return timers.length;
+      const timer = {
+        id: timers.length + 1,
+        delay,
+        due: clock.now + delay,
+        callback,
+        cleared: false,
+      };
+      timers.push(timer);
+      return timer.id;
     },
-    clearTimeout: () => undefined,
+    clearTimeout: (id: number) => {
+      const timer = timers.find((entry) => entry.id === id);
+      if (timer) timer.cleared = true;
+    },
     getComputedStyle: (element: FakeElement) => element.computed,
     innerWidth: 1280,
     innerHeight: 800,
+    devicePixelRatio: 1,
     addEventListener: (type: string, listener: Listener) =>
       windowListeners.addEventListener(type, listener),
   });
@@ -224,17 +274,38 @@ async function load(status = 200, pointerEvents = true) {
   const runFrames = () => {
     for (const frame of frames.splice(0)) frame();
   };
+  /** Moves the clock forward, firing due timers in order. */
+  const advance = (ms: number) => {
+    const end = clock.now + ms;
+    for (;;) {
+      const next = timers
+        .filter((timer) => !timer.cleared && timer.due <= end)
+        .sort((a, b) => a.due - b.due)[0];
+      if (!next) break;
+      clock.now = Math.max(clock.now, next.due);
+      next.cleared = true;
+      next.callback();
+    }
+    clock.now = end;
+  };
+  const pending = () => timers.filter((timer) => !timer.cleared);
   const cursor = () =>
     document.body.children.find((child) => child.tagName === 'svg');
   return {
     document,
     frames,
     timers,
+    pending,
     fetches,
     sockets,
     context,
+    clock,
+    observers,
+    hitTests: () => hitTimes.length,
+    hitTimes,
     windowListeners,
     runFrames,
+    advance,
     cursor,
   };
 }
@@ -263,37 +334,259 @@ describe('Hub pointer bridge page script', () => {
     expect(socket.url).toBe(
       'ws://192.168.10.20:8791/hub-pointer?token=a%20b%26c',
     );
-    expect(socket.sent).toEqual([{ t: 'hello', v: 1, w: 1280, h: 800 }]);
+    expect(socket.sent).toEqual([{ t: 'hello', v: 2, w: 1280, h: 800 }]);
     context['innerWidth'] = 900;
     windowListeners.fire(new FakeEvent('resize'));
-    expect(socket.sent.at(-1)).toEqual({ t: 'hello', v: 1, w: 900, h: 800 });
+    expect(socket.sent.at(-1)).toEqual({ t: 'hello', v: 2, w: 900, h: 800 });
     socket.receive({ t: 'ping', id: 17 });
     expect(socket.sent.at(-1)).toEqual({ t: 'pong', id: 17 });
     socket.receive({ t: 'future', extra: true });
     expect(socket.sent.at(-1)).toEqual({ t: 'pong', id: 17 });
   });
 
-  it('shows the cursor at the latest point once per frame and hides it on leave', async () => {
+  it('builds the hidden cursor as soon as the bridge is configured', async () => {
+    const page = await load();
+    const cursor = page.cursor()!;
+    expect(cursor).toBeDefined();
+    expect(page.sockets[0]!.readyState).toBe(0);
+    expect(cursor.style).toMatchObject({
+      visibility: 'hidden',
+      display: 'block',
+      transform: 'translate3d(-100px, -100px, 0)',
+      position: 'fixed',
+      pointerEvents: 'none',
+      zIndex: '2147483647',
+      willChange: 'transform',
+      contain: 'strict',
+      width: '24px',
+      height: '28px',
+    });
+    expect(cursor.style['filter']).toBeUndefined();
+    const paths = cursor.children.filter((child) => child.tagName === 'path');
+    expect(paths).toHaveLength(2);
+    expect(paths[0]!.attributes.get('fill')).toBe('#000000');
+    expect(paths[0]!.attributes.get('opacity')).toBe('0.3');
+    expect(paths[0]!.attributes.get('transform')).toBeDefined();
+    expect(paths[1]!.attributes.get('fill')).toBe('#ffffff');
+    expect(paths[1]!.attributes.get('stroke')).toBe('#161c1b');
+  });
+
+  it('shows the cursor by flipping visibility only, at the latest point once per frame', async () => {
     const page = await connected();
-    expect(page.cursor()).toBeUndefined();
     const button = page.document.element('button');
     page.document.hit = button;
+    const created = page.document.created;
+    const children = page.document.body.children.length;
     page.socket.receive({ t: 'enter', x: 1279, y: 400 });
+    const cursor = page.cursor()!;
+    expect(cursor.style['visibility']).toBe('visible');
+    expect(page.document.created).toBe(created);
+    expect(page.document.body.children).toHaveLength(children);
+    expect(page.hitTests()).toBe(0);
+
     page.socket.receive({ t: 'move', x: 1200, y: 410 });
     page.socket.receive({ t: 'move', x: 1100.5, y: 420 });
     expect(page.frames).toHaveLength(1);
+    const before = { ...cursor.style };
     page.runFrames();
-    const cursor = page.cursor()!;
-    expect(cursor.style['display']).toBe('block');
-    expect(cursor.style['pointerEvents']).toBe('none');
-    expect(cursor.style['position']).toBe('fixed');
-    expect(cursor.style['zIndex']).toBe('2147483647');
-    expect(cursor.style['transform']).toBe('translate3d(1098.5px, 418px, 0)');
+    const changed = Object.keys(cursor.style).filter(
+      (key) => cursor.style[key] !== before[key],
+    );
+    expect(changed).toEqual(['transform']);
+    expect(cursor.style['transform']).toBe('translate3d(1099px, 418px, 0)');
+    // No hit test or hover write inside the frame.
+    expect(page.hitTests()).toBe(0);
+    expect(button.hasAttribute('data-pointer-hover')).toBe(false);
+
+    page.advance(50);
+    expect(page.hitTests()).toBe(1);
     expect(button.hasAttribute('data-pointer-hover')).toBe(true);
 
     page.socket.receive({ t: 'leave' });
-    expect(cursor.style['display']).toBe('none');
+    expect(cursor.style['visibility']).toBe('hidden');
+    expect(cursor.style['transform']).toBe('translate3d(-100px, -100px, 0)');
     expect(button.hasAttribute('data-pointer-hover')).toBe(false);
+    expect(page.cursor()).toBe(cursor);
+  });
+
+  it('rounds the cursor to device pixels', async () => {
+    const page = await load();
+    page.context['devicePixelRatio'] = 2;
+    page.sockets[0]!.open();
+    page.sockets[0]!.receive({ t: 'enter', x: 10.3, y: 20.8 });
+    page.runFrames();
+    expect(page.cursor()!.style['transform']).toBe(
+      'translate3d(8.5px, 19px, 0)',
+    );
+  });
+
+  it('hit tests for hover at most every 60 ms while moving and once after it settles', async () => {
+    const page = await connected();
+    const first = page.document.element('button');
+    const second = page.document.element('button');
+    page.document.hit = first;
+    page.socket.receive({ t: 'enter', x: 0, y: 0 });
+    page.runFrames();
+    // 200 moves 8 ms apart, the second half over another button.
+    for (let index = 1; index <= 200; index += 1) {
+      page.advance(8);
+      if (index === 100) page.document.hit = second;
+      page.socket.receive({ t: 'move', x: index, y: 10 });
+      page.runFrames();
+    }
+    const { hitTimes } = page;
+    expect(hitTimes.length).toBeGreaterThanOrEqual(20);
+    expect(hitTimes.length).toBeLessThanOrEqual(Math.ceil(1600 / 60) + 1);
+    for (let index = 1; index < hitTimes.length; index += 1)
+      expect(hitTimes[index]! - hitTimes[index - 1]!).toBeGreaterThanOrEqual(
+        60,
+      );
+    // Hover changes touch attributes only when the control changes.
+    expect(first.attributeWrites).toBe(2);
+    expect(second.attributeWrites).toBe(1);
+    expect(second.hasAttribute('data-pointer-hover')).toBe(true);
+
+    // Motion stops on a third control: hover catches up after the settle.
+    const third = page.document.element('button');
+    page.document.hit = third;
+    page.advance(8);
+    page.socket.receive({ t: 'move', x: 300, y: 10 });
+    page.runFrames();
+    page.advance(70);
+    expect(third.hasAttribute('data-pointer-hover')).toBe(true);
+    const settled = page.hitTests();
+    page.advance(1000);
+    page.runFrames();
+    expect(page.hitTests()).toBe(settled);
+    expect(page.pending().filter((timer) => timer.delay < 500)).toHaveLength(0);
+  });
+
+  it('hit tests immediately before a press', async () => {
+    const page = await connected();
+    const button = page.document.element('button');
+    page.document.hit = button;
+    page.socket.receive({ t: 'enter', x: 10, y: 10 });
+    expect(page.hitTests()).toBe(0);
+    page.socket.receive({
+      t: 'button',
+      button: 'left',
+      down: true,
+      x: 12,
+      y: 12,
+    });
+    expect(page.hitTests()).toBe(1);
+    expect(button.hasAttribute('data-pointer-hover')).toBe(true);
+    expect(button.hasAttribute('data-pointer-pressed')).toBe(true);
+    expect(page.document.log[0]).toMatchObject({
+      type: 'pointerdown',
+      target: button,
+    });
+  });
+
+  it('runs a frame heartbeat while warm, without touching the DOM', async () => {
+    const page = await connected();
+    const button = page.document.element('button');
+    page.document.hit = button;
+    const cursor = page.cursor()!;
+    const style = { ...cursor.style };
+    page.socket.receive({ t: 'warm', on: true });
+    expect(page.hitTests()).toBe(1);
+    expect(button.attributeWrites).toBe(0);
+    expect(page.frames).toHaveLength(1);
+    for (let index = 0; index < 10; index += 1) {
+      page.clock.now += 16;
+      page.runFrames();
+      expect(page.frames).toHaveLength(1);
+    }
+    expect(cursor.style).toEqual(style);
+    page.socket.receive({ t: 'warm', on: false });
+    page.clock.now += 16;
+    page.runFrames();
+    expect(page.frames).toHaveLength(0);
+
+    // The heartbeat gives up after 3 s without an enter.
+    page.socket.receive({ t: 'warm', on: true });
+    let count = 0;
+    while (page.frames.length && count < 1000) {
+      page.clock.now += 16;
+      page.runFrames();
+      count += 1;
+    }
+    expect(count).toBeGreaterThanOrEqual(3000 / 16 - 1);
+    expect(count).toBeLessThanOrEqual(3000 / 16 + 1);
+
+    // Enter ends the warm heartbeat; frames then only follow motion.
+    page.socket.receive({ t: 'warm', on: true });
+    page.socket.receive({ t: 'enter', x: 5, y: 0 });
+    count = 0;
+    while (page.frames.length && count < 1000) {
+      page.clock.now += 16;
+      page.runFrames();
+      count += 1;
+    }
+    expect(count).toBeLessThanOrEqual(8);
+  });
+
+  it('reports frame telemetry while shown and once after leave, and still pongs at once', async () => {
+    const page = await connected();
+    page.document.hit = page.document.element('div');
+    page.socket.receive({ t: 'enter', x: 0, y: 0 });
+    page.clock.now += 16;
+    page.runFrames();
+    const lagsMs = [2, 4, 6, 8, 12];
+    for (const [index, lag] of lagsMs.entries()) {
+      page.socket.receive({ t: 'move', x: index + 1, y: 1 });
+      page.socket.receive({ t: 'move', x: index + 1.5, y: 1 });
+      page.clock.now += lag;
+      page.runFrames();
+      page.clock.now += 16 - lag;
+    }
+    // A stalled frame.
+    page.socket.receive({ t: 'move', x: 50, y: 1 });
+    page.clock.now += 120;
+    page.socket.receive({ t: 'ping', id: 3 });
+    expect(page.socket.sent.at(-1)).toEqual({ t: 'pong', id: 3 });
+    expect(page.frames).toHaveLength(1);
+    page.runFrames();
+    page.observers[0]!({
+      getEntries: () => [{ startTime: page.clock.now - 100, duration: 80 }],
+    });
+    page.socket.receive({ t: 'leave' });
+    const perf = page.socket.sent.at(-1)!;
+    expect(perf).toEqual({
+      t: 'perf',
+      frames: 7,
+      moves: 11,
+      lagP50: 6,
+      lagP95: 120,
+      lagMax: 120,
+      gapMax: 124,
+      longTasks: 1,
+      longTaskMs: 80,
+      span: 216,
+    });
+    // Reset after sending: a second leave reports nothing new.
+    page.socket.receive({ t: 'leave' });
+    expect(page.socket.sent.at(-1)).toBe(perf);
+  });
+
+  it('sends perf about every 2 s while the cursor is shown', async () => {
+    const page = await connected();
+    page.document.hit = page.document.element('div');
+    page.socket.receive({ t: 'enter', x: 0, y: 0 });
+    page.runFrames();
+    page.advance(2000);
+    const perfs = () =>
+      page.socket.sent.filter((entry) => entry['t'] === 'perf');
+    expect(perfs()).toHaveLength(1);
+    expect(perfs()[0]).toMatchObject({ frames: 1, moves: 0, span: 2000 });
+    page.advance(2000);
+    expect(perfs()).toHaveLength(2);
+    expect(perfs()[1]).toMatchObject({ frames: 0, span: 2000 });
+    page.socket.receive({ t: 'leave' });
+    expect(perfs()).toHaveLength(3);
+    page.advance(10000);
+    expect(perfs()).toHaveLength(3);
   });
 
   it('pairs pointerdown and pointerup and clicks when released on the same control', async () => {
@@ -453,18 +746,22 @@ describe('Hub pointer bridge page script', () => {
       y: 10,
     });
     expect(held.size).toBe(1);
+    const before = page.timers.length;
+    const reconnects = () =>
+      page.timers.slice(before).map((timer) => timer.delay);
     page.socket.close();
     expect(held.size).toBe(0);
-    expect(page.cursor()!.style['display']).toBe('none');
-    expect(page.timers.map((timer) => timer.delay)).toEqual([500]);
-    page.timers[0]!.callback();
+    expect(page.cursor()!.style['visibility']).toBe('hidden');
+    expect(page.pending().map((timer) => timer.delay)).toEqual([500]);
+    expect(reconnects()).toEqual([500]);
+    page.timers[before]!.callback();
     expect(page.sockets).toHaveLength(2);
     page.sockets[1]!.close();
-    expect(page.timers.map((timer) => timer.delay)).toEqual([500, 1000]);
-    page.timers[1]!.callback();
+    expect(reconnects()).toEqual([500, 1000]);
+    page.timers[before + 1]!.callback();
     page.sockets[2]!.open();
     page.sockets[2]!.close();
-    expect(page.timers.map((timer) => timer.delay)).toEqual([500, 1000, 500]);
+    expect(reconnects()).toEqual([500, 1000, 500]);
   });
 
   it('turns the right button into an Escape keydown on the focused element', async () => {

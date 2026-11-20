@@ -7,6 +7,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+use crate::gate::Policy;
+
 pub const TOKEN_ENV: &str = "LUGN_HUB_POINTER_TOKEN";
 
 #[derive(Debug, Deserialize)]
@@ -18,19 +20,30 @@ struct RawConfig {
     token: Option<String>,
     #[serde(default)]
     allowed_origins: Vec<String>,
-    #[serde(default = "default_zone_height")]
-    zone_height: u32,
+    #[serde(default = "default_hub_width_px")]
+    hub_width_px: u32,
+    #[serde(default = "default_entry_slack_px")]
+    entry_slack_px: u32,
     #[serde(default = "default_gain")]
     gain: f64,
     #[serde(default = "default_log_latency")]
     log_latency: bool,
+    #[serde(default = "default_suppress_effects")]
+    suppress_effects: Vec<String>,
+    #[serde(default = "default_game_app_ids")]
+    game_app_ids: Vec<String>,
+    #[serde(default = "default_fullscreen_ok_app_ids")]
+    fullscreen_ok_app_ids: Vec<String>,
 }
 
 fn default_listen() -> String {
     "0.0.0.0:8791".into()
 }
-fn default_zone_height() -> u32 {
-    420
+fn default_hub_width_px() -> u32 {
+    560
+}
+fn default_entry_slack_px() -> u32 {
+    160
 }
 fn default_gain() -> f64 {
     1.0
@@ -38,15 +51,64 @@ fn default_gain() -> f64 {
 fn default_log_latency() -> bool {
     true
 }
+fn strings(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| s.to_string()).collect()
+}
+fn default_suppress_effects() -> Vec<String> {
+    strings(&["shakecursor"])
+}
+fn default_game_app_ids() -> Vec<String> {
+    strings(&[
+        "gamescope",
+        "lutris",
+        "heroic",
+        "net.lutris.Lutris",
+        "com.heroicgameslauncher.hgl",
+        "steam_proton",
+        "minecraft-launcher",
+        "retroarch",
+        "org.libretro.RetroArch",
+    ])
+}
+fn default_fullscreen_ok_app_ids() -> Vec<String> {
+    strings(&[
+        "zen",
+        "zen-browser",
+        "app.zen_browser.zen",
+        "firefox",
+        "firefox_firefox",
+        "org.mozilla.firefox",
+        "chromium",
+        "google-chrome",
+        "brave-browser",
+        "com.brave.Browser",
+        "vivaldi-stable",
+        "mpv",
+        "vlc",
+        "org.videolan.VLC",
+        "celluloid",
+        "io.github.celluloid_player.Celluloid",
+        "org.kde.haruna",
+        "kodi",
+        "plex",
+        "com.github.iwalton3.jellyfin-media-player",
+        "org.jellyfin.JellyfinDesktop",
+        "freetube",
+        "io.freetubeapp.FreeTube",
+    ])
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub listen: SocketAddr,
     pub token: String,
     pub allowed_origins: Vec<String>,
-    pub zone_height: u32,
+    pub hub_width_px: u32,
+    pub entry_slack_px: u32,
     pub gain: f64,
     pub log_latency: bool,
+    pub suppress_effects: Vec<String>,
+    pub gate: Policy,
 }
 
 impl Config {
@@ -74,9 +136,18 @@ impl Config {
         if !(raw.gain.is_finite() && raw.gain > 0.0 && raw.gain <= 20.0) {
             bail!("`gain` must be in (0, 20]");
         }
-        if raw.zone_height == 0 {
-            bail!("`zone_height` must be positive");
+        if !(1..=100_000).contains(&raw.hub_width_px) {
+            bail!("`hub_width_px` must be in 1..=100000");
         }
+        if raw.entry_slack_px > 100_000 {
+            bail!("`entry_slack_px` must be at most 100000");
+        }
+        let suppress_effects = raw
+            .suppress_effects
+            .iter()
+            .map(|e| e.trim().to_string())
+            .filter(|e| !e.is_empty())
+            .collect();
         let allowed_origins = raw
             .allowed_origins
             .iter()
@@ -86,9 +157,12 @@ impl Config {
             listen,
             token,
             allowed_origins,
-            zone_height: raw.zone_height,
+            hub_width_px: raw.hub_width_px,
+            entry_slack_px: raw.entry_slack_px,
             gain: raw.gain,
             log_latency: raw.log_latency,
+            suppress_effects,
+            gate: Policy::new(&raw.game_app_ids, &raw.fullscreen_ok_app_ids),
         })
     }
 }
@@ -117,9 +191,23 @@ mod tests {
         assert_eq!(cfg.listen, "0.0.0.0:8791".parse().unwrap());
         assert_eq!(cfg.token, "abc");
         assert!(cfg.allowed_origins.is_empty());
-        assert_eq!(cfg.zone_height, 420);
+        assert_eq!(cfg.hub_width_px, 560);
+        assert_eq!(cfg.entry_slack_px, 160);
         assert_eq!(cfg.gain, 1.0);
         assert!(cfg.log_latency);
+        assert_eq!(cfg.suppress_effects, ["shakecursor"]);
+        // Lists are kept normalized for case-insensitive matching.
+        assert!(
+            cfg.gate
+                .game_app_ids
+                .contains(&"net.lutris.lutris".to_string())
+        );
+        assert!(cfg.gate.fullscreen_ok_app_ids.contains(&"zen".to_string()));
+        assert!(
+            cfg.gate
+                .fullscreen_ok_app_ids
+                .contains(&"io.freetubeapp.freetube".to_string())
+        );
     }
 
     #[test]
@@ -129,9 +217,13 @@ mod tests {
             listen = "127.0.0.1:9000"
             token = "file"
             allowed_origins = ["http://192.168.10.132:8788/", "HTTP://Example.org"]
-            zone_height = 300
+            hub_width_px = 600
+            entry_slack_px = 0
             gain = 1.5
             log_latency = false
+            suppress_effects = []
+            game_app_ids = ["MyGame"]
+            fullscreen_ok_app_ids = ["Foo.desktop"]
             "#,
             None,
         )
@@ -141,9 +233,21 @@ mod tests {
             cfg.allowed_origins,
             ["http://192.168.10.132:8788", "http://example.org"]
         );
-        assert_eq!(cfg.zone_height, 300);
+        assert_eq!(cfg.hub_width_px, 600);
+        assert_eq!(cfg.entry_slack_px, 0);
         assert_eq!(cfg.gain, 1.5);
         assert!(!cfg.log_latency);
+        assert!(cfg.suppress_effects.is_empty());
+        assert_eq!(cfg.gate.game_app_ids, ["mygame"]);
+        assert_eq!(cfg.gate.fullscreen_ok_app_ids, ["foo"]);
+    }
+
+    #[test]
+    fn example_config_parses() {
+        let cfg = Config::parse(include_str!("../config.example.toml"), None).unwrap();
+        assert_eq!(cfg.hub_width_px, 560);
+        assert_eq!(cfg.entry_slack_px, 160);
+        assert_eq!(cfg.suppress_effects, ["shakecursor"]);
     }
 
     #[test]
@@ -165,6 +269,8 @@ mod tests {
         assert!(Config::parse("token = \"a\"\nlisten = \"nope\"", None).is_err());
         assert!(Config::parse("token = \"a\"\ngain = 0.0", None).is_err());
         assert!(Config::parse("token = \"a\"\ngain = -1.0", None).is_err());
-        assert!(Config::parse("token = \"a\"\nzone_height = 0", None).is_err());
+        assert!(Config::parse("token = \"a\"\nhub_width_px = 0", None).is_err());
+        // Replaced by hub_width_px; unknown keys are rejected.
+        assert!(Config::parse("token = \"a\"\nzone_height = 420", None).is_err());
     }
 }

@@ -2,21 +2,50 @@
 // Wire protocol: agents/linux/hub-pointer/PROTOCOL.md. Lugn hands this page
 // the agent URL and token only when the bridge is configured for this Hub;
 // otherwise the script does nothing at all.
+//
+// The Hub's main thread is slow and the dashboard is heavy, so the cursor is
+// built once when the bridge is configured and only ever has its transform
+// and visibility changed. Each animation frame writes one transform; hover
+// hit testing runs from a timer, never inside the frame.
 (() => {
   'use strict';
 
   const CONFIG_URL = `${location.pathname.replace(/\/?$/, '/')}display-api/pointer-bridge`;
+  const PROTOCOL_VERSION = 2;
   const POINTER_ID = 4242;
   const RECONNECT_MIN_MS = 500;
   const RECONNECT_MAX_MS = 5000;
   const CONFIG_RETRY_MIN_MS = 5000;
   const CONFIG_RETRY_MAX_MS = 60000;
+  // Hover hit tests: at most this often while moving...
+  const HOVER_INTERVAL_MS = 60;
+  // ...and once this long after the last move.
+  const HOVER_SETTLE_MS = 50;
+  // Frames keep running this long after the last move, so frame gaps are
+  // measured across a whole gesture rather than per move.
+  const MOTION_TAIL_MS = 100;
+  // Longest heartbeat after `warm`, in case `enter` never comes.
+  const WARM_MAX_MS = 3000;
+  const PERF_INTERVAL_MS = 2000;
+  const LAG_SAMPLES = 256;
   // Pixel offset of the arrow tip inside the cursor graphic.
   const HOTSPOT = 2;
+  const CURSOR_WIDTH = 24;
+  const CURSOR_HEIGHT = 28;
+  const PARKED = 'translate3d(-100px, -100px, 0)';
+  const ARROW =
+    'M0 0 L0 19.5 L4.7 15.1 L7.9 22.4 L11.3 20.9 L8.2 13.8 L14.6 13.8 Z';
   const INTERACTIVE =
     'button, a, [role="button"], input, label, select, textarea, summary, [tabindex]';
   const FOCUSABLE_FIELDS = 'input, select, textarea';
   const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  const clock =
+    typeof performance === 'object' &&
+    performance &&
+    typeof performance.now === 'function'
+      ? () => performance.now()
+      : () => Date.now();
 
   let bridge;
   let socket;
@@ -24,12 +53,46 @@
   let reconnectTimer;
   let cursor;
   let visible = false;
+  let pixelRatio = 1;
+  // Latest point from the agent.
   let x = 0;
   let y = 0;
+  // Point the cursor transform was last written for.
+  let drawnX = NaN;
+  let drawnY = NaN;
   let framePending = false;
+  let lastFrameAt = 0;
+  let motionUntil = 0;
+  let warmUntil = 0;
+  let lastMotionAt = -Infinity;
+  let hoverTimer;
+  let lastHoverAt = -Infinity;
+  let hoverX = NaN;
+  let hoverY = NaN;
   let hovered = null;
+  let hitX = NaN;
+  let hitY = NaN;
+  let hitTarget = null;
   let pressTarget = null;
   let pressControl = null;
+  let pressMoveX = NaN;
+  let pressMoveY = NaN;
+
+  // Telemetry for the window since the cursor was shown or the last `perf`.
+  const lags = new Float64Array(LAG_SAMPLES);
+  const sortedLags = new Float64Array(LAG_SAMPLES);
+  let lagCount = 0;
+  let lagNext = 0;
+  let lagMax = 0;
+  let gapMax = 0;
+  let frames = 0;
+  let moves = 0;
+  let longTasks = 0;
+  let longTaskMs = 0;
+  let spanStart = 0;
+  let measuring = false;
+  let perfTimer;
+  let moveStamp = 0;
 
   function debug(...args) {
     try {
@@ -52,76 +115,152 @@
 
   // ── Cursor ──
 
+  function arrowPath(attributes) {
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', ARROW);
+    path.setAttribute('stroke-linejoin', 'round');
+    for (const [name, value] of Object.entries(attributes))
+      path.setAttribute(name, value);
+    return path;
+  }
+
+  // Built once, before any `enter`, and kept in the DOM for good: showing it
+  // is a visibility flip on a layer that already exists. A second, offset
+  // path is the shadow; a CSS filter on a moving layer can make weak GPUs
+  // re-rasterize it every frame.
   function createCursor() {
     const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('width', '24');
-    svg.setAttribute('height', '28');
-    svg.setAttribute('viewBox', `${-HOTSPOT} ${-HOTSPOT} 24 28`);
+    svg.setAttribute('width', String(CURSOR_WIDTH));
+    svg.setAttribute('height', String(CURSOR_HEIGHT));
+    svg.setAttribute(
+      'viewBox',
+      `${-HOTSPOT} ${-HOTSPOT} ${CURSOR_WIDTH} ${CURSOR_HEIGHT}`,
+    );
     svg.setAttribute('aria-hidden', 'true');
     svg.setAttribute('focusable', 'false');
-    const path = document.createElementNS(SVG_NS, 'path');
-    path.setAttribute(
-      'd',
-      'M0 0 L0 19.5 L4.7 15.1 L7.9 22.4 L11.3 20.9 L8.2 13.8 L14.6 13.8 Z',
+    svg.appendChild(
+      arrowPath({
+        transform: 'translate(0.6 1.1)',
+        fill: '#000000',
+        stroke: '#000000',
+        'stroke-width': '2',
+        opacity: '0.3',
+      }),
     );
-    path.setAttribute('fill', '#ffffff');
-    path.setAttribute('stroke', '#161c1b');
-    path.setAttribute('stroke-width', '1.4');
-    path.setAttribute('stroke-linejoin', 'round');
-    svg.appendChild(path);
+    svg.appendChild(
+      arrowPath({
+        fill: '#ffffff',
+        stroke: '#161c1b',
+        'stroke-width': '1.4',
+      }),
+    );
     const style = svg.style;
     style.position = 'fixed';
     style.left = '0';
     style.top = '0';
+    style.width = `${CURSOR_WIDTH}px`;
+    style.height = `${CURSOR_HEIGHT}px`;
     style.margin = '0';
+    style.padding = '0';
+    style.display = 'block';
+    style.overflow = 'hidden';
     style.pointerEvents = 'none';
     style.zIndex = '2147483647';
+    style.contain = 'strict';
     style.willChange = 'transform';
-    style.overflow = 'visible';
-    style.filter = 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45))';
-    style.display = 'none';
+    style.transition = 'none';
+    style.transform = PARKED;
+    style.visibility = 'hidden';
     document.body.appendChild(svg);
     return svg;
   }
 
   function showCursor() {
-    cursor ??= createCursor();
     if (!visible) {
       visible = true;
-      cursor.style.display = 'block';
+      warmUntil = 0;
+      cursor.style.visibility = 'visible';
+      startMeasuring();
     }
-    scheduleFrame();
+    noteMotion(clock());
   }
 
   function hideCursor() {
-    visible = false;
-    if (cursor) cursor.style.display = 'none';
+    if (visible) {
+      visible = false;
+      cursor.style.visibility = 'hidden';
+      cursor.style.transform = PARKED;
+      drawnX = NaN;
+      drawnY = NaN;
+    }
+    if (hoverTimer !== undefined) clearTimeout(hoverTimer);
+    hoverTimer = undefined;
+    lastHoverAt = -Infinity;
+    hoverX = NaN;
+    hoverY = NaN;
+    hitTarget = null;
     setHover(null);
   }
 
-  function scheduleFrame() {
+  function requestFrame() {
     if (framePending) return;
     framePending = true;
-    requestAnimationFrame(guard(frame));
+    requestAnimationFrame(onFrame);
   }
 
-  // One cursor write and at most one hit test per frame, at the latest point.
+  // The hot path: at most one pointermove for a held button (hit test first,
+  // while layout is still clean) and one transform write. No other reads.
   function frame() {
     framePending = false;
-    if (!visible || !cursor) return;
-    cursor.style.transform = `translate3d(${x - HOTSPOT}px, ${y - HOTSPOT}px, 0)`;
-    const target = hitTest();
-    setHover(controlFor(target));
-    if (pressTarget && target)
-      dispatchPointer('pointermove', target, { button: -1, buttons: 1 });
+    const now = clock();
+    if (visible) {
+      if (lastFrameAt) {
+        const gap = now - lastFrameAt;
+        if (gap > gapMax) gapMax = gap;
+      }
+      if (pressTarget && (x !== pressMoveX || y !== pressMoveY)) {
+        pressMoveX = x;
+        pressMoveY = y;
+        const target = hitAt(true);
+        if (target)
+          dispatchPointer('pointermove', target, { button: -1, buttons: 1 });
+      }
+      if (x !== drawnX || y !== drawnY) {
+        drawnX = x;
+        drawnY = y;
+        cursor.style.transform = `translate3d(${snap(x - HOTSPOT)}px, ${snap(y - HOTSPOT)}px, 0)`;
+        frames += 1;
+        if (moveStamp) {
+          recordLag(now - moveStamp);
+          moveStamp = 0;
+        }
+      }
+    }
+    if (now < motionUntil || now < warmUntil) {
+      lastFrameAt = now;
+      requestFrame();
+    } else {
+      lastFrameAt = 0;
+    }
+  }
+  const onFrame = guard(frame);
+
+  function snap(value) {
+    return Math.round(value * pixelRatio) / pixelRatio;
   }
 
   // ── Hit testing ──
 
-  function hitTest() {
+  // Element under the cursor. `cached` reuses the last result for the same
+  // point while that element is still in the document.
+  function hitAt(cached) {
+    if (cached && x === hitX && y === hitY && connected(hitTarget))
+      return hitTarget;
     const element = document.elementFromPoint(x, y);
-    if (!element || element.closest?.('[inert]')) return null;
-    return element;
+    hitX = x;
+    hitY = y;
+    hitTarget = !element || element.closest?.('[inert]') ? null : element;
+    return hitTarget;
   }
 
   function controlFor(element) {
@@ -134,6 +273,45 @@
     hovered = control;
     hovered?.setAttribute?.('data-pointer-hover', '');
   }
+
+  function refreshHover(now) {
+    lastHoverAt = now;
+    hoverX = x;
+    hoverY = y;
+    setHover(controlFor(hitAt(false)));
+  }
+
+  // Hover follows the cursor from a timer: at most every HOVER_INTERVAL_MS
+  // while moving, and once more after the motion settles.
+  function noteMotion(now) {
+    lastMotionAt = now;
+    if (now + MOTION_TAIL_MS > motionUntil) motionUntil = now + MOTION_TAIL_MS;
+    requestFrame();
+    if (hoverTimer === undefined)
+      armHover(
+        Math.max(lastHoverAt + HOVER_INTERVAL_MS - now, HOVER_SETTLE_MS),
+      );
+  }
+
+  function armHover(delay) {
+    hoverTimer = setTimeout(onHoverTimer, delay);
+  }
+
+  function hoverTick() {
+    hoverTimer = undefined;
+    if (!visible) return;
+    const now = clock();
+    if (x !== hoverX || y !== hoverY) refreshHover(now);
+    const sinceMotion = now - lastMotionAt;
+    if (sinceMotion < HOVER_SETTLE_MS)
+      armHover(
+        Math.max(
+          lastHoverAt + HOVER_INTERVAL_MS - now,
+          HOVER_SETTLE_MS - sinceMotion,
+        ),
+      );
+  }
+  const onHoverTimer = guard(hoverTick);
 
   function connected(element) {
     if (!element) return false;
@@ -191,11 +369,15 @@
 
   function press() {
     if (pressTarget) return;
-    const target = hitTest();
+    // Always a fresh hit test, and hover catches up before the press shows.
+    refreshHover(clock());
+    const target = hitTarget;
     if (!target) return;
     const control = controlFor(target);
     pressTarget = target;
     pressControl = control;
+    pressMoveX = x;
+    pressMoveY = y;
     if (control && !control.disabled)
       control.setAttribute?.('data-pointer-pressed', '');
     dispatchPointer('pointerdown', target, { button: 0, buttons: 1 });
@@ -210,7 +392,7 @@
     if (!pressTarget) return;
     const control = pressControl;
     clearPress();
-    const target = hitTest() ?? document.body;
+    const target = hitAt(false) ?? document.body;
     dispatchPointer('pointerup', target, { button: 0, buttons: 0 });
     dispatchMouse('mouseup', target, 0, 0);
     if (controlFor(target) === control && !control?.disabled)
@@ -263,7 +445,7 @@
   }
 
   function wheel(dx, dy) {
-    const target = hitTest();
+    const target = hitAt(true);
     if (!target) return;
     let proceed = true;
     if (typeof WheelEvent === 'function')
@@ -286,6 +468,116 @@
     }
   }
 
+  // ── Warm-up ──
+
+  // The desktop pointer is close: wake the frame loop (no DOM writes) and
+  // run one hit test without touching hover, so the first real frames and
+  // hit tests after `enter` are not the first ones in a while.
+  function warm(on) {
+    if (!on) {
+      warmUntil = 0;
+      return;
+    }
+    if (visible) return;
+    warmUntil = clock() + WARM_MAX_MS;
+    requestFrame();
+    hitAt(false);
+    hitTarget = null;
+  }
+
+  // ── Telemetry ──
+
+  function startMeasuring() {
+    if (!measuring) resetStats();
+    measuring = true;
+    if (perfTimer === undefined) armPerf();
+  }
+
+  function armPerf() {
+    perfTimer = setTimeout(onPerfTimer, PERF_INTERVAL_MS);
+  }
+
+  function perfTick() {
+    perfTimer = undefined;
+    if (!visible) return;
+    sendPerf();
+    armPerf();
+  }
+  const onPerfTimer = guard(perfTick);
+
+  function stopMeasuring() {
+    if (perfTimer !== undefined) clearTimeout(perfTimer);
+    perfTimer = undefined;
+    if (measuring) sendPerf();
+    measuring = false;
+  }
+
+  function resetStats() {
+    lagCount = 0;
+    lagNext = 0;
+    lagMax = 0;
+    gapMax = 0;
+    frames = 0;
+    moves = 0;
+    longTasks = 0;
+    longTaskMs = 0;
+    spanStart = clock();
+  }
+
+  function recordLag(lag) {
+    const value = lag > 0 ? lag : 0;
+    lags[lagNext] = value;
+    lagNext = (lagNext + 1) % LAG_SAMPLES;
+    if (lagCount < LAG_SAMPLES) lagCount += 1;
+    if (value > lagMax) lagMax = value;
+  }
+
+  function percentile(sorted, count, fraction) {
+    if (!count) return 0;
+    return sorted[Math.min(count - 1, Math.ceil(fraction * count) - 1)];
+  }
+
+  function ms(value) {
+    return Math.round(value * 10) / 10;
+  }
+
+  function sendPerf() {
+    const sorted = sortedLags.subarray(0, lagCount);
+    sorted.set(lags.subarray(0, lagCount));
+    sorted.sort();
+    send({
+      t: 'perf',
+      frames,
+      moves,
+      lagP50: ms(percentile(sorted, lagCount, 0.5)),
+      lagP95: ms(percentile(sorted, lagCount, 0.95)),
+      lagMax: ms(lagMax),
+      gapMax: ms(gapMax),
+      longTasks,
+      longTaskMs: Math.round(longTaskMs),
+      span: Math.round(clock() - spanStart),
+    });
+    resetStats();
+  }
+
+  function observeLongTasks() {
+    try {
+      if (typeof PerformanceObserver !== 'function') return;
+      new PerformanceObserver(
+        guard((list) => {
+          if (!measuring) return;
+          for (const entry of list.getEntries()) {
+            if (entry.startTime + entry.duration < spanStart) continue;
+            longTasks += 1;
+            longTaskMs += entry.duration;
+          }
+        }),
+      ).observe({ entryTypes: ['longtask'] });
+    } catch (error) {
+      debug('no long task timing', error);
+    }
+  }
+
   // ── Protocol ──
 
   function setPoint(message) {
@@ -302,7 +594,13 @@
   }
 
   function hello() {
-    send({ t: 'hello', v: 1, w: window.innerWidth, h: window.innerHeight });
+    pixelRatio = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+    send({
+      t: 'hello',
+      v: PROTOCOL_VERSION,
+      w: window.innerWidth,
+      h: window.innerHeight,
+    });
   }
 
   function handleMessage(data) {
@@ -317,33 +615,39 @@
       case 'ping':
         send({ t: 'pong', id: message.id });
         return;
+      case 'move':
+        if (!setPoint(message)) return;
+        moveStamp = clock();
+        if (!visible) showCursor();
+        else noteMotion(moveStamp);
+        moves += 1;
+        return;
       case 'enter':
         setPoint(message);
         showCursor();
         return;
-      case 'move':
+      case 'button':
         if (setPoint(message)) {
           if (!visible) showCursor();
-          else scheduleFrame();
+          else noteMotion(clock());
         }
-        return;
-      case 'button':
-        if (setPoint(message) && !visible) showCursor();
         if (message.button === 'left') {
           if (message.down) press();
           else release();
         } else if (message.button === 'right' && message.down) {
           escape();
         }
-        if (visible) scheduleFrame();
         return;
       case 'wheel':
-        setPoint(message);
+        if (setPoint(message) && visible) noteMotion(clock());
         if (Number.isFinite(message.dx) && Number.isFinite(message.dy))
           wheel(message.dx, message.dy);
         return;
       case 'leave':
         endCapture();
+        return;
+      case 'warm':
+        warm(message.on === true);
         return;
       default:
     }
@@ -352,6 +656,9 @@
   function endCapture() {
     cancelPress();
     hideCursor();
+    warmUntil = 0;
+    moveStamp = 0;
+    stopMeasuring();
   }
 
   function connect() {
@@ -420,6 +727,8 @@
     )
       return;
     bridge = { url: body.url, token: body.token };
+    cursor = createCursor();
+    observeLongTasks();
     window.addEventListener('resize', guard(hello));
     connect();
   }

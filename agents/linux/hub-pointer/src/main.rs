@@ -1,5 +1,5 @@
-//! lugn-hub-pointer: lets the desktop pointer slide off the monitor's left
-//! edge onto a Nest Hub dashboard page and back.
+//! lugn-hub-pointer: lets the desktop pointer slide off the monitor's bottom
+//! edge, near the bottom-left corner, onto a Nest Hub dashboard page and back.
 
 use std::{
     fmt,
@@ -21,31 +21,42 @@ use tokio::{
     net::TcpListener,
     signal::unix::{SignalKind, signal},
     sync::mpsc,
-    time::{Instant, MissedTickBehavior, interval, sleep_until, timeout},
+    time::{Instant, interval, sleep_until, timeout},
 };
 
 mod capture;
+mod coalesce;
 mod config;
+mod gate;
+mod kwin;
 mod portal;
 mod protocol;
 mod server;
 mod stats;
 
 use capture::{Pointer, ReleaseTo, in_entry_zone, leftmost_zone};
+use coalesce::MoveCoalescer;
 use config::Config;
+use kwin::{Effects, KwinEvent, Script, approach_for};
 use portal::{Portal, ZoneSet};
-use protocol::{AgentMsg, PageMsg};
+use protocol::{AgentMsg, PageMsg, Perf};
 use server::{Auth, NewPage, PageConn, PageEvent};
 use stats::{Pings, Rtt};
 
-const PING_EVERY: Duration = Duration::from_secs(1);
+const PING_SLOW: Duration = Duration::from_secs(1);
+/// While warm: keeps the Hub's Wi-Fi out of power save and its loop busy.
+const PING_FAST: Duration = Duration::from_millis(20);
+/// How long warm-up outlasts the cursor leaving the approach area.
+const WARM_HYSTERESIS: Duration = Duration::from_millis(1500);
 const PONG_TIMEOUT: Duration = Duration::from_millis(2500);
 const LATENCY_REPORT_EVERY: Duration = Duration::from_secs(10);
-/// Pause after a push against the edge above the Hub.
-const REARM_AFTER_UPPER_EDGE: Duration = Duration::from_millis(300);
+/// Pause after a push against the bottom edge outside the entry corner.
+const REARM_AFTER_OUTSIDE_CORNER: Duration = Duration::from_millis(300);
 const REARM_AFTER_DISABLED: Duration = Duration::from_secs(1);
 const REARM_AFTER_FAILURE: Duration = Duration::from_secs(5);
 const EI_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const KWIN_SETUP_TIMEOUT: Duration = Duration::from_secs(5);
+const KWIN_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 static START: OnceLock<std::time::Instant> = OnceLock::new();
 
@@ -112,12 +123,15 @@ fn parse_args() -> Result<Option<PathBuf>> {
 async fn run(config_path: PathBuf) -> Result<()> {
     let cfg = Config::load(&config_path)?;
     log!(
-        "config {}: listen {} zone_height {} gain {} origins {:?}",
+        "config {}: listen {} hub_width_px {} entry_slack_px {} gain {} origins {:?} \
+         suppress_effects {:?}",
         config_path.display(),
         cfg.listen,
-        cfg.zone_height,
+        cfg.hub_width_px,
+        cfg.entry_slack_px,
         cfg.gain,
-        cfg.allowed_origins
+        cfg.allowed_origins,
+        cfg.suppress_effects
     );
     // Bind first so a port clash fails before anything touches the portal.
     let listener = TcpListener::bind(cfg.listen)
@@ -154,13 +168,49 @@ async fn run(config_path: PathBuf) -> Result<()> {
     tokio::spawn(server::accept_loop(listener, auth, page_tx));
     log!("ws: listening on ws://{}{}", cfg.listen, server::PATH);
 
+    // KWin: game gate, warm-up and effect suppression. All optional.
+    let (kwin_tx, mut kwin_rx) = mpsc::channel::<KwinEvent>(64);
+    let bus = match timeout(
+        KWIN_SETUP_TIMEOUT,
+        kwin::connect(kwin::SERVICE, kwin_tx.clone()),
+    )
+    .await
+    {
+        Ok(Ok(bus)) => Some(bus),
+        Ok(Err(e)) => {
+            log!("kwin: {e:#}; game gate open, no warm-up or effect suppression");
+            None
+        }
+        Err(_) => {
+            log!("kwin: session bus timed out; game gate open, no warm-up or effect suppression");
+            None
+        }
+    };
+    let effects = bus
+        .as_ref()
+        .filter(|_| !cfg.suppress_effects.is_empty())
+        .map(|b| Effects::spawn(b.conn.clone(), cfg.suppress_effects.clone()));
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty());
+    if bus.as_ref().is_some_and(|b| b.named) && runtime_dir.is_none() {
+        log!("kwin: XDG_RUNTIME_DIR unset; game gate open, no warm-up");
+    }
+    let script = match (&bus, &runtime_dir) {
+        (Some(b), Some(dir)) if b.named => Some(Script::spawn(
+            b.conn.clone(),
+            kwin::SERVICE,
+            kwin::PLUGIN,
+            std::path::Path::new(dir),
+            kwin_tx,
+        )),
+        _ => None,
+    };
+
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
-    let mut ping = interval(PING_EVERY);
-    ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut report = interval(LATENCY_REPORT_EVERY);
 
-    let mut app = App::new(cfg, &portal, ei, zones, event_tx);
+    let mut app = App::new(cfg, &portal, ei, zones, event_tx, effects, script);
+    app.load_script();
     let result = loop {
         let far = Instant::now() + Duration::from_secs(86400);
         let pong_deadline = app
@@ -168,6 +218,9 @@ async fn run(config_path: PathBuf) -> Result<()> {
             .as_ref()
             .map_or(far, |p| p.last_pong + PONG_TIMEOUT);
         let rearm_at = app.rearm_at.unwrap_or(far);
+        let move_due = app.coalescer.deadline();
+        let cool_at = app.warm.cool_at;
+        let next_ping = app.next_ping;
         let step = tokio::select! {
             _ = sigterm.recv() => break Ok(()),
             _ = sigint.recv() => break Ok(()),
@@ -177,6 +230,11 @@ async fn run(config_path: PathBuf) -> Result<()> {
                 None => Err(anyhow!("EIS closed the connection")),
             },
             Some(page) = page_rx.recv() => app.on_new_page(page).await,
+            Some(event) = kwin_rx.recv() => app.on_kwin(event).await,
+            _ = sleep_until(move_due.unwrap_or(far)), if move_due.is_some() => {
+                app.on_move_due();
+                Ok(())
+            }
             Some(event) = event_rx.recv() => app.on_page_event(event).await,
             signal = activated.next() => match signal {
                 Some(a) if a.session_handle().as_str() == portal.session_path => {
@@ -218,8 +276,12 @@ async fn run(config_path: PathBuf) -> Result<()> {
                 None => Err(anyhow!("ZonesChanged signal stream ended")),
             },
             _ = session_closed.next() => Err(anyhow!("portal closed the session")),
-            _ = ping.tick() => {
-                app.on_ping_tick();
+            _ = sleep_until(next_ping), if app.page.is_some() => {
+                app.on_ping_due();
+                Ok(())
+            }
+            _ = sleep_until(cool_at.unwrap_or(far)), if cool_at.is_some() => {
+                app.on_warm_cooled();
                 Ok(())
             }
             _ = sleep_until(pong_deadline), if app.page.is_some() => {
@@ -251,6 +313,76 @@ struct Page {
     dead: Option<&'static str>,
 }
 
+/// Warm-up: fast pings and a `warm` hint while the cursor is near the entry
+/// corner (or captured), so the first `move` does not wake a sleeping Hub.
+#[derive(Debug, Default)]
+struct Warm {
+    /// The KWin script last said the cursor is in the approach area.
+    approach: bool,
+    /// `warm {on: true}` was sent to the current page.
+    on: bool,
+    /// When to send `warm {on: false}`, once warm-up is no longer wanted.
+    cool_at: Option<Instant>,
+}
+
+/// The agent's own input counts for the `perf` log line.
+#[derive(Debug)]
+struct Counters {
+    since: Instant,
+    /// Frozen at the end of a capture, so a `perf` sent after `leave` is not
+    /// diluted by idle time.
+    until: Option<Instant>,
+    ei_frames: u64,
+    moves_sent: u64,
+    /// Activation time until the first `move` of that capture is sent.
+    enter_at: Option<Instant>,
+    first_move: Option<Duration>,
+}
+
+impl Counters {
+    fn new(now: Instant) -> Self {
+        Self {
+            since: now,
+            until: Some(now),
+            ei_frames: 0,
+            moves_sent: 0,
+            enter_at: None,
+            first_move: None,
+        }
+    }
+
+    fn start(&mut self, now: Instant) {
+        *self = Self::new(now);
+        self.until = None;
+        self.enter_at = Some(now);
+    }
+
+    fn moved(&mut self, now: Instant) {
+        self.moves_sent += 1;
+        if let Some(t) = self.enter_at.take() {
+            self.first_move = Some(now - t);
+        }
+    }
+
+    /// Rates since the last call, as `(ei frames/s, moves/s, moves, span)`.
+    fn take(&mut self, now: Instant, active: bool) -> (f64, f64, u64, Duration) {
+        let span = self.until.unwrap_or(now) - self.since;
+        let secs = span.as_secs_f64();
+        let rate = |n: u64| if secs > 0.0 { n as f64 / secs } else { 0.0 };
+        let out = (
+            rate(self.ei_frames),
+            rate(self.moves_sent),
+            self.moves_sent,
+            span,
+        );
+        self.since = now;
+        self.until = (!active).then_some(now);
+        self.ei_frames = 0;
+        self.moves_sent = 0;
+        out
+    }
+}
+
 struct App<'p> {
     cfg: Config,
     portal: &'p Portal,
@@ -260,10 +392,20 @@ struct App<'p> {
     armed: bool,
     rearm_at: Option<Instant>,
     pointer: Pointer,
+    coalescer: MoveCoalescer,
     page: Option<Page>,
     next_page_id: u64,
     events: mpsc::Sender<PageEvent>,
     rtt: Rtt,
+    next_ping: Instant,
+    warm: Warm,
+    /// Why the focused window keeps capture off (a game), if it does.
+    gated: Option<String>,
+    /// The KWin observer is running, so `warm.approach` can gate the barrier.
+    approach_known: bool,
+    counters: Counters,
+    effects: Option<Effects>,
+    script: Option<Script>,
 }
 
 impl<'p> App<'p> {
@@ -273,24 +415,48 @@ impl<'p> App<'p> {
         ei: ei::Context,
         zones: ZoneSet,
         events: mpsc::Sender<PageEvent>,
+        effects: Option<Effects>,
+        script: Option<Script>,
     ) -> Self {
+        let now = Instant::now();
         Self {
-            pointer: Pointer::new(cfg.gain),
+            pointer: Pointer::new(cfg.gain, f64::from(cfg.hub_width_px)),
             cfg,
             portal,
             ei,
             zones,
             armed: false,
             rearm_at: None,
+            coalescer: MoveCoalescer::default(),
             page: None,
             next_page_id: 0,
             events,
             rtt: Rtt::default(),
+            next_ping: now + PING_SLOW,
+            warm: Warm::default(),
+            gated: None,
+            approach_known: false,
+            counters: Counters::new(now),
+            effects,
+            script,
         }
+    }
+
+    /// The entry corner's width: the Hub plus slack.
+    fn reach(&self) -> u32 {
+        self.cfg
+            .hub_width_px
+            .saturating_add(self.cfg.entry_slack_px)
     }
 
     fn page_ready(&self) -> bool {
         self.page.as_ref().is_some_and(|p| p.viewport.is_some())
+    }
+
+    fn load_script(&self) {
+        if let (Some(script), Some(zone)) = (&self.script, leftmost_zone(&self.zones.zones)) {
+            script.load(approach_for(zone, self.reach()));
+        }
     }
 
     fn send(&mut self, msg: &AgentMsg) {
@@ -302,8 +468,60 @@ impl<'p> App<'p> {
         }
     }
 
+    fn send_move(&mut self, now: Instant, (x, y): (f64, f64)) {
+        self.send(&AgentMsg::Move { x, y });
+        self.counters.moved(now);
+    }
+
+    /// Input frames for the page: `move`s are rate limited; anything else
+    /// first flushes a pending `move` so it lands at the right point.
+    fn send_input(&mut self, msg: &AgentMsg) {
+        let now = Instant::now();
+        match *msg {
+            AgentMsg::Move { x, y } => {
+                if let Some(pos) = self.coalescer.offer(now, (x, y)) {
+                    self.send_move(now, pos);
+                }
+            }
+            _ => {
+                if let Some(pos) = self.coalescer.take(now) {
+                    self.send_move(now, pos);
+                }
+                self.send(msg);
+            }
+        }
+    }
+
+    fn on_move_due(&mut self) {
+        let now = Instant::now();
+        if let Some(pos) = self.coalescer.flush_due(now) {
+            self.send_move(now, pos);
+        }
+    }
+
     async fn release(&self, to: ReleaseTo) -> Result<()> {
         self.portal.release(to.activation_id, to.cursor).await
+    }
+
+    fn capture_started(&mut self) {
+        let now = Instant::now();
+        self.coalescer.reset();
+        self.counters.start(now);
+        if let Some(effects) = &self.effects {
+            effects.suppress();
+        }
+        self.update_warm();
+    }
+
+    /// After the page got its `leave`, whoever ended the capture.
+    fn capture_ended(&mut self) {
+        self.coalescer.reset();
+        self.counters.until = Some(Instant::now());
+        self.counters.enter_at = None;
+        if let Some(effects) = &self.effects {
+            effects.restore();
+        }
+        self.update_warm();
     }
 
     /// Ends an ongoing capture from our side: `leave` first so the page
@@ -313,12 +531,16 @@ impl<'p> App<'p> {
             return Ok(());
         };
         log!("capture: ending ({why})");
-        self.send(&AgentMsg::Leave);
+        self.send_input(&AgentMsg::Leave);
+        self.capture_ended();
         self.release(to).await
     }
 
     async fn arm(&mut self) -> Result<()> {
         self.rearm_at = None;
+        if self.gated.is_some() {
+            return Ok(());
+        }
         let Some(zone) = leftmost_zone(&self.zones.zones) else {
             log!("portal: no zones to place a barrier on");
             return Ok(());
@@ -351,14 +573,18 @@ impl<'p> App<'p> {
         // Dropping the connection closes it after the queued `leave`.
         self.page = None;
         self.pointer.set_viewport(None);
+        self.warm.on = false;
+        self.warm.cool_at = None;
         self.disarm().await
     }
 
     async fn reap(&mut self) -> Result<()> {
-        match self.page.as_ref().and_then(|p| p.dead) {
-            Some(why) => self.drop_page(why).await,
-            None => Ok(()),
+        if let Some(why) = self.page.as_ref().and_then(|p| p.dead) {
+            return self.drop_page(why).await;
         }
+        // A game took focus or the cursor moved away during a capture:
+        // disarm once it is over.
+        self.sync_arm().await
     }
 
     async fn on_new_page(&mut self, new: NewPage) -> Result<()> {
@@ -366,16 +592,18 @@ impl<'p> App<'p> {
         self.next_page_id += 1;
         let id = self.next_page_id;
         log!("page {id}: connected from {}", new.peer);
+        let now = Instant::now();
         let mut page = Page {
             conn: PageConn::spawn(id, new, self.events.clone()),
             viewport: None,
-            last_pong: Instant::now(),
+            last_pong: now,
             pings: Pings::default(),
             dead: None,
         };
-        let ping_id = page.pings.start(Instant::now());
+        let ping_id = page.pings.start(now, false);
         self.page = Some(page);
         self.send(&AgentMsg::Ping { id: ping_id });
+        self.next_ping = now + PING_SLOW;
         Ok(())
     }
 
@@ -396,8 +624,8 @@ impl<'p> App<'p> {
             PageMsg::Pong { id } => {
                 let now = Instant::now();
                 page.last_pong = now;
-                if let Some(rtt) = page.pings.finish(id, now) {
-                    self.rtt.record(rtt);
+                if let Some(sample) = page.pings.finish(id, now) {
+                    self.rtt.record(sample);
                 }
             }
             PageMsg::Hello { w, h } => {
@@ -406,14 +634,111 @@ impl<'p> App<'p> {
                 }
                 page.viewport = Some((w, h));
                 if let Some(msg) = self.pointer.set_viewport(Some((w, h))) {
-                    self.send(&msg);
+                    self.send_input(&msg);
                 }
-                if !self.armed {
-                    self.arm().await?;
+                self.update_warm();
+                self.sync_arm().await?;
+            }
+            PageMsg::Perf(perf) => self.log_perf(&perf),
+        }
+        Ok(())
+    }
+
+    fn log_perf(&mut self, p: &Perf) {
+        let (ei_rate, sent_rate, sent, span) =
+            self.counters.take(Instant::now(), self.pointer.is_active());
+        let first = self
+            .counters
+            .first_move
+            .take()
+            .map(|d| format!(", enter→move {:.1} ms", ms(d)))
+            .unwrap_or_default();
+        log!(
+            "perf: hub lag p50 {:.1} p95 {:.1} max {:.0} ms, frame gap max {:.0} ms, \
+             long tasks {:.0} ({:.0} ms), {:.0} moves {:.0} frames/{:.1} s; \
+             agent ei {ei_rate:.0}/s sent {sent_rate:.0}/s ({sent} moves/{:.1} s){first}",
+            p.lag_p50,
+            p.lag_p95,
+            p.lag_max,
+            p.gap_max,
+            p.long_tasks,
+            p.long_task_ms,
+            p.moves,
+            p.frames,
+            p.span / 1000.0,
+            span.as_secs_f64(),
+        );
+    }
+
+    async fn on_kwin(&mut self, event: KwinEvent) -> Result<()> {
+        match event {
+            KwinEvent::Window(window) => {
+                // The script reports the window as soon as it runs, so from
+                // here on the approach signal is trustworthy.
+                self.approach_known = true;
+                let gated = window.and_then(|w| self.cfg.gate.blocked_by(&w));
+                if gated == self.gated {
+                    return self.sync_arm().await;
+                }
+                match &gated {
+                    Some(why) => log!("gate: blocked by {why}"),
+                    None => log!("gate: open"),
+                }
+                self.gated = gated;
+                // A capture in progress is left alone (it cannot start in a
+                // game anyway); sync_arm() disarms once it is over.
+                self.update_warm();
+                self.sync_arm().await?;
+            }
+            KwinEvent::Approach(inside) => {
+                if inside != self.warm.approach {
+                    self.warm.approach = inside;
+                    self.update_warm();
+                    self.sync_arm().await?;
                 }
             }
         }
         Ok(())
+    }
+
+    fn warm_wanted(&self) -> bool {
+        (self.warm.approach || self.pointer.is_active())
+            && self.gated.is_none()
+            && self.page_ready()
+    }
+
+    fn ping_period(&self) -> Duration {
+        // During capture the moves keep the link busy.
+        if self.warm.on && !self.pointer.is_active() {
+            PING_FAST
+        } else {
+            PING_SLOW
+        }
+    }
+
+    fn update_warm(&mut self) {
+        if self.warm_wanted() {
+            self.warm.cool_at = None;
+            if !self.warm.on {
+                self.warm.on = true;
+                log!("warm: on");
+                self.send(&AgentMsg::Warm { on: true });
+            }
+        } else if self.warm.on && self.warm.cool_at.is_none() {
+            self.warm.cool_at = Some(Instant::now() + WARM_HYSTERESIS);
+        }
+        let soonest = Instant::now() + self.ping_period();
+        self.next_ping = self.next_ping.min(soonest);
+    }
+
+    fn on_warm_cooled(&mut self) {
+        self.warm.cool_at = None;
+        if self.warm_wanted() || !self.warm.on {
+            return;
+        }
+        self.warm.on = false;
+        log!("warm: off");
+        self.send(&AgentMsg::Warm { on: false });
     }
 
     async fn on_activated(
@@ -421,36 +746,39 @@ impl<'p> App<'p> {
         activation_id: Option<u32>,
         cursor: Option<(f64, f64)>,
     ) -> Result<()> {
+        let hand_back = ReleaseTo {
+            activation_id,
+            cursor: None,
+        };
         if !self.page_ready() {
             // Barriers are only armed with a page, but never keep a pointer
             // nobody can see.
             log!("capture: activated without a page; releasing");
-            return self
-                .release(ReleaseTo {
-                    activation_id,
-                    cursor: None,
-                })
-                .await;
+            return self.release(hand_back).await;
+        }
+        if let Some(why) = &self.gated {
+            // The barrier was still up while a game took focus.
+            log!("capture: activated while blocked by {why}; releasing");
+            self.release(hand_back).await?;
+            return self.disarm().await;
         }
         if let Some(zone) = leftmost_zone(&self.zones.zones)
-            && !in_entry_zone(zone, self.cfg.zone_height, cursor.map(|c| c.1))
+            && !in_entry_zone(zone, self.reach(), cursor.map(|c| c.0))
         {
-            // KDE only accepts barriers that fill the edge, so pushes above
-            // the Hub land here. Hand the pointer straight back and rest the
-            // barrier briefly so a sustained push does not loop.
-            self.release(ReleaseTo {
-                activation_id,
-                cursor: None,
-            })
-            .await?;
+            // KDE only accepts barriers that fill the edge, so pushes along
+            // the bottom outside the entry corner land here. Hand the pointer
+            // straight back and rest the barrier briefly so a sustained push
+            // does not loop.
+            self.release(hand_back).await?;
             self.disarm().await?;
-            self.rearm_at = Some(Instant::now() + REARM_AFTER_UPPER_EDGE);
+            self.rearm_at = Some(Instant::now() + REARM_AFTER_OUTSIDE_CORNER);
             return Ok(());
         }
         match self.pointer.activate(activation_id, cursor) {
             Ok(enter) => {
-                log!("capture: enter {enter:?}");
                 self.send(&enter);
+                log!("capture: enter {enter:?}");
+                self.capture_started();
                 Ok(())
             }
             Err(to) => self.release(to).await,
@@ -460,7 +788,8 @@ impl<'p> App<'p> {
     fn on_deactivated(&mut self, activation_id: Option<u32>) {
         if self.pointer.deactivated(activation_id) {
             log!("capture: ended by compositor");
-            self.send(&AgentMsg::Leave);
+            self.send_input(&AgentMsg::Leave);
+            self.capture_ended();
         }
     }
 
@@ -475,10 +804,26 @@ impl<'p> App<'p> {
 
     async fn on_rearm(&mut self) -> Result<()> {
         self.rearm_at = None;
-        if self.page_ready() {
-            self.arm().await?;
+        self.sync_arm().await
+    }
+
+    /// The barrier must fill the whole bottom edge (KDE's rule), so it is only
+    /// armed while the cursor is near the entry corner. Elsewhere a push
+    /// against the bottom edge, onto the taskbar for example, never touches
+    /// it. Without the KWin observer it stays armed, as before.
+    fn arm_wanted(&self) -> bool {
+        self.page_ready() && self.gated.is_none() && (self.warm.approach || !self.approach_known)
+    }
+
+    async fn sync_arm(&mut self) -> Result<()> {
+        if self.pointer.is_active() || self.rearm_at.is_some() {
+            return Ok(());
         }
-        Ok(())
+        match (self.arm_wanted(), self.armed) {
+            (true, false) => self.arm().await,
+            (false, true) => self.disarm().await,
+            _ => Ok(()),
+        }
     }
 
     async fn on_zones_changed(&mut self) -> Result<()> {
@@ -487,10 +832,8 @@ impl<'p> App<'p> {
         self.zones = self.portal.zones().await?;
         log!("portal: zones {:?}", self.zones);
         self.pointer.set_zone(leftmost_zone(&self.zones.zones));
-        if self.page_ready() {
-            self.arm().await?;
-        }
-        Ok(())
+        self.load_script();
+        self.sync_arm().await
     }
 
     async fn on_ei(&mut self, event: EiEvent) -> Result<()> {
@@ -502,15 +845,14 @@ impl<'p> App<'p> {
                 self.pointer.scroll_discrete(s.discrete_dx, s.discrete_dy)
             }
             EiEvent::Frame(_) => {
+                self.counters.ei_frames += 1;
                 let out = self.pointer.frame();
                 for msg in &out.msgs {
-                    self.send(msg);
+                    self.send_input(msg);
                 }
                 if let Some(to) = out.release {
-                    log!(
-                        "capture: left the Hub on the right, release to {:?}",
-                        to.cursor
-                    );
+                    log!("capture: left the Hub's top, release to {:?}", to.cursor);
+                    self.capture_ended();
                     self.release(to).await?;
                 }
             }
@@ -548,11 +890,14 @@ impl<'p> App<'p> {
         Ok(())
     }
 
-    fn on_ping_tick(&mut self) {
+    fn on_ping_due(&mut self) {
+        let now = Instant::now();
+        let period = self.ping_period();
+        self.next_ping = now + period;
         let Some(page) = self.page.as_mut() else {
             return;
         };
-        let id = page.pings.start(Instant::now());
+        let id = page.pings.start(now, period == PING_FAST);
         self.send(&AgentMsg::Ping { id });
     }
 
@@ -562,11 +907,12 @@ impl<'p> App<'p> {
         }
         if let Some(s) = self.rtt.take() {
             log!(
-                "ws: rtt p50 {:.1} ms p95 {:.1} ms max {:.1} ms ({} pongs)",
+                "ws: rtt p50 {:.1} ms p95 {:.1} ms max {:.1} ms ({} pongs, {} fast)",
                 ms(s.p50),
                 ms(s.p95),
                 ms(s.max),
-                s.n
+                s.n,
+                s.fast
             );
         }
     }
@@ -579,10 +925,44 @@ impl<'p> App<'p> {
         if let Err(e) = self.disarm().await {
             log!("{e:#}");
         }
+        if let Some(effects) = &self.effects {
+            effects.shutdown(KWIN_EXIT_TIMEOUT).await;
+        }
+        if let Some(script) = &self.script {
+            script.unload(KWIN_EXIT_TIMEOUT).await;
+        }
         self.portal.close().await;
     }
 }
 
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counters_rate_over_the_capture_only() {
+        let t0 = Instant::now();
+        let mut c = Counters::new(t0);
+        c.start(t0);
+        for _ in 0..2000 {
+            c.ei_frames += 1;
+        }
+        c.moved(t0 + Duration::from_millis(4));
+        c.moved(t0 + Duration::from_millis(12));
+        assert_eq!(c.first_move, Some(Duration::from_millis(4)));
+        // Capture ends at 2 s; the post-leave perf arrives later.
+        c.until = Some(t0 + Duration::from_secs(2));
+        let (ei, sent, n, span) = c.take(t0 + Duration::from_secs(3), false);
+        assert_eq!(
+            (ei, sent, n, span),
+            (1000.0, 1.0, 2, Duration::from_secs(2))
+        );
+        // Nothing since: zero span, zero rates.
+        let (ei, sent, n, span) = c.take(t0 + Duration::from_secs(5), false);
+        assert_eq!((ei, sent, n, span), (0.0, 0.0, 0, Duration::ZERO));
+    }
 }

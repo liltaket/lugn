@@ -1,9 +1,12 @@
-# Hub pointer bridge, wire protocol v1
+# Hub pointer bridge, wire protocol v2
 
-`lugn-hub-pointer` runs on the desktop. When the desktop pointer is pushed
-against a barrier on the lower part of the monitor's left edge, the
-compositor hands the pointer to it (xdg-desktop-portal InputCapture plus
-libei). It then drives a virtual cursor on one Nest Hub dashboard page.
+`lugn-hub-pointer` runs on the desktop. The Hub stands **below** the monitor,
+its left edge roughly level with the monitor's left edge. When the desktop
+pointer is moved down out of the monitor's bottom edge near the bottom-left
+corner, the compositor hands the pointer to the agent (xdg-desktop-portal
+InputCapture plus libei). The agent then drives a virtual cursor on one Nest
+Hub dashboard page. Moving up out of the Hub's top edge, anywhere along it,
+gives the pointer back.
 
 The Hub page connects directly to the desktop over the LAN:
 
@@ -20,28 +23,31 @@ unknown fields are ignored by both sides.
 
 ## Page to agent
 
-| `t`     | Fields                                                         | When                               |
-| ------- | -------------------------------------------------------------- | ---------------------------------- |
-| `hello` | `v: 1`, `w`, `h` (viewport CSS px, `innerWidth`/`innerHeight`) | On open, and again on every resize |
-| `pong`  | `id` (echoed)                                                  | Reply to every `ping`              |
+| `t`     | Fields                                                                                            | When                                                                                    |
+| ------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `hello` | `v` (1 or 2), `w`, `h` (viewport CSS px, `innerWidth`/`innerHeight`)                              | On open, and again on every resize                                                      |
+| `pong`  | `id` (echoed)                                                                                     | Reply to every `ping`, sent straight from the message handler                           |
+| `perf`  | `frames`, `moves`, `lagP50`, `lagP95`, `lagMax`, `gapMax`, `longTasks`, `longTaskMs`, `span` (ms) | About every 2 s while the cursor is shown, and once right after `leave` (see Telemetry) |
 
 ## Agent to page
 
-| `t`      | Fields                                                              | Meaning                                                      |
-| -------- | ------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `enter`  | `x`, `y`                                                            | Capture started; show the cursor at this viewport point      |
-| `move`   | `x`, `y`                                                            | Absolute viewport CSS px (floats). Sent once per libei frame |
-| `button` | `button` (`"left"`, `"right"`, `"middle"`), `down` (bool), `x`, `y` | Press or release at the point                                |
-| `wheel`  | `dx`, `dy` (CSS px, positive = down/right), `x`, `y`                | Scroll at the point                                          |
-| `leave`  | none                                                                | Capture ended; hide the cursor and release any held button   |
-| `ping`   | `id` (integer)                                                      | Once per second while connected; page answers `pong`         |
+| `t`      | Fields                                                              | Meaning                                                                       |
+| -------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `enter`  | `x`, `y`                                                            | Capture started; show the cursor at this viewport point                       |
+| `move`   | `x`, `y`                                                            | Absolute viewport CSS px (floats). At most one per 8 ms, latest position wins |
+| `button` | `button` (`"left"`, `"right"`, `"middle"`), `down` (bool), `x`, `y` | Press or release at the point                                                 |
+| `wheel`  | `dx`, `dy` (CSS px, positive = down/right), `x`, `y`                | Scroll at the point                                                           |
+| `leave`  | none                                                                | Capture ended; hide the cursor and release any held button                    |
+| `warm`   | `on` (bool)                                                         | The desktop pointer is near the entry corner (or left it); get ready to draw  |
+| `ping`   | `id` (integer)                                                      | Once per second while connected; every 20 ms while warm; page answers `pong`  |
 
-The agent owns the cursor position and clamps it to `0 <= x`, `0 <= y < h`.
-The Hub stands to the left of the monitor with its bottom edge level with the
-monitor's bottom edge, so the cursor enters at the right edge of the Hub page
-(`x = w - 1`). Moving past the right edge (`x >= w`) ends capture and puts the
-desktop pointer back just inside the monitor's left edge at the matching
-height.
+The agent owns the cursor position and clamps it to `0 <= x < w`,
+`y < h`. The cursor enters at the top of the Hub page (`y = 0`) at the
+x that matches the desktop pointer's position along the entry zone. Moving
+above the top (`y < 0`) ends capture and puts the desktop pointer back just
+above the monitor's bottom edge at the matching x. Buttons and wheel are sent
+immediately; a pending `move` is flushed first so they land at the right
+point.
 
 ## Page behavior
 
@@ -50,6 +56,17 @@ height.
   then `click` when press and release hit the same control.
 - The page hides the cursor on `leave`, on disconnect, and when the socket is
   closed. It reconnects with backoff.
+- The cursor element exists from the moment the bridge is configured, so the
+  first `enter` does no DOM creation.
+
+## Telemetry
+
+`lag` is the time from a `move` arriving in the page's message handler to the
+animation frame that writes it to the cursor. `gapMax` is the longest interval
+between animation frames while the cursor was shown. `longTasks` and
+`longTaskMs` come from a `longtask` PerformanceObserver where the engine has
+one (otherwise 0). `span` is the window the numbers cover. The agent logs them
+next to its own rates (libei frames and `move`s sent per second).
 
 ## Safety
 
@@ -57,6 +74,7 @@ The agent ends capture when the page disconnects, when no `pong` has arrived
 for 2.5 s, on the compositor's `Deactivated` signal, and on exit. A page that
 has not answered a `ping` for 2.5 s is treated as gone even when nothing is
 captured: the agent closes its socket and disarms the barrier, and the page
-reconnects as after any disconnect. Barriers are
-only armed while a page is connected and has sent `hello`, so the desktop
-pointer is never captured with nothing to show it.
+reconnects as after any disconnect. Barriers are only armed while a page is
+connected and has sent `hello`, and while the focused window is not a game,
+so the desktop pointer is never captured with nothing to show it or in the
+middle of a game.
