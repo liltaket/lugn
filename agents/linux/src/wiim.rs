@@ -347,4 +347,22 @@ mod tests {
             status.decide()
         );
     }
+
+    /// Switches a real device to Optical and reads it back. Changes the input:
+    /// `LUGN_WIIM_HOST=192.168.1.50 cargo test --locked live_switch -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "switches the input of a real WiiM"]
+    async fn live_switch() {
+        let host = std::env::var("LUGN_WIIM_HOST").expect("set LUGN_WIIM_HOST");
+        let wiim = Wiim::new(&host).unwrap();
+        let before = wiim.status().await.unwrap();
+        println!("before: mode={} status={}", before.mode, before.status);
+        let started = std::time::Instant::now();
+        wiim.switch_to_optical().await.unwrap();
+        println!(
+            "switched and confirmed in {} ms",
+            started.elapsed().as_millis()
+        );
+        assert!(wiim.status().await.unwrap().is_optical());
+    }
 }
