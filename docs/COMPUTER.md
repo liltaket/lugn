@@ -316,14 +316,18 @@ inhibitor.
   presence miss) is therefore left alone for ten minutes rather than fought.
 - **Tracking loss is not absence.** `unknown` presence sends nothing, and it does
   not restart the empty wait.
-- **Wake.** When presence is confirmed `occupied` again, Lugn sends `on` **once**
-  (at most three attempts if it changed nothing) and only if it put the display to
-  sleep, or the agent's last request was such a sleep, which survives a restart of
-  Lugn but not of the agent connection. It does not wake a display that is already
-  on or that it did not put to sleep, is skipped in quiet hours (23:00–06:00
-  Stockholm, like music) unless `wakeInQuietHours` is set, and reports
-  `problem: wake_unavailable` when no monitor is on the bus. Mouse or keyboard
-  input remains the reliable wake.
+- **Wake.** When presence is confirmed `occupied` again (or you are home again),
+  Lugn sends `on` **once** (at most three attempts if it changed nothing), but
+  only if it put the display to sleep _because the room emptied or you were away_.
+  A display that went dark for **inactivity** (or any other reason) is not woken
+  by Lugn, not even when you leave the room and come back; the keyboard or mouse
+  wakes it. It does not wake a display that is already on, is skipped in quiet
+  hours (23:00–06:00 Stockholm, like music) unless `wakeInQuietHours` is set, and
+  reports `problem: wake_unavailable` when no monitor is on the bus. After a
+  restart of Lugn nothing remembers why the display went dark: if the room is
+  empty then and the agent's last request was a sleep, it is taken to be the
+  presence rule (inactivity sleep only happens with someone in the room); with the
+  room occupied it is left alone.
 - **Waiting, not queueing.** A request is only sent while the computer observation
   and the display state are live, fresh and from the same session.
 

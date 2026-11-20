@@ -219,30 +219,23 @@ export class DisplayPowerController {
       this.wakeNeeded = false;
       this.wakeVerifyAt = null;
     } else if (occupied && this.emptySince !== null) {
-      // Back in the room. Only a sleep Lugn itself requested earns a wake. The
-      // agent's last command lets that survive a restart of this process.
-      const ours =
-        this.offRequested ||
-        (power === 'off' && lastCommandWasOurSleep(observation));
-      if (ours && policy.wakeOnEntry) {
+      // Back in the room. Only a sleep Lugn requested because the room emptied
+      // earns a wake. A display that went dark for inactivity (or for any other
+      // reason) is left for the keyboard to wake.
+      if (this.offRequested && policy.wakeOnEntry) {
         this.wakeNeeded = true;
         this.wakeAttempts = 0;
       }
       this.leaveEmpty();
     }
     if (!this.startupChecked && observation) {
-      // After a restart of Lugn nothing remembers a sleep requested before it.
+      // After a restart of Lugn nothing remembers why the display went dark.
+      // If the room is empty now and the agent's last request was a sleep, it
+      // was almost certainly the presence rule (inactivity sleep only happens
+      // with someone in the room), so it still earns a wake on return.
       this.startupChecked = true;
-      if (
-        occupied &&
-        this.emptySince === null &&
-        power === 'off' &&
-        lastCommandWasOurSleep(observation) &&
-        policy.wakeOnEntry
-      ) {
-        this.wakeNeeded = true;
-        this.wakeAttempts = 0;
-      }
+      if (empty && power === 'off' && lastCommandWasOurSleep(observation))
+        this.offRequested = true;
     }
 
     const ready = this.ready(state, snapshot, observation);

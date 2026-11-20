@@ -651,7 +651,9 @@ describe('DisplayPowerController', () => {
       expect(h.published.at(-1)).toMatchObject({ problem: 'wake_failed' });
     });
 
-    it('wakes after a restart of Lugn from the agent’s record of its own sleep', async () => {
+    it('does not wake a dark display after a restart of Lugn with someone in the room', async () => {
+      // The agent's last request was a sleep, but with the room occupied it can
+      // only have been inactivity (or the user); the keyboard wakes it.
       h.transport.power = 'off';
       h.transport.lastCommand = {
         command_id: '77777777-7777-4777-8777-777777777777',
@@ -661,14 +663,7 @@ describe('DisplayPowerController', () => {
         timestamp_ms: 0,
       };
       await h.set({ presence: 'occupied' });
-      expect(h.transport.sent).toEqual(['on']);
-
-      // A display that went dark for another reason is left alone.
-      h = harness();
-      h.transport.power = 'off';
-      h.transport.inputIdle = true;
-      await h.set({ presence: 'occupied' });
-      await h.advance(10 * MINUTE);
+      await h.advance(60 * MINUTE);
       expect(h.transport.sent).toEqual([]);
     });
 
@@ -686,6 +681,38 @@ describe('DisplayPowerController', () => {
       expect(h.transport.sent).toEqual([]);
       await h.set({ presence: 'occupied' });
       expect(h.transport.sent).toEqual(['on']);
+    });
+
+    it('does not wake a display that went dark for inactivity, even after the room emptied and filled again', async () => {
+      h = harness();
+      h.transport.power = 'on';
+      h.transport.inputIdle = true;
+      h.transport.inputIdleSince = h.clock.now() - 2 * MINUTE;
+      await h.set({});
+      await h.advance(28 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      // Out of the room and back: the display stays dark until a key is pressed.
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(10 * MINUTE);
+      await h.set({ presence: 'occupied' });
+      await h.advance(10 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('still wakes a display that went dark because the room emptied', async () => {
+      h.transport.inputIdleSince = h.clock.now() - 2 * MINUTE;
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      await h.set({ presence: 'occupied' });
+      expect(h.transport.sent).toEqual(['off', 'on']);
+    });
+
+    it('wakes when the house was away, not only for an empty room', async () => {
+      await h.set({ home: 'away' });
+      await h.advance(2 * MINUTE);
+      await h.set({ home: 'home', presence: 'occupied' });
+      expect(h.transport.sent).toEqual(['off', 'on']);
     });
 
     it('never wakes in quiet hours', async () => {
