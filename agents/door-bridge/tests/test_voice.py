@@ -205,7 +205,8 @@ async def test_lugn_failure(tmp_path: Path) -> None:
     await run.wait()
     rec = journal(tmp_path)[0]
     assert rec["outcome"] == "lugn_failed" and rec["lugn"]["error"] == "target_not_configured"
-    assert player.played == ["error"] and t.names()[-2:] == ["ERROR", "RUN_END"]
+    # The command was understood (tone at once), then Lugn failed (error tone).
+    assert player.played == ["ok", "error"] and t.names()[-2:] == ["ERROR", "RUN_END"]
 
 
 async def test_exception_still_ends_run(tmp_path: Path) -> None:
@@ -278,7 +279,7 @@ async def test_volume_execution(tmp_path: Path, text: str, volume: float | None,
     await run.wait()
     writes = [(n, i) for n, i, *_ in lugn.calls if n != "music.getState"]
     assert writes == ([expected] if expected else [])
-    assert player.played == (["ok"] if expected else ["error"])
+    assert player.played == (["ok"] if expected else ["ok", "error"])
 
 
 async def test_ambient_floor_is_raised_by_stream_gain(tmp_path: Path) -> None:

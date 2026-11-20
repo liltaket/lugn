@@ -55,7 +55,7 @@ def test_max_utterance() -> None:
 
 def test_threshold_follows_ambient_floor() -> None:
     # Speech at -40 dBFS in a -60 room is speech; the same level is noise in a -38 room.
-    assert run(tone(800, -40) + silence(1000), floor=-60).end_reason == "speech_end"
+    assert run(silence(700) + tone(800, -40) + silence(1000), floor=-60).end_reason == "speech_end"
     loud_room = run(tone(800, -40) + silence(3000), floor=-38)
     assert loud_room.speech_start_ms is None and loud_room.end_reason == "no_speech"
 
@@ -96,3 +96,27 @@ def test_speech_started_flag_fires_once() -> None:
         ep.feed(c)
         fired += ep.speech_started_now
     assert fired == 1
+
+
+def test_wake_word_tail_is_dropped_and_listening_goes_on() -> None:
+    # The stream opens on the end of "Okay Nabu", then the user pauses and
+    # speaks the command (measured: tail 0-0.5 s, silence, command after 0.9 s).
+    pcm = tone(450, -28) + silence(900) + tone(700, -35) + silence(900)
+    ep = run(pcm, floor=-55)
+    assert ep.end_reason == "speech_end"
+    assert ep.tail_ignored_ms is not None and ep.tail_ignored_ms <= 500
+    assert ep.speech_start_ms is not None and ep.speech_start_ms >= 1300
+
+
+def test_command_said_in_one_breath_with_the_wake_word_is_kept() -> None:
+    pcm = silence(250) + tone(1200, -30) + silence(900)
+    ep = run(pcm, floor=-55)
+    assert ep.end_reason == "speech_end" and ep.tail_ignored_ms is None
+    assert ep.speech_start_ms is not None and ep.speech_start_ms <= 300
+
+
+def test_tail_alone_ends_as_no_speech_after_a_fresh_timeout() -> None:
+    pcm = tone(450, -28) + silence(4000)
+    ep = run(pcm, floor=-55)
+    assert ep.end_reason == "no_speech" and ep.tail_ignored_ms is not None
+    assert ep.audio_ms >= ep.tail_ignored_ms + CFG.no_speech_timeout_ms

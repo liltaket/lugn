@@ -70,9 +70,11 @@ class Journal:
             log.warning("voice journal write failed: %s", error)
 
 
+PRE_ROLL_MS = 500
 _ERROR_OUTCOMES = {"stt_unavailable", "run_timeout", "exception", "lugn_failed"}
 _EARCON_FOR: dict[str, Kind] = {
-    "done": "ok", "dry_run": "ok", "not_understood": "not_understood",
+    # "done" played its tone when the command was understood, before the call.
+    "dry_run": "ok", "not_understood": "not_understood",
     "low_confidence": "not_understood", "no_speech": "cancelled",
     "stt_unavailable": "error", "run_timeout": "error", "exception": "error",
     "lugn_failed": "error", "disconnected": "error",
@@ -186,7 +188,10 @@ class VoiceRun:
             self.record["weak_speech"] = True
             pcm = bytes(self._audio)
         else:
-            start_byte = max(0, snap.speech_start_ms - 300) * SAMPLE_RATE // 1000 * 2
+            # 500 ms of pre-roll: a soft first consonant ("t" in "tänd") stays
+            # under the frame threshold, and cutting it made "tänd taklampan"
+            # come back as "sen ta flampan".
+            start_byte = max(0, snap.speech_start_ms - PRE_ROLL_MS) * SAMPLE_RATE // 1000 * 2
             pcm = bytes(self._audio[start_byte:])
         self.record["audio_ms"] = len(pcm) * 1000 // (SAMPLE_RATE * 2)
         self.p.keep_audio(self.id, pcm)
@@ -226,6 +231,12 @@ class VoiceRun:
             self.outcome = "dry_run"
             send(VoiceEvent.INTENT_END)
             return
+        # Feedback as soon as the command is understood; a scene change can take
+        # seconds in Lugn. A failed call still ends with the error tone.
+        try:
+            self.p.earcons.play("ok")
+        except Exception:  # noqa: BLE001 - feedback is a courtesy
+            log.exception("earcon failed")
         execution = await self.p.executor.execute(intent.action, transcript=transcript.text,
                                                   request_id=f"voice-{self.id}")
         self._mark("lugn_end")

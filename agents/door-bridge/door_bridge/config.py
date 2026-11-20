@@ -34,7 +34,8 @@ class LugnConfig:
     # Same rule as Lugn: a name ending in _B64 holds a base64url-encoded token.
     token_env: str = ""
     token_file: str = ""
-    timeout_s: float = 2.0
+    # A scene change waits for every light; it took over 2 s on the real room.
+    timeout_s: float = 10.0
     ceiling_target: str = "lighting.ceiling"
     music_target: str = "music.room"
     all_on_scene: str = "scene.focus_light"
@@ -73,6 +74,8 @@ class VoiceConfig:
     silence_end_ms: int = 700
     max_utterance_ms: int = 6000
     no_speech_timeout_ms: int = 3000
+    # The first part of the stream that may still be the wake word's tail.
+    wake_tail_ms: int = 600
     run_timeout_s: float = 20.0
     journal_path: str = "~/.local/state/lugn-door-bridge/voice.jsonl"
     journal_max_bytes: int = 20 * 1024 * 1024

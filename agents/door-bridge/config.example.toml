@@ -16,7 +16,7 @@ ambient_sensor_name = "Ljudnivå RMS"
 url = "http://127.0.0.1:8787"
 # Same convention as Lugn: a name ending in _B64 holds a base64url-encoded value.
 token_env = "LUGN_API_TOKEN_B64"
-timeout_s = 2.0
+timeout_s = 10.0
 # Lugn target ids from its config (homeAssistant.entities / homeAssistant.music).
 ceiling_target = "lighting.ceiling"
 music_target = "music.room"
