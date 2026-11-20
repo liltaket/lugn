@@ -14,6 +14,8 @@ export interface PrinterActivityProvider {
   /** Null while the printer has nothing worth showing. Never awaits I/O. */
   snapshot(imageBasePath: string): PrinterActivityPayload | null;
   readCover(token: string): Promise<ArtworkAsset | null>;
+  /** Switches the chamber light; resolves once Home Assistant accepted it. */
+  setLight(on: boolean): Promise<void>;
   subscribe(listener: () => void): () => void;
 }
 
@@ -77,6 +79,27 @@ export class PrinterActivityService implements PrinterActivityProvider {
     return this.pending.promise;
   }
 
+  async setLight(on: boolean): Promise<void> {
+    if (this.adapter.snapshot().light === null)
+      throw new PrinterLightUnavailableError();
+    const response = await this.transport(
+      `${this.options.baseUrl}/api/services/light/${on ? 'turn_on' : 'turn_off'}`,
+      {
+        method: 'POST',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(this.options.timeoutMs ?? 5_000),
+        headers: {
+          Authorization: `Bearer ${this.options.token}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ entity_id: this.adapter.chamberLightEntityId }),
+      },
+    );
+    void response.body?.cancel().catch(() => {});
+    if (!response.ok) throw new Error(`light service HTTP ${response.status}`);
+  }
+
   private tokenFor(revision: string): string {
     return createHash('sha256')
       .update(this.secret)
@@ -112,6 +135,13 @@ export class PrinterActivityService implements PrinterActivityProvider {
     // ha-bambulab labels its PNG cover image/jpeg, so the bytes decide.
     const contentType = sniffImageType(body);
     return contentType ? { body, contentType } : null;
+  }
+}
+
+/** The printer is offline or Home Assistant does not report its light. */
+export class PrinterLightUnavailableError extends Error {
+  constructor() {
+    super('Printer chamber light unavailable');
   }
 }
 

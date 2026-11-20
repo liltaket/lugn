@@ -83,12 +83,13 @@ function snapshot(scenario) {
       endsAt: data.generatedAt + 29 * 60000,
       layer: 22,
       totalLayers: 144,
-      task: 'Stand + Box + Lid + Screw + Cable Mount',
+      task: 'Stand + Box + 3 till',
       nozzle: { current: 220, target: 220 },
       bed: { current: 60, target: 60 },
       statusSince: data.generatedAt - 40 * 60000,
       observedAt: data.generatedAt,
       imageUrl: `/${scenario}/display-api/printer/cover/fixture`,
+      light: false,
       ...overrides,
     });
     if (scenario.startsWith('print') || scenario.startsWith('camera'))
@@ -111,6 +112,11 @@ function snapshot(scenario) {
         nozzle: { current: 141, target: 220 },
         bed: { current: 38, target: 60 },
         task: 'Vase',
+      });
+    if (scenario === 'print-long')
+      data.printer = printing({
+        task: 'Articulated Dragon Full Bo… + 6 till',
+        light: true,
       });
     if (scenario === 'print-done')
       data.printer = printing({
@@ -210,6 +216,7 @@ const server = createServer(async (request, response) => {
         'print-paused',
         'print-prep',
         'print-done',
+        'print-long',
         'camera',
         'camera-print',
         'camera-print-solo',
@@ -352,6 +359,12 @@ const server = createServer(async (request, response) => {
         const policy = data.musicVolumePolicies['music.room'];
         policy.mode = body.mode;
         policy.activeOwner = body.mode === 'auto' ? 'lugn' : 'manual';
+      } else if (route === 'display-api/printer/light') {
+        if (!data.printer) return sendJson(response, 404, {});
+        setTimeout(() => {
+          data.printer.light = body.on === true;
+          data.state.revision++;
+        }, 900);
       } else if (route === 'display-api/presence-count-one')
         data.state.presence.personCount = 1;
       else return sendJson(response, 404, {});
@@ -397,6 +410,6 @@ const server = createServer(async (request, response) => {
 });
 server.listen(port, '127.0.0.1', () =>
   console.log(
-    `Simulated Hub only: http://127.0.0.1:${port}/bed/ (desk, morning, running, legacy, art-error, many, print, print-solo, print-paused, print-prep, print-done, camera, camera-print, camera-print-solo)`,
+    `Simulated Hub only: http://127.0.0.1:${port}/bed/ (desk, morning, running, legacy, art-error, many, print, print-solo, print-paused, print-prep, print-done, print-long, camera, camera-print, camera-print-solo)`,
   ),
 );

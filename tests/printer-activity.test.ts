@@ -73,11 +73,12 @@ describe('Home Assistant printer adapter', () => {
       endsAt: Date.parse('2026-11-20T16:19:30Z') + 29 * 60_000,
       layer: 22,
       totalLayers: 144,
-      task: 'Stand + Box + Lid + …',
+      task: 'Stand + Box + 2 till',
       nozzle: { current: 220, target: 220 },
       bed: { current: 60, target: 60 },
       statusSince: Date.parse('2026-11-20T15:40:00Z'),
       coverRevision: '2026-11-20T16:54:53.841064',
+      light: null,
       observedAt: Date.parse('2026-11-20T16:19:30Z'),
     });
   });
@@ -162,12 +163,47 @@ describe('Home Assistant printer adapter', () => {
     });
   });
 
-  it('words slicer task names for people', () => {
+  it('words slicer task names for two short lines', () => {
     expect(
       taskTitle('obj_1_Ball Joint Stand.stl + obj_2_Cable_Mount.3mf'),
     ).toBe('Ball Joint Stand + Cable Mount');
     expect(taskTitle('Plate_1')).toBe('Plate 1');
     expect(taskTitle('  ')).toBeNull();
+    // Several parts: the names give way so the count always shows.
+    expect(
+      taskTitle(
+        'obj_4_Stand.stl + obj_5_Box.stl + obj_6_Lid.stl + obj_7_Screw.stl',
+      ),
+    ).toBe('Stand + Box + 2 till');
+    expect(
+      taskTitle('obj_1_Articulated Dragon Full Body.stl + obj_2_Base.stl'),
+    ).toBe('Articulated Dragon Full… + Base');
+    // A name list cut off by Home Assistant counts the printable objects.
+    expect(taskTitle('obj_4_Stand.stl + obj_5_Box.stl + ', 7)).toBe(
+      'Stand + Box + 5 till',
+    );
+    const single = taskTitle(`${'Very long model name '.repeat(5)}.3mf`);
+    expect(single).toHaveLength(60);
+    expect(single?.endsWith('…')).toBe(true);
+  });
+
+  it('reports the chamber light only when Home Assistant knows it', () => {
+    const adapter = new HomeAssistantPrinterAdapter(
+      { entityPrefix: prefix, resultVisibleMinutes: 20 },
+      new FakeClock(at),
+    );
+    printing(adapter);
+    expect(adapter.activity()?.light).toBeNull();
+    adapter.acceptState({
+      entity_id: `light.${prefix}_chamber_light`,
+      state: 'on',
+    });
+    expect(adapter.activity()?.light).toBe(true);
+    adapter.acceptState({
+      entity_id: `light.${prefix}_chamber_light`,
+      state: 'unavailable',
+    });
+    expect(adapter.activity()?.light).toBeNull();
   });
 });
 
@@ -269,6 +305,36 @@ describe('printer live activity on the Hub', () => {
     expect((await fetch(`${f.origin}${payload.printer.imageUrl}`)).status).toBe(
       404,
     );
+  });
+
+  it('switches the chamber light through Home Assistant', async () => {
+    const f = await setup();
+    printing(f.adapter);
+    const post = (body: unknown, origin = f.origin) =>
+      fetch(`${f.base}/printer/light`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin },
+        body: JSON.stringify(body),
+      });
+    expect((await post({ on: true })).status).toBe(409);
+    f.adapter.acceptState({
+      entity_id: `light.${prefix}_chamber_light`,
+      state: 'off',
+    });
+    f.upstream.mockResolvedValueOnce(new Response('[]'));
+    expect((await post({ on: true })).status).toBe(200);
+    const [url, init] = f.upstream.mock.calls.at(-1)!;
+    expect(url).toBe('http://ha.test/api/services/light/turn_on');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      entity_id: `light.${prefix}_chamber_light`,
+    });
+    expect(new Headers(init?.headers).get('authorization')).toBe(
+      'Bearer private',
+    );
+    f.upstream.mockResolvedValueOnce(new Response('', { status: 500 }));
+    expect((await post({ on: false })).status).toBe(502);
+    expect((await post({ on: 'yes' })).status).toBe(400);
+    expect((await post({ on: true }, 'http://evil.test')).status).toBe(403);
   });
 
   it('refuses a cover that is not an image', async () => {

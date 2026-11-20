@@ -9,6 +9,7 @@ const PRESENCE_COUNT_URL = `${BASE_PATH}display-api/presence-count-one`;
 const ROUTINE_URL = `${BASE_PATH}display-api/routine`;
 const BEDTIME_URL = `${BASE_PATH}display-api/bedtime`;
 const SUGGESTION_URL = `${BASE_PATH}display-api/suggestion`;
+const PRINT_LIGHT_URL = `${BASE_PATH}display-api/printer/light`;
 const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
@@ -75,6 +76,7 @@ const refs = {
   printPercent: document.querySelector('#print-percent'),
   printTime: document.querySelector('#print-time'),
   printDetail: document.querySelector('#print-detail'),
+  printLight: document.querySelector('#print-light'),
   activitySwap: document.querySelector('#activity-swap'),
   activitySwapLabel: document.querySelector('#activity-swap-label'),
   musicHeading: document.querySelector('#music-heading'),
@@ -198,6 +200,8 @@ const metricRefs = new Map(
 let printActivity = null;
 let printSwapChoice = null;
 let printImageKey = null;
+// A tapped light shows its requested state until Home Assistant reports it.
+let printLightRequest = null;
 let cameraActive = null;
 const cameraDismissedIds = new Set();
 let cameraCloseHoldUntil = 0;
@@ -491,6 +495,7 @@ function setClock() {
   renderMusicProgress();
   updateCameraCountdown();
   renderPrintTime();
+  renderPrintLight();
   if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
     setConnection('offline', 'Inga färska uppdateringar från Lugn.');
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
@@ -3372,8 +3377,53 @@ function renderPrinter(payload) {
     }
     renderPrintTime();
   }
+  renderPrintLight();
   syncExpandedLighting();
 }
+
+function renderPrintLight() {
+  const button = refs.printLight;
+  if (!button) return;
+  const reported =
+    typeof printActivity?.light === 'boolean' ? printActivity.light : null;
+  if (
+    printLightRequest &&
+    (reported === printLightRequest.on ||
+      monotonicNow() > printLightRequest.until)
+  )
+    printLightRequest = null;
+  button.hidden = reported === null;
+  if (refs.printActivity)
+    refs.printActivity.dataset.light = String(reported !== null);
+  const on = printLightRequest ? printLightRequest.on : reported === true;
+  button.setAttribute('aria-pressed', String(on));
+  button.dataset.pending = String(!!printLightRequest);
+  button.disabled = isUnavailable() || printLightRequest?.sending === true;
+}
+
+if (refs.printLight)
+  refs.printLight.addEventListener('click', async () => {
+    if (
+      typeof printActivity?.light !== 'boolean' ||
+      printLightRequest?.sending ||
+      isUnavailable()
+    )
+      return;
+    const on = !(printLightRequest
+      ? printLightRequest.on
+      : printActivity.light);
+    const request = { on, until: monotonicNow() + 8000, sending: true };
+    printLightRequest = request;
+    renderPrintLight();
+    try {
+      await postJson(PRINT_LIGHT_URL, { on });
+      if (printLightRequest === request) request.sending = false;
+    } catch {
+      if (printLightRequest === request) printLightRequest = null;
+      showToast('Lampan i skrivaren svarade inte. Försök igen.', 'error');
+    }
+    renderPrintLight();
+  });
 
 if (refs.activitySwap)
   refs.activitySwap.addEventListener('click', () => {

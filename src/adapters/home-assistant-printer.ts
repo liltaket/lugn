@@ -5,7 +5,8 @@ import type { Clock } from '../core/clock.js';
  * Optional 3D printer observed through the Bambu Lab Home Assistant
  * integration (ha-bambulab). Every entity id is derived from one device prefix,
  * e.g. `a1_0123456789abcde` for `sensor.a1_0123456789abcde_print_status`.
- * Read-only: Lugn never presses the printer's buttons.
+ * Lugn never presses the printer's print buttons; it only switches the
+ * chamber light on request (see `chamberLightEntityId`).
  */
 export const HomeAssistantPrinterConfigSchema = z
   .object({
@@ -52,6 +53,8 @@ export type PrinterActivitySnapshot = {
   statusSince: number | null;
   /** Changes whenever Home Assistant publishes a new cover image. */
   coverRevision: string | null;
+  /** Chamber light; null while Home Assistant does not report on or off. */
+  light: boolean | null;
   observedAt: number | null;
 };
 
@@ -69,6 +72,8 @@ const Fields = {
   bed: 'sensor.%_bed_temperature',
   bedTarget: 'sensor.%_bed_target_temperature',
   cover: 'image.%_cover_image',
+  light: 'light.%_chamber_light',
+  objects: 'sensor.%_printable_objects',
 } as const;
 type Field = keyof typeof Fields;
 
@@ -102,6 +107,7 @@ export class HomeAssistantPrinterAdapter {
   private readonly observations = new Map<Field, Observation>();
   private readonly listeners = new Set<() => void>();
   readonly coverEntityId: string;
+  readonly chamberLightEntityId: string;
 
   constructor(
     private readonly config: HomeAssistantPrinterConfig,
@@ -115,6 +121,7 @@ export class HomeAssistantPrinterAdapter {
       ]),
     );
     this.coverEntityId = Fields.cover.replace('%', parsed.entityPrefix);
+    this.chamberLightEntityId = Fields.light.replace('%', parsed.entityPrefix);
   }
 
   get entityIds(): readonly string[] {
@@ -196,11 +203,17 @@ export class HomeAssistantPrinterAdapter {
           : null,
       layer: this.integer('layer'),
       totalLayers: this.integer('totalLayers'),
-      task: taskTitle(this.text('task')),
+      task: taskTitle(this.text('task'), this.integer('objects')),
       nozzle: this.temperature('nozzle', 'nozzleTarget'),
       bed: this.temperature('bed', 'bedTarget'),
       statusSince: this.observations.get('status')?.changedAt ?? null,
       coverRevision: coverRevision(this.text('cover')),
+      light:
+        this.text('light') === 'on'
+          ? true
+          : this.text('light') === 'off'
+            ? false
+            : null,
       observedAt:
         Math.max(
           0,
@@ -274,8 +287,15 @@ function durationMinutes(state: string, unit: string | null): number | null {
   return Math.round(minutes);
 }
 
-/** `obj_4_Stand.stl + obj_5_Box.stl + …` reads as `Stand + Box + …`. */
-export function taskTitle(value: string | null): string | null {
+/**
+ * `obj_4_Stand.stl + obj_5_Box.stl + …` reads as `Stand + Box + 5 till`.
+ * The Hub has two short lines, so a single name keeps up to 60 characters,
+ * and with several parts the names give way so the count always shows.
+ */
+export function taskTitle(
+  value: string | null,
+  objectCount: number | null = null,
+): string | null {
   if (!value) return null;
   const truncated = /\+\s*$/.test(value);
   const parts = value
@@ -286,12 +306,25 @@ export function taskTitle(value: string | null): string | null {
         .replace(/^obj_\d+_/i, '')
         .replace(/\.(?:stl|3mf|step|obj|gcode)$/i, '')
         .replace(/_/g, ' ')
+        .replace(/\s+/g, ' ')
         .trim(),
     )
     .filter(Boolean);
   if (!parts.length) return null;
-  const title = parts.join(' + ') + (truncated ? ' + …' : '');
-  return title.length > 120 ? `${title.slice(0, 119)}…` : title;
+  const total = Math.max(
+    parts.length + (truncated ? 1 : 0),
+    truncated && objectCount !== null ? objectCount : 0,
+  );
+  if (total === 1) return shorten(parts[0]!, 60);
+  const shown = [shorten(parts[0]!, 24)];
+  const second = parts[1] ? shorten(parts[1], 18) : null;
+  if (second && `${shown[0]} + ${second}`.length <= 36) shown.push(second);
+  const more = total - shown.length;
+  return more > 0 ? `${shown.join(' + ')} + ${more} till` : shown.join(' + ');
+}
+
+function shorten(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1).trimEnd()}…` : value;
 }
 
 function coverRevision(value: string | null): string | null {

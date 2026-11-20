@@ -4932,7 +4932,7 @@ body {
 #app-root #print-title {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   overflow: hidden;
   font-size: 18px;
   line-height: 23px;
@@ -5000,6 +5000,51 @@ body {
 }
 #app-root[data-print-slot='lower'] .print-detail {
   top: 230px;
+}
+
+/* Chamber light: a small capsule at the card's lower right. The tapped state
+   shows at once; a soft pulse says Home Assistant has not confirmed it yet. */
+#app-root .print-light {
+  position: absolute;
+  right: 14px;
+  top: 212px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 44px;
+  min-height: 0;
+  min-width: 0;
+  padding: 0 16px 0 13px;
+  border: 0;
+  border-radius: 22px;
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--glass-2);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease,
+    box-shadow 0.3s ease;
+}
+#app-root .print-light[hidden] {
+  display: none;
+}
+#app-root .print-light[aria-pressed='true'] {
+  color: #2a2414;
+  background: #f1dca6;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.4),
+    0 0 18px rgba(241, 220, 166, 0.35);
+}
+#app-root .print-light[data-pending='true'] {
+  animation: print-pulse 1.2s ease-in-out infinite;
+}
+#app-root[data-print-slot='lower'] .print-light {
+  top: 220px;
+}
+#app-root .print-activity[data-light='true'] .print-detail {
+  right: 128px;
 }
 
 /* The print in the lower card hides the music card it shares that place with. */

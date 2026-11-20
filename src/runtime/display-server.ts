@@ -36,7 +36,10 @@ import type {
 } from '../application/music-automation.js';
 import type { StateEventStream } from '../core/event-stream.js';
 import type { ArtworkProvider } from '../core/artwork.js';
-import type { PrinterActivityProvider } from './printer-activity-service.js';
+import {
+  PrinterLightUnavailableError,
+  type PrinterActivityProvider,
+} from './printer-activity-service.js';
 import {
   ExperienceRequestError,
   type ExperienceApi,
@@ -496,6 +499,41 @@ export class LugnDisplayServer {
           this.lastHubPollAt.set(hubRequest.hub.id, Date.now());
         }
         sendJson(response, 200, this.snapshot(hubRequest.hub));
+        return;
+      }
+      if (
+        request.method === 'POST' &&
+        hubRequest.route === '/display-api/printer/light'
+      ) {
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        const input = z
+          .object({ on: z.boolean() })
+          .strict()
+          .parse(await readJsonBody(request));
+        if (!this.options.printer) {
+          sendJson(response, 404, { error: 'printer_not_configured' });
+          return;
+        }
+        try {
+          await this.options.printer.setLight(input.on);
+          sendJson(response, 200, { accepted: true });
+        } catch (error) {
+          sendJson(
+            response,
+            error instanceof PrinterLightUnavailableError ? 409 : 502,
+            {
+              error:
+                error instanceof PrinterLightUnavailableError
+                  ? 'printer_light_unavailable'
+                  : 'printer_light_failed',
+            },
+          );
+        }
         return;
       }
       if (
