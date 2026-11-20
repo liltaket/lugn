@@ -115,4 +115,47 @@ describe('computer state integration', () => {
     });
     engine.dispose();
   });
+
+  it('records display power status without disturbing observations or other state', () => {
+    const engine = new LugnEngine(new FakeClock(1_100), { scenes: [] });
+    engine.acceptComputerObservation(observation);
+    const received: StateUpdate[] = [];
+    engine.stream.subscribe((update) => received.push(update));
+    const snapshot = {
+      deviceId: 'workstation',
+      control: 'available' as const,
+      desired: 'off' as const,
+      inhibited: null,
+      lastRequest: {
+        action: 'off' as const,
+        outcome: 'applied' as const,
+        at: 2_000,
+      },
+      nextAttemptAt: 902_000,
+      evidence: {
+        source: 'power-sensor' as const,
+        state: 'standby' as const,
+        watts: 1.2,
+        observedAt: 1_900,
+      },
+    };
+
+    engine.acceptComputerDisplay(snapshot);
+    engine.acceptComputerObservation({ ...observation, sequence: 5 });
+
+    expect(engine.state.computer.displays).toEqual({ workstation: snapshot });
+    expect(engine.state.computer.devices['workstation']?.sequence).toBe(5);
+    expect(received[0]?.domains).toEqual(['computer']);
+    expect(received[0]?.patch.computer?.displays).toEqual({
+      workstation: snapshot,
+    });
+    expect(StateUpdateSchema.parse(received[0])).toBeTruthy();
+    expect(RoomStateSchema.parse(engine.state).computer.displays).toBeDefined();
+    expect(() =>
+      engine.acceptComputerDisplay({
+        ...snapshot,
+        desired: 'sideways' as never,
+      }),
+    ).toThrow();
+  });
 });

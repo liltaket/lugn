@@ -188,6 +188,96 @@ describe('runtime configuration cross references', () => {
     ).toBe(true);
   });
 
+  it('keeps computer display control opt-in, authenticated and strictly validated', () => {
+    const mqtt = {
+      url: 'mqtt://broker.test:1883',
+      computers: [{ deviceId: 'kuffe', display: {} }],
+    };
+    expect(() => loadConfig({ ...minimal, mqtt })).toThrow(
+      'Computer display control requires authenticated MQTT',
+    );
+    const authenticated = {
+      ...mqtt,
+      usernameEnv: 'MQTT_USER',
+      passwordEnv: 'MQTT_PASSWORD',
+    };
+    const environment = {
+      HA_TOKEN: 'ha',
+      MQTT_USER: 'controller',
+      MQTT_PASSWORD: 'test-only',
+    };
+    expect(
+      loadConfig({ ...minimal, mqtt: authenticated }, environment).mqtt
+        ?.computers?.[0]?.display,
+    ).toEqual({
+      offAfterEmptyMs: 120_000,
+      reassertOffMs: 900_000,
+      wakeOnEntry: true,
+      wakeInQuietHours: false,
+      inhibitOnActivity: true,
+      activeInhibitMaxMs: 1_800_000,
+    });
+    expect(
+      loadConfig(
+        {
+          ...minimal,
+          mqtt: {
+            ...authenticated,
+            computers: [
+              {
+                deviceId: 'kuffe',
+                display: {
+                  powerSensor: {
+                    entityId: 'sensor.monitor_plug_power',
+                    onAboveWatts: 15,
+                    standbyBelowWatts: 3,
+                  },
+                },
+              },
+            ],
+          },
+        },
+        environment,
+      ).mqtt?.computers?.[0]?.display?.powerSensor,
+    ).toEqual({
+      entityId: 'sensor.monitor_plug_power',
+      onAboveWatts: 15,
+      standbyBelowWatts: 3,
+      settleMs: 20_000,
+    });
+    const invalid = (display: unknown) =>
+      loadConfig(
+        {
+          ...minimal,
+          mqtt: {
+            ...authenticated,
+            computers: [{ deviceId: 'kuffe', display }],
+          },
+        },
+        environment,
+      );
+    expect(() =>
+      invalid({
+        powerSensor: {
+          entityId: 'sensor.monitor_plug_power',
+          onAboveWatts: 5,
+          standbyBelowWatts: 5,
+        },
+      }),
+    ).toThrow('standbyBelowWatts must be lower than onAboveWatts');
+    expect(() =>
+      invalid({
+        powerSensor: {
+          entityId: 'switch.plug',
+          onAboveWatts: 10,
+          standbyBelowWatts: 1,
+        },
+      }),
+    ).toThrow();
+    expect(() => invalid({ offAfterEmptyMs: 100 })).toThrow();
+    expect(() => invalid({ unknownKey: true })).toThrow();
+  });
+
   it('defaults computer MQTT integrations and validates their topic and freshness settings', () => {
     expect(
       loadConfig({ ...minimal, mqtt: { url: 'mqtt://broker.test:1883' } }).mqtt

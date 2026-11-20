@@ -26,3 +26,11 @@ control_enabled = false
 # No network fetches; only Firefox's fixed, user-owned MPRIS PNG caches are read.
 # Thumbnails/media metadata may be private. Use a trusted broker.
 collect_artwork = false
+
+# Optional display sleep/wake requests over authenticated MQTT (DISPLAY v1, see
+# protocol/DISPLAY.md). Lugn decides when; the agent only runs a fixed command:
+# "kscreen-doctor --dpms off|on" (Plasma Wayland) or "xset dpms force off|on" (X11).
+# display_backend: "auto" (default, WAYLAND_DISPLAY -> kscreen, DISPLAY -> xset),
+# "kscreen" or "xset". Requires MQTT username/password and broker ACLs.
+display_control_enabled = false
+display_backend = "auto"

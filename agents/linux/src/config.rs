@@ -28,6 +28,10 @@ pub struct Config {
     #[serde(default)]
     pub collect_artwork: bool,
     #[serde(default)]
+    pub display_control_enabled: bool,
+    #[serde(default)]
+    pub display_backend: crate::display::BackendSetting,
+    #[serde(default)]
     pub video_app_ids: Vec<String>,
     #[serde(default)]
     pub music_app_ids: Vec<String>,
@@ -102,6 +106,12 @@ impl Config {
                     && self.mqtt_password.as_deref().is_some_and(|v| !v.is_empty())),
             "control_enabled requires configured MQTT username and password"
         );
+        ensure!(
+            !self.display_control_enabled
+                || (self.mqtt_username.as_deref().is_some_and(|v| !v.is_empty())
+                    && self.mqtt_password.as_deref().is_some_and(|v| !v.is_empty())),
+            "display_control_enabled requires configured MQTT username and password"
+        );
         Ok(())
     }
     pub fn topic(&self, leaf: &str) -> String {
@@ -122,6 +132,27 @@ mod tests {
         assert!(c.validate().is_err());
         c.mqtt_password = Some("synthetic-password".into());
         assert!(c.validate().is_ok());
+    }
+    #[test]
+    fn display_control_is_opt_in_and_requires_credentials() {
+        let mut c: Config = toml::from_str("device_id='desktop'\nmqtt_host='localhost'").unwrap();
+        assert!(!c.display_control_enabled);
+        assert_eq!(c.display_backend, crate::display::BackendSetting::Auto);
+        c.display_control_enabled = true;
+        assert!(c.validate().is_err());
+        c.mqtt_username = Some("synthetic-user".into());
+        c.mqtt_password = Some("synthetic-password".into());
+        assert!(c.validate().is_ok());
+        let parsed: Config =
+            toml::from_str("device_id='desktop'\nmqtt_host='localhost'\ndisplay_backend='xset'")
+                .unwrap();
+        assert_eq!(parsed.display_backend, crate::display::BackendSetting::Xset);
+        assert!(
+            toml::from_str::<Config>(
+                "device_id='desktop'\nmqtt_host='localhost'\ndisplay_backend='rm -rf /'"
+            )
+            .is_err()
+        );
     }
     #[test]
     fn rejects_wildcards_and_invalid_intervals() {

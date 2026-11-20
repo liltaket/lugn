@@ -4,7 +4,9 @@ A standalone Rust observation publisher for Kubuntu KDE Plasma/Wayland. It sends
 computer telemetry over MQTT and does not depend on the Lugn runtime. Default
 operation is observation-only. Optional authenticated MQTT control supports exact
 MPRIS Pause and lease-bound Resume; it provides no shell commands, input injection,
-screen capture or window control. Lugn-side consumption belongs to a separate PR.
+screen capture or window control. A second opt-in, `display_control_enabled`,
+accepts display sleep/wake requests (see below). Lugn-side consumption belongs to a
+separate PR.
 
 ## Install as the desktop user
 
@@ -133,6 +135,21 @@ Uncertain command diagnostics log only the validated command UUID, fixed failure
 stage/reason, confirmation flags and elapsed time. They contain no command payload,
 media metadata or lease tokens. Use the command UUID to correlate the private
 user-service journal with the controller's result.
+
+## Optional display sleep and wake
+
+Disabled by default. Set `display_control_enabled = true` (it needs the same MQTT
+username/password as media control, and ACLs granting subscribe on the device's
+`display/command` and publish on `display/state` and `display/ack`). Lugn decides
+when the display should sleep or wake, for example from room presence; the agent
+only runs one fixed command: `kscreen-doctor --dpms off|on` on Plasma Wayland or
+`xset dpms force off|on` on X11 (`display_backend = "auto"|"kscreen"|"xset"`).
+`kscreen-doctor` must be installed for the Wayland path.
+
+The monitor gives no feedback, so `applied` only means the desktop accepted the
+request. Read the [DISPLAY v1 contract](protocol/DISPLAY.md) for topics, the
+freshness rules and what each acknowledgment does and does not prove. No command
+text from configuration or MQTT ever reaches a process.
 
 ## Validate
 

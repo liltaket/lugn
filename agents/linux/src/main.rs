@@ -4,6 +4,7 @@ mod config;
 mod control;
 mod control_mpris;
 mod dbus;
+mod display;
 mod idle;
 mod kwin;
 mod mqtt;

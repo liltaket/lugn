@@ -140,6 +140,8 @@ Do not design core behavior around it until tested.
 
 A power-monitoring smart plug is a promising way to infer active vs standby, but thresholds and transients must be measured.
 
+Implemented as read-only evidence for display sleep/wake (`mqtt.computers[].display.powerSensor`): it shortens or lengthens repeats and verifies a wake, never starts an action, and its thresholds are placeholders until measured.
+
 ### Exact technical stack
 
 Current working direction:

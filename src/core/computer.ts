@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DisplayPowerSnapshotSchema } from './display-power.js';
 
 export const ComputerDeviceIdSchema = z
   .string()
@@ -104,6 +105,10 @@ export const ComputerObservationSchema = z.object({
 export type ComputerObservation = z.infer<typeof ComputerObservationSchema>;
 export const ComputerStateSchema = z.object({
   devices: z.record(ComputerDeviceIdSchema, ComputerObservationSchema),
+  /** Display power policy status, present only for computers configured for it. */
+  displays: z
+    .record(ComputerDeviceIdSchema, DisplayPowerSnapshotSchema)
+    .optional(),
 });
 
 export function unknownComputerReadings(): ComputerReadings {

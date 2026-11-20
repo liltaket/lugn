@@ -47,6 +47,9 @@ import {
   type ComputerPlaybackMqttPort,
 } from '../adapters/computer-playback-mqtt.js';
 import { ComputerMqttAdapter } from '../adapters/computer-mqtt.js';
+import { ComputerDisplayMqttAdapter } from '../adapters/computer-display-mqtt.js';
+import { HomeAssistantPowerSensorAdapter } from '../adapters/home-assistant-power-sensor.js';
+import { DisplayPowerController } from '../application/display-power-controller.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
 import { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
 import {
@@ -250,6 +253,9 @@ export async function startRuntime(
   let isMusicObservationTrusted: (target: string) => boolean = () => false;
   const engineRef: { current?: LugnEngine } = {};
   const playbackAdapters = new Map<string, ComputerPlaybackMqttAdapter>();
+  const displayAdapters = new Map<string, ComputerDisplayMqttAdapter>();
+  const displayControllers = new Map<string, DisplayPowerController>();
+  const powerSensors = new Map<string, HomeAssistantPowerSensorAdapter>();
   const controlRoutes = Object.fromEntries(
     Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
       mapping.computerAudio?.playbackControl
@@ -523,6 +529,20 @@ export async function startRuntime(
     if (update.patch.computer)
       computerNowPlaying.observe(update.patch.computer.devices);
   });
+  // Presence and computer changes re-evaluate display power; the controller's
+  // own status updates re-enter harmlessly and publish only on change.
+  const unsubscribeDisplayPower = engine.stream.subscribe((update) => {
+    if (
+      update.domains.some(
+        (domain) =>
+          domain === 'presence' ||
+          domain === 'computer' ||
+          domain === 'session',
+      )
+    )
+      for (const controller of displayControllers.values())
+        controller.observe();
+  });
   const artwork = homeAssistantMusic
     ? new HomeAssistantArtworkService(
         {
@@ -600,6 +620,8 @@ export async function startRuntime(
     homeAssistantSwitch?.acceptStateChangedEvent(event);
     homeAssistantMusic?.acceptStateChangedEvent(event);
     homeAssistantEnvironment.acceptStateChangedEvent(event);
+    for (const sensor of powerSensors.values())
+      sensor.acceptStateChangedEvent(event);
     homeAssistantHomePresence.acceptStateChangedEvent(event);
     homeAssistantSun.acceptEvent(event);
     homeAssistantBilresa.acceptStateChangedFrame(event);
@@ -633,7 +655,16 @@ export async function startRuntime(
         () => !queryExpired && connection.isCurrent(),
         (states) => {
           cameraSeed = states;
-          for (const state of states) homeAssistantSun.acceptState(state);
+          for (const state of states) {
+            homeAssistantSun.acceptState(state);
+            for (const sensor of powerSensors.values())
+              if (
+                typeof state === 'object' &&
+                state !== null &&
+                (state as { entity_id?: unknown }).entity_id === sensor.entityId
+              )
+                sensor.acceptState(state);
+          }
         },
       ),
       new Promise<boolean>((resolve) => {
@@ -698,7 +729,11 @@ export async function startRuntime(
         ),
       ],
       onConnected: refreshHomeAssistantStates,
-      onDisconnected: () => cameraService?.setConnected(false),
+      onDisconnected: () => {
+        cameraService?.setConnected(false);
+        // A stale wattage must not keep steering display policy.
+        for (const sensor of powerSensors.values()) sensor.invalidate();
+      },
       onError: (kind) => {
         if (kind !== 'socket') return;
         trustedMusicTargets.clear();
@@ -781,7 +816,56 @@ export async function startRuntime(
       }
       computerPlayback.observe();
     }
+    for (const computer of config.mqtt.computers ?? []) {
+      const displayConfig = computer.display;
+      if (!displayConfig) continue;
+      const publish = mqttSubscriber.publish;
+      if (!publish)
+        throw new Error(
+          'Computer display control requires MQTT publication support',
+        );
+      const deviceId = computer.deviceId;
+      const sensor = displayConfig.powerSensor
+        ? new HomeAssistantPowerSensorAdapter({
+            entityId: displayConfig.powerSensor.entityId,
+            thresholds: displayConfig.powerSensor,
+            clock: systemClock,
+            onChange: () => displayControllers.get(deviceId)?.observe(),
+          })
+        : undefined;
+      if (sensor) powerSensors.set(deviceId, sensor);
+      const adapter = new ComputerDisplayMqttAdapter({
+        deviceId,
+        baseTopic: computer.baseTopic,
+        maxAgeMs: Math.min(90_000, computer.maxAgeMs),
+        clock: systemClock,
+        mqtt: {
+          subscribe: mqttSubscriber.subscribe.bind(mqttSubscriber),
+          publish: publish.bind(mqttSubscriber),
+        },
+        onChange: () => displayControllers.get(deviceId)?.observe(),
+      });
+      displayAdapters.set(deviceId, adapter);
+      displayControllers.set(
+        deviceId,
+        new DisplayPowerController({
+          deviceId,
+          clock: systemClock,
+          policy: displayConfig,
+          getState: () => engineRef.current?.state,
+          transport: adapter,
+          ...(sensor ? { evidence: () => sensor.getEvidence() } : {}),
+          isQuietHours: () => isStockholmQuietHour(systemClock.now()),
+          ...(displayConfig.powerSensor
+            ? { evidenceSettleMs: displayConfig.powerSensor.settleMs }
+            : {}),
+          publish: (snapshot) => engine.acceptComputerDisplay(snapshot),
+        }),
+      );
+    }
     unsubscribeMqttStatus = mqttSubscriber.onStatus((status) => {
+      for (const adapter of displayAdapters.values())
+        adapter.setBrokerConnected(status === 'connected');
       for (const adapter of playbackAdapters.values())
         adapter.setBrokerConnected(status === 'connected');
       sensorAdapter?.setBrokerConnected(status === 'connected');
@@ -892,6 +976,7 @@ export async function startRuntime(
     sensorAdapter?.start();
     for (const adapter of computerAdapters) adapter.start();
     for (const adapter of playbackAdapters.values()) adapter.start();
+    for (const adapter of displayAdapters.values()) adapter.start();
     await seedHomeAssistantObservations(
       config.homeAssistant.baseUrl,
       config.homeAssistant.token,
@@ -918,6 +1003,7 @@ export async function startRuntime(
     );
   } catch (error) {
     unsubscribeComputerNowPlaying();
+    unsubscribeDisplayPower();
     routines.dispose();
     computerIntelligence.dispose();
     cameraMedia?.dispose();
@@ -931,6 +1017,9 @@ export async function startRuntime(
     sensorAdapter?.stop();
     presenceFeedback.dispose();
     for (const adapter of playbackAdapters.values()) adapter.stop();
+    for (const adapter of displayAdapters.values()) adapter.stop();
+    for (const controller of displayControllers.values()) controller.dispose();
+    for (const sensor of powerSensors.values()) sensor.dispose();
     for (const adapter of computerAdapters) adapter.stop();
     unsubscribeMqttStatus?.();
     if (goveeRefreshTimer) clearInterval(goveeRefreshTimer);
@@ -953,6 +1042,7 @@ export async function startRuntime(
     engine,
     async stop() {
       unsubscribeComputerNowPlaying();
+      unsubscribeDisplayPower();
       routines.dispose();
       computerIntelligence.dispose();
       cameraMedia?.dispose();
@@ -966,6 +1056,10 @@ export async function startRuntime(
       sensorAdapter?.stop();
       presenceFeedback.dispose();
       for (const adapter of playbackAdapters.values()) adapter.stop();
+      for (const adapter of displayAdapters.values()) adapter.stop();
+      for (const controller of displayControllers.values())
+        controller.dispose();
+      for (const sensor of powerSensors.values()) sensor.dispose();
       for (const adapter of computerAdapters) adapter.stop();
       unsubscribeMqttStatus?.();
       if (goveeRefreshTimer) clearInterval(goveeRefreshTimer);
@@ -981,6 +1075,17 @@ export async function startRuntime(
       }
     },
   };
+}
+
+const stockholmHour = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Stockholm',
+  hour: '2-digit',
+  hourCycle: 'h23',
+});
+/** Same 23:00-06:00 night as music automation. */
+function isStockholmQuietHour(now: number): boolean {
+  const hour = Number(stockholmHour.format(now));
+  return hour < 6 || hour >= 23;
 }
 
 async function seedHomeAssistantObservations(
