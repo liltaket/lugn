@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from door_bridge.lugn_client import LugnError  # noqa: E402
-from door_bridge.stt_client import SttFailure, Transcript  # noqa: E402
+from door_bridge.stt_client import Scores, SttFailure, Transcript  # noqa: E402
 from door_bridge.voice import VoiceEvent  # noqa: E402
 
 RATE = 16_000
@@ -53,10 +53,21 @@ class FakeTransport:
 
 class FakeStt:
     def __init__(self, text: str = "Tänd taklampan.", *, logprob: float = -0.2, no_speech: float = 0.01,
-                 delay: float = 0.0, fail: bool = False, hang: bool = False) -> None:
+                 delay: float = 0.0, fail: bool = False, hang: bool = False,
+                 scores: dict[str, float] | None = None, score_fail: bool = False) -> None:
         self.text, self.logprob, self.no_speech = text, logprob, no_speech
         self.delay, self.fail, self.hang = delay, fail, hang
         self.calls: list[bytes] = []
+        # Rescoring: text -> mean log-probability; anything unlisted scores -6.
+        self.scores, self.score_fail = scores or {}, score_fail
+        self.score_calls: list[tuple[list[str], str, bool]] = []
+
+    async def score(self, pcm: bytes, sample_rate: int, candidates: list[str], *, prefer: str, prompt: bool,
+                    budget_s: float) -> Scores:
+        self.score_calls.append((candidates, prefer, prompt))
+        if self.score_fail:
+            raise SttFailure("no_worker_scored", [{"worker": prefer, "error": "unsupported"}])
+        return Scores([self.scores.get(c, -6.0) for c in candidates], prefer, 7, 6, [{"worker": prefer, "ms": 7}])
 
     async def transcribe(self, pcm: bytes, sample_rate: int) -> tuple[Transcript, list[dict[str, Any]]]:
         import asyncio

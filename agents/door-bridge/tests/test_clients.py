@@ -171,6 +171,12 @@ def test_config_example_loads_and_rejects_unknown(tmp_path: Any) -> None:
     bad.write_text('[lugn]\ntimeout_s = "2"\n')
     with pytest.raises(ConfigError):
         load_config(bad)
+    from door_bridge.config import RescoreConfig
+
+    assert cfg.rescore == RescoreConfig()  # the example documents the defaults
+    bad.write_text("[rescore]\nmargin = 1.0\nopposite_margin = 0.5\n")
+    with pytest.raises(ConfigError, match="rescore"):
+        load_config(bad)
 
 
 def test_wav_roundtrip() -> None:
@@ -192,6 +198,12 @@ class FakeEngine:
     def transcribe(self, pcm16: bytes) -> dict[str, Any]:
         self.seen.append(len(pcm16))
         return {"text": "Släck allt.", "avg_logprob": -0.3, "no_speech_prob": 0.01, "language": "sv"}
+
+    def score(self, pcm16: bytes, candidates: list[str], *, with_prompt: bool) -> list[dict[str, Any]]:
+        self.seen.append(len(pcm16))
+        self.scored = (candidates, with_prompt)
+        return [{"tokens": len(c), "sum_logprob": -0.1 * i * len(c), "mean_logprob": -0.1 * i, "min_logprob": -0.2 * i}
+                for i, c in enumerate(candidates)]
 
 
 @pytest.fixture
@@ -230,3 +242,67 @@ async def test_stt_client_against_worker(worker: Any) -> None:
     tr, attempts = await stt.transcribe(b"\x00\x00" * 8000, 16000)
     assert tr.text == "Släck allt." and tr.worker == base and tr.processing_ms is not None
     assert "error" in attempts[0]
+
+
+def score_body(candidates: Any, *, prompt: Any = False, audio: Any = None) -> bytes:
+    if audio is None:
+        audio = base64.b64encode(pcm_to_wav(b"\x00\x00" * 8000)).decode()
+    return json.dumps({"audio": audio, "candidates": candidates, "prompt": prompt}).encode()
+
+
+def test_worker_score_endpoint(worker: Any) -> None:
+    base, engine = worker
+    auth = {"content-type": "application/json", "authorization": "Bearer tok"}
+
+    def post(body: bytes, headers: dict[str, str] = auth) -> httpjson.Response:
+        return httpjson.request("POST", base + "/v1/score", body=body, headers=headers, connect_timeout=1,
+                                read_timeout=2)
+
+    resp = post(score_body(["Tänd taklampan.", "Sen ta flampan."], prompt=True))
+    data = resp.json()
+    assert resp.status == 200 and data["duration_ms"] == 500 and data["prompt"] is True
+    assert [s["text"] for s in data["scores"]] == ["Tänd taklampan.", "Sen ta flampan."]
+    assert data["scores"][1]["mean_logprob"] == -0.1 and "processing_ms" in data
+    assert engine.scored == (["Tänd taklampan.", "Sen ta flampan."], True)
+    assert post(score_body(["x"]), headers={}).status == 401
+    for bad in (score_body([]), score_body([""]), score_body(["x" * 201]), score_body(["x"] * 65),
+                score_body("x"), score_body(["x"], prompt="yes"), score_body(["x"], audio="!!"),
+                score_body(["x"], audio=base64.b64encode(b"RIFFjunk").decode()), b"not json", b"[]"):
+        resp = post(bad)
+        assert resp.status == 400 and resp.json()["error"] == "bad_request", bad[:60]
+
+
+async def test_stt_client_score(worker: Any) -> None:
+    base, _ = worker
+    stt = SttClient(SttConfig(workers=("http://127.0.0.1:9", base)), token="tok")
+    result = await stt.score(b"\x00\x00" * 8000, 16000, ["a", "b", "c"], prefer=base, prompt=False, budget_s=3)
+    assert result.scores == [0.0, -0.1, -0.2] and result.worker == base
+    assert [a["worker"] for a in result.attempts] == [base]  # the transcribing worker goes first
+
+
+async def test_stt_client_score_old_worker_and_failover() -> None:
+    calls: list[str] = []
+    good = {"scores": [{"text": "a", "mean_logprob": -0.5}], "processing_ms": 40}
+
+    def transport(method: str, url: str, **kwargs: Any) -> httpjson.Response:
+        calls.append(url)
+        body = json.loads(kwargs["body"])
+        assert body["candidates"] == ["a"] and base64.b64decode(body["audio"])[:4] == b"RIFF"
+        if url.startswith("http://old"):
+            return httpjson.Response(404, b'{"error": "not_found"}')
+        if url.startswith("http://bad"):
+            return httpjson.Response(200, json.dumps({"scores": [{"text": "a", "mean_logprob": 1.0}]}).encode())
+        return httpjson.Response(200, json.dumps(good).encode())
+
+    cfg = SttConfig(workers=("http://old:1", "http://bad:1", "http://new:1"))
+    stt = SttClient(cfg, transport=transport)
+    result = await stt.score(b"\x00\x00" * 160, 16000, ["a"], prefer="http://old:1", prompt=False, budget_s=2)
+    assert result.scores == [-0.5] and result.worker == "http://new:1" and result.processing_ms == 40
+    assert [a.get("error") for a in result.attempts] == ["unsupported", "malformed score response: score out of range",
+                                                         None]
+    only_old = SttClient(SttConfig(workers=("http://old:1",)), transport=transport)
+    with pytest.raises(SttFailure) as failure:
+        await only_old.score(b"\x00\x00" * 160, 16000, ["a"], prefer="http://old:1", prompt=False, budget_s=2)
+    assert failure.value.reason == "no_worker_scored"
+    # an old worker is not put in cooldown (its transcriptions still count); a broken one is
+    assert "http://old:1" not in stt._failed_at and "http://bad:1" in stt._failed_at

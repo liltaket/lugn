@@ -11,7 +11,7 @@ import pytest
 
 from conftest import FakeLugn, FakePlayer, FakeStt, FakeTransport, chunks, silence, tone
 from door_bridge import httpjson
-from door_bridge.config import LugnConfig, SttConfig, VoiceConfig
+from door_bridge.config import LugnConfig, RescoreConfig, SttConfig, VoiceConfig
 from door_bridge.executor import Executor
 from door_bridge.stt_client import SttClient
 from door_bridge.voice import Journal, VoicePipeline, VoiceRun
@@ -20,7 +20,7 @@ UTTERANCE = silence(600) + tone(700, -20) + silence(100) + tone(300, -22) + sile
 
 
 def make(tmp_path: Path, *, stt: Any = None, lugn: FakeLugn | None = None, transport: FakeTransport | None = None,
-         **voice: Any) -> tuple[VoicePipeline, FakeTransport, FakeLugn, FakePlayer, Any]:
+         rescore: RescoreConfig | None = None, **voice: Any) -> tuple[VoicePipeline, FakeTransport, FakeLugn, FakePlayer, Any]:
     cfg = replace(VoiceConfig(journal_path=str(tmp_path / "voice.jsonl")), **voice)
     transport = transport or FakeTransport()
     lugn = lugn or FakeLugn()
@@ -28,7 +28,7 @@ def make(tmp_path: Path, *, stt: Any = None, lugn: FakeLugn | None = None, trans
     player = FakePlayer()
     pipeline = VoicePipeline(cfg=cfg, transport=transport, stt=stt, stt_confident=stt.confident,
                              executor=Executor(lugn, LugnConfig()), earcons=player,
-                             journal=Journal(cfg.journal_path, cfg.journal_max_bytes))
+                             journal=Journal(cfg.journal_path, cfg.journal_max_bytes), rescore=rescore)
     return pipeline, transport, lugn, player, stt
 
 
@@ -184,6 +184,103 @@ async def test_unknown_command(tmp_path: Path) -> None:
     await run.wait()
     assert lugn.calls == [] and player.played == ["not_understood"]
     assert journal(tmp_path)[0]["intent"]["reason"] == "negation"
+
+
+RESCORE = RescoreConfig(min_logprob=-1.0, margin=1.0, opposite_margin=2.0, refusal_margin=2.0, free_text_margin=0.5)
+
+
+async def voice_run(tmp_path: Path, stt: FakeStt, **kw: Any) -> tuple[FakeTransport, FakeLugn, FakePlayer,
+                                                                       dict[str, Any]]:
+    pipeline, t, lugn, player, _ = make(tmp_path, stt=stt, rescore=RESCORE, **kw)
+    run = await start(pipeline)
+    await speak(pipeline, UTTERANCE)
+    await run.wait()
+    return t, lugn, player, journal(tmp_path)[0]
+
+
+async def test_rescore_recovers_a_distant_command(tmp_path: Path) -> None:
+    stt = FakeStt("Sen ta flampan.", scores={"Tänd taklampan.": -0.4, "Sen ta flampan.": -0.6,
+                                              "Släck taklampan.": -3.1, "Tänd allt.": -2.5})
+    t, lugn, player, rec = await voice_run(tmp_path, stt)
+    assert lugn.calls == [("lighting.set", {"target": "lighting.ceiling", "values": {"power": True}},
+                           lugn.calls[0][2], "röst: Tänd taklampan. (hört: Sen ta flampan.)")]
+    assert player.played == ["ok"] and rec["outcome"] == "done"
+    assert rec["transcript"] == "Sen ta flampan."
+    assert rec["intent"] == {"normalized": "sen ta flampan", "reason": "no_match", "action": "ceiling.on",
+                             "source": "rescore"}
+    r = rec["rescore"]
+    assert r["trigger"] == "no_match" and r["accepted"] is True and r["reason"] == "accepted"
+    assert r["best"]["phrase"] == "Tänd taklampan." and r["runner_up"]["action"] == "scene.all_on"
+    assert r["margins"] == {"runner_up": 2.1, "opposite": 2.7, "refusal": 5.6, "free_text": 0.2}
+    assert r["worker"] == "http://w" and "rescore_end" in rec["ms"]
+    candidates, prefer, prompt = stt.score_calls[0]
+    assert candidates[-1] == "Sen ta flampan." and prefer == "http://w" and prompt is False
+    assert t.names().count("INTENT_START") == 1 and t.names()[-2:] == ["INTENT_END", "RUN_END"]
+
+
+async def test_rescore_rejects_a_close_opposite(tmp_path: Path) -> None:
+    stt = FakeStt("Sen ta flampan.", scores={"Tänd taklampan.": -0.5, "Släck taklampan.": -1.9})
+    _, lugn, player, rec = await voice_run(tmp_path, stt)
+    assert lugn.calls == [] and player.played == ["not_understood"] and rec["outcome"] == "not_understood"
+    assert rec["intent"]["action"] is None
+    assert rec["rescore"]["reason"] == "opposite_too_close" and rec["rescore"]["accepted"] is False
+    assert rec["rescore"]["opposite"] == {"action": "ceiling.off", "score": -1.9}
+
+
+async def test_rescore_rejects_a_lost_negation(tmp_path: Path) -> None:
+    stt = FakeStt("Släck in lampan.", scores={"Släck lampan.": -0.6, "Släck inte lampan.": -0.9,
+                                               "Släck in lampan.": -0.8})
+    _, lugn, _, rec = await voice_run(tmp_path, stt)
+    assert lugn.calls == [] and rec["outcome"] == "not_understood"
+    assert rec["rescore"]["reason"] == "refusal_too_close" and rec["rescore"]["refusal_score"] == -0.9
+
+
+async def test_rescore_rejects_speech_that_is_not_a_command(tmp_path: Path) -> None:
+    said = "Jag tänkte att vi kunde äta middag sen."
+    stt = FakeStt(said, scores={said: -0.2, "Tänd allt.": -0.9})
+    _, lugn, _, rec = await voice_run(tmp_path, stt)
+    assert lugn.calls == [] and rec["outcome"] == "not_understood"
+    assert rec["rescore"]["reason"] == "free_text_better" and rec["rescore"]["free_text_score"] == -0.2
+
+
+async def test_rescore_confirms_a_low_confidence_match(tmp_path: Path) -> None:
+    stt = FakeStt("Släck lampan!", logprob=-0.9, scores={"Släck lampan!": -0.3, "Tänd lampan.": -3.0})
+    _, lugn, _, rec = await voice_run(tmp_path, stt)
+    assert rec["outcome"] == "done" and rec["rejected"] == "low_avg_logprob"
+    assert lugn.calls[0][1] == {"target": "lighting.ceiling", "values": {"power": False}}
+    assert rec["rescore"]["trigger"] == "low_confidence"
+
+
+async def test_rescore_low_confidence_reject_keeps_the_outcome(tmp_path: Path) -> None:
+    stt = FakeStt("Snyggt av trampan.", logprob=-1.2, scores={"Snyggt av trampan.": -0.3})
+    _, lugn, player, rec = await voice_run(tmp_path, stt)
+    assert lugn.calls == [] and player.played == ["not_understood"]
+    assert rec["outcome"] == "low_confidence" and rec["rescore"]["reason"] == "below_floor"
+
+
+async def test_rescore_never_runs_on_refusals_or_no_speech(tmp_path: Path) -> None:
+    for i, stt in enumerate([FakeStt("Släck inte lampan."), FakeStt("Vad är klockan?"), FakeStt("<|nospeech|>"),
+                             FakeStt("Tänd taklampan.", no_speech=0.9)]):
+        directory = tmp_path / str(i)
+        directory.mkdir()
+        _, lugn, _, rec = await voice_run(directory, stt)
+        assert stt.score_calls == [] and lugn.calls == [] and "rescore" not in rec
+
+
+async def test_rescore_unavailable_is_a_miss(tmp_path: Path) -> None:
+    stt = FakeStt("Sen ta flampan.", score_fail=True)
+    _, lugn, player, rec = await voice_run(tmp_path, stt)
+    assert lugn.calls == [] and player.played == ["not_understood"] and rec["outcome"] == "not_understood"
+    assert rec["rescore"]["reason"] == "unavailable" and rec["rescore"]["accepted"] is False
+
+
+async def test_rescore_off_by_default(tmp_path: Path) -> None:
+    stt = FakeStt("Sen ta flampan.", scores={"Tänd taklampan.": -0.1})
+    pipeline, _, lugn, _, _ = make(tmp_path, stt=stt)
+    run = await start(pipeline)
+    await speak(pipeline, UTTERANCE)
+    await run.wait()
+    assert stt.score_calls == [] and lugn.calls == []
 
 
 async def test_dry_run_never_calls_lugn(tmp_path: Path) -> None:

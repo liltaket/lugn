@@ -24,6 +24,7 @@ door_bridge/
   executor.py     action -> Lugn capability calls (volume cap, relative steps)
   lugn_client.py  loopback capability client (bearer, 2 s timeout)
   stt_client.py   ordered worker list, failover, cooldown, confidence gate
+  rescore.py      closed-vocabulary rescoring when the free transcript misses
   earcons.py      tones synthesized at start, played with aplay
   features.py     dataset rows, Lugn context poller, daily gzip writer with retention
 stt_worker/       separate HTTP service (faster-whisper, Swedish), Linux and Windows
@@ -79,9 +80,17 @@ python -m stt_worker --model KBLab/kb-whisper-small --host 0.0.0.0 --port 8790 -
 
 `POST /v1/transcribe` takes a 16 kHz PCM16 mono WAV (at most 30 s) and returns
 `{text, avg_logprob, no_speech_prob, language, duration_ms, processing_ms, queue_ms, model}`.
+`POST /v1/score` (same auth) takes JSON `{"audio": "<base64 WAV, as above>",
+"candidates": ["Tänd taklampan.", ...], "prompt": false}` (1..64 non-empty
+strings of at most 200 characters) and returns `{scores: [{text, tokens,
+mean_logprob, sum_logprob, min_logprob}], prompt, duration_ms, processing_ms,
+queue_ms, model}` in candidate order (see [Rescoring](#rescoring)). A worker
+without it answers 404, which the bridge treats as a miss.
 `GET /health` reports the model. Language is forced to `sv`; decoding is
 greedy at temperature 0 and biased by an `initial_prompt` with the command
-vocabulary (`--no-prompt` disables it). `--token-env NAME` requires
+vocabulary (`--no-prompt` disables it). KBLab's `tokenizer.json` enables BPE
+dropout (0.2), which made the prompt's tokens random per request; the worker
+turns it off. `--token-env NAME` requires
 `Authorization: Bearer` from clients (set `[stt] token_env` in the bridge).
 Requests are serialized; the model is loaded and warmed at start.
 
@@ -105,8 +114,9 @@ the error earcon and a journal line. A transcript is acted on only when
    counts as speech but the loudest frame cleared the threshold (distant speech),
    the whole buffer still goes to STT (`weak_speech` in the journal); STT's gates
    and the grammar decide. `keep_audio` also keeps runs without speech.
-3. Transcribe, gate on confidence, `STT_END`; parse, `INTENT_START`/`INTENT_END`;
-   execute; earcon; `RUN_END`.
+3. Transcribe, gate on confidence, `STT_END`; parse, `INTENT_START`/`INTENT_END`
+   (with [rescoring](#rescoring) when the transcript is no command); execute;
+   earcon; `RUN_END`.
 
 Every run is finalized exactly once (journal line, earcon, `RUN_END`) on success,
 error, timeout (`run_timeout_s`, plus a stall guard on missing audio), device
@@ -120,9 +130,9 @@ Journal (`voice.jsonl`, one JSON object per run, rolled to `.1` at 20 MB):
 `run, at, conversation_id, wake_word, dry_run, ambient_floor_dbfs, endpoint
 {threshold_dbfs, audio_ms, speech_start_ms, speech_ms, end_reason, peak_dbfs},
 audio_ms, stt {worker, latency_ms, processing_ms, attempts[]}, transcript,
-avg_logprob, no_speech_prob, intent {normalized, reason, action}, lugn {ok,
-calls[], error} | planned, outcome, run_end, ms {speech_start, vad_end, stt_end,
-lugn_end, total}`.
+avg_logprob, no_speech_prob, intent {normalized, reason, action, source}, rescore,
+lugn {ok, calls[], error} | planned, outcome, run_end, ms {speech_start, vad_end,
+stt_end, rescore_end, lugn_end, total}`.
 
 Outcomes: `done`, `dry_run`, `no_speech`, `low_confidence`, `not_understood`,
 `stt_unavailable`, `lugn_failed`, `run_timeout`, `exception`, `device_stop`,
@@ -153,6 +163,73 @@ earcon.
 Voice never sets a volume above `max_voice_volume` (0.6): an absolute request
 above it is refused, a step stops at it. Every call carries
 `requestId: "voice-<run>"` and `reason: "röst: <transcript>"`.
+
+### Rescoring
+
+Distant speech often decodes to similar-sounding words ("Tänd taklampan" →
+"Sen ta flampan", "Pausa musiken" → "Ta ur sammusiken"), which the grammar
+rightly refuses. The commands are a closed set, so the bridge then asks the
+worker how well each canonical phrase (`intents.COMMAND_PHRASES`, every one of
+which parses to its action) fits the same audio: the audio is encoded once and
+each phrase is forced through the decoder (CTranslate2 `align`, the start
+sequence greedy decoding uses, no prompt). The score is the mean log-probability
+per token. An action scores its best phrase.
+
+It runs only when STT heard words but the grammar found no command
+(`no_match`), or confidence was too low (`low_avg_logprob`) and the transcript
+was no refusal. Never after a negation, a question, two commands, an empty or
+`<|nospeech|>` transcript, or a high `no_speech_prob`. The best action is
+taken only if all of these hold (`[rescore]` defaults):
+
+| rule                                                                                                             | default |
+| ---------------------------------------------------------------------------------------------------------------- | ------- |
+| score ≥ `min_logprob`                                                                                            | -2.0    |
+| ahead of the next action by `margin`                                                                             | 1.0     |
+| ahead of its opposite (tänd/släck, tänd/släck allt, ljusare/mörkare, spela/pausa, höj/sänk) by `opposite_margin` | 2.0     |
+| ahead of the negated commands ("Släck inte lampan.", `REFUSAL_PHRASES`) by `refusal_margin`                      | 1.0     |
+| the free transcript, scored the same way, is at most `free_text_margin` better                                   | 1.0     |
+
+Otherwise the run is a miss (`not_understood` or `low_confidence`, as before).
+An accepted run executes with `intent.source: "rescore"` and Lugn's reason
+`röst: <phrase> (hört: <transcript>)`. The journal's `rescore` holds `trigger`,
+`best {action, phrase, score}`, `runner_up`, `opposite`, `refusal_score`,
+`free_text_score`, `margins {runner_up, opposite, refusal, free_text}`,
+`accepted`, `reason` (`accepted`, `below_floor`, `runner_up_too_close`,
+`opposite_too_close`, `refusal_too_close`, `free_text_better`, `unavailable`),
+`worker`, `latency_ms`, `processing_ms`.
+
+Measured operating point (kb-whisper-small, int8 CPU). Synthetic Piper clips
+(three voices) mixed with room noise taken from real node recordings at
+-52 dBFS, at speech-to-noise ratios of 18/12/8/5 dB, dry and with reverberation
+(RT60 0.4 s). The thresholds were tuned on the smoke-test set (9 commands, 3
+non-commands, 2 noise clips; 9 conditions). The held-out set has 8 other
+commands and 9 non-commands chosen to be close to commands ("Släck inte
+taklampan", "Det är mörkt här inne", "Taklampan är trasig"); 5 conditions:
+
+| set (commands / non-commands)            | correct actions, free transcript only | with rescoring | wrong actions added |
+| ---------------------------------------- | ------------------------------------- | -------------- | ------------------- |
+| tuning (243 / 99)                        | 96                                    | 121            | 0                   |
+| held-out (120 / 135)                     | 61                                    | 74             | 0                   |
+| kb-whisper-medium, 8 dB reverb (27 / 11) | 9                                     | 11             | 0                   |
+
+No non-command or noise clip led to an action. The only wrong action was the free
+transcript's own ("Sätt på mysljus" → "Sätt på musik.", 8 dB reverb); rescoring
+never runs on a match. Two grid steps looser in every threshold at once still
+added no wrong action; the loosest settings that were still error-free on the
+tuning set made 6 wrong actions on the held-out set. Scoring after the command
+prompt (`prompt = true`) was measured too: it raises every command's score,
+including the wrong ones, and found fewer commands at the same error rate.
+With kb-whisper-medium, the real far-field run "Snyggt med trampan." scored
+släck 0.42 above tänd (and below the floor), so rescoring correctly does not act
+on it.
+
+Cost per fallback: one encode plus about 47 forced decodes, roughly seven free
+transcriptions' worth (the decoder's cross-attention over the whole 30 s window
+is recomputed per candidate). On a desktop CPU with 8 threads, small takes 5.8 s
+(transcription 0.8 s) and medium 15.7 s (2.1 s), so a CPU-only worker exceeds
+`timeout_s` (4 s) and the run is a miss; the worker still finishes the request
+before taking the next one. On a GPU it is expected to stay well under a second
+(not measured).
 
 ### Earcons
 

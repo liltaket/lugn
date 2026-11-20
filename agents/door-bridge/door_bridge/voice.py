@@ -22,12 +22,13 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from .audio import SAMPLE_RATE, pcm_to_wav
-from .config import VoiceConfig
+from .config import RescoreConfig, VoiceConfig
 from .earcons import Kind, Player
 from .endpointing import Endpointer
 from .executor import Executor
-from .intents import action_name, parse
-from .stt_client import SttApi, SttFailure
+from .intents import IntentResult, action_name, parse
+from .rescore import Decision, candidates, decide, should_rescore
+from .stt_client import SttApi, SttFailure, Transcript
 
 log = logging.getLogger(__name__)
 
@@ -214,22 +215,32 @@ class VoiceRun:
         send(VoiceEvent.STT_END, {"text": transcript.text or " "})
 
         confident, why = self.p.stt_confident(transcript)
+        intent = parse(transcript.text)
+        trigger = should_rescore(transcript.text, why, intent) if self.p.rescore.enabled else None
         if not confident:
             self.record["rejected"] = why
-            self.outcome = "low_confidence"
-            return
+            if trigger is None:
+                self.outcome = "low_confidence"
+                return
         send(VoiceEvent.INTENT_START)
-        intent = parse(transcript.text)
+        action = intent.action if confident else None
         self.record["intent"] = {"normalized": intent.normalized, "reason": intent.reason,
-                                 "action": action_name(intent.action)}
-        if intent.action is None:
-            self.outcome = "not_understood"
+                                 "action": action_name(action)}
+        spoken = transcript.text
+        if action is None and trigger is not None:
+            decision = await self._rescore(pcm, transcript, intent, trigger)
+            if decision is not None and decision.phrase is not None:
+                action = parse(decision.phrase).action
+                self.record["intent"].update(action=action_name(action), source="rescore")
+                spoken = f"{decision.phrase} (hört: {transcript.text.strip()})"
+        if action is None:
+            self.outcome = "not_understood" if confident else "low_confidence"
             send(VoiceEvent.INTENT_END)
             return
         if cfg.dry_run:
-            planned = self.p.executor.plan(intent.action)
+            planned = self.p.executor.plan(action)
             self.record["planned"] = ({"capability": planned[0], "input": planned[1]} if planned
-                                      else {"action": action_name(intent.action), "needs": "music.getState"})
+                                      else {"action": action_name(action), "needs": "music.getState"})
             self.outcome = "dry_run"
             send(VoiceEvent.INTENT_END)
             return
@@ -239,12 +250,31 @@ class VoiceRun:
             self.p.earcons.play("ok")
         except Exception:  # noqa: BLE001 - feedback is a courtesy
             log.exception("earcon failed")
-        execution = await self.p.executor.execute(intent.action, transcript=transcript.text,
-                                                  request_id=f"voice-{self.id}")
+        execution = await self.p.executor.execute(action, transcript=spoken, request_id=f"voice-{self.id}")
         self._mark("lugn_end")
         self.record["lugn"] = {"ok": execution.ok, "calls": execution.calls, "error": execution.error}
         self.outcome = "done" if execution.ok else "lugn_failed"
         send(VoiceEvent.INTENT_END)
+
+    async def _rescore(self, pcm: bytes, transcript: Transcript, intent: IntentResult,
+                       trigger: str) -> Decision | None:
+        """Score the command phrases against this audio; journal why it did or did not act."""
+        cfg = self.p.rescore
+        entry: dict[str, Any] = {"trigger": trigger}
+        self.record["rescore"] = entry
+        try:
+            result = await self.p.stt.score(pcm, SAMPLE_RATE, candidates(transcript.text), prefer=transcript.worker,
+                                            prompt=cfg.prompt, budget_s=cfg.timeout_s)
+        except SttFailure as failure:
+            entry.update(accepted=False, reason="unavailable", attempts=failure.attempts)
+            return None
+        self._mark("rescore_end")
+        decision = decide(cfg, transcript.text, intent, result.scores)
+        entry.update(decision.record)
+        entry.update(worker=result.worker, latency_ms=result.latency_ms, processing_ms=result.processing_ms)
+        log.info("voice run %s: rescore %s %s (%s)", self.id, decision.reason, decision.record["best"]["action"],
+                 decision.record["margins"])
+        return decision
 
     def _finish(self) -> None:
         if self.finished:
@@ -279,8 +309,10 @@ class VoicePipeline:
 
     def __init__(self, *, cfg: VoiceConfig, transport: VoiceTransport, stt: SttApi,
                  stt_confident: Callable[[Any], tuple[bool, str]], executor: Executor, earcons: Player,
-                 journal: Journal, clock: Callable[[], float] = time.monotonic) -> None:
+                 journal: Journal, clock: Callable[[], float] = time.monotonic,
+                 rescore: RescoreConfig | None = None) -> None:
         self.cfg = cfg
+        self.rescore = rescore or RescoreConfig(enabled=False)
         self.transport = transport
         self.stt = stt
         self.stt_confident = stt_confident

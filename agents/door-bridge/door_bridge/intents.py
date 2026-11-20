@@ -283,6 +283,47 @@ def parse(text: str) -> IntentResult:
     return IntentResult(None, normalized, "no_match")
 
 
+# --- Closed vocabulary for rescoring -----------------------------------------
+#
+# One written form per way of saying each command, as Whisper writes it. The
+# STT worker scores these against the audio when free transcription does not
+# match the grammar. Every phrase must parse to its action (tested), so the
+# grammar stays the only definition of what a command means.
+
+COMMAND_PHRASES: dict[str, tuple[str, ...]] = {
+    "ceiling.on": ("Tänd taklampan.", "Tänd lampan.", "Tänd ljuset.", "Sätt på taklampan."),
+    "ceiling.off": ("Släck taklampan.", "Släck lampan.", "Släck ljuset.", "Stäng av taklampan."),
+    "scene.all_on": ("Tänd allt.",),
+    "scene.all_off": ("Släck allt.", "Helt släckt."),
+    "scene.soft": ("Mysljus.", "Sätt på mysljus."),
+    "scene.everyday": ("Vardagsljus.",),
+    "scene.focus": ("Fokus.",),
+    "scene.movie": ("Filmkväll.",),
+    "brightness.up": ("Ljusare.", "Mer ljus."),
+    "brightness.down": ("Mörkare.", "Mindre ljus."),
+    "music.play": ("Spela musiken.", "Spela."),
+    "music.pause": ("Pausa musiken.", "Pausa."),
+    "volume.up": ("Höj volymen.", "Skruva upp."),
+    "volume.down": ("Sänk volymen.", "Skruva ner."),
+    **{f"volume.set.{n}": (f"Volym {n} procent.",) for n in range(10, 101, 10)},
+}
+
+# Refusals scored next to the commands. Distant speech can lose the "inte" in
+# free decoding ("Släck in lampan"); if the audio fits one of these about as
+# well as the command, rescoring must not act. Each one parses to no action.
+REFUSAL_PHRASES: tuple[str, ...] = (
+    "Tänd inte lampan.", "Släck inte lampan.", "Tänd inte taklampan.", "Släck inte taklampan.",
+    "Spela inte musiken.", "Pausa inte musiken.", "Höj inte volymen.", "Sänk inte volymen.",
+)
+
+# Actions that undo each other; confusing them is the worst mistake.
+OPPOSITES: dict[str, str] = {}
+for _a, _b in (("ceiling.on", "ceiling.off"), ("scene.all_on", "scene.all_off"),
+               ("brightness.up", "brightness.down"), ("music.play", "music.pause"),
+               ("volume.up", "volume.down")):
+    OPPOSITES[_a], OPPOSITES[_b] = _b, _a
+
+
 def _is_polite_request(normalized: str) -> bool:
     """'Kan du tända lampan?' is a request, not a question."""
     words = normalized.split()

@@ -59,6 +59,26 @@ class SttConfig:
 
 
 @dataclass(frozen=True)
+class RescoreConfig:
+    """Closed-vocabulary rescoring when the free transcript misses (see rescore.py).
+
+    Scores are mean log-probabilities per token. The defaults are the operating
+    point measured in the README: no wrong action on the evaluation set, and
+    none either with every threshold two grid steps looser.
+    """
+
+    enabled: bool = True
+    # Score the phrases after the worker's command prompt (measured: worse).
+    prompt: bool = False
+    min_logprob: float = -2.0
+    margin: float = 1.0
+    opposite_margin: float = 2.0
+    refusal_margin: float = 1.0
+    free_text_margin: float = 1.0
+    timeout_s: float = 4.0
+
+
+@dataclass(frozen=True)
 class VoiceConfig:
     dry_run: bool = False
     frame_ms: int = 30
@@ -112,6 +132,7 @@ class Config:
     node: NodeConfig = field(default_factory=NodeConfig)
     lugn: LugnConfig = field(default_factory=LugnConfig)
     stt: SttConfig = field(default_factory=SttConfig)
+    rescore: RescoreConfig = field(default_factory=RescoreConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     earcons: EarconConfig = field(default_factory=EarconConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
@@ -151,7 +172,7 @@ def load_config(path: str | Path | None, *, dry_run: bool | None = None) -> Conf
         with open(path, "rb") as handle:
             raw = tomllib.load(handle)
     sections = {
-        "node": NodeConfig, "lugn": LugnConfig, "stt": SttConfig,
+        "node": NodeConfig, "lugn": LugnConfig, "stt": SttConfig, "rescore": RescoreConfig,
         "voice": VoiceConfig, "earcons": EarconConfig, "features": FeaturesConfig,
     }
     unknown = set(raw) - set(sections)
@@ -171,6 +192,11 @@ def _validate(cfg: Config) -> None:
         raise ConfigError("[lugn] max_voice_volume must be in (0, 1]")
     if not 0 < cfg.lugn.volume_step <= 0.2:
         raise ConfigError("[lugn] volume_step must be in (0, 0.2]")
+    r = cfg.rescore
+    if not (r.min_logprob <= 0 and r.margin > 0 and r.opposite_margin >= r.margin and r.refusal_margin >= r.margin
+            and r.free_text_margin >= 0 and r.timeout_s > 0):
+        raise ConfigError("[rescore] needs min_logprob <= 0, margin > 0, opposite_margin and refusal_margin "
+                          ">= margin, free_text_margin >= 0 and timeout_s > 0")
     if cfg.voice.frame_ms not in (10, 20, 30, 40, 50):
         raise ConfigError("[voice] frame_ms must be 10..50 in steps of 10")
     for url in cfg.stt.workers:

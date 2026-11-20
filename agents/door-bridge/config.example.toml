@@ -39,6 +39,22 @@ failure_cooldown_s = 60.0
 min_avg_logprob = -0.7
 max_no_speech_prob = 0.5
 
+[rescore]
+# When the free transcript is no command, score every command phrase against
+# the audio (worker endpoint /v1/score) and act only on a clear winner. See the
+# README for the rule and the measured operating point. A worker without the
+# endpoint just means a miss.
+enabled = true
+prompt = false
+min_logprob = -2.0
+margin = 1.0
+opposite_margin = 2.0
+refusal_margin = 1.0
+free_text_margin = 1.0
+# A CPU-only worker needs 5-10 s for the ~50 candidates; it then times out
+# here, which is a miss.
+timeout_s = 4.0
+
 [voice]
 dry_run = false
 speech_margin_db = 7.0

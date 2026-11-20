@@ -58,7 +58,8 @@ async def run_bridge(cfg: Config, *, with_earcons: bool) -> None:
     node = NodeLink(cfg.node, psk)
     pipeline = VoicePipeline(cfg=cfg.voice, transport=node, stt=stt, stt_confident=stt.confident,
                              executor=Executor(lugn, cfg.lugn), earcons=player,
-                             journal=Journal(cfg.voice.journal_path, cfg.voice.journal_max_bytes))
+                             journal=Journal(cfg.voice.journal_path, cfg.voice.journal_max_bytes),
+                             rescore=cfg.rescore)
     node.pipeline = pipeline
     tasks: list[asyncio.Task[None]] = []
     if cfg.features.enabled:
