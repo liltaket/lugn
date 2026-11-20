@@ -114,7 +114,7 @@ class Contract:
     def __init__(self):
         protocol = AGENT_DIR / "protocol"
         self.schemas = {leaf: json.loads((protocol / f"{leaf}.schema.json").read_text())
-                        for leaf in ("state", "availability", "events")}
+                        for leaf in ("state", "availability", "events", "optical-state")}
         self.count = 0
         for fixture in protocol.glob("*.example.json"):
             if fixture.name.startswith("control-"):
@@ -135,7 +135,7 @@ class Contract:
 
     def check(self, message):
         require(message.topic.startswith(TOPIC + "/"), "unexpected topic")
-        leaf = message.topic.rsplit("/", 1)[1]
+        leaf = message.leaf
         require(leaf in self.schemas, f"unexpected topic leaf {leaf}")
         check_schema(message.data, self.schemas[leaf])
         require(message.data["device_id"] == DEVICE, "wrong device identity")
@@ -161,7 +161,9 @@ class Message:
 
     @property
     def leaf(self):
-        return self.topic.rsplit("/", 1)[1]
+        # Nested topics keep their group: <device>/optical/state -> "optical-state",
+        # so they are never mistaken for the computer's own "state".
+        return self.topic.removeprefix(TOPIC + "/").replace("/", "-")
 
 
 class Subscriber:
