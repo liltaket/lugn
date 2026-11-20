@@ -3602,10 +3602,11 @@ h2 {
   inherits: true;
   initial-value: 0;
 }
-#app-root {
-  transition: --progress 1s linear;
-}
+/* The value is set on the play button and only its ring transitions it: a
+   transition of an inherited property on #app-root restyles the whole page
+   every frame, which a Hub cannot keep up with while something plays. */
 #app-root .play-button::before {
+  transition: --progress 1s linear;
   content: '';
   position: absolute;
   inset: -7px;
@@ -4122,8 +4123,7 @@ body {
     --art-glow 1.4s ease,
     --art-glow-soft 1.4s ease,
     --art-tint 1.4s ease,
-    --art-tint-2 1.4s ease,
-    --progress 1s linear;
+    --art-tint-2 1.4s ease;
 }
 #app-root[data-role='desk'] {
   --art-accent: #a4c7d2;

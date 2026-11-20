@@ -451,7 +451,7 @@ function renderMusicProgress() {
       Math.min(1, (sample.position + elapsed) / sample.duration),
     );
   }
-  root.style.setProperty('--progress', fraction.toFixed(4));
+  refs.musicPlayback.style?.setProperty?.('--progress', fraction.toFixed(4));
   root.dataset.progress = String(!!sample);
 }
 
