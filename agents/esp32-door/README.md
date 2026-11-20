@@ -5,8 +5,8 @@ the room door. Design and rollout: [docs/DOOR-NODE.md](../../docs/DOOR-NODE.md).
 
 | File                     | Contents                                                                     |
 | ------------------------ | ---------------------------------------------------------------------------- |
-| `door-node.yaml`         | Full image: base + camera + audio + voice                                    |
-| `mic-test.yaml`          | Bring-up image without the camera (used while the camera is absent)          |
+| `door-node.yaml`         | Production image: base + audio + voice                                       |
+| `door-node-camera.yaml`  | Production image plus the camera; only with a camera that answers            |
 | `packages/base.yaml`     | Board, PSRAM, WiFi + fallback AP, API, OTA, safe mode, diagnostics           |
 | `packages/camera.yaml`   | OV2640/OV3660 camera, VGA JPEG, ≤2 fps, snapshot server on :8081             |
 | `packages/audio.yaml`    | PDM microphone, sound levels                                                 |

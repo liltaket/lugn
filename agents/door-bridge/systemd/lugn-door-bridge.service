@@ -1,10 +1,13 @@
-# Template for BrunoCAM (systemd user unit). Not installed by anything here.
+# systemd user unit for the host that runs Lugn.
 #   install -Dm644 systemd/lugn-door-bridge.service ~/.config/systemd/user/lugn-door-bridge.service
 #   systemctl --user daemon-reload && systemctl --user enable --now lugn-door-bridge
 # Expects: venv at %h/.local/share/lugn-door-bridge/venv (pip install -r requirements.txt),
-# code at %h/lugn/agents/door-bridge, config at %E/lugn-door-bridge/config.toml, and an
-# environment file (mode 600) holding only the variables the config names, e.g.
-#   LUGN_HTTP_TOKEN_B64=<same value as in Lugn's environment>
+# the code of the active release at %h/.local/lib/lugn-door-bridge/current (a symlink
+# to one release directory, so a release switch is a symlink change plus restart),
+# config at %E/lugn-door-bridge/config.toml, and an environment file (mode 600)
+# holding only the variables the config names, e.g.
+#   LUGN_API_TOKEN_B64=<same value as in Lugn's environment>
+#   STT_TOKEN=<the STT worker's token>
 [Unit]
 Description=Lugn door node bridge (voice + adaptive-volume data)
 After=network-online.target lugn.service
@@ -13,7 +16,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-WorkingDirectory=%h/lugn/agents/door-bridge
+WorkingDirectory=%h/.local/lib/lugn-door-bridge/current
 ExecStart=%h/.local/share/lugn-door-bridge/venv/bin/python -m door_bridge run --config %E/lugn-door-bridge/config.toml
 EnvironmentFile=%E/lugn-door-bridge/environment
 UMask=0077

@@ -64,8 +64,10 @@ adopt the node without the API key.
 
 - **Camera.** It did not answer on SCCB (I²C) at bring-up. Every probe address
   timed out, so the module was not attached or its connector was not seated.
-  Until it answers, the node runs the bring-up image (`mic-test.yaml`, without
-  the camera package). The full image is `door-node.yaml`.
+  With no camera, probing blocked the main loop past the 5 s task watchdog and
+  the node fell into safe mode after five boots. So the production image
+  `door-node.yaml` has no camera; `door-node-camera.yaml` adds it once the
+  module answers.
 - **Heat.** The die temperature read 87 °C after boot and 94 °C with the wake
   word running, at full transmit power, in open air on a desk. The radio now
   transmits at 11 dB instead of 19.5 dB; the signal is about −45 dBm indoors

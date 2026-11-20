@@ -1,3 +1,6 @@
-# CUDA libraries for CTranslate2 (CUDA 12, cuDNN 9); filled from the build.
-nvidia-cublas-cu12
-nvidia-cudnn-cu12<10
+# CUDA libraries for CTranslate2 4.9 (CUDA 12, cuDNN 9), as resolved in the
+# container build. The worker decodes WAV itself, so PyAV's version does not
+# matter here.
+ctranslate2==4.9.0
+nvidia-cublas-cu12==12.9.3.13
+nvidia-cudnn-cu12==9.28.1.4
