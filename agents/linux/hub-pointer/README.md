@@ -10,7 +10,9 @@ the monitor at the matching height. The keyboard always stays on the desktop.
 It is a separate binary next to `lugn-linux-agent`:
 
 - The xdg-desktop-portal **InputCapture** portal places a pointer barrier on
-  the left edge and hands the captured pointer over.
+  the left edge and hands the captured pointer over. KDE only accepts a
+  barrier that fills the whole edge, so a push above `zone_height` is handed
+  straight back and the barrier rests for 300 ms.
 - **libei** (through the `reis` crate) delivers relative motion, buttons and
   scroll while captured.
 - A **WebSocket** server pushes the cursor position to the Hub page, one
@@ -108,7 +110,8 @@ lugn-hub-pointer` (or killing the process) frees it.
   CSS px above the bottom of the Hub page. Scroll is not scaled by gain. A
   wheel notch scrolls 48 px.
 - **zone_height**: how much of the left edge, from the bottom up, captures the
-  pointer. Above it, pushing left stops at the screen edge as usual. The Hub
+  pointer. Above it, pushing left stops at the screen edge as usual (the
+  pointer may hitch for a moment while the barrier hands it back). The Hub
   Max screen is about 13.5 cm tall, roughly 600 desktop px on an 80 cm wide
   3658 px monitor, so values up to about 600 match the Hub's physical height.
 - Watch `ws: rtt p50 … p95 …` in the log. The round trip includes the Hub's

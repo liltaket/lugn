@@ -14,7 +14,7 @@ use ashpd::desktop::{
 };
 
 use crate::{
-    capture::{Zone, barrier_line},
+    capture::{Zone, barrier_lines},
     log,
 };
 
@@ -150,29 +150,37 @@ impl Portal {
 
     /// Places the barrier and enables capture. Fails if the compositor
     /// rejects the barrier, since then nothing could ever activate.
-    pub async fn arm(&self, zone_set: u32, zone: Zone, zone_height: u32) -> Result<()> {
-        let line = barrier_line(zone, zone_height);
+    pub async fn arm(&self, zone_set: u32, zone: Zone) -> Result<()> {
         let id = BarrierID::new(BARRIER_ID).expect("non-zero");
-        let barriers = [Barrier::new(id, line)];
-        let request = bounded(
-            "SetPointerBarriers",
-            ARM_TIMEOUT,
-            self.ic.set_pointer_barriers(
-                &self.session,
-                &barriers,
-                zone_set,
-                SetPointerBarriersOptions::default(),
-            ),
-        )
-        .await?;
-        let failed = request
-            .response()
-            .context("SetPointerBarriers response")?
-            .failed_barriers()
-            .to_vec();
-        log!("portal: SetPointerBarriers {line:?} zone_set {zone_set} failed_barriers {failed:?}");
-        if !failed.is_empty() {
-            bail!("compositor rejected barrier {line:?}");
+        let mut accepted = None;
+        for line in barrier_lines(zone) {
+            let barriers = [Barrier::new(id, line)];
+            let request = bounded(
+                "SetPointerBarriers",
+                ARM_TIMEOUT,
+                self.ic.set_pointer_barriers(
+                    &self.session,
+                    &barriers,
+                    zone_set,
+                    SetPointerBarriersOptions::default(),
+                ),
+            )
+            .await?;
+            let failed = request
+                .response()
+                .context("SetPointerBarriers response")?
+                .failed_barriers()
+                .to_vec();
+            log!(
+                "portal: SetPointerBarriers {line:?} zone_set {zone_set} failed_barriers {failed:?}"
+            );
+            if failed.is_empty() {
+                accepted = Some(line);
+                break;
+            }
+        }
+        if accepted.is_none() {
+            bail!("compositor rejected every left-edge barrier for {zone:?}");
         }
         bounded(
             "Enable",

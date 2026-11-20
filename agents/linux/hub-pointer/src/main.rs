@@ -31,7 +31,7 @@ mod protocol;
 mod server;
 mod stats;
 
-use capture::{Pointer, ReleaseTo, leftmost_zone};
+use capture::{Pointer, ReleaseTo, in_entry_zone, leftmost_zone};
 use config::Config;
 use portal::{Portal, ZoneSet};
 use protocol::{AgentMsg, PageMsg};
@@ -41,6 +41,8 @@ use stats::{Pings, Rtt};
 const PING_EVERY: Duration = Duration::from_secs(1);
 const PONG_TIMEOUT: Duration = Duration::from_millis(2500);
 const LATENCY_REPORT_EVERY: Duration = Duration::from_secs(10);
+/// Pause after a push against the edge above the Hub.
+const REARM_AFTER_UPPER_EDGE: Duration = Duration::from_millis(300);
 const REARM_AFTER_DISABLED: Duration = Duration::from_secs(1);
 const REARM_AFTER_FAILURE: Duration = Duration::from_secs(5);
 const EI_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -323,11 +325,7 @@ impl<'p> App<'p> {
         };
         self.pointer.set_zone(Some(zone));
         self.armed = true;
-        if let Err(e) = self
-            .portal
-            .arm(self.zones.id, zone, self.cfg.zone_height)
-            .await
-        {
+        if let Err(e) = self.portal.arm(self.zones.id, zone).await {
             log!("portal: arming failed: {e:#}; retrying in {REARM_AFTER_FAILURE:?}");
             self.disarm().await?;
             self.rearm_at = Some(Instant::now() + REARM_AFTER_FAILURE);
@@ -434,6 +432,21 @@ impl<'p> App<'p> {
                 })
                 .await;
         }
+        if let Some(zone) = leftmost_zone(&self.zones.zones)
+            && !in_entry_zone(zone, self.cfg.zone_height, cursor.map(|c| c.1))
+        {
+            // KDE only accepts barriers that fill the edge, so pushes above
+            // the Hub land here. Hand the pointer straight back and rest the
+            // barrier briefly so a sustained push does not loop.
+            self.release(ReleaseTo {
+                activation_id,
+                cursor: None,
+            })
+            .await?;
+            self.disarm().await?;
+            self.rearm_at = Some(Instant::now() + REARM_AFTER_UPPER_EDGE);
+            return Ok(());
+        }
         match self.pointer.activate(activation_id, cursor) {
             Ok(enter) => {
                 log!("capture: enter {enter:?}");
@@ -455,7 +468,7 @@ impl<'p> App<'p> {
         self.on_deactivated(None);
         // Our own Disable may echo this signal; re-arming after a pause
         // (and only with a live page) keeps that from looping.
-        if self.page_ready() {
+        if self.page_ready() && self.rearm_at.is_none() {
             self.rearm_at = Some(Instant::now() + REARM_AFTER_DISABLED);
         }
     }

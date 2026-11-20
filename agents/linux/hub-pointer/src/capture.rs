@@ -35,13 +35,24 @@ pub fn leftmost_zone(zones: &[Zone]) -> Option<Zone> {
         .min_by_key(|z| (z.x, std::cmp::Reverse(z.bottom())))
 }
 
-/// Vertical barrier on the zone's left edge covering the bottom
-/// `zone_height` rows. Portal barriers are inclusive lines from (x1, y1) to
-/// (x2, y2) lying on a zone edge, so a left-edge barrier has x1 == x2 == x.
-pub fn barrier_line(zone: Zone, zone_height: u32) -> (i32, i32, i32, i32) {
-    let y2 = zone.bottom() - 1;
-    let y1 = (zone.bottom() - zone_height.min(zone.height) as i32).max(zone.y);
-    (zone.x, y1, zone.x, y2)
+/// Vertical barriers on the zone's whole left edge, most likely first. KDE
+/// rejects a barrier that does not fill the edge ("doesnt fill or on edge to
+/// another screen"), so the lower entry zone is enforced on activation
+/// instead (see [`in_entry_zone`]). Whether the end point is the last row or
+/// one past it is not documented, so the caller tries both.
+pub fn barrier_lines(zone: Zone) -> [(i32, i32, i32, i32); 2] {
+    [
+        (zone.x, zone.y, zone.x, zone.bottom() - 1),
+        (zone.x, zone.y, zone.x, zone.bottom()),
+    ]
+}
+
+/// Whether an activation at `cursor_y` lies in the bottom `zone_height` rows
+/// of the left edge, the part level with the Hub. Unknown positions count as
+/// inside, so a missing hint never blocks entry.
+pub fn in_entry_zone(zone: Zone, zone_height: u32, cursor_y: Option<f64>) -> bool {
+    let top = (zone.bottom() - zone_height.min(zone.height) as i32).max(zone.y);
+    cursor_y.is_none_or(|y| y >= f64::from(top))
 }
 
 /// Maps between the zone's left edge and the Hub viewport. The Hub's bottom
@@ -315,17 +326,26 @@ mod tests {
     }
 
     #[test]
-    fn barrier_covers_bottom_of_left_edge() {
-        assert_eq!(barrier_line(MONITOR, 420), (0, 609, 0, 1028));
-        // Taller than the monitor: whole edge.
-        assert_eq!(barrier_line(MONITOR, 5000), (0, 0, 0, 1028));
+    fn barriers_fill_the_left_edge() {
+        assert_eq!(barrier_lines(MONITOR), [(0, 0, 0, 1028), (0, 0, 0, 1029)]);
         let offset = Zone {
             x: -100,
             y: 50,
             width: 100,
             height: 200,
         };
-        assert_eq!(barrier_line(offset, 100), (-100, 150, -100, 249));
+        assert_eq!(barrier_lines(offset)[0], (-100, 50, -100, 249));
+    }
+
+    #[test]
+    fn entry_zone_is_the_bottom_of_the_edge() {
+        assert!(in_entry_zone(MONITOR, 420, Some(1028.0)));
+        assert!(in_entry_zone(MONITOR, 420, Some(609.0)));
+        assert!(!in_entry_zone(MONITOR, 420, Some(608.9)));
+        assert!(!in_entry_zone(MONITOR, 420, Some(0.0)));
+        assert!(in_entry_zone(MONITOR, 420, None));
+        // Taller than the monitor: the whole edge.
+        assert!(in_entry_zone(MONITOR, 5000, Some(0.0)));
     }
 
     #[test]
