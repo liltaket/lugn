@@ -1,0 +1,37 @@
+# OV2640/OV3660 DVP camera on the Sense expansion board.
+#
+# Presence evidence, not a video feed: VGA JPEG at 2 fps at most (the bridge
+# pulls frames on demand), 0.2 fps when nobody streams. Low rates keep the
+# chip cool (the Sense board runs hot with the camera on) and leave CPU for
+# the wake word. The board has no camera power-down pin.
+
+i2c:
+  - id: camera_i2c
+    sda: GPIO40
+    scl: GPIO39
+    frequency: 100kHz
+    scan: false
+
+esp32_camera:
+  id: door_camera
+  name: Dörrkamera
+  i2c_id: camera_i2c
+  external_clock:
+    pin: GPIO10
+    frequency: 20MHz
+  data_pins: [GPIO15, GPIO17, GPIO18, GPIO16, GPIO14, GPIO12, GPIO11, GPIO48]
+  vsync_pin: GPIO38
+  href_pin: GPIO47
+  pixel_clock_pin: GPIO13
+  resolution: 640x480
+  jpeg_quality: 12
+  max_framerate: 2 fps
+  idle_framerate: 0.2 fps
+  frame_buffer_count: 2
+  frame_buffer_location: PSRAM
+  vertical_flip: false
+  horizontal_mirror: false
+
+esp32_camera_web_server:
+  - port: 8081
+    mode: snapshot

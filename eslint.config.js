@@ -8,6 +8,7 @@ export default tseslint.config(
       'bench/results/**',
       'node_modules/**',
       'agents/linux/target/**',
+      'agents/esp32-door/.esphome/**',
     ],
   },
   ...tseslint.configs.recommended,

@@ -1,0 +1,21 @@
+# Lugn door node: Seeed XIAO ESP32-S3 Sense (ESP32-S3R8, 8 MB flash, 8 MB
+# octal PSRAM, DVP camera, PDM microphone) facing the room door.
+#
+# The node is a sensor head. It never controls lights or music itself:
+# - camera frames and motion evidence for presence (complement to the STL27L),
+# - an on-device wake word, after which audio streams to the voice service,
+# - continuous audio band levels for the future adaptive volume model.
+#
+# Build and update: see README.md. The first install is over USB; every later
+# install is an encrypted OTA upload (`esphome run door-node.yaml --device
+# lugn-door.local`). Secrets live in secrets.yaml (not in git).
+
+substitutions:
+  name: lugn-door
+  friendly_name: Lugn dörrnod
+
+packages:
+  base: !include packages/base.yaml
+  camera: !include packages/camera.yaml
+  audio: !include packages/audio.yaml
+  voice: !include packages/voice.yaml

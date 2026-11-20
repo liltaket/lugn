@@ -1,0 +1,9 @@
+# Bring-up image: base + audio + voice (camera package left out while
+# the camera does not answer on SCCB). Not for production.
+substitutions:
+  name: lugn-door
+  friendly_name: Lugn dörrnod
+packages:
+  base: !include packages/base.yaml
+  audio: !include packages/audio.yaml
+  voice: !include packages/voice.yaml

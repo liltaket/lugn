@@ -1,0 +1,151 @@
+# Platform, network, OTA, safe mode and diagnostics. Shared by every image.
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2026.11.0
+  project:
+    name: liltaket.lugn-door-node
+    version: '0.1.0'
+  platformio_options:
+    board_build.flash_mode: dio
+
+esp32:
+  board: seeed_xiao_esp32s3
+  variant: esp32s3
+  flash_size: 8MB
+  cpu_frequency: 240MHZ
+  framework:
+    type: esp-idf
+    advanced:
+      # GigaDevice flash (JEDEC manufacturer 0xC8), read with esptool.
+      flash_chip: gd
+      # A new image must confirm itself (after `safe_mode` marks the boot as
+      # good); an image that crashes before that is rolled back by the
+      # bootloader.
+      enable_ota_rollback: true
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: INFO
+  # Native USB stays usable for logs and recovery flashing.
+  hardware_uart: USB_SERIAL_JTAG
+
+# --- Network and updates -----------------------------------------------------
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # The Sense board runs hot. Measured on the die (wake word running, no
+  # camera): 94 C with modem sleep off, 79 C with light modem sleep. Lower
+  # transmit power alone made no difference but costs nothing here (the AP
+  # is received at about -45 dBm).
+  power_save_mode: light
+  output_power: 11dB
+  fast_connect: false
+  # Reconnect forever; only after 3 minutes without WiFi open the fallback
+  # access point so the node can still be reached and updated.
+  reboot_timeout: 0s
+  ap:
+    ssid: 'Lugn-Door-Fallback'
+    password: !secret fallback_ap_password
+    ap_timeout: 3min
+
+captive_portal:
+
+mdns:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  # Do not reboot when no client is connected: the camera and wake word must
+  # keep running even if every consumer is offline.
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    # Inherits the API encryption key: an upload must know the key, and the
+    # image travels encrypted.
+    encryption:
+  - platform: web_server
+
+safe_mode:
+  # Five boots in a row that never reach "good" (60 s up) switch to safe
+  # mode, where only WiFi, the API and OTA run, so a bad image can always be
+  # replaced over the air.
+  num_attempts: 5
+  reboot_timeout: 10min
+  boot_is_good_after: 60s
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+  log: true
+
+# --- Diagnostics -------------------------------------------------------------
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Stockholm
+
+debug:
+  update_interval: 60s
+
+text_sensor:
+  - platform: debug
+    reset_reason:
+      name: Senaste omstartsorsak
+  - platform: wifi_info
+    ip_address:
+      name: IP-adress
+    bssid:
+      name: WiFi BSSID
+  - platform: version
+    name: ESPHome-version
+    hide_timestamp: false
+
+sensor:
+  - platform: uptime
+    name: Drifttid
+    update_interval: 60s
+  - platform: wifi_signal
+    name: WiFi-signal
+    update_interval: 30s
+  - platform: internal_temperature
+    name: Chiptemperatur
+    update_interval: 30s
+  - platform: debug
+    free:
+      name: Ledigt heap-minne
+    psram:
+      name: Ledigt PSRAM
+
+binary_sensor:
+  - platform: status
+    name: Status
+
+button:
+  - platform: restart
+    name: Starta om
+  - platform: safe_mode
+    name: Starta om i safe mode
+
+output:
+  - platform: gpio
+    id: user_led_output
+    pin:
+      number: GPIO21
+      inverted: true
+
+light:
+  - platform: binary
+    id: user_led
+    name: Statuslampa
+    output: user_led_output
+    restore_mode: ALWAYS_OFF
+    entity_category: config

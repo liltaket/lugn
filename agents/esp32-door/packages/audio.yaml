@@ -1,0 +1,57 @@
+# PDM microphone on the Sense expansion board and the audio features built on it.
+
+i2s_audio:
+  - id: i2s_mic_bus
+    # PDM: the clock goes out on the LRCLK (WS) pin.
+    i2s_lrclk_pin: GPIO42
+
+microphone:
+  - platform: i2s_audio
+    id: door_mic
+    i2s_audio_id: i2s_mic_bus
+    adc_type: external
+    pdm: true
+    i2s_din_pin: GPIO41
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: left
+    correct_dc_offset: true
+
+sensor:
+  # Broadband level in dBFS, one value per second. A first, coarse input for
+  # the adaptive volume data set and a cross-check for audio_bands below.
+  - platform: sound_level
+    microphone: door_mic
+    passive: false
+    measurement_duration: 1000ms
+    rms:
+      name: Ljudnivå RMS
+    peak:
+      name: Ljudnivå topp
+
+  # --- audio_bands -----------------------------------------------------------
+  # Octave band levels (dBFS), A-weighted level and spectral flatness, all
+  # published together once per second. See components/audio_bands/README.md.
+  - platform: audio_bands
+    microphone: door_mic
+    passive: false
+    measurement_duration: 1s
+    laeq:
+      name: Ljudnivå A-vägd
+    bands:
+      - { center: 63, name: 'Band 63 Hz' }
+      - { center: 125, name: 'Band 125 Hz' }
+      - { center: 250, name: 'Band 250 Hz' }
+      - { center: 500, name: 'Band 500 Hz' }
+      - { center: 1000, name: 'Band 1000 Hz' }
+      - { center: 2000, name: 'Band 2000 Hz' }
+      - { center: 4000, name: 'Band 4000 Hz' }
+      # Partial at 16 kHz: 5.6-8 kHz (Nyquist) instead of 5.6-11.2 kHz.
+      - { center: 8000, name: 'Band 8000 Hz' }
+    spectral_flatness:
+      name: Spektral platthet
+
+external_components:
+  - source: { type: local, path: components }
+    components: [audio_bands]
+# --- end audio_bands ---------------------------------------------------------

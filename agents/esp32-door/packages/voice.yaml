@@ -1,0 +1,99 @@
+# Wake word on the node, speech to the door bridge on BrunoCAM.
+#
+# The node only detects the wake word and streams the following utterance
+# over the encrypted API (API audio, 16 kHz PCM16). The bridge owns
+# endpointing, speech-to-text, the command grammar and the Lugn call, and it
+# always ends a run with RUN_END. The node has no speaker; replies play on
+# BrunoCAM.
+#
+# Placeholder wake word: "Hey Jarvis" (said as "Hej Jarvis"). The real
+# wake word is not decided; a custom model replaces `hey_jarvis` below.
+
+micro_wake_word:
+  id: mww
+  microphone:
+    microphone: door_mic
+    gain_factor: 4
+  # The VAD model must agree before a wake word counts: fewer false wakes
+  # from music and TV.
+  vad:
+  models:
+    - model: hey_jarvis
+      id: wake_hey_jarvis
+  on_wake_word_detected:
+    - logger.log:
+        level: INFO
+        format: 'Wake word: %s'
+        args: [wake_word.c_str()]
+    - text_sensor.template.publish:
+        id: last_wake_word
+        state: !lambda return wake_word;
+    - voice_assistant.start:
+        wake_word: !lambda return wake_word;
+
+voice_assistant:
+  id: va
+  micro_wake_word: mww
+  microphone:
+    microphone: door_mic
+    gain_factor: 4
+  # Hints for the bridge (it applies its own gain/noise handling).
+  noise_suppression_level: 2
+  auto_gain: 31dBFS
+  on_listening:
+    - light.turn_on: user_led
+  on_stt_vad_end:
+    - light.turn_off: user_led
+  on_end:
+    - light.turn_off: user_led
+    - if:
+        condition:
+          switch.is_on: wake_word_enabled
+        then:
+          - micro_wake_word.start:
+  on_error:
+    - light.turn_off: user_led
+    - logger.log:
+        level: WARN
+        format: 'Voice run failed: %s %s'
+        args: [code.c_str(), message.c_str()]
+    - if:
+        condition:
+          switch.is_on: wake_word_enabled
+        then:
+          - micro_wake_word.start:
+  on_client_connected:
+    - if:
+        condition:
+          switch.is_on: wake_word_enabled
+        then:
+          - micro_wake_word.start:
+  on_client_disconnected:
+    - voice_assistant.stop:
+
+text_sensor:
+  - platform: template
+    id: last_wake_word
+    name: Senaste wake word
+
+switch:
+  # Privacy switch: off stops wake-word listening and any running voice run.
+  # Audio levels keep running (they leave the node only as numbers).
+  - platform: template
+    id: wake_word_enabled
+    name: Wake word
+    icon: mdi:microphone
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - micro_wake_word.start:
+    on_turn_off:
+      - voice_assistant.stop:
+      - micro_wake_word.stop:
+
+api:
+  actions:
+    # Push-to-talk without the wake word: diagnostics and a future button.
+    - action: start_listening
+      then:
+        - voice_assistant.start:

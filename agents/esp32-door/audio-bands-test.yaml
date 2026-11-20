@@ -1,0 +1,10 @@
+# Compile check for the audio_bands component (configured in
+# packages/audio.yaml): base + audio only, with a separate node name so its
+# build directory does not collide with lugn-door. Not for flashing.
+substitutions:
+  name: lugn-door-bands-test
+  friendly_name: Lugn dörrnod bandtest
+
+packages:
+  base: !include packages/base.yaml
+  audio: !include packages/audio.yaml
