@@ -45,7 +45,8 @@ def check_schema(value, schema, path="payload"):
     supported = {"$schema", "$id", "title", "description", "type", "const",
                  "enum", "format", "pattern", "minimum", "maximum", "anyOf",
                  "required", "properties", "additionalProperties", "items",
-                 "maxLength", "maxItems"}
+                 "maxLength", "maxItems", "minLength", "oneOf",
+                 "contentEncoding", "contentMediaType"}
     require(not set(schema) - supported, f"unsupported schema keywords at {path}")
     if "anyOf" in schema:
         for candidate in schema["anyOf"]:
@@ -56,10 +57,20 @@ def check_schema(value, schema, path="payload"):
                 pass
         else:
             raise AssertionError(f"{path}: no anyOf branch matched")
+    if "oneOf" in schema:
+        matches = 0
+        for candidate in schema["oneOf"]:
+            try:
+                check_schema(value, candidate, path)
+                matches += 1
+            except AssertionError:
+                pass
+        require(matches == 1, f"{path}: expected exactly one oneOf branch to match")
     if "type" in schema:
         kinds = {"object": dict, "array": list, "string": str,
                  "integer": int, "boolean": bool, "null": type(None)}
-        require(type(value) is kinds[schema["type"]], f"{path}: wrong type")
+        allowed = schema["type"] if isinstance(schema["type"], list) else [schema["type"]]
+        require(any(type(value) is kinds[name] for name in allowed), f"{path}: wrong type")
     if "const" in schema:
         require(value == schema["const"] and type(value) is type(schema["const"]),
                 f"{path}: wrong constant")
@@ -72,6 +83,8 @@ def check_schema(value, schema, path="payload"):
     for keyword in ("maxLength", "maxItems"):
         if keyword in schema:
             require(len(value) <= schema[keyword], f"{path}: exceeds {keyword}")
+    if "minLength" in schema:
+        require(len(value) >= schema["minLength"], f"{path}: shorter than minLength")
     if "pattern" in schema:
         require(re.search(schema["pattern"], value), f"{path}: pattern mismatch")
     if "format" in schema:
@@ -105,8 +118,16 @@ class Contract:
                 schema = json.loads((protocol / f"control-{leaf if leaf in ('state', 'ack') else 'command'}.schema.json").read_text())
                 check_schema(json.loads(fixture.read_text()), schema, fixture.name)
                 continue
-            leaf = fixture.name.split(".")[0].split("-")[0]
-            check_schema(json.loads(fixture.read_text()), self.schemas[leaf], fixture.name)
+            parts = fixture.name.removesuffix(".example.json").split("-")
+            # Longest matching schema wins: display-ack-off.example.json is
+            # checked by display-ack.schema.json, state-unknown by state.
+            schema_file = next(
+                (protocol / f"{'-'.join(parts[:n])}.schema.json"
+                 for n in range(len(parts), 0, -1)
+                 if (protocol / f"{'-'.join(parts[:n])}.schema.json").exists()),
+                None)
+            require(schema_file is not None, f"{fixture.name}: no matching schema")
+            check_schema(json.loads(fixture.read_text()), json.loads(schema_file.read_text()), fixture.name)
 
     def check(self, message):
         require(message.topic.startswith(TOPIC + "/"), "unexpected topic")

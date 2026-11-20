@@ -4806,3 +4806,94 @@ body {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+/* ── Artwork shapes, one rule for every image ──
+   Every image gets the same hero at the top of the sleeve (a square or a 3:2
+   box) and the same fade into its blurred copy. Near-square and wide images
+   fill the hero with a gentle center crop; panoramas and portrait frames sit
+   whole inside it, with their own blur filling the rest. Baked-in black bars
+   are trimmed in display.js before any of this. */
+#app-root .music-artwork[data-aspect] img {
+  width: 100%;
+  height: auto;
+  max-height: none;
+  object-position: center;
+  -webkit-mask-image: linear-gradient(to bottom, #000 56%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 56%, transparent 100%);
+}
+#app-root .music-artwork[data-aspect] img {
+  object-fit: cover;
+}
+#app-root .music-artwork[data-aspect='tall'] img {
+  aspect-ratio: 4 / 5;
+}
+#app-root .music-artwork[data-aspect='square'] img {
+  aspect-ratio: 1 / 1;
+}
+#app-root .music-artwork[data-aspect='wide'] img {
+  aspect-ratio: 3 / 2;
+}
+#app-root .music-artwork[data-aspect='panorama'] img,
+#app-root .music-artwork[data-aspect='strip'] img {
+  aspect-ratio: 2 / 1;
+}
+#app-root .music-artwork[data-aspect='strip'] img {
+  object-fit: contain;
+}
+#app-root .music-artwork[data-aspect]::before {
+  filter: blur(30px) saturate(1.35) brightness(0.68);
+}
+#app-root .music-artwork[data-aspect='strip']::before {
+  filter: blur(26px) saturate(1.35) brightness(0.78);
+}
+/* Tall frames reach under the title, so they fade out sooner. */
+#app-root .music-artwork[data-aspect='tall'] img {
+  -webkit-mask-image: linear-gradient(to bottom, #000 36%, transparent 76%);
+  mask-image: linear-gradient(to bottom, #000 36%, transparent 76%);
+}
+/* A strip fades at its own edges, so it blends into its blur on all sides. */
+#app-root .music-artwork[data-aspect='strip'][data-strip='wide'] img {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent calc(50% - var(--strip-span) / 2),
+    #000 calc(50% - var(--strip-span) / 2 + 12%),
+    #000 calc(50% + var(--strip-span) / 2 - 12%),
+    transparent calc(50% + var(--strip-span) / 2)
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent calc(50% - var(--strip-span) / 2),
+    #000 calc(50% - var(--strip-span) / 2 + 12%),
+    #000 calc(50% + var(--strip-span) / 2 - 12%),
+    transparent calc(50% + var(--strip-span) / 2)
+  );
+}
+#app-root .music-artwork[data-aspect='strip'][data-strip='tall'] img {
+  aspect-ratio: 1 / 1;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent calc(50% - var(--strip-span) / 2),
+    #000 calc(50% - var(--strip-span) / 2 + 10%),
+    #000 calc(50% + var(--strip-span) / 2 - 10%),
+    transparent calc(50% + var(--strip-span) / 2)
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent calc(50% - var(--strip-span) / 2),
+    #000 calc(50% - var(--strip-span) / 2 + 10%),
+    #000 calc(50% + var(--strip-span) / 2 - 10%),
+    transparent calc(50% + var(--strip-span) / 2)
+  );
+}
+/* The compact music card under a camera (or another stacked top card) shows a
+   plain square thumbnail for every shape: no hero box, no fades. */
+#app-root[data-camera-visible='true']
+  .music-artwork[data-aspect][data-strip]
+  img,
+#app-root[data-stacked='true'] .music-artwork[data-aspect][data-strip] img {
+  aspect-ratio: auto;
+  height: 100%;
+  object-fit: cover;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
