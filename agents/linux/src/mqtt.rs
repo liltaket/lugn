@@ -229,6 +229,8 @@ async fn publish_display(
         outputs: current.outputs,
         power_changed_at_ms: current.power_changed_at_ms,
         input_idle: current.input_idle,
+        input_idle_since_ms: current.input_idle_since_ms,
+        idle_blockers: current.idle_blockers,
         last_command: current.last_command,
     };
     b.publish(c.topic("display/state"), serde_json::to_vec(&state)?, true)
@@ -271,7 +273,7 @@ async fn connected(
     c: &Config,
     session: &str,
     states: &mut watch::Receiver<Observations>,
-    input_idle: &watch::Receiver<Option<bool>>,
+    feeds: &display::Feeds,
     sequence: &mut u64,
     connected_once: &mut bool,
 ) -> Result<()> {
@@ -315,7 +317,7 @@ async fn connected(
                 "Display control has no backend (no WAYLAND_DISPLAY or DISPLAY); requests will be rejected"
             );
         }
-        let runtime = display::spawn(context.clone(), backend, input_idle.clone());
+        let runtime = display::spawn(context.clone(), backend, feeds.clone());
         b.display_commands = Some(runtime.commands.clone());
         if b.control_clock.is_none() {
             b.control_clock = Some((control::now_ms(), std::time::Instant::now()));
@@ -442,12 +444,12 @@ async fn connected(
 }
 #[cfg(test)]
 pub async fn run(c: Config, states: watch::Receiver<Observations>) -> Result<()> {
-    run_with(c, states, watch::channel(None).1).await
+    run_with(c, states, display::Feeds::none()).await
 }
 pub async fn run_with(
     c: Config,
     mut states: watch::Receiver<Observations>,
-    input_idle: watch::Receiver<Option<bool>>,
+    feeds: display::Feeds,
 ) -> Result<()> {
     let session = uuid::Uuid::new_v4().to_string();
     let mut sequence = 0;
@@ -462,7 +464,7 @@ pub async fn run_with(
         let mut broker = Broker::new(&c, &session)?;
         let start = tokio::time::Instant::now();
         tokio::select! {
-            result = connected(&mut broker, &c, &session, &mut states, &input_idle, &mut sequence, &mut connected_once) => {
+            result = connected(&mut broker, &c, &session, &mut states, &feeds, &mut sequence, &mut connected_once) => {
                 // Avoid dumping options or credentials in errors.
                 if result.is_err() { eprintln!("MQTT connection lost/unavailable; retrying"); }
             }

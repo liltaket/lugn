@@ -8,7 +8,11 @@
 //! signal, not proof that the panel is dark (a monitor can show its own "no
 //! signal" message or sleep by itself); where the kernel offers no such state
 //! the reading is `unknown` and `applied` falls back to "the command exited 0".
-use crate::control::{Context, now_ms, uuid_valid};
+use crate::{
+    blockers::Blocker,
+    control::{Context, now_ms, uuid_valid},
+    idle::InputIdle,
+};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -236,6 +240,28 @@ pub struct Status {
     /// No keyboard/pointer input for the configured time, ignoring idle
     /// inhibitors; `None` when the compositor cannot report it.
     pub input_idle: Option<bool>,
+    /// Estimated time of the last input while `input_idle` is true.
+    pub input_idle_since_ms: Option<u64>,
+    /// What PowerDevil reports as holding the machine awake; `None` when it
+    /// cannot be read (unknown, not "nothing").
+    pub idle_blockers: Option<Vec<Blocker>>,
+}
+
+/// Inputs the agent watches for the display state besides the kernel.
+#[derive(Clone)]
+pub struct Feeds {
+    pub input_idle: watch::Receiver<InputIdle>,
+    pub blockers: watch::Receiver<Option<Vec<Blocker>>>,
+}
+impl Feeds {
+    /// No feed ever reports anything.
+    #[cfg(test)]
+    pub fn none() -> Self {
+        Self {
+            input_idle: watch::channel(InputIdle::default()).1,
+            blockers: watch::channel(None).1,
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 pub struct State {
@@ -251,6 +277,8 @@ pub struct State {
     pub outputs: Vec<OutputState>,
     pub power_changed_at_ms: Option<u64>,
     pub input_idle: Option<bool>,
+    pub input_idle_since_ms: Option<u64>,
+    pub idle_blockers: Option<Vec<Blocker>>,
     pub last_command: Option<LastCommand>,
 }
 
@@ -323,17 +351,13 @@ async fn run_program(program: &str, args: &[&str]) -> Result<(), Reason> {
     }
 }
 
-pub fn spawn(
-    context: Context,
-    backend: Option<Backend>,
-    input_idle: watch::Receiver<Option<bool>>,
-) -> Runtime {
+pub fn spawn(context: Context, backend: Option<Backend>, feeds: Feeds) -> Runtime {
     spawn_with(
         context,
         backend,
         backend.map(process_executor),
         drm_observer(),
-        input_idle,
+        feeds,
         VERIFY_WINDOW,
     )
 }
@@ -342,7 +366,7 @@ pub fn spawn_with(
     backend: Option<Backend>,
     executor: Option<Executor>,
     observer: Observer,
-    input_idle: watch::Receiver<Option<bool>>,
+    feeds: Feeds,
     verify_window: Duration,
 ) -> Runtime {
     let (commands, rx) = mpsc::channel(8);
@@ -352,7 +376,9 @@ pub fn spawn_with(
         power: initial.power,
         outputs: initial.outputs,
         power_changed_at_ms: None,
-        input_idle: *input_idle.borrow(),
+        input_idle: feeds.input_idle.borrow().idle,
+        input_idle_since_ms: feeds.input_idle.borrow().since_ms,
+        idle_blockers: feeds.blockers.borrow().clone(),
     });
     let (ack_tx, acks) = mpsc::channel(32);
     let task = tokio::spawn(run(
@@ -365,7 +391,7 @@ pub fn spawn_with(
         rx,
         status_tx,
         ack_tx,
-        input_idle,
+        feeds,
     ));
     Runtime {
         commands,
@@ -446,12 +472,17 @@ async fn run(
     mut commands: mpsc::Receiver<Delivery>,
     status: watch::Sender<Status>,
     acks: mpsc::Sender<Ack>,
-    mut input_idle: watch::Receiver<Option<bool>>,
+    feeds: Feeds,
 ) {
+    let Feeds {
+        input_idle: mut input_feed,
+        blockers: mut blockers_feed,
+    } = feeds;
     let mut cache: HashMap<String, Cached> = HashMap::new();
     let mut ticker = tokio::time::interval(POLL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut input_open = true;
+    let mut blockers_open = true;
     loop {
         let delivery = tokio::select! {
             delivery = commands.recv() => match delivery {
@@ -462,14 +493,29 @@ async fn run(
                 actor.observe(&status);
                 continue;
             }
-            changed = input_idle.changed(), if input_open => {
+            changed = input_feed.changed(), if input_open => {
                 if changed.is_err() {
                     input_open = false;
                 } else {
-                    let value = *input_idle.borrow_and_update();
+                    let value = *input_feed.borrow_and_update();
                     status.send_if_modified(|s| {
-                        let changed = s.input_idle != value;
-                        s.input_idle = value;
+                        let changed =
+                            s.input_idle != value.idle || s.input_idle_since_ms != value.since_ms;
+                        s.input_idle = value.idle;
+                        s.input_idle_since_ms = value.since_ms;
+                        changed
+                    });
+                }
+                continue;
+            }
+            changed = blockers_feed.changed(), if blockers_open => {
+                if changed.is_err() {
+                    blockers_open = false;
+                } else {
+                    let value = blockers_feed.borrow_and_update().clone();
+                    status.send_if_modified(|s| {
+                        let changed = s.idle_blockers != value;
+                        s.idle_blockers = value;
                         changed
                     });
                 }

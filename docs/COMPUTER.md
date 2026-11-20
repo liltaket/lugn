@@ -266,7 +266,9 @@ doing.
           "wakeOnEntry": true,
           "wakeInQuietHours": false,
           "inhibitOnActivity": true,
-          "activeInhibitMaxMs": 1800000
+          "activeInhibitMaxMs": 1800000,
+          "idleSleepAfterMs": 1800000,
+          "ignoreIdleBlockers": ["T3 Code"]
         }
       }
     ]
@@ -324,6 +326,39 @@ inhibitor.
 - **Waiting, not queueing.** A request is only sent while the computer observation
   and the display state are live, fresh and from the same session.
 
+### Sleep after inactivity
+
+Independently of presence, Lugn puts the display to sleep after
+`idleSleepAfterMs` (default 30 minutes, `null` turns it off, minimum 5 minutes)
+without keyboard or pointer input, with the room occupied or not. Any input wakes
+the display as usual (KWin does that), and a fresh stretch of inactivity then
+starts. It needs the agent's display feedback; without it nothing is sent.
+
+It has to be certain that nobody is watching, so it asks for _positive_ evidence:
+
+- **Music never holds it.** Nothing about media players is used. A player that
+  claims to be "Playing" (a remote-controlled app, Spotify Connect to a receiver,
+  playback on another device) is irrelevant; only the signals below count.
+- **Video holds it**: a PowerDevil blocker whose reason mentions video (browsers
+  raise "Playing video" while a video plays), the computer's activity classified
+  as `video` or `gaming`, or a full-screen window while sound is played _on this
+  computer_.
+- **Any other blocker holds it** unless its application is listed in
+  `ignoreIdleBlockers`, because a video player can be an idle blocker with another
+  reason. Blockers whose reason is "Playing audio" are music and never hold it.
+  Application names are matched case-insensitively.
+- **Unknown holds it**: unreadable blockers, a computer observation that is not
+  live and fresh, or the compositor reporting an inhibitor (`idle: false` while
+  input is idle) with nothing listed to explain it.
+- **A display that lights up by itself** in the same stretch (a bump without
+  input) is left alone for ten minutes, at most four times; a request that
+  changed nothing is retried at 30 s and 1 min, then given up for that stretch.
+
+Limits: a silent video that raises no blocker and is not full-screen, or a
+blocker raised only through a Wayland idle-inhibit protocol while another listed
+blocker is active, cannot be seen. Unknowns above are treated as "somebody may be
+watching". The reason sleep is held is visible in `idleSleep.heldBy`.
+
 ### Open-loop fallback (no `power` reported)
 
 On a system where the kernel offers no readable state (`power: unknown`, for
@@ -361,5 +396,8 @@ shows `control` (`available` only while a request could be sent), `desired`
 (`off`/`on`/`null`), `inhibited` (`recent_input`, `recent_activity`,
 `video_or_game`), `observed` (`power`, `inputIdle`, `changedAt`), `lastRequest`
 (`applied`, `rejected`, `uncertain`, `failed`, with the agent's reason),
-`problem`, `nextAttemptAt` and any plug `evidence`. Status is not restored after a
+`problem`, `idleSleep` (`inactiveSince`, `dueAt`, `heldBy`: `video`, `game`,
+`fullscreen_audio`, `other_blocker`, `unexplained_inhibitor`, `computer_unknown`,
+`blockers_unknown`, `no_feedback`, `keeps_waking`, `off_failed`), `nextAttemptAt`
+and any plug `evidence`. Status is not restored after a
 restart: a restart starts a fresh empty wait.

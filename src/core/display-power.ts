@@ -56,6 +56,31 @@ export const DisplayPowerSnapshotSchema = z.object({
     })
     .nullable()
     .optional(),
+  /**
+   * Sleep after a long stretch without input, whatever the room reads. `heldBy`
+   * says why it is not going to sleep yet; `dueAt` is when it would.
+   */
+  idleSleep: z
+    .object({
+      inactiveSince: z.number().nonnegative().nullable(),
+      dueAt: z.number().nonnegative().nullable(),
+      heldBy: z
+        .enum([
+          'video',
+          'game',
+          'fullscreen_audio',
+          'other_blocker',
+          'unexplained_inhibitor',
+          'computer_unknown',
+          'blockers_unknown',
+          'no_feedback',
+          'keeps_waking',
+          'off_failed',
+        ])
+        .nullable(),
+    })
+    .nullable()
+    .optional(),
   /** Why Lugn stopped trying until the room is occupied and empty again. */
   problem: z
     .enum(['off_failed', 'keeps_waking', 'wake_failed', 'wake_unavailable'])

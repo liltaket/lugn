@@ -11,6 +11,8 @@
 
 use std::{collections::BTreeMap, thread, time::Duration};
 
+use crate::control::now_ms;
+
 use tokio::sync::{mpsc::Sender, watch};
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle,
@@ -23,13 +25,18 @@ use wayland_protocols::ext::idle_notify::v1::client::{
 
 use crate::state::Event;
 
+/// Input-only idle as published to the display state: whether there has been no
+/// keyboard or pointer input for the configured time, and since when (an
+/// estimate of the last input, from the idled event minus the timeout).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputIdle {
+    pub idle: Option<bool>,
+    pub since_ms: Option<u64>,
+}
+
 /// Start a dedicated blocking Wayland dispatch thread. No input events or
 /// periodic idle queries are needed; only connection failures trigger retries.
-pub fn spawn(
-    tx: Sender<Event>,
-    timeout_secs: u32,
-    input: Option<(watch::Sender<Option<bool>>, u32)>,
-) {
+pub fn spawn(tx: Sender<Event>, timeout_secs: u32, input: Option<(watch::Sender<InputIdle>, u32)>) {
     let failure_tx = tx.clone();
     let (input_tx, input_secs) = match input {
         Some((tx, secs)) => (Some(tx), Some(secs)),
@@ -49,7 +56,7 @@ pub fn spawn(
                 if let Err(error) = run_session(&mut output, timeout_secs, input_secs, &mut backoff)
                 {
                     output.send(None);
-                    output.send_input(None);
+                    output.send_input(InputIdle::default());
                     if output.tx.is_closed() {
                         break;
                     }
@@ -71,7 +78,7 @@ struct Output {
     tx: Sender<Event>,
     // The outer Option distinguishes no publication from published unknown.
     last: Option<Option<bool>>,
-    input_tx: Option<watch::Sender<Option<bool>>>,
+    input_tx: Option<watch::Sender<InputIdle>>,
 }
 
 impl Output {
@@ -83,11 +90,11 @@ impl Output {
 }
 
 impl Output {
-    fn send_input(&self, idle: Option<bool>) {
+    fn send_input(&self, input: InputIdle) {
         if let Some(tx) = &self.input_tx {
             tx.send_if_modified(|current| {
-                let changed = *current != idle;
-                *current = idle;
+                let changed = *current != input;
+                *current = input;
                 changed
             });
         }
@@ -135,6 +142,8 @@ struct Seat {
     idle: Option<bool>,
     input_notification: Option<ExtIdleNotificationV1>,
     input_idle: Option<bool>,
+    /// Estimated time of the last input, set when the seat went idle.
+    input_since_ms: Option<u64>,
 }
 
 struct IdleState {
@@ -162,6 +171,7 @@ impl IdleState {
                     (name, true),
                 ));
                 seat.input_idle = Some(false);
+                seat.input_since_ms = None;
             }
             if seat.notification.is_none() {
                 seat.notification = Some(notifier.get_idle_notification(
@@ -183,9 +193,22 @@ impl IdleState {
     }
 
     /// Unknown unless input idle was requested and the compositor supports it.
-    fn input_idle(&self) -> Option<bool> {
-        self.input_timeout_ms?;
-        aggregate_idle(self.seats.values().map(|seat| seat.input_idle))
+    fn input_idle(&self) -> InputIdle {
+        let Some(timeout) = self.input_timeout_ms else {
+            return InputIdle::default();
+        };
+        let idle = aggregate_idle(self.seats.values().map(|seat| seat.input_idle));
+        // The most recent last-input across seats; only meaningful while idle.
+        let since_ms = if idle == Some(true) {
+            self.seats
+                .values()
+                .filter_map(|seat| seat.input_since_ms)
+                .max()
+                .or_else(|| Some(now_ms().saturating_sub(u64::from(timeout))))
+        } else {
+            None
+        };
+        InputIdle { idle, since_ms }
     }
 }
 
@@ -241,6 +264,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for IdleState {
                                 idle: None,
                                 input_notification: None,
                                 input_idle: None,
+                                input_since_ms: None,
                             },
                         );
                     }
@@ -263,6 +287,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for IdleState {
                         }
                         seat.idle = None;
                         seat.input_idle = None;
+                        seat.input_since_ms = None;
                     }
                     if let Some((_, _, notifier)) = state.notifier.take() {
                         notifier.destroy();
@@ -295,6 +320,7 @@ impl Dispatch<ExtIdleNotificationV1, (u32, bool)> for IdleState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        let timeout = u64::from(state.input_timeout_ms.unwrap_or(0));
         let Some(seat) = state.seats.get_mut(name) else {
             return;
         };
@@ -313,8 +339,18 @@ impl Dispatch<ExtIdleNotificationV1, (u32, bool)> for IdleState {
             &mut seat.idle
         };
         match event {
-            ext_idle_notification_v1::Event::Idled => *slot = Some(true),
-            ext_idle_notification_v1::Event::Resumed => *slot = Some(false),
+            ext_idle_notification_v1::Event::Idled => {
+                *slot = Some(true);
+                if *input {
+                    seat.input_since_ms = Some(now_ms().saturating_sub(timeout));
+                }
+            }
+            ext_idle_notification_v1::Event::Resumed => {
+                *slot = Some(false);
+                if *input {
+                    seat.input_since_ms = None;
+                }
+            }
             _ => {}
         }
     }

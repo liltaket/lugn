@@ -13,7 +13,7 @@ fn spawn_with(context: Context, backend: Option<Backend>, executor: Option<Execu
         backend,
         executor,
         Arc::new(Reading::default),
-        watch::channel(None).1,
+        Feeds::none(),
         Duration::from_millis(300),
     )
 }
@@ -59,17 +59,13 @@ fn following(shared: Arc<Mutex<Reading>>, follow: bool) -> Executor {
         })
     })
 }
-fn observed_runtime(
-    observer: Observer,
-    executor: Executor,
-    input: watch::Receiver<Option<bool>>,
-) -> Runtime {
+fn observed_runtime(observer: Observer, executor: Executor, feeds: Feeds) -> Runtime {
     super::spawn_with(
         context(),
         Some(Backend::Kscreen),
         Some(executor),
         observer,
-        input,
+        feeds,
         Duration::from_millis(600),
     )
 }
@@ -160,6 +156,10 @@ fn fixtures_roundtrip_and_match_the_schemas() {
     let state: State = serde_json::from_str(STATE).unwrap();
     assert_eq!(serde_json::to_value(&state).unwrap(), expected);
     exact_fields(&expected, &state_schema);
+    exact_fields(
+        &expected["idle_blockers"][0],
+        &state_schema["properties"]["idle_blockers"]["oneOf"][1]["items"],
+    );
     exact_fields(
         &expected["outputs"][0],
         &state_schema["properties"]["outputs"]["items"],
@@ -393,7 +393,7 @@ async fn program_runner_maps_spawn_and_exit_failures() {
 #[tokio::test(flavor = "current_thread")]
 async fn applied_is_acknowledged_only_after_the_kernel_state_follows() {
     let (observer, shared) = kernel(Power::On);
-    let mut runtime = observed_runtime(observer, following(shared, true), watch::channel(None).1);
+    let mut runtime = observed_runtime(observer, following(shared, true), Feeds::none());
     assert_eq!(runtime.status.borrow().power, Power::On);
     let ack = roundtrip(&mut runtime, delivery(fresh(Action::Off))).await;
     assert_eq!(
@@ -418,7 +418,7 @@ async fn an_exit_zero_that_changes_nothing_is_not_applied() {
     // This is exactly what happened live: the command exited 0 while the
     // display stayed lit.
     let (observer, shared) = kernel(Power::On);
-    let mut runtime = observed_runtime(observer, following(shared, false), watch::channel(None).1);
+    let mut runtime = observed_runtime(observer, following(shared, false), Feeds::none());
     let ack = roundtrip(&mut runtime, delivery(fresh(Action::Off))).await;
     assert_eq!(
         (ack.outcome, ack.reason),
@@ -432,7 +432,7 @@ async fn an_exit_zero_that_changes_nothing_is_not_applied() {
 #[tokio::test(flavor = "current_thread")]
 async fn no_connected_output_is_rejected_without_waiting() {
     let (observer, shared) = kernel(Power::Absent);
-    let mut runtime = observed_runtime(observer, following(shared, false), watch::channel(None).1);
+    let mut runtime = observed_runtime(observer, following(shared, false), Feeds::none());
     let started = Instant::now();
     let ack = roundtrip(&mut runtime, delivery(fresh(Action::On))).await;
     assert_eq!(
@@ -446,7 +446,7 @@ async fn no_connected_output_is_rejected_without_waiting() {
 #[tokio::test(flavor = "current_thread")]
 async fn a_request_for_the_state_already_reached_is_applied_at_once() {
     let (observer, shared) = kernel(Power::Off);
-    let mut runtime = observed_runtime(observer, following(shared, false), watch::channel(None).1);
+    let mut runtime = observed_runtime(observer, following(shared, false), Feeds::none());
     let ack = roundtrip(&mut runtime, delivery(fresh(Action::Off))).await;
     assert_eq!(
         (ack.outcome, ack.reason),
@@ -457,7 +457,7 @@ async fn a_request_for_the_state_already_reached_is_applied_at_once() {
 #[tokio::test(flavor = "current_thread")]
 async fn unreadable_kernel_state_falls_back_to_the_exit_status() {
     let (observer, shared) = kernel(Power::Unknown);
-    let mut runtime = observed_runtime(observer, following(shared, false), watch::channel(None).1);
+    let mut runtime = observed_runtime(observer, following(shared, false), Feeds::none());
     let ack = roundtrip(&mut runtime, delivery(fresh(Action::Off))).await;
     assert_eq!(
         (ack.outcome, ack.reason),
@@ -467,18 +467,45 @@ async fn unreadable_kernel_state_falls_back_to_the_exit_status() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn input_idle_and_external_power_changes_reach_the_status() {
+async fn input_idle_blockers_and_external_power_changes_reach_the_status() {
     let (observer, shared) = kernel(Power::On);
-    let (input_tx, input_rx) = watch::channel(None);
-    let mut runtime =
-        observed_runtime(observer.clone(), following(shared.clone(), false), input_rx);
+    let (input_tx, input_rx) = watch::channel(InputIdle::default());
+    let (blockers_tx, blockers_rx) = watch::channel(None);
+    let mut runtime = observed_runtime(
+        observer.clone(),
+        following(shared.clone(), false),
+        Feeds {
+            input_idle: input_rx,
+            blockers: blockers_rx,
+        },
+    );
     assert_eq!(runtime.status.borrow().input_idle, None);
-    input_tx.send(Some(true)).unwrap();
+    assert_eq!(runtime.status.borrow().idle_blockers, None);
+    input_tx
+        .send(InputIdle {
+            idle: Some(true),
+            since_ms: Some(1_770_000_000_000),
+        })
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(1), runtime.status.changed())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(runtime.status.borrow().input_idle, Some(true));
+    assert_eq!(
+        runtime.status.borrow().input_idle_since_ms,
+        Some(1_770_000_000_000)
+    );
+    let blocker = Blocker {
+        app: "zen".into(),
+        reason: "Playing video".into(),
+    };
+    blockers_tx.send(Some(vec![blocker.clone()])).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), runtime.status.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(runtime.status.borrow().idle_blockers, Some(vec![blocker]));
     // The periodic sampler publishes a change nobody asked for (a wake by input).
     let actor = Actor {
         observer,

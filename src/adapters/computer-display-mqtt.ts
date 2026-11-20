@@ -49,6 +49,15 @@ export const ComputerDisplayStateSchema = z.strictObject({
   power_changed_at_ms: Integer.nullable(),
   /** No real keyboard/pointer input recently, ignoring idle inhibitors. */
   input_idle: z.boolean().nullable(),
+  /** Estimated time of the last input while `input_idle` is true. */
+  input_idle_since_ms: Integer.nullable(),
+  /** What PowerDevil lists as holding the machine awake; null when unreadable. */
+  idle_blockers: z
+    .array(
+      z.strictObject({ app: z.string().max(64), reason: z.string().max(64) }),
+    )
+    .max(8)
+    .nullable(),
   last_command: z
     .strictObject({
       command_id: UUID,

@@ -86,6 +86,20 @@ const DisplayPowerConfigSchema = z
     wakeOnEntry: z.boolean().default(true),
     wakeInQuietHours: z.boolean().default(false),
     inhibitOnActivity: z.boolean().default(true),
+    /**
+     * Put the display to sleep after this long without keyboard or pointer
+     * input, whatever the room reads, unless video, a game or an unknown idle
+     * blocker is active. `null` turns it off.
+     */
+    idleSleepAfterMs: z
+      .number()
+      .int()
+      .min(300_000)
+      .max(86_400_000)
+      .nullable()
+      .default(1_800_000),
+    /** Idle blockers (by application name) that never keep the display on. */
+    ignoreIdleBlockers: z.array(z.string().min(1).max(64)).max(16).default([]),
     activeInhibitMaxMs: z
       .number()
       .int()

@@ -40,6 +40,8 @@ function state(
     outputs: [{ connector: 'DP-1', power: 'on' }],
     power_changed_at_ms: null,
     input_idle: true,
+    input_idle_since_ms: NOW - 50_000,
+    idle_blockers: [],
     last_command: null,
     ...overrides,
   };

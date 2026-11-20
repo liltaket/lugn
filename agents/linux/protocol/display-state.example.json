@@ -16,6 +16,17 @@
   ],
   "power_changed_at_ms": 1770000000300,
   "input_idle": true,
+  "input_idle_since_ms": 1769999990100,
+  "idle_blockers": [
+    {
+      "app": "T3 Code",
+      "reason": "Agents are working"
+    },
+    {
+      "app": "zen",
+      "reason": "Playing audio"
+    }
+  ],
   "last_command": {
     "command_id": "77777777-7777-4777-8777-777777777777",
     "action": "off",

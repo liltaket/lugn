@@ -215,6 +215,8 @@ describe('runtime configuration cross references', () => {
       wakeOnEntry: true,
       wakeInQuietHours: false,
       inhibitOnActivity: true,
+      idleSleepAfterMs: 1_800_000,
+      ignoreIdleBlockers: [],
       activeInhibitMaxMs: 1_800_000,
     });
     expect(

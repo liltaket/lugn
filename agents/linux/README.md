@@ -150,9 +150,11 @@ The agent reads the kernel's per-connector DPMS state (`/sys/class/drm`) and
 publishes it as `power`, so a request is acknowledged `applied` only after that
 state followed the command; a command that exits 0 without effect is reported as
 `not_observed`. That is the GPU's view of the picture signal, not proof the panel
-is dark. It also publishes `input_idle` (keyboard/pointer idle, ignoring idle
-inhibitors, `display_input_idle_secs`, default 120) so a controller does not act
-while someone is working. Read the [DISPLAY v1 contract](protocol/DISPLAY.md) for
+is dark. It also publishes `input_idle` and `input_idle_since_ms` (keyboard/pointer
+idle, ignoring idle inhibitors, `display_input_idle_secs`, default 120) so a
+controller does not act while someone is working, and `idle_blockers` (what
+PowerDevil lists as holding the machine awake: for example "Playing video" or
+"Playing audio") so it can tell a film from music. Read the [DISPLAY v1 contract](protocol/DISPLAY.md) for
 topics, freshness rules and what each acknowledgment does and does not prove. No
 command text from configuration or MQTT ever reaches a process.
 

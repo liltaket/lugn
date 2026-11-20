@@ -45,7 +45,19 @@ for `display_input_idle_secs` (default 120), using `ext_idle_notifier_v1` versio
 `get_input_idle_notification`, which **ignores idle inhibitors**. Observation v1's
 `idle` honors them, so a playing video or a busy tool keeps it `false` and it
 cannot tell a person from an inhibitor. `null` means the compositor cannot report
-it. It is published only here, never in observation v1.
+it. It is published only here, never in observation v1. `input_idle_since_ms` is
+an estimate of the last input (the idled event's time minus the timeout) while
+`input_idle` is true, and null otherwise, so a controller can measure a long
+stretch of inactivity with a short idle timeout.
+
+`idle_blockers` lists what PowerDevil (`PolicyAgent.ListInhibitions`) says is
+holding the machine awake, as at most eight `{app, reason}` pairs of up to 64
+characters: for example a browser's "Playing video" or "Playing audio", or a
+tool's "Agents are working". It is how a controller tells a film from music. It
+is sampled every 15 seconds and is `null` (unknown, not "nothing") when it cannot
+be read, for example outside Plasma. The method is deprecated upstream but still
+served. Application names are published, so protect broker access as for media
+titles.
 
 Requests are idempotent: asking for `off` twice is harmless. With a reported
 `power` a controller should send only to change the observed state and not repeat

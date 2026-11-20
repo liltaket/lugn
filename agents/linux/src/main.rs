@@ -1,5 +1,6 @@
 mod artwork;
 mod audio;
+mod blockers;
 mod config;
 mod control;
 mod control_mpris;
@@ -22,7 +23,11 @@ async fn main() -> Result<()> {
     let config = config::Config::load(std::path::Path::new(&path))?;
     let (tx, mut rx) = mpsc::channel(64);
     let (latest, states) = watch::channel(state::Observations::default());
-    let (input_idle_tx, input_idle) = watch::channel(None);
+    let (input_idle_tx, input_idle) = watch::channel(idle::InputIdle::default());
+    let (blockers_tx, blockers) = watch::channel(None);
+    if config.display_control_enabled {
+        blockers::spawn(blockers_tx);
+    }
     idle::spawn(
         tx.clone(),
         config.idle_secs,
@@ -42,7 +47,15 @@ async fn main() -> Result<()> {
             }
         }
     });
-    let result = mqtt::run_with(config, states, input_idle).await;
+    let result = mqtt::run_with(
+        config,
+        states,
+        display::Feeds {
+            input_idle,
+            blockers,
+        },
+    )
+    .await;
     kwin::cleanup().await;
     result
 }

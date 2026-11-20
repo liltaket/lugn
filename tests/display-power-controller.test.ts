@@ -25,6 +25,8 @@ type Scene = {
   presence: Presence;
   home: 'home' | 'away' | 'unknown';
   idle: boolean | null;
+  fullscreen: boolean | null;
+  audioPlaying: boolean | null;
   activity: 'desktop' | 'gaming' | 'video' | 'idle' | 'unknown';
   online: boolean;
   session: string;
@@ -39,6 +41,8 @@ function harness(
     presence: 'occupied',
     home: 'home',
     idle: true,
+    fullscreen: null,
+    audioPlaying: null,
     activity: 'desktop',
     online: true,
     session: SESSION,
@@ -54,6 +58,8 @@ function harness(
     /** Agent-reported GPU display state; `unknown` means no feedback. */
     power: 'unknown' as ComputerDisplayState['power'],
     inputIdle: null as boolean | null,
+    inputIdleSince: null as number | null,
+    blockers: [] as Array<{ app: string; reason: string }> | null,
     lastCommand: null as ComputerDisplayState['last_command'],
     changedAt: null as number | null,
     /** The agent's state only catches up with an acknowledged command later. */
@@ -69,6 +75,8 @@ function harness(
           outputs: [],
           power_changed_at_ms: transport.changedAt,
           input_idle: transport.inputIdle,
+          input_idle_since_ms: transport.inputIdleSince,
+          idle_blockers: transport.blockers,
           last_command: transport.lastCommand,
         },
       };
@@ -115,7 +123,14 @@ function harness(
             availability: scene.online ? 'online' : 'offline',
             freshness: scene.online ? 'fresh' : 'unknown',
             sessionId: scene.session,
-            observed: { idle: scene.idle },
+            observed: {
+              idle: scene.idle,
+              fullscreen: scene.fullscreen,
+              audio:
+                scene.audioPlaying === null
+                  ? null
+                  : { playing: scene.audioPlaying },
+            },
             activity: { classification: scene.activity },
           },
         },
@@ -662,6 +677,207 @@ describe('DisplayPowerController', () => {
       h.setQuiet(true);
       await h.set({ presence: 'occupied' });
       expect(h.transport.sent).toEqual(['off']);
+    });
+  });
+
+  describe('sleeping after inactivity', () => {
+    /** Occupied room, display lit, nobody has touched the computer for two minutes. */
+    const idleAtDesk = async (
+      policy: Partial<DisplayPowerPolicy> = {},
+      options: {
+        blockers?: Array<{ app: string; reason: string }> | null;
+      } = {},
+    ) => {
+      h = harness(policy);
+      h.transport.power = 'on';
+      h.transport.inputIdle = true;
+      h.transport.inputIdleSince = h.clock.now() - 2 * MINUTE;
+      if (options.blockers !== undefined)
+        h.transport.blockers = options.blockers;
+      await h.set({});
+    };
+
+    it('sleeps once after thirty minutes without input, with the room occupied', async () => {
+      await idleAtDesk();
+      expect(h.published.at(-1)?.idleSleep).toMatchObject({
+        heldBy: null,
+        dueAt: h.transport.inputIdleSince! + 30 * MINUTE,
+      });
+      await h.advance(28 * MINUTE - 1);
+      expect(h.transport.sent).toEqual([]);
+      await h.advance(1);
+      expect(h.transport.sent).toEqual(['off']);
+      await h.advance(6 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('starts over after input, and does not wake anything on its own', async () => {
+      await idleAtDesk();
+      await h.advance(28 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      // The user touches the keyboard: the display wakes, the clock restarts.
+      h.transport.power = 'on';
+      h.transport.inputIdle = false;
+      h.transport.inputIdleSince = null;
+      h.controller.observe();
+      await h.advance(10 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      h.transport.inputIdle = true;
+      h.transport.inputIdleSince = h.clock.now() - 2 * MINUTE;
+      h.controller.observe();
+      await h.advance(28 * MINUTE);
+      expect(h.transport.sent).toEqual(['off', 'off']);
+    });
+
+    it('is not held by music, which includes sound that is not played on this computer', async () => {
+      await idleAtDesk(
+        { ignoreIdleBlockers: ['T3 Code'] },
+        {
+          blockers: [
+            { app: 'T3 Code', reason: 'Agents are working' },
+            { app: 'zen', reason: 'Playing audio' },
+          ],
+        },
+      );
+      // A media player claims to be playing, locally there is only audio.
+      await h.set({ audioPlaying: true, fullscreen: false });
+      await h.advance(28 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('is held by video until it stops, and then sleeps', async () => {
+      await idleAtDesk(
+        { ignoreIdleBlockers: ['t3 code'] },
+        {
+          blockers: [
+            { app: 'T3 Code', reason: 'Agents are working' },
+            { app: 'zen', reason: 'Playing video' },
+          ],
+        },
+      );
+      await h.advance(60 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      expect(h.published.at(-1)?.idleSleep).toMatchObject({
+        heldBy: 'video',
+        dueAt: null,
+      });
+      h.transport.blockers = [{ app: 'T3 Code', reason: 'Agents are working' }];
+      h.controller.observe();
+      await flush();
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('is held by a blocker nobody has said to ignore', async () => {
+      await idleAtDesk(
+        {},
+        { blockers: [{ app: 'T3 Code', reason: 'Agents are working' }] },
+      );
+      await h.advance(2 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      expect(h.published.at(-1)?.idleSleep).toMatchObject({
+        heldBy: 'other_blocker',
+      });
+    });
+
+    it('is held by a game, a classified video, or a full-screen window with local sound', async () => {
+      for (const [scene, heldBy] of [
+        [{ activity: 'gaming' as const }, 'game'],
+        [{ activity: 'video' as const }, 'video'],
+        [{ fullscreen: true, audioPlaying: true }, 'fullscreen_audio'],
+      ] as const) {
+        await idleAtDesk();
+        await h.set(scene);
+        await h.advance(2 * 60 * MINUTE);
+        expect(h.transport.sent).toEqual([]);
+        expect(h.published.at(-1)?.idleSleep).toMatchObject({ heldBy });
+      }
+    });
+
+    it('is held when it cannot tell what is going on', async () => {
+      await idleAtDesk({}, { blockers: null });
+      await h.advance(2 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      expect(h.published.at(-1)?.idleSleep).toMatchObject({
+        heldBy: 'blockers_unknown',
+      });
+
+      await idleAtDesk();
+      await h.set({ online: false });
+      await h.advance(2 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      expect(h.published.at(-1)?.idleSleep).toMatchObject({
+        heldBy: 'computer_unknown',
+      });
+
+      // The compositor says something blocks idle, yet nothing is listed.
+      await idleAtDesk();
+      await h.set({ idle: false });
+      await h.advance(2 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      expect(h.published.at(-1)?.idleSleep).toMatchObject({
+        heldBy: 'unexplained_inhibitor',
+      });
+    });
+
+    it('needs the agent’s display feedback and can be switched off', async () => {
+      await idleAtDesk();
+      h.transport.power = 'unknown';
+      h.controller.observe();
+      await h.advance(2 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      expect(h.published.at(-1)?.idleSleep).toMatchObject({
+        heldBy: 'no_feedback',
+      });
+
+      await idleAtDesk({ idleSleepAfterMs: null });
+      await h.advance(6 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      expect(h.published.at(-1)?.idleSleep ?? null).toBeNull();
+    });
+
+    it('sends nothing to a display that is already dark', async () => {
+      await idleAtDesk();
+      h.transport.power = 'off';
+      h.controller.observe();
+      await h.advance(60 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+    });
+
+    it('does not fight a display that lights up by itself in the same stretch', async () => {
+      await idleAtDesk();
+      await h.advance(28 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      h.transport.power = 'on'; // a bump with no input
+      h.controller.observe();
+      await h.advance(9 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      await h.advance(MINUTE + 1);
+      expect(h.transport.sent).toEqual(['off', 'off']);
+    });
+
+    it('retries a request that changed nothing, then gives up for this stretch', async () => {
+      await idleAtDesk();
+      h.transport.outcome = 'uncertain';
+      h.transport.reason = 'not_observed';
+      await h.advance(28 * MINUTE);
+      expect(h.transport.sent).toHaveLength(1);
+      await h.advance(30_000);
+      expect(h.transport.sent).toHaveLength(2);
+      await h.advance(MINUTE);
+      expect(h.transport.sent).toHaveLength(3);
+      for (let i = 0; i < 10; i++) await h.advance(10 * MINUTE);
+      expect(h.transport.sent).toHaveLength(3);
+      expect(h.published.at(-1)?.idleSleep).toMatchObject({
+        heldBy: 'off_failed',
+      });
+    });
+
+    it('leaves an empty room to the presence rules', async () => {
+      await idleAtDesk();
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      expect(h.published.at(-1)?.idleSleep ?? null).toBeNull();
     });
   });
 

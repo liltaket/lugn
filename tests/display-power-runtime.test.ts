@@ -156,6 +156,8 @@ describe('display power in the composed runtime', () => {
           outputs: [{ connector: 'DP-1', power: kernel.power }],
           power_changed_at_ms: null,
           input_idle: kernel.inputIdle,
+          input_idle_since_ms: kernel.inputIdle ? Date.now() - 150_000 : null,
+          idle_blockers: [],
           last_command: lastCommand.value,
         }),
       );

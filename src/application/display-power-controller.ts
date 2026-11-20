@@ -26,6 +26,14 @@ export type DisplayPowerPolicy = {
   inhibitOnActivity: boolean;
   /** Game/video (and idle-less activity) can postpone sleep for at most this long. */
   activeInhibitMaxMs: number;
+  /**
+   * Sleep after this long without keyboard or pointer input, whatever presence
+   * says, unless video, a game or an unexplained idle blocker is active; music
+   * never holds it. Needs the agent's display feedback. `null` turns it off.
+   */
+  idleSleepAfterMs: number | null;
+  /** Idle blockers (by application name) that never hold the display on. */
+  ignoreIdleBlockers: readonly string[];
 };
 
 export const defaultDisplayPowerPolicy: DisplayPowerPolicy = {
@@ -35,6 +43,8 @@ export const defaultDisplayPowerPolicy: DisplayPowerPolicy = {
   wakeInQuietHours: false,
   inhibitOnActivity: true,
   activeInhibitMaxMs: 1_800_000,
+  idleSleepAfterMs: 1_800_000,
+  ignoreIdleBlockers: [],
 };
 
 /** Plug evidence timing, used only when the agent reports no display state. */
@@ -60,6 +70,8 @@ const FAILURE_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000, 600_000];
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
 type Problem = NonNullable<DisplayPowerSnapshot['problem']>;
+type IdleSleep = NonNullable<DisplayPowerSnapshot['idleSleep']>;
+type HeldBy = NonNullable<IdleSleep['heldBy']>;
 type Power = ComputerDisplayState['power'];
 type Options = {
   deviceId: string;
@@ -100,6 +112,14 @@ export class DisplayPowerController {
   private lastOffAttemptAt = 0;
   private offAttempts = 0;
   private offApplications = 0;
+  /** State of the current stretch without input (idle sleep). */
+  private idleEpisode: number | null = null;
+  private idleApplications = 0;
+  private idleAttempts = 0;
+  private idleAppliedAt = 0;
+  private idleWakeAt = 0;
+  private idleFailures = 0;
+  private idleFailureAt = 0;
   private lastExternalWakeAt = 0;
   private prevPower: Power | null = null;
   private startupChecked = false;
@@ -160,6 +180,7 @@ export class DisplayPowerController {
     const occupied = state.presence.state === 'occupied' && !away;
     this.problem = null;
 
+    const previousPower = this.prevPower;
     // A display that lights up while the room reads empty and we did not ask.
     if (power !== null) {
       if (
@@ -209,6 +230,8 @@ export class DisplayPowerController {
         : null;
     let dueAt: number | null = null;
     let action: 'off' | 'on' | null = null;
+    let kind: 'empty' | 'idle' = 'empty';
+    let idleSleep: IdleSleep | null = null;
 
     if (!feedback && this.wakeVerifyAt !== null && occupied) {
       if (now >= this.wakeVerifyAt) {
@@ -257,9 +280,26 @@ export class DisplayPowerController {
         dueAt = minDue(dueAt, due);
         if (due <= now) action = 'off';
       }
+    } else if (!empty) {
+      const step = this.idleSleepStep(
+        state,
+        observation,
+        power,
+        previousPower,
+        now,
+      );
+      idleSleep = step.info;
+      if (step.due !== null) {
+        dueAt = minDue(dueAt, step.due);
+        if (step.due <= now) {
+          action = 'off';
+          kind = 'idle';
+        }
+      }
     }
 
-    if (action && ready && !this.sending) void this.send(action, feedback);
+    if (action && ready && !this.sending)
+      void this.send(action, feedback, kind);
     // A due request that cannot be sent waits for the transport, not a timer.
     const armAt = this.sending || (action && !ready) ? null : dueAt;
     this.rearm(armAt, now);
@@ -269,7 +309,114 @@ export class DisplayPowerController {
       ready,
       armAt,
       observation,
+      idleSleep,
     );
+  }
+
+  /**
+   * Sleep after a long stretch without input. Positive evidence is required
+   * that nobody is watching something: music never holds it, video, a game or
+   * a blocker nobody can explain does, and anything unreadable counts as held.
+   */
+  private idleSleepStep(
+    state: RoomState,
+    observation: ComputerDisplayState | null,
+    power: Power | null,
+    previousPower: Power | null,
+    now: number,
+  ): { info: IdleSleep | null; due: number | null } {
+    const after = this.options.policy.idleSleepAfterMs;
+    if (after === null || !observation) return { info: null, due: null };
+    const since =
+      observation.input_idle === true ? observation.input_idle_since_ms : null;
+    if (since === null) {
+      // Someone used the computer; the next stretch of inactivity starts fresh.
+      this.idleEpisode = null;
+      this.idleApplications = 0;
+      this.idleAttempts = 0;
+      this.idleAppliedAt = 0;
+      this.idleWakeAt = 0;
+      this.idleFailures = 0;
+      return {
+        info: { inactiveSince: null, dueAt: null, heldBy: null },
+        due: null,
+      };
+    }
+    if (this.idleEpisode !== since) {
+      this.idleEpisode = since;
+      this.idleApplications = 0;
+      this.idleAttempts = 0;
+      this.idleAppliedAt = 0;
+      this.idleWakeAt = 0;
+      this.idleFailures = 0;
+    }
+    // Lit again without input in this stretch: a bump, not a person.
+    if (previousPower === 'off' && (power === 'on' || power === 'partial'))
+      this.idleWakeAt = now;
+    const held = (heldBy: HeldBy | null, dueAt: number | null = null) => ({
+      info: { inactiveSince: since, dueAt, heldBy },
+      due: dueAt,
+    });
+    if (power === null) return held('no_feedback');
+    // Already dark, or no monitor on the bus: nothing to do.
+    if (power === 'off' || power === 'none') return held(null);
+    const blocker = this.visualMediaBlocker(state, observation);
+    if (blocker) return held(blocker);
+    if (this.idleApplications >= OFF_APPLICATIONS_MAX)
+      return held('keeps_waking');
+    if (this.idleAttempts >= OFF_MAX_ATTEMPTS) return held('off_failed');
+    let due = since + after;
+    const last = Math.max(this.idleAppliedAt, this.idleWakeAt);
+    if (last > 0) due = Math.max(due, last + REPEAT_HOLD_MS);
+    if (this.idleFailures > 0)
+      due = Math.max(
+        due,
+        this.idleFailureAt +
+          FAILURE_BACKOFF_MS[
+            Math.min(this.idleFailures, FAILURE_BACKOFF_MS.length) - 1
+          ]!,
+      );
+    return held(null, due);
+  }
+
+  /** Why someone may be watching, or null when nothing visual is going on. */
+  private visualMediaBlocker(
+    state: RoomState,
+    observation: ComputerDisplayState,
+  ): HeldBy | null {
+    const computer = state.computer.devices[this.options.deviceId];
+    if (
+      !computer ||
+      computer.availability !== 'online' ||
+      computer.freshness !== 'fresh'
+    )
+      return 'computer_unknown';
+    if (computer.activity.classification === 'gaming') return 'game';
+    if (computer.activity.classification === 'video') return 'video';
+    // A full-screen window with local sound is a film or a game even when no
+    // blocker is listed. Sound that is not played on this computer (a receiver
+    // or another device) never shows up here.
+    if (
+      computer.observed.fullscreen === true &&
+      computer.observed.audio?.playing === true
+    )
+      return 'fullscreen_audio';
+    const blockers = observation.idle_blockers;
+    if (blockers === null) return 'blockers_unknown';
+    const ignored = new Set(
+      this.options.policy.ignoreIdleBlockers.map((name) => name.toLowerCase()),
+    );
+    for (const blocker of blockers) {
+      if (ignored.has(blocker.app.toLowerCase())) continue;
+      const video = /video/i.test(blocker.reason);
+      // "Playing audio" is music, which never holds the display on.
+      if (!video && /audio/i.test(blocker.reason)) continue;
+      return video ? 'video' : 'other_blocker';
+    }
+    // The compositor says something blocks idle yet nothing is listed.
+    if (blockers.length === 0 && computer.observed.idle === false)
+      return 'unexplained_inhibitor';
+    return null;
   }
 
   /** When the display should next be put to sleep, or null for never (now). */
@@ -385,7 +532,11 @@ export class DisplayPowerController {
     );
   }
 
-  private async send(action: 'off' | 'on', feedback: boolean): Promise<void> {
+  private async send(
+    action: 'off' | 'on',
+    feedback: boolean,
+    kind: 'empty' | 'idle',
+  ): Promise<void> {
     this.sending = true;
     const epoch = this.epoch;
     let outcome: 'applied' | 'rejected' | 'uncertain' | 'failed' = 'failed';
@@ -401,6 +552,21 @@ export class DisplayPowerController {
     if (this.disposed) return;
     const now = this.options.clock.now();
     this.lastRequest = { action, outcome, reason, at: now };
+    if (kind === 'idle') {
+      // Sleep for inactivity touches none of the empty-room bookkeeping.
+      if (outcome === 'applied') {
+        this.idleApplications += 1;
+        this.idleAppliedAt = now;
+        this.idleAttempts = 0;
+        this.idleFailures = 0;
+      } else {
+        this.idleAttempts += 1;
+        this.idleFailures += 1;
+        this.idleFailureAt = now;
+      }
+      this.observe();
+      return;
+    }
     if (action === 'off') this.lastOffAttemptAt = now;
     else {
       this.lastWakeAttemptAt = now;
@@ -476,6 +642,7 @@ export class DisplayPowerController {
     ready: boolean,
     armAt: number | null,
     observation: ComputerDisplayState | null,
+    idleSleep: IdleSleep | null,
   ): void {
     const snapshot: DisplayPowerSnapshot = {
       deviceId: this.options.deviceId,
@@ -491,6 +658,7 @@ export class DisplayPowerController {
           }
         : null,
       problem: this.problem,
+      idleSleep,
       nextAttemptAt: inhibited ? null : armAt,
       evidence: this.options.evidence?.() ?? null,
     };
