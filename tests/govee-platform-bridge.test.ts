@@ -376,6 +376,116 @@ describe('cloud zone controls and discovery', () => {
       await stop();
     }
   });
+  it('sends opted-in ceiling white after its mask toggles, and never with an effect', async () => {
+    const client = new FakeClient();
+    let preset!: GoveePresetControls;
+    const info = {
+      ...metadata,
+      capabilities: [
+        ...metadata.capabilities,
+        {
+          type: 'devices.capabilities.color_setting',
+          instance: 'colorTemperatureK',
+          parameters: {
+            dataType: 'INTEGER',
+            range: { min: 2700, max: 6500, precision: 1 },
+          },
+        },
+      ],
+    };
+    const platform = {
+      devices: vi.fn(async () => [info]),
+      scenes: vi.fn(async () => [scene]),
+      state: vi.fn(async () => state()),
+      control: vi.fn(
+        async (_identity: unknown, _command: unknown, guard: () => void) => {
+          guard();
+        },
+      ),
+    };
+    const stop = await startGoveePlatformBridge(
+      runtime,
+      GoveePlatformConfigSchema.parse({
+        ...config,
+        devices: [{ ...fixture, staticColor: true }],
+      }),
+      {
+        connect: (() => client) as unknown as typeof connect,
+        platform,
+        environment: {
+          GOVEE_KEY_B64: Buffer.from('test-secret').toString('base64url'),
+        },
+        fetch: async () =>
+          new Response(
+            JSON.stringify({ lighting: { devices: { [fixture.target]: {} } } }),
+          ),
+        ready: (c) => {
+          preset = c;
+        },
+        pollIntervalMs: 60000,
+        followupDelayMs: 60000,
+      },
+    );
+    client.emit('connect');
+    try {
+      await vi.waitFor(() =>
+        expect(preset.capabilities()[fixture.target]).toMatchObject({
+          zones: true,
+          staticColor: true,
+        }),
+      );
+      const base = { requestId: 'r', target: fixture.target, controlId: 'g' };
+      await preset.apply(
+        {
+          ...base,
+          staticColor: { colorTemperature: 3000 },
+          zones: { main: false, ring: true },
+          zoneOrder: 'disable-first',
+        },
+        async () => undefined,
+      );
+      expect(platform.control.mock.calls.map((c) => c[1])).toEqual([
+        {
+          type: toggle('mainLightToggle').type,
+          instance: 'mainLightToggle',
+          value: 0,
+        },
+        {
+          type: toggle('backgroundLightToggle').type,
+          instance: 'backgroundLightToggle',
+          value: 1,
+        },
+        {
+          type: 'devices.capabilities.color_setting',
+          instance: 'colorTemperatureK',
+          value: 3000,
+        },
+      ]);
+      await expect(
+        preset.apply(
+          {
+            ...base,
+            effect: 'Forest',
+            staticColor: { colorTemperature: 3000 },
+          },
+          async () => undefined,
+        ),
+      ).rejects.toThrow('static color');
+      expect(platform.control).toHaveBeenCalledTimes(3);
+    } finally {
+      await stop();
+    }
+  });
+  it('omits static white for a zoned fixture that did not opt in', async () => {
+    const f = await running();
+    try {
+      expect(
+        f.preset.capabilities()[fixture.target]?.staticColor,
+      ).toBeUndefined();
+    } finally {
+      await f.stop();
+    }
+  });
   it('sends only the scene for a mode-only step after fresh confirmed ON', async () => {
     const f = await running();
     try {
@@ -488,6 +598,70 @@ describe('cloud zone controls and discovery', () => {
     expect(() => platformZoneMaskControls(metadata, [main], masks[0]!)).toThrow(
       'Unsupported platform zone',
     );
+  });
+  it('disables the unwanted zone first only when asked, still ending at the mask', () => {
+    for (const after of [
+      { main: true, ring: false },
+      { main: false, ring: true },
+      { main: true, ring: true },
+    ]) {
+      const controls = platformZoneMaskControls(
+        metadata,
+        [main, ring],
+        after,
+        'disable-first',
+      );
+      const values = controls.map((control) => control.value);
+      expect(values).toEqual([...values].sort());
+      expect(
+        Object.fromEntries(
+          controls.map((control) => [
+            control.instance === 'mainLightToggle' ? 'main' : 'ring',
+            control.value === 1,
+          ]),
+        ),
+      ).toEqual(after);
+    }
+  });
+  it('sends only OFF toggles in disable-only order', () => {
+    expect(
+      platformZoneMaskControls(
+        metadata,
+        [main, ring],
+        { main: false, ring: true },
+        'disable-only',
+      ),
+    ).toEqual([
+      {
+        type: toggle('mainLightToggle').type,
+        instance: 'mainLightToggle',
+        value: 0,
+      },
+    ]);
+    expect(
+      platformZoneMaskControls(
+        metadata,
+        [main, ring],
+        { main: true, ring: true },
+        'disable-only',
+      ),
+    ).toEqual([]);
+  });
+  it('sends only ON toggles in enable-only order', () => {
+    expect(
+      platformZoneMaskControls(
+        metadata,
+        [main, ring],
+        { main: false, ring: true },
+        'enable-only',
+      ),
+    ).toEqual([
+      {
+        type: toggle('backgroundLightToggle').type,
+        instance: 'backgroundLightToggle',
+        value: 1,
+      },
+    ]);
   });
   it('sends only the configured toggle for zone ON/OFF', () => {
     expect(platformZoneControls(metadata, main, { state: 'ON' })).toEqual([

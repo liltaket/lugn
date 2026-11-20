@@ -1331,7 +1331,14 @@ it.each([true, false])(
       }
       expect(runtime.engine.goveeCapabilities).toEqual(capabilities);
       await runtime.engine.activateScene('scene.govee_test', { type: 'user' });
-      expect(events.slice(0, 3)).toEqual(['drained', 'static', 'apply']);
+      // The fixture reports OFF with an unknown stored mask: it is lit dimly
+      // through HA first, masked once lit, then raised to the scene.
+      expect(events.slice(0, 4)).toEqual([
+        'drained',
+        'static',
+        'static',
+        'apply',
+      ]);
       expect(runtime.engine.state.lighting.devices[target]?.govee?.status).toBe(
         'sent',
       );

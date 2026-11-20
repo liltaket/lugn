@@ -24,8 +24,21 @@ export type LightingCommand = {
   isCurrent?: () => boolean;
   /** Internal mode-only rotation step; never repeats baseline power/brightness. */
   goveeOnly?: true;
-  govee?: GoveeSceneIntent & { controlId: string };
-  goveeStatic?: { controlId: string; color: GoveeStaticColor };
+  govee?: GoveeSceneIntent & {
+    controlId: string;
+    /** Whole-fixture white/RGB sent with a zones-only mask, never with an effect. */
+    staticColor?: GoveeStaticColor;
+    /** Fixture reported OFF: light it dimly and mask it before the baseline. */
+    stageZones?: true;
+    /** Mask Lugn last delivered, kept by the fixture through OFF/ON; only changed toggles are sent. */
+    knownZones?: { main: boolean; ring: boolean };
+  };
+  goveeStatic?: {
+    controlId: string;
+    color: GoveeStaticColor;
+    /** Restores both zones after Lugn last left a zoned fixture partially masked. */
+    zones?: { main: boolean; ring: boolean };
+  };
   id: string;
   target: string;
   values: LightingValues;

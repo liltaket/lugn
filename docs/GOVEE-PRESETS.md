@@ -148,6 +148,58 @@ Baseline changes and mask transitions may transiently light both ceiling zones;
 final mask handling must follow all mode/brightness/effect writes. Cloud acceptance
 does not prove atomic or simultaneous physical application.
 
+When the fixture reports OFF and the mask is main-only or ring-only, the engine
+marks the command `stageZones` and passes the mask it last delivered
+(`knownZones`), which the fixture keeps through whole OFF/ON. The H60A6 ignores
+every zone toggle while dark and lights with its stored mask, so after a
+whole-fixture scene a ring-only ON first shows the main light at that scene's
+brightness. Earlier versions powered the fixture with a cloud ring ON
+(disable-first) and sent the main OFF once lit. That flashed the whole lamp
+for 1–2 s whenever the stored mask still had the main light.
+
+The H60A6 always powers on with the main light. A local Matter ON lights the
+whole fixture at once. A cloud ring ON from a ring-only stored mask lit the
+ring, then the whole fixture, and the main OFF then left the ring (Bruno,
+2026-11-16). The adapter therefore lights the fixture through HA at 1 % (with
+the scene's white or RGB), so the main light is barely visible. It waits for a
+fresh native ON report (at most 4 s), because a toggle sent while dark is
+ignored. Once lit, it sends only the unwanted OFF (`zoneOrder:"disable-only"`).
+It waits 1.5 s for cloud delivery before the baseline raises the brightness,
+and sends no later zone toggle. Removing the brief dim main light would need a
+faster local zone command than the official cloud API offers.
+
+An attended test series with Bruno isolated these rules. A Matter level/CT
+write after a dark zone OFF relit the main light (immediately, after 2 s and
+after 6 s). A main OFF sent once lit held through later Matter and API white
+writes, until another ring ON was sent. That sequence, and the earlier ring ON
+plus main OFF masks, flashed the main light.
+
+For an already lit fixture, zones already lit get no ON toggle, so only the
+needed OFF toggles are sent, or none. An unknown or dark wanted zone still uses
+the enable-first mask, and the engine forgets the mask on an external handoff.
+The platform bridge sends a static white after the zone toggles. The engine also remembers the static
+white or RGB it last delivered. A zones-only preset skips an unchanged one, and
+an effect or external handoff makes it unknown again.
+
+Staging is best effort. If it fails or
+no ON report arrives, the baseline and final mask still run, and a final failure
+still ends in local OFF.
+
+The fixture remembers its zone mask through whole OFF/ON, and an ordinary Matter
+ON never changes it. After Lugn leaves a zoned fixture partially masked, the
+next ordinary positive command's white reset therefore also enables both zones,
+as does the first such command after startup or an external handoff, because
+the mask is unknown then. That restore is sent alongside the local baseline,
+not after it, so on a lit fixture the main light comes on without waiting for
+HA. After that, ordinary commands skip the toggles until another partial mask.
+
+A platform fixture configured with `staticColor:true` (the H60A6 here) also
+sends the scene's white with a zones-only mask, after the toggles. Without an
+effect, the ring therefore leaves a previous vendor scene and follows the same
+Kelvin as the whole fixture. Effects keep their own colors. The adapter clamps
+every vendor static Kelvin to the target's range, since an API-rejected value
+would otherwise end in the failure OFF.
+
 `lighting.devices[target].govee` exposes requested `intent`, optional session
 `controlId` and `status` (`pending`, `sent`, `failed`). The ID is published only
 while illumination is permitted. `sent` is transport acceptance, **not physical
@@ -193,13 +245,13 @@ an available Govee API; Matter state alone is not proof that an app scene stoppe
 HTTP over the protected Unix socket, with no network listener:
 
 - `GET /capabilities` → `{targets: Record<target,{effects:string[],zones:boolean,colorTemperature?:{min,max}}>}`.
-- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation.
+- `POST /apply` ← `{requestId,target,controlId,effect?,zones?,zoneOrder?,modeOnly?:true}` → matching IDs and `status:"sent"`, plus truthful delivery metadata. Mode-only requires an effect and never grants activation. `zoneOrder` (`disable-first` for OFF before ON, `disable-only` for OFF toggles only, `enable-only` for ON toggles only, currently unused by Lugn) requires `zones`.
 - `POST /cancel` ← `{target,controlId?}` → `{status:"drained"}`.
 
 Capabilities can include optional `staticColor:true`. A color reset uses
 `POST /apply` with `{requestId,target,controlId,staticColor:{colorTemperature:4000}}`
 or `staticColor:{rgb:[r,g,b]}`. The reset cannot contain both color modes, a scene,
-zone mask, power or brightness. Its control ID must match the live static grant,
+power or brightness. It can contain a zone mask, which follows the color. Its control ID must match the live static grant,
 with no Govee effect or external lease and powered desired intent. Delivery
 reports `staticColor:"cloud_accepted"`, not optical confirmation.
 

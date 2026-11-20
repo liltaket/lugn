@@ -22,6 +22,7 @@ export interface GoveeControlClient {
     staticColor?: GoveeStaticColor | undefined;
     modeOnly?: true | undefined;
     zones?: { main: boolean; ring: boolean } | undefined;
+    zoneOrder?: 'disable-first' | 'disable-only' | 'enable-only' | undefined;
   }): Promise<void>;
   cancel(target: string, controlId?: string): Promise<void>;
 }
@@ -111,6 +112,10 @@ export class GoveeSocketClient implements GoveeControlClient {
 /** One queue per physical target spans baseline, effects, masks and subsequent static/OFF. */
 export class GoveePresetLightingAdapter implements LightingAdapter {
   private readonly tails = new Map<string, Promise<void>>();
+  private readonly powerWaiters = new Set<{
+    target: string;
+    resolve: () => void;
+  }>();
   async refreshCapabilities(): Promise<void> {
     const next = await this.client.capabilities();
     // Keep known capabilities through an outage so static/OFF still uses its barrier.
@@ -120,7 +125,15 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     private readonly ordinary: LightingAdapter,
     private readonly client: GoveeControlClient,
     readonly goveeCapabilities: GoveeCapabilities,
-  ) {}
+    private readonly stagedPowerTimeoutMs = 4_000,
+    private readonly stagedSettleMs = 1_500,
+  ) {
+    this.ordinary.subscribe((observation) => {
+      if (observation.values.power !== true) return;
+      for (const waiter of this.powerWaiters)
+        if (waiter.target === observation.target) waiter.resolve();
+    });
+  }
   subscribe(listener: (observation: LightingObservation) => void): () => void {
     return this.ordinary.subscribe(listener);
   }
@@ -153,11 +166,34 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
       staticReset &&
       (intent ||
         !capability.staticColor ||
+        (staticReset.zones && !capability.zones) ||
         !command.isCurrent ||
         !GoveeStaticColorSchema.safeParse(staticReset.color).success ||
         command.values.power === false)
     )
       throw new Error('Invalid Govee static reset');
+    if (
+      intent?.staticColor &&
+      (!capability.staticColor ||
+        !command.isCurrent ||
+        !intent.zones ||
+        intent.effect !== undefined ||
+        command.goveeOnly ||
+        !GoveeStaticColorSchema.safeParse(intent.staticColor).success ||
+        command.values.power === false)
+    )
+      throw new Error('Invalid Govee static reset');
+    if (intent?.knownZones && !intent.zones)
+      throw new Error('Invalid Govee zone staging');
+    if (
+      intent?.stageZones &&
+      (!intent.zones ||
+        (intent.zones.main && intent.zones.ring) ||
+        !command.isCurrent ||
+        command.goveeOnly ||
+        command.values.power !== true)
+    )
+      throw new Error('Invalid Govee zone staging');
     if (
       command.goveeOnly &&
       (!intent?.effect ||
@@ -185,20 +221,179 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     if (!current()) return;
     const values = { ...command.values };
     const range = capability.colorTemperature;
-    if (range && values.colorTemperature !== undefined)
-      values.colorTemperature = Math.max(
-        range.min,
-        Math.min(range.max, values.colorTemperature),
-      );
-    if (!command.goveeOnly)
-      await this.ordinary.dispatch({
-        id: command.id,
-        target: command.target,
-        values,
-      });
+    const kelvin = (value: number) =>
+      range ? Math.max(range.min, Math.min(range.max, value)) : value;
+    if (values.colorTemperature !== undefined)
+      values.colorTemperature = kelvin(values.colorTemperature);
+    // The vendor API rejects out-of-range Kelvin; a rejection must not become OFF.
+    const staticColor = (color: GoveeStaticColor): GoveeStaticColor =>
+      color.colorTemperature === undefined
+        ? color
+        : { colorTemperature: kelvin(color.colorTemperature) };
+    // The H60A6 ignores zone toggles while dark and always powers on with the
+    // main light, whether a local Matter ON or a cloud ring ON wakes it (Bruno
+    // saw ring, then whole, then ring only after the cloud ON). The fixture is
+    // therefore lit through HA at 1 %, so the unwanted zone is barely visible,
+    // and the unwanted zone's OFF follows its own ON report. Cloud acceptance
+    // precedes delivery, so the OFF gets time to arrive before the scene
+    // brightness. A zone ON while lit relights an OFF zone, so no toggle
+    // follows the OFF.
+    let stagedLit = false;
+    if (intent?.stageZones && intent.zones) {
+      const powered = this.waitForPower(command.target, current);
+      try {
+        await this.ordinary.dispatch({
+          id: command.id,
+          target: command.target,
+          values: {
+            power: true,
+            brightness: 1,
+            ...(values.rgb
+              ? { rgb: values.rgb }
+              : values.colorTemperature !== undefined
+                ? { colorTemperature: values.colorTemperature }
+                : {}),
+          },
+        });
+        if ((await powered.wait) && current()) {
+          await this.applyGuarded(
+            command,
+            intent.controlId,
+            // Power-on lights both zones, so only the OFF is needed.
+            { zones: intent.zones, zoneOrder: 'disable-only' },
+            current,
+          );
+          stagedLit = true;
+          await this.settle(this.stagedSettleMs, current);
+        }
+      } catch {
+        // Best effort only: baseline and the authoritative final mask still run.
+      } finally {
+        powered.stop();
+      }
+      if (!current()) return;
+    }
+    // Restoring both zones does not depend on the baseline: on a lit fixture
+    // the main ON lights at once, so it is sent alongside the local write.
+    const restore =
+      staticReset?.zones && !command.goveeOnly
+        ? this.applyGuarded(
+            command,
+            staticReset.controlId,
+            { zones: staticReset.zones },
+            current,
+          )
+        : undefined;
+    restore?.catch(() => undefined);
+    if (!command.goveeOnly) {
+      try {
+        await this.ordinary.dispatch({
+          id: command.id,
+          target: command.target,
+          values,
+        });
+      } catch (error) {
+        await restore?.catch(() => undefined);
+        throw error;
+      }
+    }
+    try {
+      await restore;
+    } catch (error) {
+      if (!current()) return;
+      // Both zones were wanted; a failed restore leaves no unwanted zone lit.
+      throw error;
+    }
     if (!current() || (!intent && !staticReset) || values.power === false)
       return;
     const controlId = (intent ?? staticReset)!.controlId;
+    const color = intent?.staticColor ?? staticReset?.color;
+    const zones = restore ? undefined : (intent?.zones ?? staticReset?.zones);
+    const known = intent?.knownZones;
+    // Wanted zones already lit get no ON toggle: on the H60A6 it would relight
+    // an OFF zone. Unknown or dark zones still use the enable-first mask.
+    const zoneBody =
+      !zones || stagedLit
+        ? {}
+        : known && (!zones.main || known.main) && (!zones.ring || known.ring)
+          ? zones.main && zones.ring
+            ? {}
+            : { zones, zoneOrder: 'disable-only' as const }
+          : { zones };
+    const body = {
+      ...(command.goveeOnly ? { modeOnly: true as const } : {}),
+      ...(intent?.effect !== undefined ? { effect: intent.effect } : {}),
+      ...zoneBody,
+      ...(color ? { staticColor: staticColor(color) } : {}),
+    };
+    if (
+      body.effect === undefined &&
+      body.zones === undefined &&
+      body.staticColor === undefined
+    )
+      return;
+    try {
+      await this.applyGuarded(command, controlId, body, current);
+    } catch (error) {
+      if (!current()) return;
+      // A partial mask failure must not leave an accidentally illuminated second zone.
+      await this.ordinary.dispatch({
+        id: `${command.id}-govee-failed-off`,
+        target: command.target,
+        values: { power: false },
+      });
+      throw error;
+    }
+  }
+
+  /** Resolves on a fresh native ON report, a timeout or a lost generation. */
+  private waitForPower(
+    target: string,
+    current: () => boolean,
+  ): { wait: Promise<boolean>; stop: () => void } {
+    let finish!: (powered: boolean) => void;
+    const wait = new Promise<boolean>((resolve) => {
+      const waiter = { target, resolve: () => finish(true) };
+      const timer = setTimeout(() => finish(false), this.stagedPowerTimeoutMs);
+      const poll = setInterval(() => {
+        if (!current()) finish(false);
+      }, 20);
+      finish = (powered) => {
+        clearTimeout(timer);
+        clearInterval(poll);
+        this.powerWaiters.delete(waiter);
+        resolve(powered);
+      };
+      this.powerWaiters.add(waiter);
+    });
+    return { wait, stop: () => finish(false) };
+  }
+
+  /** Waits for delivery after API acceptance; a lost generation ends it early. */
+  private settle(ms: number, current: () => boolean): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(done, ms);
+      const poll = setInterval(() => {
+        if (!current()) done();
+      }, 20);
+      function done() {
+        clearTimeout(timer);
+        clearInterval(poll);
+        resolve();
+      }
+    });
+  }
+
+  /** Rejects after a requested drain; cancellation never leaves later stale sends. */
+  private async applyGuarded(
+    command: LightingCommand,
+    controlId: string,
+    body: Omit<
+      Parameters<GoveeControlClient['apply']>[0],
+      'requestId' | 'target' | 'controlId'
+    >,
+    current: () => boolean,
+  ): Promise<void> {
     // A disconnected/aborted HTTP request cannot retract a cloud write. On guard
     // invalidation explicitly cancel and wait for the server's drain acknowledgement.
     let cancel: Promise<void> | undefined;
@@ -226,23 +421,12 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
           requestId: command.id,
           target: command.target,
           controlId,
-          ...(command.goveeOnly ? { modeOnly: true as const } : {}),
-          ...(intent?.effect !== undefined ? { effect: intent.effect } : {}),
-          ...(intent?.zones !== undefined ? { zones: intent.zones } : {}),
-          ...(staticReset ? { staticColor: staticReset.color } : {}),
+          ...body,
         }),
         cancellation,
       ]);
     } catch (error) {
       await requestCancel();
-      if (!current()) return;
-      // A partial mask failure must not leave an accidentally illuminated second zone.
-      if (current())
-        await this.ordinary.dispatch({
-          id: `${command.id}-govee-failed-off`,
-          target: command.target,
-          values: { power: false },
-        });
       throw error;
     } finally {
       clearInterval(timer);

@@ -314,6 +314,22 @@ export class LugnEngine {
   }
 
   private readonly goveeTransitionTargets = new Set<string>();
+  /**
+   * The zone mask Lugn last delivered to a zoned fixture. Fixtures remember their
+   * mask through whole OFF/ON, and a zone ON while lit can relight an OFF zone,
+   * so transitions send only the toggles that change, and an ON from OFF into
+   * the stored mask needs no staging. Absent means unknown.
+   */
+  private readonly goveeZoneMasks = new Map<
+    string,
+    { main: boolean; ring: boolean }
+  >();
+  /**
+   * The vendor static white/RGB Lugn last delivered. A zones-only preset skips an
+   * unchanged one: every cloud write while the fixture comes up is another
+   * chance to disturb its mask. Effects and handoffs make it unknown.
+   */
+  private readonly goveeStaticColors = new Map<string, string>();
   private readonly lightingTargetGenerations = new Map<string, number>();
   private readonly goveeRotationTimers = new Map<string, TimerHandle>();
   private invalidateLightingTarget(target: string): void {
@@ -526,6 +542,27 @@ export class LugnEngine {
     if (intent)
       device.govee = { intent: structuredClone(intent), status: 'pending' };
     else delete device.govee;
+  }
+
+  /** The requested white/RGB for a vendor static mode; the adapter clamps Kelvin. */
+  private goveeStaticColor(
+    target: string,
+    values: LightingValues,
+  ): GoveeStaticColor {
+    const desired = this.requireDevice(target).effectiveDesired;
+    return values.rgb
+      ? { rgb: values.rgb }
+      : values.colorTemperature !== undefined
+        ? { colorTemperature: values.colorTemperature }
+        : desired.rgb
+          ? { rgb: desired.rgb }
+          : {
+              colorTemperature:
+                desired.colorTemperature ??
+                this.adapter.goveeCapabilities?.[target]?.colorTemperature
+                  ?.min ??
+                2700,
+            };
   }
 
   get scenes(): ReadonlyMap<string, LightingScene> {
@@ -2156,6 +2193,9 @@ export class LugnEngine {
       canActivate: true,
     };
     device.externalControl = control;
+    // Explicit zone buttons and app effects can leave either zone dark.
+    this.goveeZoneMasks.delete(target);
+    this.goveeStaticColors.delete(target);
     device.effectiveDesired = { power: true };
     device.ownership = {
       power: {
@@ -4149,24 +4189,40 @@ export class LugnEngine {
         this.requireDevice(target).effectiveDesired.power === true &&
         isCurrent()
       ) {
-        const desired = this.requireDevice(target).effectiveDesired;
-        staticColor = values.rgb
-          ? { rgb: values.rgb }
-          : values.colorTemperature !== undefined
-            ? { colorTemperature: values.colorTemperature }
-            : desired.rgb
-              ? { rgb: desired.rgb }
-              : {
-                  colorTemperature:
-                    desired.colorTemperature ??
-                    this.adapter.goveeCapabilities[target]?.colorTemperature
-                      ?.min ??
-                    2700,
-                };
+        staticColor = this.goveeStaticColor(target, values);
         staticControlId = randomUUID();
         this.requireDevice(target).goveeStaticControlId = staticControlId;
         this.publish(['lighting']);
       }
+      const goveeZonesOnly = Boolean(
+        govee?.intent.zones && !govee.intent.effect && !govee.intent.rotation,
+      );
+      const goveeStageZones =
+        govee?.intent.zones !== undefined &&
+        !(govee.intent.zones.main && govee.intent.zones.ring) &&
+        values.power === true &&
+        this.requireDevice(target).observed.power === false;
+      const knownZones = this.goveeZoneMasks.get(target);
+      const restoreZones = Boolean(
+        staticControlId &&
+        this.adapter.goveeCapabilities?.[target]?.zones &&
+        !(knownZones?.main && knownZones.ring),
+      );
+      if (govee?.intent.zones || restoreZones)
+        this.goveeZoneMasks.delete(target);
+      const zoneStatic =
+        goveeZonesOnly &&
+        this.adapter.goveeCapabilities?.[target]?.staticColor &&
+        this.requireDevice(target).effectiveDesired.power === true
+          ? this.goveeStaticColor(target, values)
+          : undefined;
+      const sentStatic = zoneStatic ?? (staticControlId && staticColor);
+      const freshZoneStatic =
+        zoneStatic &&
+        JSON.stringify(zoneStatic) !== this.goveeStaticColors.get(target)
+          ? zoneStatic
+          : undefined;
+      if (govee || staticControlId) this.goveeStaticColors.delete(target);
       // Consume the forced transition before synchronous adapter feedback can
       // re-enter reconciliation; the in-flight command now owns this attempt.
       this.goveeTransitionTargets.delete(target);
@@ -4179,7 +4235,13 @@ export class LugnEngine {
           ...(this.adapter.goveeCapabilities ? { isCurrent } : {}),
           ...(staticControlId && staticColor
             ? {
-                goveeStatic: { controlId: staticControlId, color: staticColor },
+                goveeStatic: {
+                  controlId: staticControlId,
+                  color: staticColor,
+                  ...(restoreZones
+                    ? { zones: { main: true, ring: true } }
+                    : {}),
+                },
               }
             : {}),
           ...(govee?.controlId
@@ -4191,6 +4253,12 @@ export class LugnEngine {
                       ? { effect: govee.intent.effect }
                       : {}),
                   ...(govee.intent.zones ? { zones: govee.intent.zones } : {}),
+                  // A static zone mask may sit on a stale vendor scene/ring color.
+                  ...(freshZoneStatic ? { staticColor: freshZoneStatic } : {}),
+                  ...(goveeStageZones ? { stageZones: true as const } : {}),
+                  ...(govee.intent.zones && knownZones
+                    ? { knownZones: { ...knownZones } }
+                    : {}),
                   controlId: govee.controlId!,
                 },
               }
@@ -4200,6 +4268,12 @@ export class LugnEngine {
           () => {
             if (!govee && isCurrent())
               this.goveeTransitionTargets.delete(target);
+            if (isCurrent() && sentStatic)
+              this.goveeStaticColors.set(target, JSON.stringify(sentStatic));
+            if (isCurrent() && restoreZones)
+              this.goveeZoneMasks.set(target, { main: true, ring: true });
+            else if (isCurrent() && govee?.intent.zones)
+              this.goveeZoneMasks.set(target, { ...govee.intent.zones });
             if (
               govee &&
               isCurrent() &&

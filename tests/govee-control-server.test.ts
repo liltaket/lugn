@@ -422,14 +422,44 @@ describe('Govee Unix command server', () => {
       staticColor: { colorTemperature: 4000 },
     };
     expect((await call(f.socketPath, '/apply', reset)).status).toBe(200);
+    // A zones-only mask carries its static white so the ring leaves a vendor scene.
+    expect(
+      (
+        await call(f.socketPath, '/apply', {
+          ...reset,
+          zones: { main: false, ring: true },
+          zoneOrder: 'disable-first',
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await call(f.socketPath, '/apply', {
+          ...reset,
+          zones: { main: false, ring: true },
+          zoneOrder: 'disable-only',
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await call(f.socketPath, '/apply', {
+          ...command,
+          effect: undefined,
+          zones: { main: false, ring: true },
+          zoneOrder: 'enable-only',
+        })
+      ).status,
+    ).toBe(200);
     for (const input of [
       { ...reset, effect: 'Forest' },
-      { ...reset, zones: { main: true, ring: false } },
       { ...reset, modeOnly: true },
+      { ...reset, zoneOrder: 'disable-first' },
+      { ...reset, zones: { main: true, ring: false }, zoneOrder: 'last' },
       { ...reset, staticColor: { colorTemperature: 4000, brightness: 50 } },
     ])
       expect((await call(f.socketPath, '/apply', input)).status).toBe(400);
-    expect(f.options.apply).toHaveBeenCalledOnce();
+    expect(f.options.apply).toHaveBeenCalledTimes(4);
   });
 
   it('rejects superseded ownership and sanitizes unavailable/error responses', async () => {

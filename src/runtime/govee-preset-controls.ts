@@ -29,9 +29,7 @@ export function combineGoveePresetControls(
         result[target] = {
           effects: lan?.effects.length ? lan.effects : capability.effects,
           zones: Boolean(lan?.zones || capability.zones),
-          ...(capability.staticColor && !lan?.effects.length
-            ? { staticColor: true }
-            : {}),
+          ...(capability.staticColor ? { staticColor: true } : {}),
           ...((capability.colorTemperature ?? lan?.colorTemperature)
             ? {
                 colorTemperature:
@@ -46,7 +44,8 @@ export function combineGoveePresetControls(
       const lan = local.capabilities()[command.target];
       const cloud = platform?.capabilities()[command.target];
       if (command.staticColor) {
-        if (!platform || !cloud?.staticColor)
+        // White/RGB and its zone mask are one ordered cloud sequence.
+        if (!platform || !cloud?.staticColor || (command.zones && !cloud.zones))
           throw new Error('Govee static color unavailable');
         await guard();
         return platform.apply(command, guard);
@@ -78,6 +77,7 @@ export function combineGoveePresetControls(
             target: command.target,
             controlId: command.controlId,
             zones: command.zones,
+            ...(command.zoneOrder ? { zoneOrder: command.zoneOrder } : {}),
             ...(command.modeOnly ? { modeOnly: true as const } : {}),
           },
           guard,

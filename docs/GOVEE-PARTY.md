@@ -192,3 +192,168 @@ automatic restarts. The final room state is Allt av, as Bruno requested after
 leaving home again. Private evidence: `window-live-proof.log`,
 `window-effects-live-proof.json`, `window-final-native-off.json` and
 `active-lugn-manifest-8840c447afd1.json` in the artifact directory above.
+
+## Follow-up: ceiling main light flash and ring white
+
+Bruno reported that ring-only modes often lit the large ceiling main light
+first, then left only the ring, and that the ring did not follow the white
+temperature. The ordinary HA/Matter ON reached the H60A6 before the cloud mask,
+so a restored main light stayed visible for one or more cloud round trips.
+
+Commit `64c02b9` stages a main-only/ring-only mask disable-first while the
+fixture reports OFF, before the HA baseline. The final mask then also disables
+first. The platform ceiling is opted into `staticColor`, so zones-only white
+presets send their Kelvin through the API before the toggles; effects keep their
+own colors. See the [preset contract](GOVEE-PRESETS.md).
+
+`npm run check` passed **127 suites / 2079 tests**, and `npm run build` passed.
+This machine lacks `rg`, which the Govee installer fixture requires; that
+fixture passed with an `rg -c` shim. The release is installed at
+`/home/bruno/lugn-govee-64c02b9` from an archive with SHA-256
+`d8c4c73fa9b9ebdd6912d66877a1c2694374703e99e05c808418e13d5d0c4734`. The only
+protected-configuration change adds `"staticColor": true` to the platform
+ceiling, with backups in `deploy-backups/govee-64c02b9`. Both services are
+active with zero restarts. The companion reports ceiling zones, LAN effects and
+static white.
+
+Bruno chose not to observe an attended test. Software evidence covers only
+ordering and payloads. Whether the H60A6 keeps a dark-staged mask through
+Matter ON, and whether API Kelvin reaches the ring, remain unobserved.
+
+### Second iteration: native ON wait, zone restore and Vardagsljus ring
+
+Bruno then reported that the main light still flashed when the ring turned
+on, and that Focus left the main light dark after a ring-only preset. His test
+log showed staging ran from a confirmed OFF. A live probe from Matter OFF (main
+OFF, then ring ON through the API) saw HA report ON about 1.6 s after the API
+accepted the request. Thus a cloud toggle powers the dark fixture, but its
+acceptance precedes delivery; the following local Matter ON could arrive
+first. The Focus result shows that the fixture keeps its zone mask through
+Matter OFF/ON.
+
+Commit `c4d8baa` waits up to 4 s for that native ON report before the
+baseline. After a partial mask, the next ordinary white reset also enables both
+zones, as does the first one after startup or a handoff. At Bruno's request,
+Vardagsljus now lights the ceiling ring only at 55 %/2700 K. The other preset
+lamps and the six other presets are unchanged, and the offline save issued no
+physical commands.
+
+`npm run check` passed **127 suites / 2083 tests**, including both installer
+fixtures (the Govee one again with the `rg` shim), and `npm run build` passed.
+The archive SHA-256 is
+`41dc85676ce512815d969d9f57421af357caf779ea8018a790e1fe7ccc00adb0`; both
+services run `/home/bruno/lugn-govee-c4d8baa` with zero restarts. Reapplying
+Vardagsljus from OFF reported `sent` with the ceiling ON at 55 %/2702 K.
+Whether the main light stayed dark, and the ring color, await Bruno's
+observation.
+
+### Third iteration: attended toggle-order series
+
+Bruno then reported that the ring lit alone, then the whole fixture lit, then
+the main light switched off. The API white now appeared to steer the ring.
+An attended probe series under an explicit external handoff isolated the
+trigger.
+
+| Step | Sequence from Matter OFF unless noted                                     | Observed by Bruno |
+| ---- | ------------------------------------------------------------------------- | ----------------- |
+| 1    | API main OFF, ring ON → native ON → immediate Matter 55 %/2700 K          | ring, then whole  |
+| 2    | Lit fixture: API main OFF → 6 s → Matter 40 %/3000 K                      | ring only         |
+| 3    | As 1, 2 s wait, Matter, then API 2700 K                                   | main lit          |
+| 4    | Lit fixture: API main OFF → 6 s → API 3000 K only                         | ring only         |
+| 5    | As 3 with a 6 s wait                                                      | main lit          |
+| 6    | As 1, then API main OFF once lit → 1.5 s → Matter → API 2700 K            | ring only         |
+| 7    | As 6, but with ring ON after each main OFF, plus a final main OFF/ring ON | flash             |
+
+A zone OFF is ignored while dark, and a ring ON while lit relights the main
+light. Commits `5a42c45` (repeat once lit) and `df32766` (OFF last) both still
+flashed through Lugn. Commit `ae193a9` repeats only the unwanted OFF after
+native ON and sends no later toggle. For a lit fixture it sends only the
+changed toggles based on the mask Lugn last delivered. It matches step 6, the
+only sequence Bruno saw without a flash.
+
+`npm run check` passed **127 suites / 2085 tests** (the Govee installer fixture
+again with the `rg` shim), and `npm run build` passed. Both services run
+`/home/bruno/lugn-govee-ae193a9` (archive SHA-256
+`7033cc6123c45e2ec832ace40a3e332d77b0d04150f99332496432c600c999ed`) with zero
+restarts. A Lugn activation of Vardagsljus from OFF reported `sent` with the
+ceiling ON at 55 %/2702 K. Bruno was not in the room and did not observe it.
+The `ae193a9` sequence through Lugn, effect presets with a ring-only mask, and
+Focus after a ring preset remain visually unverified.
+
+### Fourth iteration: dim power-up and parallel zone restore
+
+The next morning Bruno reported that the whole fixture still flashed when the
+ring came on from OFF. He also reported that the main light was slow to return
+when going from Vardagsljus to Focus. Lugn's ledger showed the flash case was
+Focus → OFF → Vardagsljus 1.3 s later. The fixture lights with its stored
+mask, so it came back with the main light at Focus brightness until the cloud
+main OFF arrived. In step 6 of the attended series the stored mask was
+presumably already ring-only.
+
+Commit `80a06c1` skips staging when Lugn's last delivered mask already matches.
+Otherwise it lights the fixture at 1 % through HA and masks it once natively
+ON. The Focus restore toggles are sent alongside the HA baseline, and the
+static white follows the toggles.
+
+`npm run check` passed **127 suites / 2088 tests** (the Govee installer fixture
+again with the `rg` shim), and `npm run build` passed. Both services run
+`/home/bruno/lugn-govee-80a06c1` (archive SHA-256
+`5ade9d102187f1bfaf586ed38126ee1d41844c012eac8e270a50c59f4b090d6b`) with zero
+restarts. The restart cleared the in-memory mask, so the first ring-only ON
+from OFF uses the dim path. No physical test was run, and Bruno's observation
+is pending.
+
+### Fifth iteration: cloud ring ON into the stored mask
+
+Bruno then reported a whole-fixture flash every time the ring came on from OFF,
+while the end state was reliable. The ledger showed only one such transition
+after `80a06c1`: Vardagsljus (lit) → OFF → Vardagsljus at 11:59:42. It took the
+matching-stored-mask path, which sent a Matter ON, then the safety main OFF and
+the API white. In attended steps 4 and 6, an API white never relit the main
+light. The Matter ON from dark is therefore the likely trigger, which also fits
+the "ring, then whole" result of step 1.
+
+The next commit powers a matching stored mask with the ring's cloud ON. This
+is step 6 without the ignored dark OFF. At Bruno's suggestion, an unchanged
+static white is also skipped.
+
+`npm run check` passed **127 suites / 2089 tests** (the Govee installer fixture
+again with the `rg` shim), and `npm run build` passed. Both services run
+`/home/bruno/lugn-govee-6d50dbf` (archive SHA-256
+`14b45a1b6eec26b6e599701aef240f40d3f18552defd9439fd01dbd8526c1f7e`) with zero
+restarts. The restart cleared the in-memory mask and white again, so the first
+ring-only ON from OFF uses the 1 % path. No physical test was run, and Bruno's
+observation is pending.
+
+### Sixth iteration: always light dimly
+
+With `6d50dbf`, Bruno saw the ring light first, then the whole fixture, and
+then the main light switch off. The ledger shows Vardagsljus from OFF at
+12:15:51 on the cloud ring ON path, with HA ON at 12:15:52.2. Nothing else was
+sent before the main OFF. The fixture itself therefore relights the main light
+after a cloud ring ON from dark, and a ring-only stored mask does not help. The
+next commit always lights the fixture at 1 % through HA, then sends the main
+OFF once natively ON, so the unavoidable main light is barely visible.
+
+`npm run check` passed **127 suites / 2089 tests** (the Govee installer fixture
+again with the `rg` shim), and `npm run build` passed. Both services run
+`/home/bruno/lugn-govee-221c985` (archive SHA-256
+`c41c8226d26353e1c2e24e98a27dcf53f5e809c9185c6361d1ec75d50f36e70f`) with zero
+restarts. No physical test was run, and Bruno's observation is pending.
+
+### Direct-control probe
+
+At Bruno's request, Lugn's host probed the H60A6 for a faster local zone path.
+
+- **LAN:** `turn` works, but LAN `ptReal` silently drops non-scene frames: the
+  zone frame `33 30 <zone> <state>`, `33 04` brightness and `33 01` power, plain
+  or PSK-encrypted. The frame bytes come from the BLE library govee-ble-local
+  1.10.0.
+- **Device surface:** the lamp has no open TCP ports. Its Matter node is one
+  plain extended color light without vendor clusters.
+- **Bluetooth:** this was out of scope at Bruno's request. Home Assistant's BLE
+  link timed out at −86…−90 dBm.
+- **Attended tests:** a cloud ring ON from Matter OFF lit the whole fixture at
+  once, both after a whole-fixture scene and after a lit main OFF. With the
+  available channels every power-on lights the main light. The `221c985` 1 %
+  power-up remains the mitigation.
