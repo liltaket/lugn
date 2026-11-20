@@ -1,12 +1,17 @@
 # lugn-hub-pointer
 
-Lets the desktop mouse slide off the monitor onto the Nest Hub Max dashboard
-that stands below it, left edges roughly level. Move the pointer down out of
-the monitor's bottom edge near the bottom-left corner and it disappears from
-the desktop and shows up as a cursor at the top of the Hub page, at the
-matching x. Move it up out of the page's top edge, anywhere along it, and the
-desktop pointer comes back just above the monitor's bottom edge at the
-matching x. The keyboard always stays on the desktop.
+Lets the desktop mouse slide off the monitor onto the Nest Hub dashboard that
+stands below it, left edges roughly level. Push the pointer down out of the
+monitor's bottom edge near the bottom-left corner: the edge holds it for a
+moment, and once the push carries on far enough downward it disappears from
+the desktop and shows up as a cursor just below the top of the Hub page, at
+the matching x. A slide sideways along the edge, a move back up, a click or
+a pause hands the pointer straight back to the desktop instead. Move the
+cursor out of the page's top edge (anywhere along it) or out of its left or
+right edge and the desktop pointer comes back just above the monitor's bottom
+edge: at the matching x through the top, in the corner through the left, and
+just past the Hub's width through the right. The Hub's bottom edge is a wall.
+The keyboard always stays on the desktop.
 
 It is a separate binary next to `lugn-linux-agent`:
 
@@ -16,9 +21,16 @@ It is a separate binary next to `lugn-linux-agent`:
   KWin observer reports the cursor near the entry corner. A push down onto the
   taskbar further right never meets it. Inside the approach area but outside
   the entry corner (`hub_width_px + entry_slack_px` from the left), a push is
-  handed straight back and the barrier rests for 300 ms. Without the KWin
-  observer the barrier stays armed while a page is connected. The exact line
-  KDE accepts is tried from four candidates on the first arm and remembered.
+  handed straight back and the barrier rests for 300 ms. Inside the corner
+  the push is pending until it has gone `entry_push_px` further, mostly
+  downward, within `entry_timeout_ms`; only then does the page get `enter`. A
+  pending push that slides `entry_push_px` sideways, moves back up more than
+  4 px, times out, or sees a button or wheel event is handed back where the
+  hand went, and the barrier rests for 400 ms. libei has already taken that
+  button or wheel event, so that click is lost (the log says so). Without the
+  KWin observer the barrier stays armed while a page is connected. The exact
+  line KDE accepts is tried from four candidates on the first arm and
+  remembered.
 - **libei** (through the `reis` crate) delivers relative motion, buttons and
   scroll while captured.
 - A **WebSocket** server pushes the cursor position to the Hub page, at most
@@ -56,8 +68,10 @@ Copy [config.example.toml](config.example.toml) to
 | `token`                 | required             | Shared secret, compared in constant time. `LUGN_HUB_POINTER_TOKEN` in the environment overrides it       |
 | `allowed_origins`       | `[]`                 | Allowed `Origin` headers for the upgrade, e.g. `["http://192.168.10.132:8788"]`. Empty allows any Origin |
 | `hub_width_px`          | `560`                | The Hub's physical width, in desktop logical px. Positions along the edge scale by page width / this     |
-| `entry_slack_px`        | `160`                | How far past the Hub's right edge a push down still enters (at the Hub's last column)                    |
-| `gain`                  | `1.0`                | Hub CSS px per desktop logical px of motion                                                              |
+| `entry_slack_px`        | `60`                 | How far past the Hub's right edge a push down still enters (at the Hub's last column)                    |
+| `entry_push_px`         | `40`                 | Desktop px a push must carry on, mostly downward, before it enters; the same sideways aborts             |
+| `entry_timeout_ms`      | `350`                | A push that has not entered by then is handed back to the desktop                                        |
+| `gain`                  | `2.0`                | Hub CSS px per desktop logical px of motion                                                              |
 | `log_latency`           | `true`               | Log WebSocket round-trip p50/p95/max every 10 s                                                          |
 | `suppress_effects`      | `["shakecursor"]`    | KWin effects unloaded while the pointer is on the Hub. Empty disables                                    |
 | `game_app_ids`          | launchers, emulators | Window classes or desktop file names that count as games, also when windowed (see below)                 |
@@ -145,14 +159,23 @@ lugn-hub-pointer` (or killing the process) frees it.
 
 ## Tuning
 
-- **hub_width_px**: the Hub Max screen is about 22 cm wide, roughly 560
-  desktop px on an 80 cm wide 3657 px monitor. Set it so the cursor enters the
-  Hub above where the desktop pointer left the monitor.
+- **hub_width_px**: the Hub screen's width in cm times the monitor's desktop
+  px per cm. Set it so the cursor enters the Hub below where the desktop
+  pointer left the monitor.
 - **entry_slack_px**: pushes down this far right of the Hub still enter, at
   the Hub's right edge. Further right, pushing down stops at the screen edge as
   usual; close to the corner the pointer may hitch for a moment while the
   barrier hands it back.
-- **gain**: raise it if the Hub cursor feels slow compared with the desktop
+- **entry_push_px** and **entry_timeout_ms**: how deliberate a push into the
+  Hub must be. Raise the push if the Hub takes the pointer when you only meant
+  to reach the taskbar; lower it, or raise the timeout, if entering feels
+  sticky. On entry the cursor lands 24 Hub px below the top (plus any push
+  past `entry_push_px`, times gain), so a small twitch upward right after
+  entering does not leave again.
+- **gain**: the Nest Hub page is 1024 CSS px wide on a ~15.5 cm screen, about
+  66 px/cm; the 3657 px monitor is ~119 cm wide, about 30.7 px/cm. 2.0 keeps
+  the cursor's physical speed about the same on both. Raise it if the Hub
+  cursor feels slow compared with the desktop
   pointer, lower it if it feels twitchy. Scroll is not scaled by gain. A wheel
   notch scrolls 48 px.
 - **Warm-up**: while the cursor is within `hub_width_px + entry_slack_px + 200`

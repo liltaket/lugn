@@ -34,7 +34,7 @@ mod protocol;
 mod server;
 mod stats;
 
-use capture::{Pointer, ReleaseTo, in_entry_zone, leftmost_zone};
+use capture::{Abort, Ended, EntryRule, Exit, Pointer, ReleaseTo, in_entry_zone, leftmost_zone};
 use coalesce::MoveCoalescer;
 use config::Config;
 use kwin::{Effects, KwinEvent, Script, approach_for};
@@ -52,6 +52,10 @@ const PONG_TIMEOUT: Duration = Duration::from_millis(2500);
 const LATENCY_REPORT_EVERY: Duration = Duration::from_secs(10);
 /// Pause after a push against the bottom edge outside the entry corner.
 const REARM_AFTER_OUTSIDE_CORNER: Duration = Duration::from_millis(300);
+/// Pause after a push into the corner that did not enter (slid sideways,
+/// moved back up, timed out, clicked), so a slide along the edge does not
+/// re-trigger on every pixel.
+const REARM_AFTER_ABORT: Duration = Duration::from_millis(400);
 const REARM_AFTER_DISABLED: Duration = Duration::from_secs(1);
 const REARM_AFTER_FAILURE: Duration = Duration::from_secs(5);
 const EI_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -123,12 +127,14 @@ fn parse_args() -> Result<Option<PathBuf>> {
 async fn run(config_path: PathBuf) -> Result<()> {
     let cfg = Config::load(&config_path)?;
     log!(
-        "config {}: listen {} hub_width_px {} entry_slack_px {} gain {} origins {:?} \
-         suppress_effects {:?}",
+        "config {}: listen {} hub_width_px {} entry_slack_px {} entry_push_px {} \
+         entry_timeout {:?} gain {} origins {:?} suppress_effects {:?}",
         config_path.display(),
         cfg.listen,
         cfg.hub_width_px,
         cfg.entry_slack_px,
+        cfg.entry_push_px,
+        cfg.entry_timeout,
         cfg.gain,
         cfg.allowed_origins,
         cfg.suppress_effects
@@ -220,6 +226,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
         let rearm_at = app.rearm_at.unwrap_or(far);
         let move_due = app.coalescer.deadline();
         let cool_at = app.warm.cool_at;
+        let entry_due = app.pointer.pending_deadline();
         let next_ping = app.next_ping;
         let step = tokio::select! {
             _ = sigterm.recv() => break Ok(()),
@@ -234,6 +241,9 @@ async fn run(config_path: PathBuf) -> Result<()> {
             _ = sleep_until(move_due.unwrap_or(far)), if move_due.is_some() => {
                 app.on_move_due();
                 Ok(())
+            }
+            _ = sleep_until(entry_due.unwrap_or(far)), if entry_due.is_some() => {
+                app.on_entry_due().await
             }
             Some(event) = event_rx.recv() => app.on_page_event(event).await,
             signal = activated.next() => match signal {
@@ -420,7 +430,14 @@ impl<'p> App<'p> {
     ) -> Self {
         let now = Instant::now();
         Self {
-            pointer: Pointer::new(cfg.gain, f64::from(cfg.hub_width_px)),
+            pointer: Pointer::new(
+                cfg.gain,
+                f64::from(cfg.hub_width_px),
+                EntryRule {
+                    push_px: f64::from(cfg.entry_push_px),
+                    timeout: cfg.entry_timeout,
+                },
+            ),
             cfg,
             portal,
             ei,
@@ -525,15 +542,42 @@ impl<'p> App<'p> {
     }
 
     /// Ends an ongoing capture from our side: `leave` first so the page
-    /// reacts at once, then give the pointer back to the compositor.
+    /// reacts at once, then give the pointer back to the compositor. A push
+    /// that has not entered yet is just handed back; the page saw nothing.
     async fn end_capture(&mut self, why: &str) -> Result<()> {
+        let shown = self.pointer.is_active();
         let Some(to) = self.pointer.end() else {
             return Ok(());
         };
-        log!("capture: ending ({why})");
-        self.send_input(&AgentMsg::Leave);
-        self.capture_ended();
+        if shown {
+            log!("capture: ending ({why})");
+            self.send_input(&AgentMsg::Leave);
+            self.capture_ended();
+        } else {
+            log!("capture: entry abandoned ({why})");
+        }
         self.release(to).await
+    }
+
+    /// A push into the corner did not enter: hand the pointer back where the
+    /// hand went and rest the barrier briefly.
+    async fn abort_entry(&mut self, to: ReleaseTo, why: Abort) -> Result<()> {
+        log!(
+            "capture: entry aborted ({}), release to {:?}",
+            why.reason(),
+            to.cursor
+        );
+        self.release(to).await?;
+        self.disarm().await?;
+        self.rearm_at = Some(Instant::now() + REARM_AFTER_ABORT);
+        Ok(())
+    }
+
+    async fn on_entry_due(&mut self) -> Result<()> {
+        match self.pointer.timeout(Instant::now()) {
+            Some(to) => self.abort_entry(to, Abort::Timeout).await,
+            None => Ok(()),
+        }
     }
 
     async fn arm(&mut self) -> Result<()> {
@@ -702,7 +746,7 @@ impl<'p> App<'p> {
     }
 
     fn warm_wanted(&self) -> bool {
-        (self.warm.approach || self.pointer.is_active())
+        (self.warm.approach || self.pointer.is_capturing())
             && self.gated.is_none()
             && self.page_ready()
     }
@@ -774,11 +818,10 @@ impl<'p> App<'p> {
             self.rearm_at = Some(Instant::now() + REARM_AFTER_OUTSIDE_CORNER);
             return Ok(());
         }
-        match self.pointer.activate(activation_id, cursor) {
-            Ok(enter) => {
-                self.send(&enter);
-                log!("capture: enter {enter:?}");
-                self.capture_started();
+        // Nothing shows on the Hub until the push commits (see on_ei).
+        match self.pointer.activate(activation_id, cursor, Instant::now()) {
+            Ok(()) => {
+                log!("capture: pending");
                 Ok(())
             }
             Err(to) => self.release(to).await,
@@ -786,10 +829,13 @@ impl<'p> App<'p> {
     }
 
     fn on_deactivated(&mut self, activation_id: Option<u32>) {
+        let pending = self.pointer.is_pending();
         if self.pointer.deactivated(activation_id) {
             log!("capture: ended by compositor");
             self.send_input(&AgentMsg::Leave);
             self.capture_ended();
+        } else if pending && !self.pointer.is_capturing() {
+            log!("capture: entry ended by compositor");
         }
     }
 
@@ -816,7 +862,7 @@ impl<'p> App<'p> {
     }
 
     async fn sync_arm(&mut self) -> Result<()> {
-        if self.pointer.is_active() || self.rearm_at.is_some() {
+        if self.pointer.is_capturing() || self.rearm_at.is_some() {
             return Ok(());
         }
         match (self.arm_wanted(), self.armed) {
@@ -846,14 +892,30 @@ impl<'p> App<'p> {
             }
             EiEvent::Frame(_) => {
                 self.counters.ei_frames += 1;
-                let out = self.pointer.frame();
+                let out = self.pointer.frame(Instant::now());
+                if out.entered {
+                    // Effects and counters start only once the push commits.
+                    self.capture_started();
+                    if let Some(enter) = out.msgs.first() {
+                        log!("capture: enter {enter:?}");
+                    }
+                }
                 for msg in &out.msgs {
                     self.send_input(msg);
                 }
-                if let Some(to) = out.release {
-                    log!("capture: left the Hub's top, release to {:?}", to.cursor);
-                    self.capture_ended();
-                    self.release(to).await?;
+                match out.release {
+                    Some((to, Ended::Exit(edge))) => {
+                        let edge = match edge {
+                            Exit::Top => "top",
+                            Exit::Left => "left",
+                            Exit::Right => "right",
+                        };
+                        log!("capture: left the Hub's {edge}, release to {:?}", to.cursor);
+                        self.capture_ended();
+                        self.release(to).await?;
+                    }
+                    Some((to, Ended::Abort(why))) => self.abort_entry(to, why).await?,
+                    None => {}
                 }
             }
             EiEvent::SeatAdded(s) => {

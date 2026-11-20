@@ -2,11 +2,11 @@
 
 `lugn-hub-pointer` runs on the desktop. The Hub stands **below** the monitor,
 its left edge roughly level with the monitor's left edge. When the desktop
-pointer is moved down out of the monitor's bottom edge near the bottom-left
+pointer is pushed down out of the monitor's bottom edge near the bottom-left
 corner, the compositor hands the pointer to the agent (xdg-desktop-portal
-InputCapture plus libei). The agent then drives a virtual cursor on one Nest
-Hub dashboard page. Moving up out of the Hub's top edge, anywhere along it,
-gives the pointer back.
+InputCapture plus libei). Once the push has carried on far enough downward,
+the agent drives a virtual cursor on one Nest Hub dashboard page. Moving out
+of the Hub's top, left or right edge gives the pointer back.
 
 The Hub page connects directly to the desktop over the LAN:
 
@@ -42,12 +42,20 @@ unknown fields are ignored by both sides.
 | `ping`   | `id` (integer)                                                      | Once per second while connected; every 20 ms while warm; page answers `pong`  |
 
 The agent owns the cursor position and clamps it to `0 <= x < w`,
-`y < h`. The cursor enters at the top of the Hub page (`y = 0`) at the
+`y < h`. `enter` is not sent when the compositor hands the pointer over,
+but only after the push has gone on `entry_push_px` (40 by default) further,
+mostly downward; a push that slides sideways, moves back up, sees a button
+or wheel event or takes longer than `entry_timeout_ms` (350) is handed back
+to the desktop and the page sees nothing. The cursor enters near the top of
+the Hub page (`y` = 24 plus any overshoot past the push, times gain) at the
 x that matches the desktop pointer's position along the entry zone. Moving
-above the top (`y < 0`) ends capture and puts the desktop pointer back just
-above the monitor's bottom edge at the matching x. Buttons and wheel are sent
-immediately; a pending `move` is flushed first so they land at the right
-point.
+above the top (`y < 0`), left of the left edge (`x < 0`) or right of the
+right edge (`x >= w`) sends `leave`, ends capture and puts the desktop
+pointer back just above the monitor's bottom edge: at the matching x through
+the top, in the bottom-left corner through the left, and just right of the
+Hub's width through the right. The bottom edge holds the cursor at
+`y = h - 1`. Buttons and wheel are sent immediately; a pending `move` is
+flushed first so they land at the right point.
 
 ## Page behavior
 

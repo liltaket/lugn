@@ -2,6 +2,7 @@ use std::{
     env,
     net::SocketAddr,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -24,6 +25,10 @@ struct RawConfig {
     hub_width_px: u32,
     #[serde(default = "default_entry_slack_px")]
     entry_slack_px: u32,
+    #[serde(default = "default_entry_push_px")]
+    entry_push_px: u32,
+    #[serde(default = "default_entry_timeout_ms")]
+    entry_timeout_ms: u64,
     #[serde(default = "default_gain")]
     gain: f64,
     #[serde(default = "default_log_latency")]
@@ -43,10 +48,16 @@ fn default_hub_width_px() -> u32 {
     560
 }
 fn default_entry_slack_px() -> u32 {
-    160
+    60
+}
+fn default_entry_push_px() -> u32 {
+    40
+}
+fn default_entry_timeout_ms() -> u64 {
+    350
 }
 fn default_gain() -> f64 {
-    1.0
+    2.0
 }
 fn default_log_latency() -> bool {
     true
@@ -105,6 +116,8 @@ pub struct Config {
     pub allowed_origins: Vec<String>,
     pub hub_width_px: u32,
     pub entry_slack_px: u32,
+    pub entry_push_px: u32,
+    pub entry_timeout: Duration,
     pub gain: f64,
     pub log_latency: bool,
     pub suppress_effects: Vec<String>,
@@ -142,6 +155,12 @@ impl Config {
         if raw.entry_slack_px > 100_000 {
             bail!("`entry_slack_px` must be at most 100000");
         }
+        if !(1..=10_000).contains(&raw.entry_push_px) {
+            bail!("`entry_push_px` must be in 1..=10000");
+        }
+        if !(1..=10_000).contains(&raw.entry_timeout_ms) {
+            bail!("`entry_timeout_ms` must be in 1..=10000");
+        }
         let suppress_effects = raw
             .suppress_effects
             .iter()
@@ -159,6 +178,8 @@ impl Config {
             allowed_origins,
             hub_width_px: raw.hub_width_px,
             entry_slack_px: raw.entry_slack_px,
+            entry_push_px: raw.entry_push_px,
+            entry_timeout: Duration::from_millis(raw.entry_timeout_ms),
             gain: raw.gain,
             log_latency: raw.log_latency,
             suppress_effects,
@@ -192,8 +213,10 @@ mod tests {
         assert_eq!(cfg.token, "abc");
         assert!(cfg.allowed_origins.is_empty());
         assert_eq!(cfg.hub_width_px, 560);
-        assert_eq!(cfg.entry_slack_px, 160);
-        assert_eq!(cfg.gain, 1.0);
+        assert_eq!(cfg.entry_slack_px, 60);
+        assert_eq!(cfg.entry_push_px, 40);
+        assert_eq!(cfg.entry_timeout, Duration::from_millis(350));
+        assert_eq!(cfg.gain, 2.0);
         assert!(cfg.log_latency);
         assert_eq!(cfg.suppress_effects, ["shakecursor"]);
         // Lists are kept normalized for case-insensitive matching.
@@ -219,6 +242,8 @@ mod tests {
             allowed_origins = ["http://192.168.10.132:8788/", "HTTP://Example.org"]
             hub_width_px = 600
             entry_slack_px = 0
+            entry_push_px = 25
+            entry_timeout_ms = 500
             gain = 1.5
             log_latency = false
             suppress_effects = []
@@ -235,6 +260,8 @@ mod tests {
         );
         assert_eq!(cfg.hub_width_px, 600);
         assert_eq!(cfg.entry_slack_px, 0);
+        assert_eq!(cfg.entry_push_px, 25);
+        assert_eq!(cfg.entry_timeout, Duration::from_millis(500));
         assert_eq!(cfg.gain, 1.5);
         assert!(!cfg.log_latency);
         assert!(cfg.suppress_effects.is_empty());
@@ -246,7 +273,10 @@ mod tests {
     fn example_config_parses() {
         let cfg = Config::parse(include_str!("../config.example.toml"), None).unwrap();
         assert_eq!(cfg.hub_width_px, 560);
-        assert_eq!(cfg.entry_slack_px, 160);
+        assert_eq!(cfg.entry_slack_px, 60);
+        assert_eq!(cfg.entry_push_px, 40);
+        assert_eq!(cfg.entry_timeout, Duration::from_millis(350));
+        assert_eq!(cfg.gain, 2.0);
         assert_eq!(cfg.suppress_effects, ["shakecursor"]);
     }
 
@@ -270,6 +300,9 @@ mod tests {
         assert!(Config::parse("token = \"a\"\ngain = 0.0", None).is_err());
         assert!(Config::parse("token = \"a\"\ngain = -1.0", None).is_err());
         assert!(Config::parse("token = \"a\"\nhub_width_px = 0", None).is_err());
+        assert!(Config::parse("token = \"a\"\nentry_push_px = 0", None).is_err());
+        assert!(Config::parse("token = \"a\"\nentry_timeout_ms = 0", None).is_err());
+        assert!(Config::parse("token = \"a\"\nentry_timeout_ms = 60000", None).is_err());
         // Replaced by hub_width_px; unknown keys are rejected.
         assert!(Config::parse("token = \"a\"\nzone_height = 420", None).is_err());
     }

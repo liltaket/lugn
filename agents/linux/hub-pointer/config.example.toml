@@ -12,17 +12,25 @@ token = "change-me"
 # An empty list allows any Origin; the token is then the only check.
 allowed_origins = ["http://192.168.10.132:8788"]
 
-# The Hub stands below the monitor, left edges level. Its physical width in
-# desktop logical px: the Hub Max screen is ~22 cm wide, the 3657 px monitor
-# ~80 cm, so ~560. A push down out of the bottom edge enters the Hub when it is
-# within hub_width_px + entry_slack_px of the monitor's left edge.
+# The Hub stands below the monitor, left edges level. hub_width_px is its
+# physical width in desktop logical px (screen width in cm times the
+# monitor's px per cm). A push down out of the bottom edge can enter the Hub
+# when it starts within hub_width_px + entry_slack_px of the monitor's left
+# edge.
 hub_width_px = 560
-entry_slack_px = 160
+entry_slack_px = 60
 
-# Hub CSS px per desktop logical px of mouse motion. The Hub Max page is
-# 1280x800 CSS px on a ~22 cm wide screen; the 3657 px monitor is ~80 cm, so
-# 1.0 keeps the physical cursor speed similar.
-gain = 1.0
+# Entry resistance: after the barrier stops the pointer, it must be pushed
+# entry_push_px further, mostly downward, within entry_timeout_ms. Sliding
+# that far sideways, moving back up or running out of time hands it back to
+# the desktop instead.
+entry_push_px = 40
+entry_timeout_ms = 350
+
+# Hub CSS px per desktop logical px of mouse motion. The Nest Hub page is
+# 1024 CSS px on a ~15.5 cm wide screen (~66 px/cm); the 3657 px monitor is
+# ~119 cm wide (~30.7 px/cm), so 2.0 keeps the physical cursor speed similar.
+gain = 2.0
 
 # Log WebSocket ping round-trip p50/p95/max every 10 s.
 log_latency = true
