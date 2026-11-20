@@ -111,7 +111,7 @@ class FakePlayer:
         self.played: list[str] = []
 
     def play(self, kind: str) -> None:
-        if kind != "listening":  # off by default, as in the real player
+        if kind != "listening":  # the wake tick is not part of an outcome
             self.played.append(kind)
 
 

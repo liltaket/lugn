@@ -75,7 +75,9 @@ _ERROR_OUTCOMES = {"stt_unavailable", "run_timeout", "exception", "lugn_failed"}
 _EARCON_FOR: dict[str, Kind] = {
     # "done" played its tone when the command was understood, before the call.
     "dry_run": "ok", "not_understood": "not_understood",
-    "low_confidence": "not_understood", "no_speech": "cancelled",
+    # No tone for a run without speech: that is usually a false wake, and the
+    # listening tick already told a real user that the node heard them.
+    "low_confidence": "not_understood",
     "stt_unavailable": "error", "run_timeout": "error", "exception": "error",
     "lugn_failed": "error", "disconnected": "error",
 }

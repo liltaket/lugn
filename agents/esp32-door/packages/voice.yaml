@@ -24,6 +24,11 @@ micro_wake_word:
   models:
     - model: okay_nabu
       id: wake_okay_nabu
+      # The model's own cutoff is 97 %. It heard the wake word only near the
+      # node; 90 % trades some false wakes for range. A false wake acts on
+      # nothing: a run still needs a confident transcript that the grammar
+      # matches, and a run without speech ends silently.
+      probability_cutoff: 90%
   on_wake_word_detected:
     - logger.log:
         level: INFO

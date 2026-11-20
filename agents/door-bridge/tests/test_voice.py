@@ -151,7 +151,7 @@ async def test_no_speech(tmp_path: Path) -> None:
     await speak(pipeline, silence(3200))
     await run.wait()
     assert t.names() == ["RUN_START", "STT_START", "STT_VAD_END", "RUN_END"]
-    assert stt.calls == [] and player.played == ["cancelled"]
+    assert stt.calls == [] and player.played == []
     assert journal(tmp_path)[0]["outcome"] == "no_speech"
 
 

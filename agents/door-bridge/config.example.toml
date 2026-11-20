@@ -60,8 +60,9 @@ enabled = true
 # ALSA device for `aplay -D`; empty uses the default (BrunoCAM's 3.5 mm jack).
 audio_device = ""
 volume = 0.35
-# A tone at the wake word. Off by default: the node's mic hears it.
-listening = false
+# A short tick at the wake word, so the user knows the node listens from
+# anywhere in the room. The bridge drops it with the wake word's tail.
+listening = true
 # Optional pre-rendered speech (tools/render_prompts.py): <kind>.wav replaces a tone.
 prompts_dir = ""
 

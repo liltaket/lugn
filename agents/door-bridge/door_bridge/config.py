@@ -89,7 +89,7 @@ class EarconConfig:
     enabled: bool = True
     audio_device: str = ""
     volume: float = 0.35
-    listening: bool = False
+    listening: bool = True
     # Optional directory with pre-rendered <kind>.wav files (e.g. Piper speech).
     prompts_dir: str = ""
 
