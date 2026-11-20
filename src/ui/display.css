@@ -4899,16 +4899,10 @@ body {
 }
 
 /* ── Hub pointer bridge (pointer-bridge.js) ──
-   A desktop-driven virtual cursor sets these attributes; synthetic input does
-   not trigger :hover or :active. Pressed rules mirror the :active rules above
-   with the same specificity; nothing here applies without the bridge. */
-button[data-pointer-hover]:not(:disabled):not([data-pointer-pressed]),
-[role='button'][data-pointer-hover]:not([data-pointer-pressed]),
-a[data-pointer-hover]:not([data-pointer-pressed]),
-summary[data-pointer-hover]:not([data-pointer-pressed]),
-label[data-pointer-hover]:not([data-pointer-pressed]) {
-  filter: brightness(1.08);
-}
+   A desktop-driven virtual cursor sets this attribute; synthetic input does
+   not trigger :active. Hover is drawn by the cursor's own highlight plate.
+   Pressed rules mirror the :active rules above with the same specificity;
+   nothing here applies without the bridge. */
 button[data-pointer-pressed]:not(:disabled) {
   filter: brightness(1.15);
 }

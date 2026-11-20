@@ -21,6 +21,9 @@
   const HOVER_INTERVAL_MS = 60;
   // ...and once this long after the last move.
   const HOVER_SETTLE_MS = 50;
+  // After a click, Escape or wheel the page may change under a still cursor:
+  // hover and the plate are measured again this long after.
+  const HOVER_RECHECK_MS = 300;
   // Frames keep running this long after the last move, so frame gaps are
   // measured across a whole gesture rather than per move.
   const MOTION_TAIL_MS = 100;
@@ -28,17 +31,37 @@
   const WARM_MAX_MS = 3000;
   const PERF_INTERVAL_MS = 2000;
   const LAG_SAMPLES = 256;
-  // Pixel offset of the arrow tip inside the cursor graphic.
-  const HOTSPOT = 2;
-  const CURSOR_WIDTH = 24;
-  const CURSOR_HEIGHT = 28;
+  // The dot: a soft disc centred on the hotspot, drawn inside a slightly
+  // larger box so its shadow is not clipped by paint containment.
+  const DOT_SIZE = 18;
+  const DOT_BOX = 28;
   const PARKED = 'translate3d(-100px, -100px, 0)';
-  const ARROW =
-    'M0 0 L0 19.5 L4.7 15.1 L7.9 22.4 L11.3 20.9 L8.2 13.8 L14.6 13.8 Z';
+  // The highlight plate that replaces the dot over a control.
+  const PLATE_PADDING = 6;
+  const PLATE_MIN_RADIUS = 12;
+  // Controls bigger than this keep the dot and get no plate.
+  const PLATE_MAX_WIDTH = 420;
+  const PLATE_MAX_HEIGHT = 260;
+  // The plate leans toward the pointer by this share of its offset from the
+  // control's centre, at most PLATE_SHIFT_MAX px each way.
+  const PLATE_PARALLAX = 0.06;
+  const PLATE_SHIFT_MAX = 3;
+  // A plate that faded out less than this long ago slides to the next
+  // control instead of popping up there.
+  const PLATE_MORPH_MS = 180;
+  const EASE_MS = 160;
+  const EASE = 'cubic-bezier(0.25, 1, 0.5, 1)';
+  const LOOK = {
+    dot: { transform: 'scale(1)', opacity: '1' },
+    dotPressed: { transform: 'scale(0.85)', opacity: '1' },
+    dotOnPlate: { transform: 'scale(0.4)', opacity: '0' },
+    plateHidden: { transform: 'scale(0.96)', opacity: '0' },
+    plate: { transform: 'scale(1)', opacity: '1' },
+    platePressed: { transform: 'scale(0.97)', opacity: '0.7' },
+  };
   const INTERACTIVE =
     'button, a, [role="button"], input, label, select, textarea, summary, [tabindex]';
   const FOCUSABLE_FIELDS = 'input, select, textarea';
-  const SVG_NS = 'http://www.w3.org/2000/svg';
 
   const clock =
     typeof performance === 'object' &&
@@ -52,6 +75,9 @@
   let reconnectDelay = RECONNECT_MIN_MS;
   let reconnectTimer;
   let cursor;
+  let dotFill;
+  let plate;
+  let plateFill;
   let visible = false;
   let pixelRatio = 1;
   // Latest point from the agent.
@@ -67,6 +93,7 @@
   let lastMotionAt = -Infinity;
   let hoverTimer;
   let lastHoverAt = -Infinity;
+  let recheckTimer;
   let hoverX = NaN;
   let hoverY = NaN;
   let hovered = null;
@@ -77,6 +104,16 @@
   let pressControl = null;
   let pressMoveX = NaN;
   let pressMoveY = NaN;
+  // Plate geometry in viewport px, set when the hovered control changes.
+  let plateShown = false;
+  let plateHiddenAt = -Infinity;
+  let plateRect = null;
+  let plateCenterX = 0;
+  let plateCenterY = 0;
+  let plateDrawnX = NaN;
+  let plateDrawnY = NaN;
+  let dotLook = null;
+  let plateLook = null;
 
   // Telemetry for the window since the cursor was shown or the last `perf`.
   const lags = new Float64Array(LAG_SAMPLES);
@@ -115,64 +152,105 @@
 
   // ── Cursor ──
 
-  function arrowPath(attributes) {
-    const path = document.createElementNS(SVG_NS, 'path');
-    path.setAttribute('d', ARROW);
-    path.setAttribute('stroke-linejoin', 'round');
-    for (const [name, value] of Object.entries(attributes))
-      path.setAttribute(name, value);
-    return path;
-  }
-
-  // Built once, before any `enter`, and kept in the DOM for good: showing it
-  // is a visibility flip on a layer that already exists. A second, offset
-  // path is the shadow; a CSS filter on a moving layer can make weak GPUs
-  // re-rasterize it every frame.
-  function createCursor() {
-    const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('width', String(CURSOR_WIDTH));
-    svg.setAttribute('height', String(CURSOR_HEIGHT));
-    svg.setAttribute(
-      'viewBox',
-      `${-HOTSPOT} ${-HOTSPOT} ${CURSOR_WIDTH} ${CURSOR_HEIGHT}`,
-    );
-    svg.setAttribute('aria-hidden', 'true');
-    svg.setAttribute('focusable', 'false');
-    svg.appendChild(
-      arrowPath({
-        transform: 'translate(0.6 1.1)',
-        fill: '#000000',
-        stroke: '#000000',
-        'stroke-width': '2',
-        opacity: '0.3',
-      }),
-    );
-    svg.appendChild(
-      arrowPath({
-        fill: '#ffffff',
-        stroke: '#161c1b',
-        'stroke-width': '1.4',
-      }),
-    );
-    const style = svg.style;
+  function fixedLayer(role, width, height) {
+    const element = document.createElement('div');
+    element.setAttribute('data-hub-pointer', role);
+    element.setAttribute('aria-hidden', 'true');
+    const style = element.style;
     style.position = 'fixed';
     style.left = '0';
     style.top = '0';
-    style.width = `${CURSOR_WIDTH}px`;
-    style.height = `${CURSOR_HEIGHT}px`;
+    style.width = `${width}px`;
+    style.height = `${height}px`;
     style.margin = '0';
     style.padding = '0';
     style.display = 'block';
-    style.overflow = 'hidden';
     style.pointerEvents = 'none';
-    style.zIndex = '2147483647';
-    style.contain = 'strict';
     style.willChange = 'transform';
     style.transition = 'none';
-    style.transform = PARKED;
     style.visibility = 'hidden';
-    document.body.appendChild(svg);
-    return svg;
+    return element;
+  }
+
+  // Inner layers change scale and opacity only when the look changes (hover
+  // or press), never per frame, so they alone carry a transition.
+  function easedLayer(look) {
+    const element = document.createElement('div');
+    const style = element.style;
+    style.position = 'absolute';
+    style.boxSizing = 'border-box';
+    style.margin = '0';
+    style.padding = '0';
+    style.pointerEvents = 'none';
+    style.willChange = 'transform, opacity';
+    style.transition = `transform ${EASE_MS}ms ${EASE}, opacity ${EASE_MS}ms ${EASE}`;
+    style.transform = look.transform;
+    style.opacity = look.opacity;
+    return element;
+  }
+
+  // Built once, before any `enter`, and kept in the DOM for good: showing it
+  // is a visibility flip on layers that already exist. No CSS filter or
+  // backdrop: the shadow and fill rasterize once and the layers only move.
+  function createCursor() {
+    plate = fixedLayer('plate', 0, 0);
+    plate.style.zIndex = '2147483646';
+    plate.style.contain = 'layout size style';
+    plate.style.transform = 'translate3d(0px, 0px, 0)';
+    plateFill = easedLayer(LOOK.plateHidden);
+    plateFill.style.left = '0';
+    plateFill.style.top = '0';
+    plateFill.style.right = '0';
+    plateFill.style.bottom = '0';
+    plateFill.style.background = 'rgba(255, 255, 255, 0.14)';
+    plateFill.style.boxShadow = 'inset 0 0 0 1px rgba(255, 255, 255, 0.06)';
+    plate.appendChild(plateFill);
+    plateLook = LOOK.plateHidden;
+
+    const dot = fixedLayer('dot', DOT_BOX, DOT_BOX);
+    dot.style.zIndex = '2147483647';
+    dot.style.contain = 'strict';
+    dot.style.overflow = 'hidden';
+    dot.style.transform = PARKED;
+    dotFill = easedLayer(LOOK.dot);
+    const inset = `${(DOT_BOX - DOT_SIZE) / 2}px`;
+    dotFill.style.left = inset;
+    dotFill.style.top = inset;
+    dotFill.style.width = `${DOT_SIZE}px`;
+    dotFill.style.height = `${DOT_SIZE}px`;
+    dotFill.style.borderRadius = '50%';
+    dotFill.style.background = 'rgba(236, 240, 232, 0.55)';
+    dotFill.style.border = '1px solid rgba(12, 18, 16, 0.32)';
+    dotFill.style.boxShadow = '0 1px 4px rgba(0, 0, 0, 0.24)';
+    dot.appendChild(dotFill);
+    dotLook = LOOK.dot;
+
+    document.body.appendChild(plate);
+    document.body.appendChild(dot);
+    return dot;
+  }
+
+  function setLook(element, current, look) {
+    if (current === look) return look;
+    if (current.transform !== look.transform)
+      element.style.transform = look.transform;
+    if (current.opacity !== look.opacity) element.style.opacity = look.opacity;
+    return look;
+  }
+
+  // Dot and plate looks follow hover and press; called off the hot path.
+  function updateLook() {
+    const pressed = pressTarget !== null;
+    dotLook = setLook(
+      dotFill,
+      dotLook,
+      plateShown ? LOOK.dotOnPlate : pressed ? LOOK.dotPressed : LOOK.dot,
+    );
+    plateLook = setLook(
+      plateFill,
+      plateLook,
+      !plateShown ? LOOK.plateHidden : pressed ? LOOK.platePressed : LOOK.plate,
+    );
   }
 
   function showCursor() {
@@ -180,6 +258,7 @@
       visible = true;
       warmUntil = 0;
       cursor.style.visibility = 'visible';
+      plate.style.visibility = 'visible';
       startMeasuring();
     }
     noteMotion(clock());
@@ -190,16 +269,143 @@
       visible = false;
       cursor.style.visibility = 'hidden';
       cursor.style.transform = PARKED;
+      plate.style.visibility = 'hidden';
       drawnX = NaN;
       drawnY = NaN;
     }
     if (hoverTimer !== undefined) clearTimeout(hoverTimer);
     hoverTimer = undefined;
+    if (recheckTimer !== undefined) clearTimeout(recheckTimer);
+    recheckTimer = undefined;
     lastHoverAt = -Infinity;
     hoverX = NaN;
     hoverY = NaN;
     hitTarget = null;
     setHover(null);
+    plateHiddenAt = -Infinity;
+  }
+
+  // ── Highlight plate ──
+
+  // #app-root is scaled with CSS zoom; the plate lives outside it in viewport
+  // px. Newer engines report zoomed descendants' rects in viewport px, older
+  // ones in the root's own px: the root's own width tells which.
+  function rectScale(zoom) {
+    if (zoom === 1) return 1;
+    const width = document
+      .getElementById?.('app-root')
+      ?.getBoundingClientRect?.().width;
+    if (!(width > 0)) return 1;
+    const viewport = window.innerWidth;
+    if (Math.abs(width - viewport) <= 2) return 1;
+    if (Math.abs(width * zoom - viewport) <= 2) return zoom;
+    return 1;
+  }
+
+  function rootZoom() {
+    const zoom = Number.parseFloat(
+      document.getElementById?.('app-root')?.style?.zoom,
+    );
+    return zoom > 0 ? zoom : 1;
+  }
+
+  function disabled(control) {
+    return (
+      control.disabled === true ||
+      control.getAttribute?.('aria-disabled') === 'true'
+    );
+  }
+
+  // Sizes the plate to the newly hovered control. Runs only when hover moves
+  // to another control, from the hover timer, after the hit test has already
+  // brought layout up to date.
+  function placePlate(control, morph = true) {
+    if (!control || disabled(control) || !control.getBoundingClientRect) {
+      hidePlate();
+      return;
+    }
+    const zoom = rootZoom();
+    const scale = rectScale(zoom);
+    const box = control.getBoundingClientRect();
+    const width = box.width * scale + 2 * PLATE_PADDING;
+    const height = box.height * scale + 2 * PLATE_PADDING;
+    if (
+      !(box.width > 0 && box.height > 0) ||
+      width > PLATE_MAX_WIDTH + 2 * PLATE_PADDING ||
+      height > PLATE_MAX_HEIGHT + 2 * PLATE_PADDING
+    ) {
+      hidePlate();
+      return;
+    }
+    const left = box.left * scale - PLATE_PADDING;
+    const top = box.top * scale - PLATE_PADDING;
+    const corner = String(getComputedStyle(control).borderTopLeftRadius ?? '');
+    const pill = Math.min(width, height) / 2;
+    const radius = corner.endsWith('%')
+      ? pill
+      : Math.min(
+          pill,
+          Math.max(
+            PLATE_MIN_RADIUS,
+            (Number.parseFloat(corner) || 0) * zoom + PLATE_PADDING,
+          ),
+        );
+    const previous = !morph
+      ? null
+      : plateShown || clock() - plateHiddenAt < PLATE_MORPH_MS
+        ? plateRect
+        : null;
+    plateRect = { left, top, width, height };
+    plateCenterX = left + width / 2;
+    plateCenterY = top + height / 2;
+    const style = plate.style;
+    style.left = `${left}px`;
+    style.top = `${top}px`;
+    style.width = `${width}px`;
+    style.height = `${height}px`;
+    plateFill.style.borderRadius = `${radius}px`;
+    drawPlate();
+    if (previous) morphPlate(previous, plateRect);
+    plateShown = true;
+    updateLook();
+  }
+
+  // Slides the plate from the control it just left, on the compositor.
+  function morphPlate(from, to) {
+    if (typeof plateFill.animate !== 'function') return;
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+    plateFill.animate(
+      [
+        {
+          transform: `translate(${dx}px, ${dy}px) scale(${from.width / to.width}, ${from.height / to.height})`,
+        },
+        { transform: 'scale(1)' },
+      ],
+      { duration: EASE_MS, easing: EASE },
+    );
+  }
+
+  function hidePlate() {
+    if (!plateShown) return;
+    plateShown = false;
+    plateHiddenAt = clock();
+    updateLook();
+  }
+
+  function plateShift(offset) {
+    const shift = offset * PLATE_PARALLAX;
+    return Math.max(-PLATE_SHIFT_MAX, Math.min(PLATE_SHIFT_MAX, shift));
+  }
+
+  // The plate leans a few px toward the pointer: one transform write.
+  function drawPlate() {
+    const px = snap(plateShift(x - plateCenterX));
+    const py = snap(plateShift(y - plateCenterY));
+    if (px === plateDrawnX && py === plateDrawnY) return;
+    plateDrawnX = px;
+    plateDrawnY = py;
+    plate.style.transform = `translate3d(${px}px, ${py}px, 0)`;
   }
 
   function requestFrame() {
@@ -209,7 +415,8 @@
   }
 
   // The hot path: at most one pointermove for a held button (hit test first,
-  // while layout is still clean) and one transform write. No other reads.
+  // while layout is still clean) and a transform write on the dot, plus one
+  // on the plate while it is shown. No other reads or writes.
   function frame() {
     framePending = false;
     const now = clock();
@@ -228,7 +435,8 @@
       if (x !== drawnX || y !== drawnY) {
         drawnX = x;
         drawnY = y;
-        cursor.style.transform = `translate3d(${snap(x - HOTSPOT)}px, ${snap(y - HOTSPOT)}px, 0)`;
+        cursor.style.transform = `translate3d(${snap(x - DOT_BOX / 2)}px, ${snap(y - DOT_BOX / 2)}px, 0)`;
+        if (plateShown) drawPlate();
         frames += 1;
         if (moveStamp) {
           recordLag(now - moveStamp);
@@ -269,17 +477,36 @@
 
   function setHover(control) {
     if (control === hovered) return;
+    // Measure first, while layout is still clean from the hit test.
+    placePlate(control);
     hovered?.removeAttribute?.('data-pointer-hover');
     hovered = control;
     hovered?.setAttribute?.('data-pointer-hover', '');
   }
 
-  function refreshHover(now) {
+  // `remeasure` sizes the plate again even when the control is unchanged.
+  function refreshHover(now, remeasure = false) {
     lastHoverAt = now;
     hoverX = x;
     hoverY = y;
-    setHover(controlFor(hitAt(false)));
+    const control = controlFor(hitAt(false));
+    if (control === hovered && remeasure) placePlate(control, false);
+    else setHover(control);
   }
+
+  // The page may have moved or replaced what is under the cursor.
+  function recheckHover() {
+    if (!visible) return;
+    if (recheckTimer !== undefined) clearTimeout(recheckTimer);
+    recheckTimer = setTimeout(onRecheckTimer, HOVER_RECHECK_MS);
+  }
+
+  function recheckTick() {
+    recheckTimer = undefined;
+    if (!visible) return;
+    refreshHover(clock(), true);
+  }
+  const onRecheckTimer = guard(recheckTick);
 
   // Hover follows the cursor from a timer: at most every HOVER_INTERVAL_MS
   // while moving, and once more after the motion settles.
@@ -380,6 +607,7 @@
     pressMoveY = y;
     if (control && !control.disabled)
       control.setAttribute?.('data-pointer-pressed', '');
+    updateLook();
     dispatchPointer('pointerdown', target, { button: 0, buttons: 1 });
     dispatchMouse('mousedown', target, 0, 1);
     // Focus only text-like fields: programmatic focus on buttons would show
@@ -397,6 +625,7 @@
     dispatchMouse('mouseup', target, 0, 0);
     if (controlFor(target) === control && !control?.disabled)
       dispatchMouse('click', target, 0, 0);
+    recheckHover();
   }
 
   // Ends a press without a click, so display.js never keeps a pointer held.
@@ -415,6 +644,7 @@
     pressControl?.removeAttribute?.('data-pointer-pressed');
     pressTarget = null;
     pressControl = null;
+    updateLook();
   }
 
   function escape() {
@@ -636,12 +866,15 @@
           else release();
         } else if (message.button === 'right' && message.down) {
           escape();
+          recheckHover();
         }
         return;
       case 'wheel':
         if (setPoint(message) && visible) noteMotion(clock());
-        if (Number.isFinite(message.dx) && Number.isFinite(message.dy))
+        if (Number.isFinite(message.dx) && Number.isFinite(message.dy)) {
           wheel(message.dx, message.dy);
+          recheckHover();
+        }
         return;
       case 'leave':
         endCapture();

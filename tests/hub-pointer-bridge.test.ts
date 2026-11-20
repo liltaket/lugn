@@ -52,7 +52,16 @@ class FakeElement extends Listeners {
   clientHeight = 0;
   scrollWidth = 0;
   clientWidth = 0;
-  computed = { overflowX: 'visible', overflowY: 'visible' };
+  computed: Record<string, string> = {
+    overflowX: 'visible',
+    overflowY: 'visible',
+    borderTopLeftRadius: '0px',
+  };
+  rect = { left: 0, top: 0, width: 0, height: 0 };
+  animations: Array<{
+    keyframes: Array<Record<string, string>>;
+    options: Record<string, unknown>;
+  }> = [];
   constructor(
     readonly document: FakeDocument,
     readonly tagName: string,
@@ -79,6 +88,23 @@ class FakeElement extends Listeners {
   }
   hasAttribute(name: string): boolean {
     return this.attributes.has(name);
+  }
+  getAttribute(name: string): string | null {
+    return this.attributes.get(name) ?? null;
+  }
+  getBoundingClientRect(): {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } {
+    return { ...this.rect };
+  }
+  animate(
+    keyframes: Array<Record<string, string>>,
+    options: Record<string, unknown>,
+  ): void {
+    this.animations.push({ keyframes, options });
   }
   appendChild(child: FakeElement): FakeElement {
     child.parentElement = this;
@@ -138,6 +164,10 @@ class FakeDocument extends Listeners {
   }
   elementFromPoint(): FakeElement | null {
     return this.hit;
+  }
+  ids = new Map<string, FakeElement>();
+  getElementById(id: string): FakeElement | null {
+    return this.ids.get(id) ?? null;
   }
   element(tag: string, parent: FakeElement = this.body): FakeElement {
     return parent.appendChild(new FakeElement(this, tag));
@@ -289,8 +319,12 @@ async function load(status = 200, pointerEvents = true) {
     clock.now = end;
   };
   const pending = () => timers.filter((timer) => !timer.cleared);
-  const cursor = () =>
-    document.body.children.find((child) => child.tagName === 'svg');
+  const layer = (role: string) =>
+    document.body.children.find(
+      (child) => child.attributes.get('data-hub-pointer') === role,
+    );
+  const cursor = () => layer('dot');
+  const plate = () => layer('plate');
   return {
     document,
     frames,
@@ -307,6 +341,7 @@ async function load(status = 200, pointerEvents = true) {
     runFrames,
     advance,
     cursor,
+    plate,
   };
 }
 
@@ -344,31 +379,69 @@ describe('Hub pointer bridge page script', () => {
     expect(socket.sent.at(-1)).toEqual({ t: 'pong', id: 17 });
   });
 
-  it('builds the hidden cursor as soon as the bridge is configured', async () => {
+  it('builds the hidden dot and plate as soon as the bridge is configured', async () => {
     const page = await load();
     const cursor = page.cursor()!;
-    expect(cursor).toBeDefined();
+    const plate = page.plate()!;
     expect(page.sockets[0]!.readyState).toBe(0);
+    // The plate sits under the dot, both outside the dashboard.
+    expect(page.document.body.children).toEqual([plate, cursor]);
+    for (const layer of [cursor, plate])
+      expect(layer.style).toMatchObject({
+        visibility: 'hidden',
+        display: 'block',
+        position: 'fixed',
+        pointerEvents: 'none',
+        willChange: 'transform',
+        transition: 'none',
+      });
     expect(cursor.style).toMatchObject({
-      visibility: 'hidden',
-      display: 'block',
       transform: 'translate3d(-100px, -100px, 0)',
-      position: 'fixed',
-      pointerEvents: 'none',
       zIndex: '2147483647',
-      willChange: 'transform',
       contain: 'strict',
-      width: '24px',
+      width: '28px',
       height: '28px',
     });
-    expect(cursor.style['filter']).toBeUndefined();
-    const paths = cursor.children.filter((child) => child.tagName === 'path');
-    expect(paths).toHaveLength(2);
-    expect(paths[0]!.attributes.get('fill')).toBe('#000000');
-    expect(paths[0]!.attributes.get('opacity')).toBe('0.3');
-    expect(paths[0]!.attributes.get('transform')).toBeDefined();
-    expect(paths[1]!.attributes.get('fill')).toBe('#ffffff');
-    expect(paths[1]!.attributes.get('stroke')).toBe('#161c1b');
+    expect(plate.style['zIndex']).toBe('2147483646');
+    const dot = cursor.children[0]!;
+    expect(dot.style).toMatchObject({
+      width: '18px',
+      height: '18px',
+      borderRadius: '50%',
+      background: 'rgba(236, 240, 232, 0.55)',
+      transform: 'scale(1)',
+      opacity: '1',
+    });
+    const fill = plate.children[0]!;
+    expect(fill.style).toMatchObject({
+      transform: 'scale(0.96)',
+      opacity: '0',
+    });
+    // Only transform and opacity ever ease; no filters anywhere.
+    for (const layer of [dot, fill])
+      expect(
+        layer.style['transition']!.replace(/\([^)]*\)/g, '')
+          .split(',')
+          .map((part) => part.trim().split(' ')[0]),
+      ).toEqual(['transform', 'opacity']);
+    for (const layer of [cursor, dot, plate, fill]) {
+      expect(layer.style['filter']).toBeUndefined();
+      expect(layer.style['backdropFilter']).toBeUndefined();
+    }
+  });
+
+  it('centres the dot on the hotspot', async () => {
+    const page = await connected();
+    page.socket.receive({ t: 'enter', x: 100, y: 50 });
+    page.runFrames();
+    const cursor = page.cursor()!;
+    const dot = cursor.children[0]!;
+    const box = Number.parseFloat(cursor.style['width']!);
+    const offset = Number.parseFloat(dot.style['left']!);
+    const size = Number.parseFloat(dot.style['width']!);
+    expect(offset + size / 2).toBe(box / 2);
+    expect(Number.parseFloat(dot.style['top']!) + size / 2).toBe(box / 2);
+    expect(cursor.style['transform']).toBe('translate3d(86px, 36px, 0)');
   });
 
   it('shows the cursor by flipping visibility only, at the latest point once per frame', async () => {
@@ -393,7 +466,7 @@ describe('Hub pointer bridge page script', () => {
       (key) => cursor.style[key] !== before[key],
     );
     expect(changed).toEqual(['transform']);
-    expect(cursor.style['transform']).toBe('translate3d(1099px, 418px, 0)');
+    expect(cursor.style['transform']).toBe('translate3d(1087px, 406px, 0)');
     // No hit test or hover write inside the frame.
     expect(page.hitTests()).toBe(0);
     expect(button.hasAttribute('data-pointer-hover')).toBe(false);
@@ -416,7 +489,7 @@ describe('Hub pointer bridge page script', () => {
     page.sockets[0]!.receive({ t: 'enter', x: 10.3, y: 20.8 });
     page.runFrames();
     expect(page.cursor()!.style['transform']).toBe(
-      'translate3d(8.5px, 19px, 0)',
+      'translate3d(-3.5px, 7px, 0)',
     );
   });
 
@@ -818,5 +891,271 @@ describe('Hub pointer bridge page script', () => {
       'wheel',
       'wheel',
     ]);
+  });
+
+  describe('highlight plate', () => {
+    type Page = Awaited<ReturnType<typeof connected>>;
+
+    function control(
+      page: Page,
+      rect: { left: number; top: number; width: number; height: number },
+      radius = '22px',
+    ): FakeElement {
+      const button = page.document.element('button');
+      button.rect = rect;
+      button.computed = { ...button.computed, borderTopLeftRadius: radius };
+      return button;
+    }
+
+    function appRoot(page: Page, zoom: string, width: number): void {
+      const root = page.document.element('main');
+      root.style['zoom'] = zoom;
+      root.rect = { left: 0, top: 0, width, height: 600 };
+      page.document.ids.set('app-root', root);
+    }
+
+    /** Moves to the point over `hit` and lets the hover timer run. */
+    function hover(page: Page, hit: FakeElement, x: number, y: number): void {
+      page.document.hit = hit;
+      page.socket.receive({ t: 'move', x, y });
+      page.runFrames();
+      page.advance(70);
+    }
+
+    function look(element: FakeElement) {
+      return {
+        transform: element.style['transform'],
+        opacity: element.style['opacity'],
+      };
+    }
+
+    const tile = { left: 100, top: 200, width: 200, height: 100 };
+
+    it('hugs the hovered control and hides the dot, then lets go', async () => {
+      const page = await connected();
+      const button = control(page, tile);
+      const dot = page.cursor()!.children[0]!;
+      const plate = page.plate()!;
+      const fill = plate.children[0]!;
+      page.document.hit = page.document.element('div');
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      page.runFrames();
+      expect(plate.style['visibility']).toBe('visible');
+      expect(look(fill)).toEqual({ transform: 'scale(0.96)', opacity: '0' });
+
+      hover(page, button, 200, 250);
+      expect(plate.style).toMatchObject({
+        left: '94px',
+        top: '194px',
+        width: '212px',
+        height: '112px',
+      });
+      expect(fill.style['borderRadius']).toBe('28px');
+      expect(look(fill)).toEqual({ transform: 'scale(1)', opacity: '1' });
+      expect(look(dot)).toEqual({ transform: 'scale(0.4)', opacity: '0' });
+      // Centred pointer, centred plate.
+      expect(plate.style['transform']).toBe('translate3d(0px, 0px, 0)');
+      expect(fill.animations).toHaveLength(0);
+
+      hover(page, page.document.element('div'), 400, 250);
+      expect(look(fill)).toEqual({ transform: 'scale(0.96)', opacity: '0' });
+      expect(look(dot)).toEqual({ transform: 'scale(1)', opacity: '1' });
+
+      hover(page, button, 200, 250);
+      page.socket.receive({ t: 'leave' });
+      expect(plate.style['visibility']).toBe('hidden');
+      expect(look(fill)).toEqual({ transform: 'scale(0.96)', opacity: '0' });
+      expect(button.hasAttribute('data-pointer-hover')).toBe(false);
+    });
+
+    it('uses zoomed rects as they are when the root reports viewport px', async () => {
+      const page = await connected();
+      appRoot(page, '1.25', 1280);
+      const button = control(page, tile);
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      hover(page, button, 200, 250);
+      expect(page.plate()!.style).toMatchObject({
+        left: '94px',
+        top: '194px',
+        width: '212px',
+        height: '112px',
+      });
+      // The computed radius is in the control's own px.
+      expect(page.plate()!.children[0]!.style['borderRadius']).toBe('33.5px');
+    });
+
+    it('scales rects by the zoom when the root reports its own px', async () => {
+      const page = await connected();
+      appRoot(page, '1.25', 1024);
+      const button = control(page, tile);
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      hover(page, button, 250, 312);
+      expect(page.plate()!.style).toMatchObject({
+        left: '119px',
+        top: '244px',
+        width: '262px',
+        height: '137px',
+      });
+      expect(page.plate()!.children[0]!.style['borderRadius']).toBe('33.5px');
+    });
+
+    it('rounds the plate into a pill for a round button', async () => {
+      const page = await connected();
+      const play = control(
+        page,
+        { left: 900, top: 450, width: 62, height: 62 },
+        '50%',
+      );
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      hover(page, play, 931, 481);
+      expect(page.plate()!.style['width']).toBe('74px');
+      expect(page.plate()!.children[0]!.style['borderRadius']).toBe('37px');
+    });
+
+    it('shows no plate for disabled or oversized controls', async () => {
+      const page = await connected();
+      const plate = page.plate()!;
+      const fill = plate.children[0]!;
+      const dot = page.cursor()!.children[0]!;
+      const off = control(page, tile);
+      off.disabled = true;
+      const ariaOff = control(page, tile);
+      ariaOff.setAttribute('aria-disabled', 'true');
+      const big = control(page, { left: 0, top: 0, width: 700, height: 500 });
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      for (const [index, target] of [off, ariaOff, big].entries()) {
+        hover(page, target, 150 + index, 250);
+        expect(target.hasAttribute('data-pointer-hover')).toBe(true);
+        expect(look(fill)).toEqual({ transform: 'scale(0.96)', opacity: '0' });
+        expect(look(dot)).toEqual({ transform: 'scale(1)', opacity: '1' });
+      }
+      expect(plate.style['width']).toBe('0px');
+    });
+
+    it('moves only the dot and plate transforms per frame, leaning a few px toward the pointer', async () => {
+      const page = await connected();
+      const button = control(page, tile);
+      const layers = [
+        page.cursor()!,
+        page.cursor()!.children[0]!,
+        page.plate()!,
+        page.plate()!.children[0]!,
+      ];
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      hover(page, button, 200, 250);
+      const before = layers.map((layer) => ({ ...layer.style }));
+      const hits = page.hitTests();
+      page.socket.receive({ t: 'move', x: 240, y: 260 });
+      page.runFrames();
+      expect(page.plate()!.style['transform']).toBe('translate3d(2px, 1px, 0)');
+      page.socket.receive({ t: 'move', x: 299, y: 299 });
+      page.runFrames();
+      // Clamped to 3 px each way.
+      expect(page.plate()!.style['transform']).toBe('translate3d(3px, 3px, 0)');
+      const changed = layers.map((layer, index) =>
+        Object.keys(layer.style).filter(
+          (key) => layer.style[key] !== before[index]![key],
+        ),
+      );
+      expect(changed).toEqual([['transform'], [], ['transform'], []]);
+      expect(page.hitTests()).toBe(hits);
+    });
+
+    it('slides from the control it just left to the next one', async () => {
+      const page = await connected();
+      const first = control(page, tile);
+      const second = control(page, { ...tile, left: 310 });
+      const fill = page.plate()!.children[0]!;
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      hover(page, first, 200, 250);
+      hover(page, second, 410, 250);
+      expect(page.plate()!.style['left']).toBe('304px');
+      expect(fill.animations).toHaveLength(1);
+      expect(fill.animations[0]!.keyframes).toEqual([
+        { transform: 'translate(-210px, 0px) scale(1, 1)' },
+        { transform: 'scale(1)' },
+      ]);
+      // Long after fading out, the plate appears in place instead.
+      hover(page, page.document.element('div'), 600, 250);
+      page.advance(500);
+      hover(page, first, 200, 250);
+      expect(fill.animations).toHaveLength(1);
+    });
+
+    it('measures again after a click, Escape or wheel under a still cursor', async () => {
+      const page = await connected();
+      const button = control(page, tile);
+      const plate = page.plate()!;
+      const fill = plate.children[0]!;
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      hover(page, button, 200, 250);
+      const click = (down: boolean) =>
+        page.socket.receive({
+          t: 'button',
+          button: 'left',
+          down,
+          x: 200,
+          y: 250,
+        });
+      click(true);
+      click(false);
+      // The click moved the control; the plate follows without sliding.
+      button.rect = { ...tile, top: 150 };
+      const hits = page.hitTests();
+      page.advance(299);
+      expect(page.hitTests()).toBe(hits);
+      page.advance(1);
+      expect(page.hitTests()).toBe(hits + 1);
+      expect(plate.style['top']).toBe('144px');
+      expect(fill.animations).toHaveLength(0);
+      expect(look(fill)).toEqual({ transform: 'scale(1)', opacity: '1' });
+
+      // Escape closed what was under the cursor.
+      page.document.hit = page.document.element('div');
+      page.socket.receive({
+        t: 'button',
+        button: 'right',
+        down: true,
+        x: 200,
+        y: 250,
+      });
+      page.advance(300);
+      expect(button.hasAttribute('data-pointer-hover')).toBe(false);
+      expect(look(fill)).toEqual({ transform: 'scale(0.96)', opacity: '0' });
+
+      // Wheel scrolled a control in under the cursor.
+      page.document.hit = button;
+      page.socket.receive({ t: 'wheel', dx: 0, dy: 40, x: 200, y: 250 });
+      page.advance(300);
+      expect(look(fill)).toEqual({ transform: 'scale(1)', opacity: '1' });
+      page.advance(5000);
+      expect(page.pending().filter((timer) => timer.delay < 500)).toHaveLength(
+        0,
+      );
+    });
+
+    it('shrinks the dot or the plate while the button is held', async () => {
+      const page = await connected();
+      const button = control(page, tile);
+      const dot = page.cursor()!.children[0]!;
+      const fill = page.plate()!.children[0]!;
+      const press = (down: boolean, x: number) =>
+        page.socket.receive({ t: 'button', button: 'left', down, x, y: 250 });
+      page.document.hit = page.document.element('div');
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      press(true, 10);
+      expect(look(dot)).toEqual({ transform: 'scale(0.85)', opacity: '1' });
+      press(false, 10);
+      expect(look(dot)).toEqual({ transform: 'scale(1)', opacity: '1' });
+
+      page.document.hit = button;
+      press(true, 200);
+      expect(button.hasAttribute('data-pointer-pressed')).toBe(true);
+      expect(look(fill)).toEqual({ transform: 'scale(0.97)', opacity: '0.7' });
+      expect(look(dot)).toEqual({ transform: 'scale(0.4)', opacity: '0' });
+      press(false, 200);
+      expect(button.hasAttribute('data-pointer-pressed')).toBe(false);
+      expect(look(fill)).toEqual({ transform: 'scale(1)', opacity: '1' });
+    });
   });
 });
