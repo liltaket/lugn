@@ -4807,10 +4807,17 @@ body {
    stays under it (y 302–580). A camera borrows the top card: the print then
    shares the lower card with music, and a chip on the camera swaps them.
    Card rows: plate + name/title (14–118), percent · time · lamp (136–184),
-   progress (206–216), layer line (230–248). The model sits on a small
-   textured build plate so a black filament render still reads; the plate
-   warms up while the chamber light is on. */
+   progress (206–216), layer line (230–248). Flat like the music card: the
+   status color lives in the stage word and the bar, nowhere else. The model
+   sits on a pale plate so a black filament render still reads. */
 #app-root .print-activity {
+  --print-ink: #9fdca6;
+  --print-bar: #7cc98a;
+  --print-tint: rgba(124, 201, 138, 0.06);
+  --print-plate: #dfe7db;
+  --print-plate-lit: #efe6cc;
+  --print-lamp: #efd79b;
+  --print-lamp-ink: #33290f;
   position: absolute;
   left: var(--rx);
   top: 20px;
@@ -4821,23 +4828,8 @@ body {
   z-index: 3;
   color: var(--ink);
   background:
-    radial-gradient(
-      110% 80% at 0% 0%,
-      rgba(132, 201, 141, 0.18),
-      transparent 60%
-    ),
-    radial-gradient(
-      80% 60% at 100% 100%,
-      rgba(132, 201, 141, 0.07),
-      transparent 70%
-    ),
-    var(--panel);
-  box-shadow:
-    inset 0 0 0 1px rgba(150, 214, 158, 0.14),
-    0 10px 30px rgba(0, 0, 0, 0.18);
-  --print-ink: #9fdca6;
-  --print-glow: rgba(159, 220, 166, 0.45);
-  --print-fill: linear-gradient(90deg, #4fae66, #9fdca6);
+    linear-gradient(var(--print-tint), var(--print-tint)), var(--panel);
+  box-shadow: inset 0 0 0 1px var(--hair);
   animation: redesign-cam-in 0.5s cubic-bezier(0.2, 0.9, 0.25, 1);
 }
 #app-root .print-activity[hidden] {
@@ -4846,60 +4838,45 @@ body {
 #app-root[data-print-slot='lower'] .print-activity {
   top: 302px;
   height: 278px;
-  box-shadow: inset 0 0 0 1px rgba(150, 214, 158, 0.14);
 }
 #app-root .print-activity[data-status='paused'] {
   --print-ink: #e7bc78;
-  --print-glow: rgba(231, 188, 120, 0.45);
-  --print-fill: linear-gradient(90deg, #b8893f, #e7bc78);
+  --print-bar: #d9a95c;
+  --print-tint: rgba(231, 188, 120, 0.06);
 }
 #app-root .print-activity[data-status='failed'] {
   --print-ink: #ee9a86;
-  --print-glow: rgba(238, 154, 134, 0.45);
-  --print-fill: linear-gradient(90deg, #b9583f, #ee9a86);
+  --print-bar: #d8735c;
+  --print-tint: rgba(238, 154, 134, 0.06);
 }
 
-/* The build plate: pale, finely textured like a PEI sheet, with a soft
-   shadow under the model. */
 #app-root .print-plate {
   position: absolute;
   left: 14px;
   top: 14px;
   width: 104px;
   height: 104px;
-  border-radius: 24px;
+  border-radius: 22px;
   overflow: hidden;
   display: grid;
   place-items: center;
   color: rgba(24, 32, 31, 0.45);
-  background:
-    radial-gradient(circle, rgba(40, 52, 49, 0.09) 0.8px, transparent 1.2px) 0
-      0 / 6px 6px,
-    radial-gradient(50% 18% at 50% 82%, rgba(24, 32, 31, 0.2), transparent),
-    radial-gradient(90% 90% at 50% 30%, #f2f5ee, #cfdccb 72%, #b9cab5);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.45),
-    inset 0 -6px 12px rgba(24, 32, 31, 0.08);
-  transition:
-    box-shadow 0.4s ease,
-    filter 0.4s ease;
+  background: var(--print-plate);
+  transition: background-color 0.4s ease;
 }
+/* The chamber light only warms the plate the model stands on. */
 #app-root .print-activity[data-lamp='on'] .print-plate {
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 244, 214, 0.7),
-    inset 0 18px 26px rgba(255, 226, 160, 0.42),
-    0 0 22px rgba(241, 220, 166, 0.22);
+  background: var(--print-plate-lit);
 }
 #app-root[data-time='night'] .print-plate {
   filter: brightness(0.72);
 }
 #app-root .print-plate img {
   position: absolute;
-  inset: 6px;
-  width: calc(100% - 12px);
-  height: calc(100% - 12px);
+  inset: 8px;
+  width: calc(100% - 16px);
+  height: calc(100% - 16px);
   object-fit: contain;
-  filter: drop-shadow(0 4px 4px rgba(0, 0, 0, 0.22));
 }
 #app-root .print-activity[data-image='ready'] .print-fallback {
   display: none;
@@ -4912,44 +4889,20 @@ body {
   top: 22px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
 }
 #app-root .print-kicker {
   display: flex;
-  align-items: center;
-  gap: 7px;
+  align-items: baseline;
+  gap: 8px;
   min-width: 0;
   font-size: 13px;
   line-height: 18px;
-  color: var(--ink-2);
   white-space: nowrap;
 }
-#app-root .print-kicker::before {
-  content: '';
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--print-ink);
-  box-shadow: 0 0 0 4px rgba(159, 220, 166, 0.12);
-}
-#app-root .print-activity[data-status='printing'] .print-kicker::before {
-  animation: print-pulse 2.4s ease-in-out infinite;
-}
-@keyframes print-pulse {
-  50% {
-    opacity: 0.35;
-  }
-}
 #app-root #print-name {
-  font-weight: 700;
-  color: var(--ink);
-  letter-spacing: 0.01em;
-}
-#app-root #print-state::before {
-  content: '·';
-  margin-right: 7px;
-  color: var(--ink-3);
+  font-weight: 600;
+  color: var(--ink-2);
 }
 #app-root #print-state {
   overflow: hidden;
@@ -5020,7 +4973,7 @@ body {
   top: 206px;
   height: 10px;
   border-radius: 5px;
-  background: rgba(238, 241, 232, 0.08);
+  background: var(--glass-2);
 }
 #app-root .print-progress::before {
   content: '';
@@ -5029,8 +4982,7 @@ body {
   width: var(--print-progress, 0%);
   min-width: 10px;
   border-radius: inherit;
-  background: var(--print-fill);
-  box-shadow: 0 0 12px var(--print-glow);
+  background: var(--print-bar);
   transition: width 1.2s ease;
 }
 #app-root .print-detail {
@@ -5059,9 +5011,8 @@ body {
   top: 238px;
 }
 
-/* Chamber light: a round icon button at the end of the percent row. Lit, it
-   glows warm and the plate warms with it; a soft pulse says Home Assistant
-   has not confirmed the tap yet. */
+/* Chamber light: a round icon button at the end of the percent row; lit, it
+   fills warm. A slow fade says Home Assistant has not confirmed the tap. */
 #app-root .print-light {
   position: absolute;
   right: 16px;
@@ -5091,18 +5042,17 @@ body {
   height: 22px;
 }
 #app-root .print-light[aria-pressed='true'] {
-  color: #3a2f12;
-  background: radial-gradient(circle at 50% 40%, #fbecc3, #efd291);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
-    0 0 0 5px rgba(241, 220, 166, 0.12),
-    0 0 22px rgba(241, 220, 166, 0.4);
-}
-#app-root .print-light[aria-pressed='true'] svg path {
-  fill: rgba(58, 47, 18, 0.16);
+  color: var(--print-lamp-ink);
+  background: var(--print-lamp);
+  box-shadow: none;
 }
 #app-root .print-light[data-pending='true'] {
-  animation: print-pulse 1.2s ease-in-out infinite;
+  animation: print-pending 1.4s ease-in-out infinite;
+}
+@keyframes print-pending {
+  50% {
+    opacity: 0.55;
+  }
 }
 #app-root .print-activity[data-lamp='unknown'] .print-figures {
   right: 18px;

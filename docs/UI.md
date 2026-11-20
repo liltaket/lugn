@@ -127,8 +127,9 @@ parts read `Stand + Box + 5 till`, with the names shortened first so the count
 always shows. A round lamp button at the end of the percentage row switches
 the printer's chamber light; it appears only while Home Assistant reports the
 light on or off, shows the tapped state at once and pulses until Home
-Assistant confirms it. While the light is on, the button and the plate glow
-warm.
+Assistant confirms it. While the light is on, the button fills warm and the
+plate the model stands on turns warm too. The card is flat like the music
+card; the status color appears only in the stage word and the progress bar.
 A paused print turns amber and a failed one red. A camera has priority and
 borrows the top card; the print and the music then share the lower card. Music
 keeps it while it plays, unless the print is paused, finished or failed; a chip

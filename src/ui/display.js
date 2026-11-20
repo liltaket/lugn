@@ -3299,9 +3299,10 @@ function renderPrintTime() {
   let text = '';
   let eta = '';
   if (activity.status === 'finished') {
-    text = 'Klar';
+    // The stage word already says Klar; this says when, and what is next.
     if (Number.isFinite(activity.statusSince))
-      eta = `kl. ${timeFormat.format(new Date(activity.statusSince))}`;
+      text = `kl. ${timeFormat.format(new Date(activity.statusSince))}`;
+    eta = 'hämta den';
   } else if (activity.status === 'failed') {
     text = 'Kolla skrivaren';
   } else if (activity.status === 'paused') {

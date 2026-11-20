@@ -115,7 +115,7 @@ function snapshot(scenario) {
       });
     if (scenario === 'print-long')
       data.printer = printing({
-        task: 'Articulated Dragon Full Bo… + 6 till',
+        task: 'Articulated Dragon Full… + 6 till',
         light: true,
       });
     if (scenario === 'print-done')
