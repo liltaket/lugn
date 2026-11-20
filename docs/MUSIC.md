@@ -1,9 +1,12 @@
 # Music
 
-Lugn controls configured Home Assistant `media_player.*` entities through
-explicit semantic targets such as `music.room`. It does not currently use a
-direct WiiM network protocol. Available operations depend on the HA integration
-behind the mapped entity.
+Lugn controls music targets through explicit semantic IDs such as `music.room`.
+Each target may use either a direct LAN WiiM transport (`wiim.music`, using
+the WiiM HTTPS HTTP API with HTTP/1.1 keep-alive and UPnP GENA push events —
+see [Direct WiiM transport](WIIM-DIRECT.md)) or a Home Assistant
+`media_player.*` entity (`homeAssistant.music`, which remains available as a
+fallback). Available operations on Home Assistant targets depend on the HA
+integration behind the mapped entity.
 
 ## Dashboard controls
 
@@ -499,13 +502,16 @@ boundary across DST. Manual mode resets after 20 minutes of room absence.
 While Manual remains selected, automatic volume commands remain suppressed unless passive person reduction is enabled;
 that feature uses its own occupied/known-count/available guards.
 
-- Music control depends on Home Assistant exposing and supporting the needed
-  media-player service for the mapped device.
+- For Home Assistant targets, music control depends on Home Assistant exposing
+  and supporting the needed media-player service for the mapped device.
 - Preset request confirmation is unavailable from the current HA observations.
-- Lugn has no direct WiiM transport. Software fades use Home Assistant
-  feedback, but their timing has not been measured against the connected WiiM.
-  The computer agent switches the input to Optical over the WiiM HTTP API on its
-  own; Home Assistant and Lugn see that as an ordinary source change.
+- Direct WiiM targets (`wiim.music`) talk to the WiiM directly over LAN (HTTPS
+  HTTP/1.1 keep-alive + UPnP GENA push) for lower feedback latency, true
+  physical input-mode reporting and direct physical `readStatus()` verification;
+  write commands beyond `switchmode:optical` remain unit/mock-verified until
+  spot-checked on hardware (see [Direct WiiM transport](WIIM-DIRECT.md)). The
+  computer agent switches the input to Optical directly over a warmed WiiM HTTP
+  API connection on its own.
 - The Hub music-settings editor controls fixed per-player automatic bases, daily
   offsets, person offsets, caps and optional passive Manual reduction. The compact
   room dashboard still targets its configured player without a source selector.
