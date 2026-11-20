@@ -49,7 +49,16 @@ import {
 import { ComputerMqttAdapter } from '../adapters/computer-mqtt.js';
 import { ComputerDisplayMqttAdapter } from '../adapters/computer-display-mqtt.js';
 import { HomeAssistantPowerSensorAdapter } from '../adapters/home-assistant-power-sensor.js';
-import { DisplayPowerController } from '../application/display-power-controller.js';
+import {
+  DisplayPowerController,
+  type DisplayPowerPolicy,
+} from '../application/display-power-controller.js';
+import { DisplayPowerApi } from '../application/display-power-api.js';
+import {
+  DisplayPowerSettingsService,
+  settingsFromConfig,
+} from '../application/display-power-settings-service.js';
+import { DisplayPowerSettingsStore } from './display-power-settings-store.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
 import { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
 import {
@@ -488,9 +497,33 @@ export async function startRuntime(
     ),
     observationTrusted: (target) => isMusicObservationTrusted(target),
   });
-  const experience = new IntelligenceApi(
-    new RoutineApi(routines, routineStore),
-    computerIntelligence.service,
+  // Display power: the configured `display` entries say which computers have
+  // the feature and give the defaults; the control panel's saved values win.
+  const displayPowerStore = new DisplayPowerSettingsStore(
+    `${lightingIntentPath}.display-power.json`,
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  await displayPowerStore.load();
+  const displayConfigs = Object.fromEntries(
+    (config.mqtt?.computers ?? []).flatMap((computer) =>
+      computer.display ? [[computer.deviceId, computer.display]] : [],
+    ),
+  );
+  const displaySettings = new DisplayPowerSettingsService({
+    repository: displayPowerStore,
+    defaults: Object.fromEntries(
+      Object.entries(displayConfigs).map(([deviceId, display]) => [
+        deviceId,
+        settingsFromConfig(display),
+      ]),
+    ),
+  });
+  const experience = new DisplayPowerApi(
+    new IntelligenceApi(
+      new RoutineApi(routines, routineStore),
+      computerIntelligence.service,
+    ),
+    displaySettings,
   );
   let syncingHomeAssistantStates = false;
   let homeAssistantConnection: HomeAssistantConnection | undefined;
@@ -531,6 +564,9 @@ export async function startRuntime(
   });
   // Presence and computer changes re-evaluate display power; the controller's
   // own status updates re-enter harmlessly and publish only on change.
+  const unsubscribeDisplaySettings = displaySettings.subscribe(() => {
+    for (const controller of displayControllers.values()) controller.observe();
+  });
   const unsubscribeDisplayPower = engine.stream.subscribe((update) => {
     if (
       update.domains.some(
@@ -851,7 +887,30 @@ export async function startRuntime(
         new DisplayPowerController({
           deviceId,
           clock: systemClock,
-          policy: displayConfig,
+          policy: (): DisplayPowerPolicy => {
+            const saved = displaySettings.effective(deviceId);
+            return {
+              // Only the open-loop fallback uses this; not editable in the panel.
+              reassertOffMs: displayConfig.reassertOffMs,
+              offAfterEmptyMs:
+                saved?.offAfterEmptyMs ?? displayConfig.offAfterEmptyMs,
+              ensureOffWhenAway:
+                saved?.ensureOffWhenAway ?? displayConfig.ensureOffWhenAway,
+              wakeOnEntry: saved?.wakeOnEntry ?? displayConfig.wakeOnEntry,
+              wakeInQuietHours:
+                saved?.wakeInQuietHours ?? displayConfig.wakeInQuietHours,
+              inhibitOnActivity:
+                saved?.inhibitOnActivity ?? displayConfig.inhibitOnActivity,
+              activeInhibitMaxMs:
+                saved?.activeInhibitMaxMs ?? displayConfig.activeInhibitMaxMs,
+              idleSleepAfterMs: saved
+                ? saved.idleSleepAfterMs
+                : displayConfig.idleSleepAfterMs,
+              ignoreIdleBlockers:
+                saved?.ignoreIdleBlockers ?? displayConfig.ignoreIdleBlockers,
+            };
+          },
+          enabled: () => displaySettings.effective(deviceId)?.enabled ?? true,
           getState: () => engineRef.current?.state,
           transport: adapter,
           ...(sensor ? { evidence: () => sensor.getEvidence() } : {}),
@@ -1004,6 +1063,7 @@ export async function startRuntime(
   } catch (error) {
     unsubscribeComputerNowPlaying();
     unsubscribeDisplayPower();
+    unsubscribeDisplaySettings();
     routines.dispose();
     computerIntelligence.dispose();
     cameraMedia?.dispose();
@@ -1043,6 +1103,8 @@ export async function startRuntime(
     async stop() {
       unsubscribeComputerNowPlaying();
       unsubscribeDisplayPower();
+      unsubscribeDisplaySettings();
+      unsubscribeDisplaySettings();
       routines.dispose();
       computerIntelligence.dispose();
       cameraMedia?.dispose();

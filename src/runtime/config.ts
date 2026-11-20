@@ -83,6 +83,8 @@ const DisplayPowerConfigSchema = z
       .min(60_000)
       .max(86_400_000)
       .default(900_000),
+    /** While nobody is home, keep ensuring the display is off. */
+    ensureOffWhenAway: z.boolean().default(true),
     wakeOnEntry: z.boolean().default(true),
     wakeInQuietHours: z.boolean().default(false),
     inhibitOnActivity: z.boolean().default(true),

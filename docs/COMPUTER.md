@@ -263,6 +263,7 @@ doing.
         "deviceId": "kuffe",
         "display": {
           "offAfterEmptyMs": 120000,
+          "ensureOffWhenAway": true,
           "wakeOnEntry": true,
           "wakeInQuietHours": false,
           "inhibitOnActivity": true,
@@ -325,6 +326,17 @@ inhibitor.
   input remains the reliable wake.
 - **Waiting, not queueing.** A request is only sent while the computer observation
   and the display state are live, fresh and from the same session.
+
+### When nobody is home
+
+Home Assistant reporting `away` counts as an empty room, with one difference:
+with `ensureOffWhenAway` (default on) Lugn keeps making sure the display is off
+for as long as you are away. A display that lights up again (a bump, the monitor
+re-announcing itself) is put back to sleep after an hour, with no cap on how many
+times, and a request that changed nothing backs off to an hourly try instead of
+giving up. Recent input at the computer still holds it (someone is there), and
+returning home wakes it as for any return. Switch it off to treat `away` exactly
+like an empty room, with the limits above.
 
 ### Sleep after inactivity
 
@@ -391,10 +403,27 @@ Thresholds are placeholders: measure the monitor in use and in standby. The plug
 is also reported in the status alongside the agent's reading, where it is the only
 way to see a monitor that sleeps by itself while the GPU still sends a picture.
 
+### Settings in the control panel
+
+The Datorer page has a **Skärmstyrning** section: the live status per computer
+(display on or off as reported, when it will sleep for inactivity or why it will
+not, the last command) and a form for the settings. The `display` entry in the
+runtime configuration decides that the feature exists for a computer and gives
+the defaults; what is saved in the panel overrides them, is applied at once
+without a restart and survives restarts (`<state path>.display-power.json`).
+The form edits the master switch (off: nothing is sent), the wait for an empty
+room, keeping the display off while away, sleep after inactivity and its time, whether
+to wait while the computer is in use or plays video or a game and for how long,
+which blockers to ignore, and waking on return (also at night). "Återställ
+grundinställning" returns a computer to the configured values. Saves are
+checked against the settings generation, so a change made elsewhere meanwhile is
+reported as a conflict instead of being overwritten. Settings the panel does not
+show (`reassertOffMs`, `powerSensor`) stay in the configuration.
+
 ### State
 
 `state.computer.displays[deviceId]` (state, SSE and the `computer` stream patch)
-shows `control` (`available` only while a request could be sent), `desired`
+shows `enabled` (the master switch), `control` (`available` only while a request could be sent), `desired`
 (`off`/`on`/`null`), `inhibited` (`recent_input`, `recent_activity`,
 `video_or_game`), `observed` (`power`, `inputIdle`, `changedAt`), `lastRequest`
 (`applied`, `rejected`, `uncertain`, `failed`, with the agent's reason),

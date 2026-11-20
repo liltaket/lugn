@@ -36,6 +36,8 @@ export type DisplayPowerInhibitReason = z.infer<
  */
 export const DisplayPowerSnapshotSchema = z.object({
   deviceId: z.string(),
+  /** The control panel's master switch for this computer's display. */
+  enabled: z.boolean().optional(),
   control: z.enum(['available', 'unavailable']),
   desired: z.enum(['on', 'off']).nullable(),
   inhibited: DisplayPowerInhibitReasonSchema.nullable(),

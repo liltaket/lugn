@@ -285,6 +285,10 @@ export class LugnHttpServer {
         name: 'presence.js',
         contentType: 'text/javascript; charset=utf-8',
       },
+      '/ui/display-power.js': {
+        name: 'display-power.js',
+        contentType: 'text/javascript; charset=utf-8',
+      },
       '/ui/styles.css': {
         name: 'styles.css',
         contentType: 'text/css; charset=utf-8',

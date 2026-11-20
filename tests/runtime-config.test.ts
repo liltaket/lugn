@@ -212,6 +212,7 @@ describe('runtime configuration cross references', () => {
     ).toEqual({
       offAfterEmptyMs: 120_000,
       reassertOffMs: 900_000,
+      ensureOffWhenAway: true,
       wakeOnEntry: true,
       wakeInQuietHours: false,
       inhibitOnActivity: true,

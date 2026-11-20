@@ -52,6 +52,7 @@
     <link rel="stylesheet" href="/ui/styles.css" />
     <script type="module" src="/ui/app.js"></script>
     <script type="module" src="/ui/presence.js"></script>
+    <script type="module" src="/ui/display-power.js"></script>
   </head>
   <body>
     <!--
@@ -1252,6 +1253,137 @@
             </div>
           </div>
           <div class="computer-list" id="computer-list"></div>
+        </section>
+
+        <section
+          class="display-power-section"
+          data-pages="datorer"
+          id="display-power-section"
+          aria-labelledby="display-power-title"
+          hidden
+        >
+          <div class="section-heading">
+            <div>
+              <h2 id="display-power-title">Skärmstyrning</h2>
+              <p>
+                Lugn kan släcka och tända datorns skärm. Läget läses från
+                datorns bildsignal: det visar att signalen är släckt, inte att
+                själva panelen är mörk.
+              </p>
+            </div>
+          </div>
+          <div class="computer-list" id="display-power-status"></div>
+          <form id="display-power-form" class="editor-surface">
+            <fieldset id="display-power-fields">
+              <legend>Inställningar</legend>
+              <label id="display-device-field"
+                >Dator<select id="display-device"></select
+              ></label>
+              <label class="settings-toggle"
+                ><input id="display-enabled" type="checkbox" /> Automatisk
+                skärmstyrning</label
+              >
+              <p class="field-help">
+                Avstängd skickar Lugn inga skärmkommandon alls till datorn.
+              </p>
+              <h3>Släcka</h3>
+              <label class="settings-toggle"
+                ><input id="display-away" type="checkbox" /> Håll skärmen släckt
+                när ingen är hemma</label
+              >
+              <p class="field-help">
+                Lugn kontrollerar då skärmen om och om igen, men sällan, så den
+                inte tänds i onödan medan du är borta.
+              </p>
+              <div class="form-grid">
+                <label
+                  >Släck när rummet varit tomt (minuter)<input
+                    id="display-off-after"
+                    type="number"
+                    min="1"
+                    max="1440"
+                    step="any"
+                    required
+                /></label>
+              </div>
+              <label class="settings-toggle"
+                ><input id="display-idle-enabled" type="checkbox" /> Släck även
+                när datorn inte använts</label
+              >
+              <div class="form-grid">
+                <label
+                  >Utan tangentbord eller mus i (minuter)<input
+                    id="display-idle-minutes"
+                    type="number"
+                    min="5"
+                    max="1440"
+                    step="any"
+                    required
+                /></label>
+              </div>
+              <p class="field-help">
+                Gäller oavsett om någon är i rummet. Musik hindrar aldrig. Film,
+                spel eller något okänt som håller datorn vaken gör det.
+              </p>
+              <label class="settings-toggle"
+                ><input id="display-inhibit" type="checkbox" /> Vänta medan
+                datorn används eller spelar film eller spel</label
+              >
+              <div class="form-grid">
+                <label
+                  >Vänta högst (minuter, film och spel)<input
+                    id="display-inhibit-max"
+                    type="number"
+                    min="0"
+                    max="1440"
+                    step="any"
+                    required
+                /></label>
+              </div>
+              <label
+                >Appar som aldrig håller skärmen tänd (separerade med
+                komma)<input
+                  id="display-ignore"
+                  autocomplete="off"
+                  placeholder="T3 Code"
+              /></label>
+              <p class="field-help">
+                Namnen som datorn rapporterar för det som håller den vaken, till
+                exempel ett verktyg som kör i bakgrunden.
+              </p>
+              <h3>Tända</h3>
+              <label class="settings-toggle"
+                ><input id="display-wake" type="checkbox" /> Tänd skärmen när
+                jag kommer tillbaka (efter att Lugn släckt den)</label
+              >
+              <label class="settings-toggle"
+                ><input id="display-wake-quiet" type="checkbox" /> Tänd även
+                mellan 23 och 06</label
+              >
+              <div class="editor-actions">
+                <button
+                  id="display-save"
+                  class="button button-primary"
+                  type="submit"
+                >
+                  Spara</button
+                ><button
+                  id="display-discard"
+                  class="button button-quiet"
+                  type="button"
+                >
+                  Ångra ändringar</button
+                ><button
+                  id="display-reset"
+                  class="button button-quiet"
+                  type="button"
+                >
+                  Återställ grundinställning
+                </button>
+              </div>
+            </fieldset>
+            <p id="display-power-message" role="status" aria-live="polite"></p>
+          </form>
         </section>
 
         <section

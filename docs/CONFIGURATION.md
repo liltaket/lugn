@@ -19,7 +19,8 @@ Current configuration covers:
 - Home Assistant temperature, humidity, CO₂ and PM2.5 mappings;
 - MQTT connection, topic and freshness window for STL27L events;
 - optional computer observations through `mqtt.computers`, including opt-in
-  presence-driven display sleep/wake per computer (see [Computer integration](COMPUTER.md));
+  presence-driven display sleep/wake per computer, with defaults here and live
+  settings in the control panel (see [Computer integration](COMPUTER.md));
 - prelight targets and duration;
 - scenes and optional Bed/Desk Hub roles, Cast receiver addresses and tokens.
 

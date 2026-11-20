@@ -139,10 +139,16 @@ function harness(
         },
       },
     }) as unknown as RoomState;
+  let currentPolicy: DisplayPowerPolicy = {
+    ...defaultDisplayPowerPolicy,
+    ...policy,
+  };
+  let enabledFlag = true;
   const controller = new DisplayPowerController({
     deviceId: 'kuffe',
     clock,
-    policy: { ...defaultDisplayPowerPolicy, ...policy },
+    policy: () => currentPolicy,
+    enabled: () => enabledFlag,
     getState: state,
     transport: transport as unknown as ComputerDisplayTransport,
     evidence: () =>
@@ -185,6 +191,14 @@ function harness(
       controller.observe();
     },
     setQuiet: (value: boolean) => (quiet = value),
+    setPolicy: (patch: Partial<DisplayPowerPolicy>) => {
+      currentPolicy = { ...currentPolicy, ...patch };
+      controller.observe();
+    },
+    setEnabled: (value: boolean) => {
+      enabledFlag = value;
+      controller.observe();
+    },
   };
 }
 
@@ -680,6 +694,101 @@ describe('DisplayPowerController', () => {
       h.setQuiet(true);
       await h.set({ presence: 'occupied' });
       expect(h.transport.sent).toEqual(['off']);
+    });
+  });
+
+  describe('settings from the control panel', () => {
+    beforeEach(() => {
+      h.transport.power = 'on';
+      h.transport.inputIdle = true;
+    });
+
+    it('does nothing while switched off, and reports it, then resumes when switched on', async () => {
+      h.setEnabled(false);
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(10 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      expect(h.published.at(-1)).toMatchObject({ enabled: false });
+      h.setEnabled(true);
+      await flush();
+      expect(h.transport.sent).toEqual(['off']);
+      expect(h.published.at(-1)).toMatchObject({ enabled: true });
+    });
+
+    it('applies a changed wait at once, without a restart', async () => {
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(MINUTE);
+      h.setPolicy({ offAfterEmptyMs: 5 * MINUTE });
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+  });
+
+  describe('when nobody is home', () => {
+    beforeEach(() => {
+      h.transport.power = 'on';
+      h.transport.inputIdle = true;
+    });
+    /** The display lights up again by itself after each applied sleep. */
+    const bumpsFor = async (cycles: number) => {
+      for (let i = 0; i < cycles; i++) {
+        h.transport.power = 'on';
+        h.controller.observe();
+        for (let m = 0; m < 61; m++) await h.advance(MINUTE);
+      }
+    };
+
+    it('keeps ensuring the display is off, with hourly rechecks and no cap', async () => {
+      await h.set({ home: 'away' });
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      await bumpsFor(7);
+      expect(h.transport.sent.filter((a) => a === 'off')).toHaveLength(8);
+      expect(h.published.at(-1)?.problem ?? null).toBeNull();
+    });
+
+    it('does not hammer it: one recheck per hour, however often it lights up', async () => {
+      await h.set({ home: 'away' });
+      await h.advance(2 * MINUTE);
+      h.transport.power = 'on';
+      h.controller.observe();
+      await h.advance(59 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('keeps retrying a request that changed nothing, slowly, instead of giving up', async () => {
+      h.transport.outcome = 'uncertain';
+      h.transport.reason = 'not_observed';
+      await h.set({ home: 'away' });
+      for (let i = 0; i < 120; i++) await h.advance(MINUTE);
+      expect(h.transport.sent.length).toBeGreaterThan(3);
+      expect(h.transport.sent.length).toBeLessThan(10);
+    });
+
+    it('behaves like an empty room when switched off in the settings', async () => {
+      h.setPolicy({ ensureOffWhenAway: false });
+      await h.set({ home: 'away' });
+      await h.advance(2 * MINUTE);
+      await bumpsFor(7);
+      expect(h.transport.sent.filter((a) => a === 'off')).toHaveLength(4);
+      expect(h.published.at(-1)).toMatchObject({ problem: 'keeps_waking' });
+    });
+
+    it('still waits while someone is typing at the computer', async () => {
+      h.transport.inputIdle = false;
+      await h.set({ home: 'away' });
+      await h.advance(3 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      expect(h.published.at(-1)).toMatchObject({ inhibited: 'recent_input' });
+    });
+
+    it('wakes on return, once, as for an empty room', async () => {
+      await h.set({ home: 'away' });
+      await h.advance(2 * MINUTE);
+      await h.set({ home: 'home', presence: 'occupied' });
+      expect(h.transport.sent).toEqual(['off', 'on']);
     });
   });
 
