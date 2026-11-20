@@ -128,7 +128,15 @@ The current idea of approximately +/-2 volume tolerance is provisional.
 
 ### Optical automation
 
-Explore exactly when PC activity should request Optical and when continuity/manual ownership should block it.
+Decided: the computer's Linux agent switches the WiiM to Optical itself, directly
+over the WiiM HTTP API, when it hears sustained audible sound on the sink wired to
+the WiiM and the WiiM is not playing its own music (paused, stopped or idle). It
+is on by default and finds the WiiM on its own. A short sound such as a
+notification never switches, an input the user chose on purpose is not fought
+(one decision per run of sound), and the thresholds are tunable per computer in
+the control panel. The slower, suggestion-first Optical flow in Lugn's
+computer intelligence remains and is unchanged. Open: a WiiM that stays on
+Optical after the computer goes quiet is not switched back.
 
 ### Presence trajectory
 

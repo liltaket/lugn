@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lugn optical switch state v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "device_id",
+    "sequence",
+    "timestamp_ms",
+    "heartbeat_interval_ms",
+    "phase",
+    "capture",
+    "host",
+    "host_source",
+    "wiim",
+    "discovered",
+    "last_switch",
+    "settings_source",
+    "settings_generation"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "device_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+      "maxLength": 64
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "heartbeat_interval_ms": {
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 300000
+    },
+    "phase": {
+      "enum": ["disabled", "searching", "idle", "sound"]
+    },
+    "capture": {
+      "enum": ["off", "ok", "unavailable"]
+    },
+    "host": {
+      "type": ["string", "null"],
+      "maxLength": 260
+    },
+    "host_source": {
+      "enum": ["config", "lugn", "discovered", null]
+    },
+    "wiim": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reachable", "optical", "playing"],
+          "properties": {
+            "reachable": {
+              "type": "boolean"
+            },
+            "optical": {
+              "type": ["boolean", "null"]
+            },
+            "playing": {
+              "type": ["boolean", "null"]
+            }
+          }
+        }
+      ]
+    },
+    "discovered": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "maxLength": 64
+      }
+    },
+    "last_switch": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome", "timestamp_ms", "latency_ms"],
+          "properties": {
+            "outcome": {
+              "enum": ["switched", "failed"]
+            },
+            "timestamp_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "latency_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      ]
+    },
+    "settings_source": {
+      "enum": ["config", "lugn"]
+    },
+    "settings_generation": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-fA-F-]{1,36}$"
+    }
+  }
+}

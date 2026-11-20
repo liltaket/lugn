@@ -71,6 +71,13 @@ Saving requires the same web session, same-origin request and CSRF token as othe
 edits, is checked against the settings generation so stale edits are rejected,
 and applies at once. See [Computer integration](COMPUTER.md#settings-in-the-control-panel).
 
+The Datorer page also has a **Datorljud till WiiM** section for the agent's fast
+WiiM Optical switching: the live status per computer and a settings form (master
+switch, how long sound must last, silence that ends it, sensitivity, WiiM
+address, sound output). Saves use the same session, same-origin and CSRF checks
+and generation conflict detection. See
+[Computer integration](COMPUTER.md#fast-wiim-optical-switching).
+
 ## Current Hub dashboard
 
 Lugn serves its own room dashboard for Nest Hubs. It is a custom Lugn page, not

@@ -61,6 +61,13 @@ import {
   settingsFromConfig,
 } from '../application/display-power-settings-service.js';
 import { DisplayPowerSettingsStore } from './display-power-settings-store.js';
+import {
+  OpticalSwitchApi,
+  type OpticalAgentSource,
+} from '../application/optical-switch-api.js';
+import { OpticalSwitchSettingsService } from '../application/optical-switch-settings-service.js';
+import { ComputerOpticalMqttAdapter } from '../adapters/computer-optical-mqtt.js';
+import { OpticalSwitchSettingsStore } from './optical-switch-settings-store.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
 import { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
 import {
@@ -269,6 +276,7 @@ export async function startRuntime(
   const playbackAdapters = new Map<string, ComputerPlaybackMqttAdapter>();
   const displayAdapters = new Map<string, ComputerDisplayMqttAdapter>();
   const displayControllers = new Map<string, DisplayPowerController>();
+  const opticalAdapters = new Map<string, ComputerOpticalMqttAdapter>();
   const powerSensors = new Map<string, HomeAssistantPowerSensorAdapter>();
   const controlRoutes = Object.fromEntries(
     Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
@@ -523,12 +531,33 @@ export async function startRuntime(
       ]),
     ),
   });
-  const experience = new DisplayPowerApi(
-    new IntelligenceApi(
-      new RoutineApi(routines, routineStore),
-      computerIntelligence.service,
+  // Fast WiiM Optical switching: every configured computer gets it, on by
+  // default. Lugn only holds and publishes the settings; the agent switches.
+  const opticalSwitchStore = new OpticalSwitchSettingsStore(
+    `${lightingIntentPath}.optical-switch.json`,
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  await opticalSwitchStore.load();
+  const opticalSwitchSettings = new OpticalSwitchSettingsService({
+    repository: opticalSwitchStore,
+    defaults: Object.fromEntries(
+      (config.mqtt?.computers ?? []).map((computer) => [
+        computer.deviceId,
+        computer.opticalSwitch,
+      ]),
     ),
-    displaySettings,
+  });
+  const opticalAgents = new Map<string, OpticalAgentSource>();
+  const experience = new OpticalSwitchApi(
+    new DisplayPowerApi(
+      new IntelligenceApi(
+        new RoutineApi(routines, routineStore),
+        computerIntelligence.service,
+      ),
+      displaySettings,
+    ),
+    opticalSwitchSettings,
+    opticalAgents,
   );
   let syncingHomeAssistantStates = false;
   let homeAssistantConnection: HomeAssistantConnection | undefined;
@@ -569,6 +598,11 @@ export async function startRuntime(
   });
   // Presence and computer changes re-evaluate display power; the controller's
   // own status updates re-enter harmlessly and publish only on change.
+  const unsubscribeOpticalSettings = opticalSwitchSettings.subscribe(() => {
+    // A saved change reaches the agent at once, retained for its next connection.
+    for (const adapter of opticalAdapters.values())
+      void adapter.publishSettings();
+  });
   const unsubscribeDisplaySettings = displaySettings.subscribe(() => {
     for (const controller of displayControllers.values()) controller.observe();
   });
@@ -929,7 +963,36 @@ export async function startRuntime(
         }),
       );
     }
+    const opticalPublish = mqttSubscriber.publish;
+    if (opticalPublish)
+      for (const computer of config.mqtt.computers ?? []) {
+        const deviceId = computer.deviceId;
+        const adapter = new ComputerOpticalMqttAdapter({
+          deviceId,
+          baseTopic: computer.baseTopic,
+          maxAgeMs: Math.min(300_000, computer.maxAgeMs),
+          clock: systemClock,
+          mqtt: {
+            subscribe: mqttSubscriber.subscribe.bind(mqttSubscriber),
+            publish: opticalPublish.bind(mqttSubscriber),
+          },
+          settings: () => {
+            const settings = opticalSwitchSettings.effective(deviceId);
+            return settings
+              ? { settings, generation: opticalSwitchSettings.generation() }
+              : undefined;
+          },
+          onWarning: (message) => console.warn(`[lugn] ${message}`),
+        });
+        opticalAdapters.set(deviceId, adapter);
+        opticalAgents.set(deviceId, {
+          status: () => adapter.status(),
+          subscribe: (listener) => adapter.subscribe(listener),
+        });
+      }
     unsubscribeMqttStatus = mqttSubscriber.onStatus((status) => {
+      for (const adapter of opticalAdapters.values())
+        adapter.setBrokerConnected(status === 'connected');
       for (const adapter of displayAdapters.values())
         adapter.setBrokerConnected(status === 'connected');
       for (const adapter of playbackAdapters.values())
@@ -1055,6 +1118,7 @@ export async function startRuntime(
     for (const adapter of computerAdapters) adapter.start();
     for (const adapter of playbackAdapters.values()) adapter.start();
     for (const adapter of displayAdapters.values()) adapter.start();
+    for (const adapter of opticalAdapters.values()) adapter.start();
     await seedHomeAssistantObservations(
       config.homeAssistant.baseUrl,
       config.homeAssistant.token,
@@ -1083,6 +1147,7 @@ export async function startRuntime(
     unsubscribeComputerNowPlaying();
     unsubscribeDisplayPower();
     unsubscribeDisplaySettings();
+    unsubscribeOpticalSettings();
     routines.dispose();
     computerIntelligence.dispose();
     cameraMedia?.dispose();
@@ -1097,6 +1162,7 @@ export async function startRuntime(
     presenceFeedback.dispose();
     for (const adapter of playbackAdapters.values()) adapter.stop();
     for (const adapter of displayAdapters.values()) adapter.stop();
+    for (const adapter of opticalAdapters.values()) adapter.stop();
     for (const controller of displayControllers.values()) controller.dispose();
     for (const sensor of powerSensors.values()) sensor.dispose();
     for (const adapter of computerAdapters) adapter.stop();
@@ -1123,7 +1189,7 @@ export async function startRuntime(
       unsubscribeComputerNowPlaying();
       unsubscribeDisplayPower();
       unsubscribeDisplaySettings();
-      unsubscribeDisplaySettings();
+      unsubscribeOpticalSettings();
       routines.dispose();
       computerIntelligence.dispose();
       cameraMedia?.dispose();
@@ -1138,6 +1204,7 @@ export async function startRuntime(
       presenceFeedback.dispose();
       for (const adapter of playbackAdapters.values()) adapter.stop();
       for (const adapter of displayAdapters.values()) adapter.stop();
+      for (const adapter of opticalAdapters.values()) adapter.stop();
       for (const controller of displayControllers.values())
         controller.dispose();
       for (const sensor of powerSensors.values()) sensor.dispose();

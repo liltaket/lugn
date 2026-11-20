@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lugn optical switch settings v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "device_id",
+    "generation",
+    "enabled",
+    "wiim_host",
+    "audio_sink",
+    "min_audible_ms",
+    "release_ms",
+    "level_db"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "device_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+      "maxLength": 64
+    },
+    "generation": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{1,36}$",
+      "maxLength": 36
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "wiim_host": {
+      "type": ["string", "null"],
+      "maxLength": 260,
+      "description": "Private IPv4 address or .local name, optionally with :port. null: use the agent's own setting, then discovery."
+    },
+    "audio_sink": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+    },
+    "min_audible_ms": {
+      "type": "integer",
+      "minimum": 200,
+      "maximum": 5000
+    },
+    "release_ms": {
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 10000
+    },
+    "level_db": {
+      "type": "integer",
+      "minimum": -80,
+      "maximum": -20
+    }
+  }
+}

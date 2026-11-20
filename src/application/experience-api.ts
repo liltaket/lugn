@@ -9,6 +9,7 @@ export const experienceRoutes = [
   'intelligence/settings',
   'intelligence/suggestion',
   'display/settings',
+  'optical/settings',
 ] as const;
 export type ExperienceRoute = (typeof experienceRoutes)[number];
 
@@ -18,6 +19,7 @@ export interface ExperienceApi {
     routines?: unknown;
     intelligence?: unknown;
     displayPower?: unknown;
+    opticalSwitch?: unknown;
   };
   request(
     route: ExperienceRoute,

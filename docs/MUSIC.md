@@ -502,8 +502,10 @@ that feature uses its own occupied/known-count/available guards.
 - Music control depends on Home Assistant exposing and supporting the needed
   media-player service for the mapped device.
 - Preset request confirmation is unavailable from the current HA observations.
-- Direct WiiM transport is not implemented. Software fades use Home Assistant
+- Lugn has no direct WiiM transport. Software fades use Home Assistant
   feedback, but their timing has not been measured against the connected WiiM.
+  The computer agent switches the input to Optical over the WiiM HTTP API on its
+  own; Home Assistant and Lugn see that as an ordinary source change.
 - The Hub music-settings editor controls fixed per-player automatic bases, daily
   offsets, person offsets, caps and optional passive Manual reduction. The compact
   room dashboard still targets its configured player without a source selector.

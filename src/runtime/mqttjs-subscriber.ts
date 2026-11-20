@@ -185,7 +185,7 @@ export class MqttJsSubscriber implements PresenceMqttSubscriber {
   publish(
     topic: string,
     payload: string,
-    options: { qos: 1; retain: false },
+    options: { qos: 1; retain: boolean },
     signal?: AbortSignal,
   ): Promise<void> {
     const client = this.client;

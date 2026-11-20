@@ -80,13 +80,17 @@ def check_schema(value, schema, path="payload"):
         require(value >= schema["minimum"], f"{path}: below minimum")
     if "maximum" in schema:
         require(value <= schema["maximum"], f"{path}: above maximum")
-    for keyword in ("maxLength", "maxItems"):
-        if keyword in schema:
-            require(len(value) <= schema[keyword], f"{path}: exceeds {keyword}")
-    if "minLength" in schema:
-        require(len(value) >= schema["minLength"], f"{path}: shorter than minLength")
-    if "pattern" in schema:
-        require(re.search(schema["pattern"], value), f"{path}: pattern mismatch")
+    # As in JSON Schema, size and pattern keywords only constrain their own
+    # type, so a ["string", "null"] field may be null.
+    if isinstance(value, str):
+        if "maxLength" in schema:
+            require(len(value) <= schema["maxLength"], f"{path}: exceeds maxLength")
+        if "minLength" in schema:
+            require(len(value) >= schema["minLength"], f"{path}: shorter than minLength")
+        if "pattern" in schema:
+            require(re.search(schema["pattern"], value), f"{path}: pattern mismatch")
+    if isinstance(value, list) and "maxItems" in schema:
+        require(len(value) <= schema["maxItems"], f"{path}: exceeds maxItems")
     if "format" in schema:
         require(schema["format"] == "uuid", f"{path}: unsupported format")
         try:
@@ -110,7 +114,7 @@ class Contract:
     def __init__(self):
         protocol = AGENT_DIR / "protocol"
         self.schemas = {leaf: json.loads((protocol / f"{leaf}.schema.json").read_text())
-                        for leaf in ("state", "availability", "events")}
+                        for leaf in ("state", "availability", "events", "optical-state")}
         self.count = 0
         for fixture in protocol.glob("*.example.json"):
             if fixture.name.startswith("control-"):
@@ -131,7 +135,7 @@ class Contract:
 
     def check(self, message):
         require(message.topic.startswith(TOPIC + "/"), "unexpected topic")
-        leaf = message.topic.rsplit("/", 1)[1]
+        leaf = message.leaf
         require(leaf in self.schemas, f"unexpected topic leaf {leaf}")
         check_schema(message.data, self.schemas[leaf])
         require(message.data["device_id"] == DEVICE, "wrong device identity")
@@ -157,7 +161,9 @@ class Message:
 
     @property
     def leaf(self):
-        return self.topic.rsplit("/", 1)[1]
+        # Nested topics keep their group: <device>/optical/state -> "optical-state",
+        # so they are never mistaken for the computer's own "state".
+        return self.topic.removeprefix(TOPIC + "/").replace("/", "-")
 
 
 class Subscriber:

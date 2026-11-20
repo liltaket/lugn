@@ -53,6 +53,7 @@
     <script type="module" src="/ui/app.js"></script>
     <script type="module" src="/ui/presence.js"></script>
     <script type="module" src="/ui/display-power.js"></script>
+    <script type="module" src="/ui/optical-switch.js"></script>
   </head>
   <body>
     <!--
@@ -1383,6 +1384,134 @@
               </div>
             </fieldset>
             <p id="display-power-message" role="status" aria-live="polite"></p>
+          </form>
+        </section>
+
+        <section
+          class="display-power-section"
+          data-pages="datorer"
+          id="optical-section"
+          aria-labelledby="optical-title"
+          hidden
+        >
+          <div class="section-heading">
+            <div>
+              <h2 id="optical-title">Datorljud till WiiM</h2>
+              <p>
+                Så fort datorn spelar riktigt ljud och WiiM:en inte spelar egen
+                musik byter datorns agent den till optisk ingång, direkt mot
+                WiiM:en. Kortare ljud än tidsgränsen nedan, som ett notisljud,
+                räknas inte.
+              </p>
+            </div>
+          </div>
+          <div class="computer-list" id="optical-status"></div>
+          <form id="optical-form" class="editor-surface">
+            <fieldset id="optical-fields">
+              <legend>Inställningar</legend>
+              <label id="optical-device-field"
+                >Dator<select id="optical-device"></select
+              ></label>
+              <label class="settings-toggle"
+                ><input id="optical-enabled" type="checkbox" /> Byt automatiskt
+                till optisk ingång när datorn spelar ljud</label
+              >
+              <p class="field-help">
+                Avstängd lämnar agenten WiiM:en helt ifred.
+              </p>
+              <h3>Hur snabbt</h3>
+              <div class="form-grid">
+                <label
+                  >Ljudet måste hålla i (millisekunder)<input
+                    id="optical-min"
+                    type="number"
+                    min="200"
+                    max="5000"
+                    step="10"
+                    required
+                /></label>
+              </div>
+              <p class="field-help">
+                Kortare ger snabbare byte men fler felbyten på korta ljud. Under
+                200 går inte, över 1000 märks tydligt.
+              </p>
+              <div class="form-grid">
+                <label
+                  >Tystnad som avslutar ett ljud (millisekunder)<input
+                    id="optical-release"
+                    type="number"
+                    min="500"
+                    max="10000"
+                    step="100"
+                    required
+                /></label>
+              </div>
+              <p class="field-help">
+                Efter ett byte, eller ett beslut att inte byta, väntar agenten
+                på så här lång tystnad innan den agerar igen. Det hindrar den
+                från att slåss mot ett val du själv gjort.
+              </p>
+              <div class="form-grid">
+                <label
+                  >Känslighet (dB, -80 till -20)<input
+                    id="optical-level"
+                    type="number"
+                    min="-80"
+                    max="-20"
+                    step="1"
+                    required
+                /></label>
+              </div>
+              <p class="field-help">
+                Lägre tal hör svagare ljud (till exempel -65). Standard är -55.
+              </p>
+              <h3>Utrustning</h3>
+              <label
+                >WiiM-adress<input
+                  id="optical-host"
+                  autocomplete="off"
+                  placeholder="Hittas automatiskt"
+              /></label>
+              <p class="field-help">
+                Lämna tom så letar agenten själv. Hittar den flera, eller ingen,
+                skriver du IP-adressen på det lokala nätverket eller ett namn
+                som slutar på .local.
+              </p>
+              <label
+                >Ljudutgång på datorn<input
+                  id="optical-sink"
+                  autocomplete="off"
+                  placeholder="Standardutgången"
+              /></label>
+              <p class="field-help">
+                Namnet på ljudutgången som sitter på WiiM:en (kommandot
+                <code>pactl list short sinks</code>). Då räknas inte ljud på
+                andra utgångar, som skärmens högtalare. Tom följer datorns
+                standardutgång.
+              </p>
+              <div class="editor-actions">
+                <button
+                  id="optical-save"
+                  class="button button-primary"
+                  type="submit"
+                >
+                  Spara</button
+                ><button
+                  id="optical-discard"
+                  class="button button-quiet"
+                  type="button"
+                >
+                  Ångra ändringar</button
+                ><button
+                  id="optical-reset"
+                  class="button button-quiet"
+                  type="button"
+                >
+                  Återställ grundinställning
+                </button>
+              </div>
+            </fieldset>
+            <p id="optical-message" role="status" aria-live="polite"></p>
           </form>
         </section>
 
