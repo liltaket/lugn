@@ -18,13 +18,16 @@ jobs:
         with:
           node-version: 22
       - run: sudo apt-get update && sudo apt-get install -y cmake mosquitto dbus-daemon shellcheck
+      # Ubuntu's AppArmor profile for /usr/sbin/mosquitto cannot read the
+      # per-test config in a temp directory, so tests run an unconfined copy.
+      - run: cp /usr/sbin/mosquitto "$RUNNER_TEMP/mosquitto"
       - run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked && cargo build --locked
         working-directory: agents/linux
       - run: bash tests/install.sh && shellcheck scripts/install.sh tests/install.sh && node tests/kwin.mjs
         working-directory: agents/linux
-      - run: LUGN_TEST_DBUS=1 dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" cargo test --locked dbus_lifecycle -- --ignored --test-threads=1'
+      - run: LUGN_TEST_BROKER="$RUNNER_TEMP/mosquitto" LUGN_TEST_DBUS=1 dbus-run-session -- sh -c 'DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" cargo test --locked dbus_lifecycle -- --ignored --test-threads=1'
         working-directory: agents/linux
       - run: cargo test --locked mqtt_control_wire -- --ignored
         working-directory: agents/linux
-      - run: python3 tests/mqtt_integration.py --broker /usr/sbin/mosquitto --agent target/debug/lugn-linux-agent --password-tool /usr/bin/mosquitto_passwd
+      - run: python3 tests/mqtt_integration.py --broker "$RUNNER_TEMP/mosquitto" --agent target/debug/lugn-linux-agent --password-tool /usr/bin/mosquitto_passwd
         working-directory: agents/linux
