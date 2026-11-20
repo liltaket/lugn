@@ -677,6 +677,15 @@ export function createWiimUpnpSubscriber(): WiimUpnpSubscriber {
               ? 'rendering_control'
               : null;
         if (!service) return;
+        // Anyone on the LAN can reach this listener; only the WiiM knows the
+        // subscription id it was given, so other senders are ignored.
+        const sid = req.headers['sid'];
+        const expected = sids.get(
+          service === 'avtransport'
+            ? '/upnp/event/rendertransport1'
+            : '/upnp/event/rendercontrol1',
+        );
+        if (expected === undefined || sid !== expected) return;
         const parsed = parseWiimUpnpLastChange(
           service,
           Buffer.concat(chunks, total).toString('utf8'),
