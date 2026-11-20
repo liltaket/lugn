@@ -95,12 +95,31 @@ The rest of the one-screen view shows:
 - local time and date;
 - temperature, humidity, CO₂ and PM2.5, with missing or stale values marked;
 - music playback/title and volume, with Spotify DJ and Optical preset buttons,
-  play/pause, and volume `−` / `+` controls in 5-point steps.
+  play/pause and the Automatisk/Manuell volume selector.
 
-There are no individual light sliders or source selector on this Hub view.
+The layout (2026-11) is drawn 600 px tall and scaled to the Hub's viewport; the
+canvas takes the viewport's full width. The room is on the left: date over the
+clock, the air values on one line, the person count in a capsule (tapping it
+sets the count to 1), the five room scenes in two rows, and one bottom row with
+Släck allt and the cameras (Entré, Framsida) as direct choices. Custom
+`scene.custom_*` presets (the Govee scenes) stay in the control panel and are
+not shown on the Hub, and the Hub has no scene paging, Villkor, Rutiner or
+Musik buttons. Music is the right column: the artwork at the top in its own
+proportions over a blurred copy of itself, the source switch, the title, and
+one capsule holding the volume selector and play/pause. The ring around
+play/pause shows the playback position (Home Assistant `media_position` and
+`media_duration`, or the computer agent's MPRIS `Position` and `mpris:length`),
+and a thin bar under the capsule shows the reported volume. The Hub has no
+volume `−` / `+` buttons. When nothing plays and no camera shows, the music
+column narrows and the room controls widen; it shows a resting record and the
+two sources as play buttons. An open camera takes the top of the music column
+and music becomes a compact card under it.
+
+There are no individual light sliders on this Hub view.
 Home/away gates automatic lighting and music behavior only; the explicit
 preset, playback and volume controls remain available while away.
 
+The volume step logic below remains in `display.js` but has no visible buttons.
 Volume steps and their boundary buttons use the latest pending requested volume,
 falling back to the reported volume after confirmation, failure, expiry or an
 external change. The displayed current volume remains the player's observation.

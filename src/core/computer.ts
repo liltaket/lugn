@@ -37,6 +37,10 @@ export const ComputerMediaSchema = z.object({
   album: TextSchema.nullable(),
   contentType: TextSchema.nullable(),
   artwork: ComputerArtworkSchema.nullable().optional(),
+  /** Position at `positionUpdatedAt` (epoch ms); presentation only. */
+  positionSeconds: z.number().min(0).optional(),
+  durationSeconds: z.number().positive().optional(),
+  positionUpdatedAt: z.number().int().nonnegative().optional(),
 });
 
 /** Readings describe the computer, never physical room occupancy or user intent. */

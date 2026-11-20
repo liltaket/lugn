@@ -204,6 +204,12 @@ let contextDetailsOpen = false;
 let contextPage = 0;
 let contextItems = [];
 let musicMenuOpen = false;
+// Latest playback position sample for the ring around play/pause.
+let musicProgress = null;
+let lastShownTitle = null;
+// Colors drawn from the current artwork; the whole Hub takes them on while it plays.
+let artTheme = null;
+let lastPresenceValue = null;
 let volumeAuthorityNotice = false;
 let volumeCommandNotice = false;
 const interactionPointers = new Set();
@@ -349,13 +355,50 @@ function setText(element, value) {
   if (element.textContent !== text) element.textContent = text;
 }
 
+// Restart a one-shot CSS animation class, so a change is felt, not just seen.
+function pulse(element, name) {
+  if (
+    typeof element?.classList?.remove !== 'function' ||
+    typeof element.classList.add !== 'function'
+  )
+    return;
+  element.classList.remove(name);
+  void element.offsetWidth;
+  element.classList.add(name);
+}
+
+// A segmented control's sliding thumb follows its pressed button.
+function syncSegment(container) {
+  if (!container?.dataset || !container.children) return;
+  const buttons = [...container.children];
+  const index = buttons.findIndex(
+    (button) => button.getAttribute?.('aria-pressed') === 'true',
+  );
+  container.dataset.selected = index < 0 ? 'none' : String(index);
+}
+
 function roleName(role) {
   return role === 'bed' ? 'bed' : role === 'desk' ? 'desk' : 'unknown';
 }
 
+// The layout is drawn 600 px tall and scaled to the Hub's viewport height; the
+// canvas takes the viewport's own width, so the whole screen is used. A very
+// narrow viewport is scaled by width instead, keeping the left column usable.
+function fitScreen() {
+  const width = globalThis.innerWidth;
+  const height = globalThis.innerHeight;
+  if (!root.style || !width || !height) return;
+  const minimumWidth = 900;
+  const zoom = Math.min(height / 600, width / minimumWidth);
+  root.style.zoom = String(zoom);
+  root.style.setProperty('--W', `${width / zoom}px`);
+}
+globalThis.addEventListener?.('resize', fitScreen);
+
 function setRole(role) {
   const resolved = roleName(role);
   root.dataset.role = resolved;
+  fitScreen();
   if (refs.musicPresets && presetRoleKey !== resolved) {
     const presets =
       resolved === 'desk'
@@ -392,7 +435,46 @@ function setConnection(state, message, retry = false) {
   renderCamera(latestPayload);
 }
 
+// The ring around play/pause shows how far into the track or video playback is.
+// Samples come from the player (Home Assistant) or the computer agent (MPRIS);
+// between samples the position advances with server time while playing.
+function renderMusicProgress() {
+  if (!root.style) return;
+  const sample = musicProgress;
+  let fraction = 0;
+  if (sample) {
+    const elapsed = sample.playing
+      ? Math.max(0, (estimatedServerNow() - sample.at) / 1000)
+      : 0;
+    fraction = Math.max(
+      0,
+      Math.min(1, (sample.position + elapsed) / sample.duration),
+    );
+  }
+  root.style.setProperty('--progress', fraction.toFixed(4));
+  root.dataset.progress = String(!!sample);
+}
+
+function progressSample(values) {
+  return values &&
+    typeof values.positionSeconds === 'number' &&
+    typeof values.durationSeconds === 'number' &&
+    typeof values.positionUpdatedAt === 'number' &&
+    Number.isFinite(values.positionSeconds) &&
+    Number.isFinite(values.durationSeconds) &&
+    Number.isFinite(values.positionUpdatedAt) &&
+    values.durationSeconds > 0
+    ? {
+        position: values.positionSeconds,
+        duration: values.durationSeconds,
+        at: values.positionUpdatedAt,
+      }
+    : null;
+}
+
 function setClock() {
+  renderMusicProgress();
+  updateCameraCountdown();
   if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
     setConnection('offline', 'Inga färska uppdateringar från Lugn.');
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
@@ -541,7 +623,12 @@ function sceneButtonFor(scene) {
 function renderScenes(payload) {
   if (!refs.sceneGrid) return;
   const allScenes = getSceneList(payload);
-  const presets = allScenes.filter((scene) => scene.id !== 'scene.all_off');
+  // The Hub shows the room's own scenes; custom (Govee) presets stay in the
+  // control panel for now.
+  const presets = allScenes.filter(
+    (scene) =>
+      scene.id !== 'scene.all_off' && !scene.id.startsWith('scene.custom_'),
+  );
   const off = allScenes.find((scene) => scene.id === 'scene.all_off');
   refs.sceneOff.hidden = !off;
   refs.sceneOff.disabled =
@@ -557,6 +644,9 @@ function renderScenes(payload) {
     refs.sceneGrid.dataset.count = String(
       Math.min(presets.length - scenePage * pageSize, pageSize),
     );
+    // Five scenes leave the sixth grid cell for Släck; other counts give it a row.
+    root.dataset.sceneLayout =
+      off && pages === 1 && presets.length === 5 ? 'six' : 'row';
   }
   refs.scenePrevious.disabled = scenePage === 0;
   refs.sceneNext.disabled = scenePage === pages - 1;
@@ -657,8 +747,10 @@ function renderScenes(payload) {
               : 'selected';
     setText(button.querySelector('.scene-status'), status);
     button.querySelector('.scene-status').hidden = !status;
-    if (button.getAttribute('aria-pressed') !== String(selected))
+    if (button.getAttribute('aria-pressed') !== String(selected)) {
       button.setAttribute('aria-pressed', String(selected));
+      if (selected) pulse(button, 'lit');
+    }
     if (scene.id !== 'scene.all_off') ordered.push(button);
   }
   const orderKey = scenes.map((scene) => scene.id).join('\u0000');
@@ -1590,11 +1682,87 @@ function updateArtworkColor(image) {
     root.style.setProperty('--art-raised', shade(38, 0.15));
     root.style.setProperty('--art-night-ground', shade(7, 0.05));
     root.style.setProperty('--art-night-surface', shade(15, 0.07));
+    artTheme = artPalette(colors);
     root.dataset.artColor = 'true';
+    syncArtTheme();
   } catch {
     // Missing canvas support or inaccessible image: retain the neutral palette.
     root.dataset.artColor = 'false';
   }
+}
+
+// A light, saturated accent and dark, tinted grounds from one average color.
+function artPalette([r, g, b]) {
+  const [rr, gg, bb] = [r / 255, g / 255, b / 255];
+  const max = Math.max(rr, gg, bb);
+  const min = Math.min(rr, gg, bb);
+  const lightness = (max + min) / 2;
+  const delta = max - min;
+  let hue = 0;
+  if (delta) {
+    hue =
+      max === rr
+        ? ((gg - bb) / delta + 6) % 6
+        : max === gg
+          ? (bb - rr) / delta + 2
+          : (rr - gg) / delta + 4;
+    hue *= 60;
+  }
+  const saturation = delta ? delta / (1 - Math.abs(2 * lightness - 1)) : 0;
+  const hsl = (s, l, a = 1) => {
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const m = l - c / 2;
+    const [r1, g1, b1] =
+      hue < 60
+        ? [c, x, 0]
+        : hue < 120
+          ? [x, c, 0]
+          : hue < 180
+            ? [0, c, x]
+            : hue < 240
+              ? [0, x, c]
+              : hue < 300
+                ? [x, 0, c]
+                : [c, 0, x];
+    const channel = (value) => Math.round((value + m) * 255);
+    return `rgba(${channel(r1)}, ${channel(g1)}, ${channel(b1)}, ${a})`;
+  };
+  // Grey artwork keeps a quiet, nearly neutral theme instead of an invented hue.
+  const s =
+    saturation < 0.08 ? 0.04 : Math.min(0.72, Math.max(0.38, saturation));
+  return {
+    accent: hsl(s, 0.7),
+    deep: hsl(s * 0.55, 0.095),
+    panel: hsl(s * 0.5, 0.15),
+    glow: hsl(s, 0.5, 0.34),
+    glowSoft: hsl(s, 0.45, 0.16),
+    tint: hsl(s * 0.6, 0.85, 0.07),
+    tint2: hsl(s * 0.6, 0.85, 0.11),
+  };
+}
+
+// The artwork theme applies only while music plays with known artwork.
+function syncArtTheme() {
+  if (!root.style) return;
+  const names = {
+    accent: '--art-accent',
+    deep: '--art-deep',
+    panel: '--art-panel',
+    glow: '--art-glow',
+    glowSoft: '--art-glow-soft',
+    tint: '--art-tint',
+    tint2: '--art-tint-2',
+  };
+  const active =
+    !!artTheme &&
+    root.dataset.artColor === 'true' &&
+    root.dataset.musicPlaying === 'true';
+  for (const [key, property] of Object.entries(names)) {
+    if (active) root.style.setProperty(property, artTheme[key]);
+    else root.style.removeProperty?.(property);
+  }
+  root.dataset.themed = String(active);
 }
 
 function renderEnvironment(environment) {
@@ -1729,6 +1897,7 @@ function renderVolumeAuthority(payload, target) {
     button.setAttribute('aria-pressed', String(!unavailable && selected));
     button.setAttribute('aria-busy', String(busy));
   }
+  syncSegment(refs.musicVolumeAuto.parentElement);
   const reason = isUnavailable()
     ? 'Lugn svarar inte · försök när kontakten är tillbaka'
     : observationsUntrusted
@@ -2428,6 +2597,8 @@ function renderMusic(payload) {
     setText(refs.musicVolumeObservedLabel, 'Nu');
     refs.musicVolumeObservedLabel.dataset.stale = 'false';
     refs.musicVolumeValue.value = '—';
+    root.style?.setProperty('--volume-level', '0');
+    musicProgress = null;
     refs.musicVolumeValue.setAttribute(
       'aria-label',
       'Spelarens rapporterade volym',
@@ -2485,6 +2656,19 @@ function renderMusic(payload) {
       : 'ready';
   refs.musicPresetOptical.dataset.state = refs.musicPresetDj.dataset.state;
   const sourceName = String(observed.source ?? '').toLowerCase();
+  // The computer's routed input (for example "PC") is what Optical selects.
+  const computerInput =
+    sourceName.includes('optical') ||
+    !!payload?.computerNowPlaying?.[musicTarget];
+  const trustedSource =
+    canControl && musicObservationTrusted(payload, musicTarget);
+  root.dataset.musicSource = !trustedSource
+    ? 'none'
+    : sourceName.includes('spotify')
+      ? 'dj'
+      : computerInput
+        ? 'optical'
+        : 'none';
   refs.musicPresetDj.setAttribute(
     'aria-pressed',
     String(
@@ -2498,7 +2682,7 @@ function renderMusic(payload) {
     String(
       canControl &&
         musicObservationTrusted(payload, musicTarget) &&
-        sourceName.includes('optical'),
+        computerInput,
     ),
   );
   refs.musicPlayback.setAttribute(
@@ -2509,9 +2693,15 @@ function renderMusic(payload) {
         ? 'Spela och släpp manuell paus'
         : 'Starta musik',
   );
+  syncSegment(refs.musicPresets);
   refs.musicPlayback.setAttribute('aria-pressed', String(isPlaying));
-  refs.musicPlayback.dataset.icon =
-    playbackAction === 'paused' ? 'pause' : 'play';
+  const playIcon = playbackAction === 'paused' ? 'pause' : 'play';
+  if (
+    refs.musicPlayback.dataset.icon &&
+    refs.musicPlayback.dataset.icon !== playIcon
+  )
+    pulse(refs.musicPlayback, 'icon-swap');
+  refs.musicPlayback.dataset.icon = playIcon;
   setText(refs.musicPlaybackIcon, playbackAction === 'paused' ? 'Ⅱ' : '▶');
   setText(
     refs.musicPlaybackLabel,
@@ -2648,6 +2838,26 @@ function renderMusic(payload) {
   renderArtwork(payload, musicTarget);
   refs.musicVolumeValue.value = formatVolume(volume);
   setText(refs.musicVolumeValue, refs.musicVolumeValue.value);
+  // The thin bar under the selector draws the reported level.
+  root.style?.setProperty(
+    '--volume-level',
+    String(typeof volume === 'number' ? Math.max(0, Math.min(1, volume)) : 0),
+  );
+  // Computer media (Optical) has its own position; never mix it with the receiver's.
+  const sample = computer
+    ? computer.status === 'playing'
+      ? progressSample(computer)
+      : null
+    : progressSample(observed);
+  musicProgress = sample
+    ? { ...sample, playing: isPlaying && !reportedOnly }
+    : null;
+  renderMusicProgress();
+  const shownTitle = refs.musicTitle.textContent;
+  if (lastShownTitle !== null && shownTitle !== lastShownTitle)
+    pulse(refs.musicTitle.parentElement, 'text-in');
+  lastShownTitle = shownTitle;
+  syncArtTheme();
 }
 
 function render(payload) {
@@ -2677,6 +2887,12 @@ function renderPresenceCorrection(payload) {
         ? String(count)
         : '?',
   );
+  if (
+    lastPresenceValue !== null &&
+    refs.presenceCountValue.textContent !== lastPresenceValue
+  )
+    pulse(refs.presenceCountOne, 'count-in');
+  lastPresenceValue = refs.presenceCountValue.textContent;
   refs.presenceCountOne.hidden = false;
   refs.presenceCountOne.disabled = busy || isUnavailable() || !available;
   refs.presenceCountOne.setAttribute('aria-busy', String(busy));
@@ -3019,6 +3235,69 @@ window.addEventListener('blur', () => {
 });
 
 // Camera media is scoped to one server-issued view. No HA credentials enter the browser.
+
+// Two canvases under the live image keep the last frame on screen: a sharp copy
+// in the same place and a soft, blurred fill for the letterbox. A frame swap can
+// then never show black, even if the Hub's browser repaints the image late.
+let cameraCanvases = null;
+function cameraUnderlays() {
+  if (cameraCanvases) return cameraCanvases;
+  const frame = refs.cameraImage?.parentElement;
+  if (typeof frame?.insertBefore !== 'function') return null;
+  const make = (className) => {
+    const canvas = document.createElement('canvas');
+    if (typeof canvas?.getContext !== 'function') return null;
+    canvas.className = className;
+    canvas.setAttribute('aria-hidden', 'true');
+    frame.insertBefore(canvas, refs.cameraImage);
+    return canvas;
+  };
+  const blur = make('camera-blur');
+  const under = blur && make('camera-under');
+  cameraCanvases = blur && under ? { blur, under } : null;
+  return cameraCanvases;
+}
+function paintCameraUnderlay() {
+  const image = refs.cameraImage;
+  if (!image?.complete || !image.naturalWidth || image.hidden) return;
+  const canvases = cameraUnderlays();
+  if (!canvases) return;
+  try {
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    canvases.under.width = width;
+    canvases.under.height = height;
+    canvases.under.getContext('2d')?.drawImage(image, 0, 0, width, height);
+    canvases.blur.width = 48;
+    canvases.blur.height = Math.max(1, Math.round((48 * height) / width));
+    canvases.blur
+      .getContext('2d')
+      ?.drawImage(image, 0, 0, canvases.blur.width, canvases.blur.height);
+  } catch {
+    // A frame that cannot be drawn leaves the previous underlay in place.
+  }
+}
+function clearCameraUnderlay() {
+  if (!cameraCanvases) return;
+  cameraCanvases.under.width = 0;
+  cameraCanvases.blur.width = 0;
+}
+// The close button's ring shows the time left of the view.
+function updateCameraCountdown() {
+  if (!cameraActive) return;
+  const left = Math.max(
+    0,
+    Math.ceil((cameraActive.expiresAt - estimatedServerNow()) / 1000),
+  );
+  const total = Number(
+    latestPayload?.cameraDashboard?.settings?.durationSeconds,
+  );
+  setText(refs.cameraCountdown, `${left} s`);
+  refs.cameraClose.style?.setProperty(
+    '--cam-left',
+    String(Number.isFinite(total) && total > 0 ? Math.min(1, left / total) : 1),
+  );
+}
 function cameraMediaUrl(value) {
   if (typeof value !== 'string' || !/^(\/|\.\/)/.test(value)) return null;
   try {
@@ -3043,6 +3322,7 @@ function stopCameraMedia() {
   refs.cameraImage.onerror = null;
   refs.cameraImage.removeAttribute('src');
   refs.cameraImage.hidden = true;
+  clearCameraUnderlay();
   if (cameraObjectUrl) URL.revokeObjectURL(cameraObjectUrl);
   cameraObjectUrl = null;
   cameraMediaKey = null;
@@ -3125,6 +3405,7 @@ function startCameraImages(active, epoch) {
       failures = 0;
       refs.cameraImage.hidden = false;
       refs.cameraPlaceholder.hidden = true;
+      window.setTimeout(paintCameraUnderlay, 80);
       refs.cameraStatus.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
       cameraImageTimer = window.setTimeout(frame, 1000);
     } catch {
@@ -3236,11 +3517,17 @@ function renderCamera(payload) {
   if (cameraActive && !active && document.activeElement === refs.cameraClose)
     refs.cameraMenu.focus?.();
   cameraActive = active;
+  for (const button of refs.cameraChoices.children)
+    button.setAttribute(
+      'aria-pressed',
+      String(!!active && button.dataset.cameraId === active.cameraId),
+    );
   refs.cameraPanel.hidden = !active && !showingPending;
   if (!allowed || !viewerAllowed) cameraChoicesOpen = false;
   if (refs.cameraPagination)
     refs.cameraPagination.hidden = !cameraChoicesOpen || cameraPages <= 1;
-  refs.cameraChoices.hidden = !cameraChoicesOpen;
+  // The cameras live in the bottom bar as direct choices.
+  refs.cameraChoices.hidden = false;
   refs.cameraMenu.setAttribute('aria-expanded', String(cameraChoicesOpen));
   refs.cameraMenu.textContent =
     cameraActionRequests > 0
@@ -3285,10 +3572,7 @@ function renderCamera(payload) {
   }
   setText(refs.cameraName, active.name);
   setText(refs.cameraReason, active.reason || 'Manuellt öppnad');
-  setText(
-    refs.cameraCountdown,
-    `${Math.max(0, Math.ceil((active.expiresAt - estimatedServerNow()) / 1000))} s`,
-  );
+  updateCameraCountdown();
   refs.cameraImage.alt = `${active.name}, senast hämtade kamerabild`;
   const key = `${active.id}|${active.imageUrl ?? ''}`;
   if (cameraMediaKey !== key) void startCameraMedia(active);
@@ -3471,6 +3755,25 @@ refs.musicArtworkImage.addEventListener('load', () => {
   if (refs.musicArtwork.dataset.state !== 'loading') return;
   refs.musicArtworkImage.hidden = false;
   refs.musicArtwork.dataset.state = 'available';
+  pulse(refs.musicArtwork, 'art-in');
+  const { naturalWidth: width, naturalHeight: height } = refs.musicArtworkImage;
+  refs.musicArtwork.dataset.aspect =
+    width && height
+      ? width / height > 1.2
+        ? 'wide'
+        : width / height < 0.85
+          ? 'tall'
+          : 'square'
+      : 'square';
+  // The full image sits at the top in its own proportions over a blurred copy,
+  // so square covers, video thumbnails and tall images all fit without cropping.
+  const source =
+    refs.musicArtworkImage.currentSrc || refs.musicArtworkImage.src;
+  if (refs.musicArtwork.style && source)
+    refs.musicArtwork.style.setProperty(
+      '--art-url',
+      `url("${String(source).replace(/["\\\n]/g, '')}")`,
+    );
   updateArtworkColor(refs.musicArtworkImage);
 });
 document.addEventListener('keydown', (event) => {

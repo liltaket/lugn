@@ -373,7 +373,7 @@ describe('Hub role action hierarchy', () => {
       const ui = dashboard();
       try {
         await microtasks();
-        const ids = [...sceneIds, 'scene.custom_a', 'scene.custom_b'];
+        const ids = [...sceneIds, 'scene.extra_a', 'scene.extra_b'];
         runInContext(
           `render(${JSON.stringify({ ...ui.payload(), role, scenes: ids.map((id) => ({ id, name: id, lighting: {} })) })})`,
           ui.context,
@@ -397,6 +397,35 @@ describe('Hub role action hierarchy', () => {
       }
     },
   );
+  it('leaves custom presets off the Hub, so the room scenes need no paging', async () => {
+    vi.useFakeTimers();
+    const ui = dashboard();
+    try {
+      await microtasks();
+      const ids = [
+        'scene.all_off',
+        'scene.soft_light',
+        'scene.everyday_light',
+        'scene.movie_light',
+        'scene.focus_light',
+        'scene.party',
+        'scene.custom_ring',
+        'scene.custom_ceiling',
+      ];
+      runInContext(
+        `render(${JSON.stringify({ ...ui.payload(), role: 'bed', scenes: ids.map((id) => ({ id, name: id, lighting: {} })) })})`,
+        ui.context,
+      );
+      const shown = ui
+        .get('#scene-grid')
+        .children.map((button) => button.dataset['scene']);
+      expect(shown).toHaveLength(5);
+      expect(shown.some((id) => id?.startsWith('scene.custom_'))).toBe(false);
+      expect(ui.get('#scene-pagination').hidden).toBe(true);
+    } finally {
+      ui.engine.dispose();
+    }
+  });
   it.each([
     [
       'bed',

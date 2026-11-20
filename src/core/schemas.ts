@@ -198,6 +198,10 @@ export const MusicObservationValuesSchema = z
     title: z.string().nullable(),
     artist: z.string().max(1024).nullable().optional(),
     album: z.string().max(1024).nullable().optional(),
+    /** Playback position at `positionUpdatedAt` (epoch ms); clients extrapolate while playing. */
+    positionSeconds: z.number().min(0).optional(),
+    durationSeconds: z.number().positive().optional(),
+    positionUpdatedAt: z.number().int().nonnegative().optional(),
   })
   .strict();
 export type MusicObservationValues = z.infer<
