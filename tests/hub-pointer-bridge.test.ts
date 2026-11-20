@@ -46,6 +46,8 @@ class FakeElement extends Listeners {
   parentElement: FakeElement | null = null;
   style: Record<string, string> = {};
   disabled = false;
+  /** A label's labelled control. */
+  control: FakeElement | null = null;
   scrollTop = 0;
   scrollLeft = 0;
   scrollHeight = 0;
@@ -324,7 +326,13 @@ async function load(status = 200, pointerEvents = true) {
       (child) => child.attributes.get('data-hub-pointer') === role,
     );
   const cursor = () => layer('dot');
-  const plate = () => layer('plate');
+  const plates = () =>
+    document.body.children.filter(
+      (child) => child.attributes.get('data-hub-pointer') === 'plate',
+    );
+  /** Plates currently faded in. */
+  const shown = () =>
+    plates().filter((plate) => plate.style['opacity'] === '1');
   return {
     document,
     frames,
@@ -341,7 +349,8 @@ async function load(status = 200, pointerEvents = true) {
     runFrames,
     advance,
     cursor,
-    plate,
+    plates,
+    shown,
   };
 }
 
@@ -379,52 +388,54 @@ describe('Hub pointer bridge page script', () => {
     expect(socket.sent.at(-1)).toEqual({ t: 'pong', id: 17 });
   });
 
-  it('builds the hidden dot and plate as soon as the bridge is configured', async () => {
+  it('builds the hidden dot and plates as soon as the bridge is configured', async () => {
     const page = await load();
     const cursor = page.cursor()!;
-    const plate = page.plate()!;
+    const plates = page.plates();
     expect(page.sockets[0]!.readyState).toBe(0);
-    // The plate sits under the dot, both outside the dashboard.
-    expect(page.document.body.children).toEqual([plate, cursor]);
-    for (const layer of [cursor, plate])
+    // Two plates under the dot, all outside the dashboard.
+    expect(plates).toHaveLength(2);
+    expect(page.document.body.children).toEqual([...plates, cursor]);
+    for (const layer of [cursor, ...plates])
       expect(layer.style).toMatchObject({
         visibility: 'hidden',
         display: 'block',
         position: 'fixed',
         pointerEvents: 'none',
-        willChange: 'transform',
-        transition: 'none',
       });
     expect(cursor.style).toMatchObject({
       transform: 'translate3d(-100px, -100px, 0)',
       zIndex: '2147483647',
       contain: 'strict',
-      width: '28px',
-      height: '28px',
+      willChange: 'transform',
+      transition: 'none',
+      width: '30px',
+      height: '30px',
     });
-    expect(plate.style['zIndex']).toBe('2147483646');
     const dot = cursor.children[0]!;
     expect(dot.style).toMatchObject({
-      width: '18px',
-      height: '18px',
+      width: '20px',
+      height: '20px',
       borderRadius: '50%',
       background: 'rgba(236, 240, 232, 0.55)',
-      transform: 'scale(1)',
-      opacity: '1',
+      border: '1px solid rgba(12, 18, 16, 0.32)',
+      boxShadow: '0 1px 4px rgba(0, 0, 0, 0.24)',
     });
-    const fill = plate.children[0]!;
-    expect(fill.style).toMatchObject({
-      transform: 'scale(0.96)',
-      opacity: '0',
-    });
-    // Only transform and opacity ever ease; no filters anywhere.
-    for (const layer of [dot, fill])
-      expect(
-        layer.style['transition']!.replace(/\([^)]*\)/g, '')
-          .split(',')
-          .map((part) => part.trim().split(' ')[0]),
-      ).toEqual(['transform', 'opacity']);
-    for (const layer of [cursor, dot, plate, fill]) {
+    // The dot never eases, shrinks or fades.
+    expect(dot.style['transition']).toBeUndefined();
+    expect(dot.style['transform']).toBeUndefined();
+    expect(dot.style['opacity']).toBeUndefined();
+    for (const plate of plates) {
+      expect(plate.style).toMatchObject({
+        zIndex: '2147483646',
+        opacity: '0',
+        willChange: 'opacity',
+        transition: 'opacity 110ms ease-out',
+      });
+      // A plate never moves.
+      expect(plate.style['transform']).toBeUndefined();
+    }
+    for (const layer of [cursor, dot, ...plates]) {
       expect(layer.style['filter']).toBeUndefined();
       expect(layer.style['backdropFilter']).toBeUndefined();
     }
@@ -441,7 +452,7 @@ describe('Hub pointer bridge page script', () => {
     const size = Number.parseFloat(dot.style['width']!);
     expect(offset + size / 2).toBe(box / 2);
     expect(Number.parseFloat(dot.style['top']!) + size / 2).toBe(box / 2);
-    expect(cursor.style['transform']).toBe('translate3d(86px, 36px, 0)');
+    expect(cursor.style['transform']).toBe('translate3d(85px, 35px, 0)');
   });
 
   it('shows the cursor by flipping visibility only, at the latest point once per frame', async () => {
@@ -466,7 +477,7 @@ describe('Hub pointer bridge page script', () => {
       (key) => cursor.style[key] !== before[key],
     );
     expect(changed).toEqual(['transform']);
-    expect(cursor.style['transform']).toBe('translate3d(1087px, 406px, 0)');
+    expect(cursor.style['transform']).toBe('translate3d(1086px, 405px, 0)');
     // No hit test or hover write inside the frame.
     expect(page.hitTests()).toBe(0);
     expect(button.hasAttribute('data-pointer-hover')).toBe(false);
@@ -489,7 +500,7 @@ describe('Hub pointer bridge page script', () => {
     page.sockets[0]!.receive({ t: 'enter', x: 10.3, y: 20.8 });
     page.runFrames();
     expect(page.cursor()!.style['transform']).toBe(
-      'translate3d(-3.5px, 7px, 0)',
+      'translate3d(-4.5px, 6px, 0)',
     );
   });
 
@@ -900,11 +911,13 @@ describe('Hub pointer bridge page script', () => {
       page: Page,
       rect: { left: number; top: number; width: number; height: number },
       radius = '22px',
+      tag = 'button',
+      parent?: FakeElement,
     ): FakeElement {
-      const button = page.document.element('button');
-      button.rect = rect;
-      button.computed = { ...button.computed, borderTopLeftRadius: radius };
-      return button;
+      const element = page.document.element(tag, parent);
+      element.rect = rect;
+      element.computed = { ...element.computed, borderTopLeftRadius: radius };
+      return element;
     }
 
     function appRoot(page: Page, zoom: string, width: number): void {
@@ -922,49 +935,55 @@ describe('Hub pointer bridge page script', () => {
       page.advance(70);
     }
 
-    function look(element: FakeElement) {
-      return {
-        transform: element.style['transform'],
-        opacity: element.style['opacity'],
-      };
+    function box(plate: FakeElement) {
+      const { left, top, width, height } = plate.style;
+      return { left, top, width, height };
     }
 
     const tile = { left: 100, top: 200, width: 200, height: 100 };
+    const tileBox = {
+      left: '94px',
+      top: '194px',
+      width: '212px',
+      height: '112px',
+    };
 
-    it('hugs the hovered control and hides the dot, then lets go', async () => {
+    it('sits still around the hovered control under a dot that stays as it is', async () => {
       const page = await connected();
       const button = control(page, tile);
       const dot = page.cursor()!.children[0]!;
-      const plate = page.plate()!;
-      const fill = plate.children[0]!;
+      const dotStyle = { ...dot.style };
       page.document.hit = page.document.element('div');
       page.socket.receive({ t: 'enter', x: 10, y: 10 });
       page.runFrames();
-      expect(plate.style['visibility']).toBe('visible');
-      expect(look(fill)).toEqual({ transform: 'scale(0.96)', opacity: '0' });
+      for (const plate of page.plates())
+        expect(plate.style['visibility']).toBe('visible');
+      expect(page.shown()).toHaveLength(0);
 
       hover(page, button, 200, 250);
-      expect(plate.style).toMatchObject({
-        left: '94px',
-        top: '194px',
-        width: '212px',
-        height: '112px',
-      });
-      expect(fill.style['borderRadius']).toBe('28px');
-      expect(look(fill)).toEqual({ transform: 'scale(1)', opacity: '1' });
-      expect(look(dot)).toEqual({ transform: 'scale(0.4)', opacity: '0' });
-      // Centred pointer, centred plate.
-      expect(plate.style['transform']).toBe('translate3d(0px, 0px, 0)');
-      expect(fill.animations).toHaveLength(0);
+      expect(page.shown()).toHaveLength(1);
+      const plate = page.shown()[0]!;
+      expect(box(plate)).toEqual(tileBox);
+      expect(plate.style['borderRadius']).toBe('28px');
+      expect(plate.style['background']).toBe('rgba(255, 255, 255, 0.14)');
+      expect(dot.style).toEqual(dotStyle);
+      // The dot follows the pointer exactly over the control.
+      expect(page.cursor()!.style['transform']).toBe(
+        'translate3d(185px, 235px, 0)',
+      );
 
       hover(page, page.document.element('div'), 400, 250);
-      expect(look(fill)).toEqual({ transform: 'scale(0.96)', opacity: '0' });
-      expect(look(dot)).toEqual({ transform: 'scale(1)', opacity: '1' });
+      expect(page.shown()).toHaveLength(0);
+      // It fades out where it was.
+      expect(box(plate)).toEqual(tileBox);
+      expect(dot.style).toEqual(dotStyle);
 
       hover(page, button, 200, 250);
       page.socket.receive({ t: 'leave' });
-      expect(plate.style['visibility']).toBe('hidden');
-      expect(look(fill)).toEqual({ transform: 'scale(0.96)', opacity: '0' });
+      for (const entry of page.plates()) {
+        expect(entry.style['visibility']).toBe('hidden');
+        expect(entry.style['opacity']).toBe('0');
+      }
       expect(button.hasAttribute('data-pointer-hover')).toBe(false);
     });
 
@@ -974,14 +993,10 @@ describe('Hub pointer bridge page script', () => {
       const button = control(page, tile);
       page.socket.receive({ t: 'enter', x: 10, y: 10 });
       hover(page, button, 200, 250);
-      expect(page.plate()!.style).toMatchObject({
-        left: '94px',
-        top: '194px',
-        width: '212px',
-        height: '112px',
-      });
+      const plate = page.shown()[0]!;
+      expect(box(plate)).toEqual(tileBox);
       // The computed radius is in the control's own px.
-      expect(page.plate()!.children[0]!.style['borderRadius']).toBe('33.5px');
+      expect(plate.style['borderRadius']).toBe('33.5px');
     });
 
     it('scales rects by the zoom when the root reports its own px', async () => {
@@ -990,13 +1005,14 @@ describe('Hub pointer bridge page script', () => {
       const button = control(page, tile);
       page.socket.receive({ t: 'enter', x: 10, y: 10 });
       hover(page, button, 250, 312);
-      expect(page.plate()!.style).toMatchObject({
+      const plate = page.shown()[0]!;
+      expect(box(plate)).toEqual({
         left: '119px',
         top: '244px',
         width: '262px',
         height: '137px',
       });
-      expect(page.plate()!.children[0]!.style['borderRadius']).toBe('33.5px');
+      expect(plate.style['borderRadius']).toBe('33.5px');
     });
 
     it('rounds the plate into a pill for a round button', async () => {
@@ -1008,38 +1024,128 @@ describe('Hub pointer bridge page script', () => {
       );
       page.socket.receive({ t: 'enter', x: 10, y: 10 });
       hover(page, play, 931, 481);
-      expect(page.plate()!.style['width']).toBe('74px');
-      expect(page.plate()!.children[0]!.style['borderRadius']).toBe('37px');
+      expect(page.shown()[0]!.style['width']).toBe('74px');
+      expect(page.shown()[0]!.style['borderRadius']).toBe('37px');
     });
 
-    it('shows no plate for disabled or oversized controls', async () => {
+    it('highlights large controls too, with an outline once they are big', async () => {
       const page = await connected();
-      const plate = page.plate()!;
-      const fill = plate.children[0]!;
+      // Wider than the old 420 px cap: still a fill.
+      const wide = control(page, {
+        left: 10,
+        top: 300,
+        width: 426,
+        height: 60,
+      });
+      const big = control(page, { left: 0, top: 0, width: 700, height: 500 });
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      hover(page, wide, 200, 330);
+      expect(page.shown()).toHaveLength(1);
+      expect(page.shown()[0]!.style['width']).toBe('438px');
+      expect(page.shown()[0]!.style['background']).toBe(
+        'rgba(255, 255, 255, 0.14)',
+      );
+      hover(page, big, 350, 250);
+      expect(page.shown()).toHaveLength(1);
+      const plate = page.shown()[0]!;
+      expect(box(plate)).toEqual({
+        left: '-6px',
+        top: '-6px',
+        width: '712px',
+        height: '512px',
+      });
+      expect(plate.style['background']).toBe('rgba(255, 255, 255, 0.04)');
+      expect(plate.style['boxShadow']).toContain('inset 0 0 0 2px');
+    });
+
+    it('shows no plate for disabled controls', async () => {
+      const page = await connected();
       const dot = page.cursor()!.children[0]!;
+      const dotStyle = { ...dot.style };
       const off = control(page, tile);
       off.disabled = true;
       const ariaOff = control(page, tile);
       ariaOff.setAttribute('aria-disabled', 'true');
-      const big = control(page, { left: 0, top: 0, width: 700, height: 500 });
+      const label = control(page, tile, '0px', 'label');
+      const radio = page.document.element('input', label);
+      radio.disabled = true;
+      label.control = radio;
       page.socket.receive({ t: 'enter', x: 10, y: 10 });
-      for (const [index, target] of [off, ariaOff, big].entries()) {
+      for (const [index, target] of [off, ariaOff, label].entries()) {
         hover(page, target, 150 + index, 250);
         expect(target.hasAttribute('data-pointer-hover')).toBe(true);
-        expect(look(fill)).toEqual({ transform: 'scale(0.96)', opacity: '0' });
-        expect(look(dot)).toEqual({ transform: 'scale(1)', opacity: '1' });
+        expect(page.shown()).toHaveLength(0);
+        expect(dot.style).toEqual(dotStyle);
       }
-      expect(plate.style['width']).toBe('0px');
     });
 
-    it('moves only the dot and plate transforms per frame, leaning a few px toward the pointer', async () => {
+    it('resolves the hovered point to the element a click acts on', async () => {
+      const page = await connected();
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      // A scene tile: the grid delegates to the button, not its spans.
+      const grid = page.document.element('div');
+      const scene = control(page, tile, '22px', 'button', grid);
+      scene.setAttribute('data-scene', 'scene.soft_light');
+      const name = page.document.element(
+        'span',
+        page.document.element('span', scene),
+      );
+      hover(page, name, 150, 250);
+      expect(scene.hasAttribute('data-pointer-hover')).toBe(true);
+      expect(box(page.shown()[0]!)).toEqual(tileBox);
+
+      // A radio inside its label: the whole label row.
+      const row = { left: 20, top: 400, width: 600, height: 44 };
+      const label = control(page, row, '0px', 'label');
+      const radio = page.document.element('input', label);
+      radio.rect = { left: 24, top: 412, width: 20, height: 20 };
+      hover(page, radio, 30, 420);
+      expect(label.hasAttribute('data-pointer-hover')).toBe(true);
+      expect(page.shown()[0]!.style['width']).toBe('612px');
+      hover(page, page.document.element('span', label), 300, 420);
+      expect(label.hasAttribute('data-pointer-hover')).toBe(true);
+
+      // A role="button" element counts.
+      const custom = control(page, tile, '0px', 'div');
+      custom.setAttribute('role', 'button');
+      hover(page, custom, 160, 250);
+      expect(custom.hasAttribute('data-pointer-hover')).toBe(true);
+
+      // Focus-only panels and scroll areas do nothing on a click.
+      for (const attribute of ['0', '-1']) {
+        const panel = control(
+          page,
+          { left: 0, top: 0, width: 600, height: 300 },
+          '0px',
+          'section',
+        );
+        panel.setAttribute('tabindex', attribute);
+        hover(
+          page,
+          page.document.element('p', panel),
+          300 + Number(attribute),
+          150,
+        );
+        expect(panel.hasAttribute('data-pointer-hover')).toBe(false);
+        expect(page.shown()).toHaveLength(0);
+      }
+
+      // Nothing inside an aria-hidden subtree.
+      const hiddenGroup = page.document.element('div');
+      hiddenGroup.setAttribute('aria-hidden', 'true');
+      const hiddenButton = control(page, tile, '0px', 'button', hiddenGroup);
+      hover(page, hiddenButton, 170, 250);
+      expect(hiddenButton.hasAttribute('data-pointer-hover')).toBe(false);
+      expect(page.shown()).toHaveLength(0);
+    });
+
+    it('writes nothing but the dot transform per frame', async () => {
       const page = await connected();
       const button = control(page, tile);
       const layers = [
         page.cursor()!,
         page.cursor()!.children[0]!,
-        page.plate()!,
-        page.plate()!.children[0]!,
+        ...page.plates(),
       ];
       page.socket.receive({ t: 'enter', x: 10, y: 10 });
       hover(page, button, 200, 250);
@@ -1047,48 +1153,51 @@ describe('Hub pointer bridge page script', () => {
       const hits = page.hitTests();
       page.socket.receive({ t: 'move', x: 240, y: 260 });
       page.runFrames();
-      expect(page.plate()!.style['transform']).toBe('translate3d(2px, 1px, 0)');
       page.socket.receive({ t: 'move', x: 299, y: 299 });
       page.runFrames();
-      // Clamped to 3 px each way.
-      expect(page.plate()!.style['transform']).toBe('translate3d(3px, 3px, 0)');
       const changed = layers.map((layer, index) =>
         Object.keys(layer.style).filter(
           (key) => layer.style[key] !== before[index]![key],
         ),
       );
-      expect(changed).toEqual([['transform'], [], ['transform'], []]);
+      expect(changed).toEqual([['transform'], [], [], []]);
+      expect(page.cursor()!.style['transform']).toBe(
+        'translate3d(284px, 284px, 0)',
+      );
       expect(page.hitTests()).toBe(hits);
     });
 
-    it('slides from the control it just left to the next one', async () => {
+    it('fades between controls without sliding', async () => {
       const page = await connected();
       const first = control(page, tile);
       const second = control(page, { ...tile, left: 310 });
-      const fill = page.plate()!.children[0]!;
       page.socket.receive({ t: 'enter', x: 10, y: 10 });
       hover(page, first, 200, 250);
+      const [a] = page.shown();
       hover(page, second, 410, 250);
-      expect(page.plate()!.style['left']).toBe('304px');
-      expect(fill.animations).toHaveLength(1);
-      expect(fill.animations[0]!.keyframes).toEqual([
-        { transform: 'translate(-210px, 0px) scale(1, 1)' },
-        { transform: 'scale(1)' },
-      ]);
-      // Long after fading out, the plate appears in place instead.
-      hover(page, page.document.element('div'), 600, 250);
-      page.advance(500);
+      const [b] = page.shown();
+      expect(page.shown()).toHaveLength(1);
+      expect(b).not.toBe(a);
+      // The old plate fades out where it is; the new one fades in in place.
+      expect(a!.style['opacity']).toBe('0');
+      expect(a!.style['left']).toBe('94px');
+      expect(b!.style['left']).toBe('304px');
+      // Back while the first is still fading: it simply fades back in.
       hover(page, first, 200, 250);
-      expect(fill.animations).toHaveLength(1);
+      expect(page.shown()).toEqual([a]);
+      expect(b!.style['opacity']).toBe('0');
+      for (const plate of page.plates()) {
+        expect(plate.animations).toHaveLength(0);
+        expect(plate.style['transform']).toBeUndefined();
+      }
     });
 
     it('measures again after a click, Escape or wheel under a still cursor', async () => {
       const page = await connected();
       const button = control(page, tile);
-      const plate = page.plate()!;
-      const fill = plate.children[0]!;
       page.socket.receive({ t: 'enter', x: 10, y: 10 });
       hover(page, button, 200, 250);
+      const plate = page.shown()[0]!;
       const click = (down: boolean) =>
         page.socket.receive({
           t: 'button',
@@ -1099,16 +1208,16 @@ describe('Hub pointer bridge page script', () => {
         });
       click(true);
       click(false);
-      // The click moved the control; the plate follows without sliding.
+      // The click moved the control; the same plate is resized in place.
       button.rect = { ...tile, top: 150 };
       const hits = page.hitTests();
       page.advance(299);
       expect(page.hitTests()).toBe(hits);
       page.advance(1);
       expect(page.hitTests()).toBe(hits + 1);
+      expect(page.shown()).toEqual([plate]);
       expect(plate.style['top']).toBe('144px');
-      expect(fill.animations).toHaveLength(0);
-      expect(look(fill)).toEqual({ transform: 'scale(1)', opacity: '1' });
+      expect(plate.animations).toHaveLength(0);
 
       // Escape closed what was under the cursor.
       page.document.hit = page.document.element('div');
@@ -1121,41 +1230,42 @@ describe('Hub pointer bridge page script', () => {
       });
       page.advance(300);
       expect(button.hasAttribute('data-pointer-hover')).toBe(false);
-      expect(look(fill)).toEqual({ transform: 'scale(0.96)', opacity: '0' });
+      expect(page.shown()).toHaveLength(0);
 
       // Wheel scrolled a control in under the cursor.
       page.document.hit = button;
       page.socket.receive({ t: 'wheel', dx: 0, dy: 40, x: 200, y: 250 });
       page.advance(300);
-      expect(look(fill)).toEqual({ transform: 'scale(1)', opacity: '1' });
+      expect(page.shown()).toHaveLength(1);
       page.advance(5000);
       expect(page.pending().filter((timer) => timer.delay < 500)).toHaveLength(
         0,
       );
     });
 
-    it('shrinks the dot or the plate while the button is held', async () => {
+    it('brightens the plate while the button is held, never the dot', async () => {
       const page = await connected();
       const button = control(page, tile);
       const dot = page.cursor()!.children[0]!;
-      const fill = page.plate()!.children[0]!;
+      const dotStyle = { ...dot.style };
       const press = (down: boolean, x: number) =>
         page.socket.receive({ t: 'button', button: 'left', down, x, y: 250 });
       page.document.hit = page.document.element('div');
       page.socket.receive({ t: 'enter', x: 10, y: 10 });
       press(true, 10);
-      expect(look(dot)).toEqual({ transform: 'scale(0.85)', opacity: '1' });
+      expect(dot.style).toEqual(dotStyle);
       press(false, 10);
-      expect(look(dot)).toEqual({ transform: 'scale(1)', opacity: '1' });
 
       page.document.hit = button;
       press(true, 200);
       expect(button.hasAttribute('data-pointer-pressed')).toBe(true);
-      expect(look(fill)).toEqual({ transform: 'scale(0.97)', opacity: '0.7' });
-      expect(look(dot)).toEqual({ transform: 'scale(0.4)', opacity: '0' });
+      const plate = page.shown()[0]!;
+      expect(plate.style['background']).toBe('rgba(255, 255, 255, 0.24)');
+      expect(dot.style).toEqual(dotStyle);
       press(false, 200);
       expect(button.hasAttribute('data-pointer-pressed')).toBe(false);
-      expect(look(fill)).toEqual({ transform: 'scale(1)', opacity: '1' });
+      expect(plate.style['background']).toBe('rgba(255, 255, 255, 0.14)');
+      expect(dot.style).toEqual(dotStyle);
     });
   });
 });

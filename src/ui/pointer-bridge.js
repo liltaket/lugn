@@ -6,7 +6,8 @@
 // The Hub's main thread is slow and the dashboard is heavy, so the cursor is
 // built once when the bridge is configured and only ever has its transform
 // and visibility changed. Each animation frame writes one transform; hover
-// hit testing runs from a timer, never inside the frame.
+// hit testing, and the highlight around the hovered control, run from a
+// timer, never inside the frame.
 (() => {
   'use strict';
 
@@ -32,35 +33,41 @@
   const PERF_INTERVAL_MS = 2000;
   const LAG_SAMPLES = 256;
   // The dot: a soft disc centred on the hotspot, drawn inside a slightly
-  // larger box so its shadow is not clipped by paint containment.
-  const DOT_SIZE = 18;
-  const DOT_BOX = 28;
+  // larger box so its shadow is not clipped by paint containment. It always
+  // shows and only ever moves.
+  const DOT_SIZE = 20;
+  const DOT_BOX = 30;
   const PARKED = 'translate3d(-100px, -100px, 0)';
-  // The highlight plate that replaces the dot over a control.
+  // The highlight plate: static around the hovered control, under the dot.
   const PLATE_PADDING = 6;
   const PLATE_MIN_RADIUS = 12;
-  // Controls bigger than this keep the dot and get no plate.
-  const PLATE_MAX_WIDTH = 420;
-  const PLATE_MAX_HEIGHT = 260;
-  // The plate leans toward the pointer by this share of its offset from the
-  // control's centre, at most PLATE_SHIFT_MAX px each way.
-  const PLATE_PARALLAX = 0.06;
-  const PLATE_SHIFT_MAX = 3;
-  // A plate that faded out less than this long ago slides to the next
-  // control instead of popping up there.
-  const PLATE_MORPH_MS = 180;
-  const EASE_MS = 160;
-  const EASE = 'cubic-bezier(0.25, 1, 0.5, 1)';
-  const LOOK = {
-    dot: { transform: 'scale(1)', opacity: '1' },
-    dotPressed: { transform: 'scale(0.85)', opacity: '1' },
-    dotOnPlate: { transform: 'scale(0.4)', opacity: '0' },
-    plateHidden: { transform: 'scale(0.96)', opacity: '0' },
-    plate: { transform: 'scale(1)', opacity: '1' },
-    platePressed: { transform: 'scale(0.97)', opacity: '0.7' },
+  // A plate covering at least this many px draws an outline instead: a large
+  // area washed in white reads as selected rather than hovered.
+  const RING_MIN_AREA = 64000;
+  const FADE_MS = 110;
+  // The dark hairline outside keeps the plate visible over light controls
+  // and artwork.
+  const PLATE_LOOKS = {
+    fill: {
+      background: 'rgba(255, 255, 255, 0.14)',
+      pressed: 'rgba(255, 255, 255, 0.24)',
+      boxShadow:
+        'inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.16)',
+    },
+    ring: {
+      background: 'rgba(255, 255, 255, 0.04)',
+      pressed: 'rgba(255, 255, 255, 0.1)',
+      boxShadow:
+        'inset 0 0 0 2px rgba(255, 255, 255, 0.42), 0 0 0 1px rgba(0, 0, 0, 0.22)',
+    },
   };
-  const INTERACTIVE =
-    'button, a, [role="button"], input, label, select, textarea, summary, [tabindex]';
+  // Everything on the Hub that acts on a click: display.js binds its
+  // handlers to buttons (the scene grid delegates to its buttons) and the
+  // bedtime form's labels carry their radios, checkbox and time field.
+  // Generic focus targets ([tabindex] panels and scroll areas) do nothing on
+  // a click and are left out.
+  const CONTROLS =
+    'button, a[href], input, select, textarea, summary, label, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="option"]';
   const FOCUSABLE_FIELDS = 'input, select, textarea';
 
   const clock =
@@ -75,9 +82,9 @@
   let reconnectDelay = RECONNECT_MIN_MS;
   let reconnectTimer;
   let cursor;
-  let dotFill;
-  let plate;
-  let plateFill;
+  // Two plates, so one can fade out around the control just left while the
+  // other fades in around the next one.
+  let plates = [];
   let visible = false;
   let pixelRatio = 1;
   // Latest point from the agent.
@@ -104,16 +111,8 @@
   let pressControl = null;
   let pressMoveX = NaN;
   let pressMoveY = NaN;
-  // Plate geometry in viewport px, set when the hovered control changes.
-  let plateShown = false;
-  let plateHiddenAt = -Infinity;
-  let plateRect = null;
-  let plateCenterX = 0;
-  let plateCenterY = 0;
-  let plateDrawnX = NaN;
-  let plateDrawnY = NaN;
-  let dotLook = null;
-  let plateLook = null;
+  // The plate shown around the hovered control, if any.
+  let activePlate = null;
 
   // Telemetry for the window since the cursor was shown or the last `perf`.
   const lags = new Float64Array(LAG_SAMPLES);
@@ -172,85 +171,51 @@
     return element;
   }
 
-  // Inner layers change scale and opacity only when the look changes (hover
-  // or press), never per frame, so they alone carry a transition.
-  function easedLayer(look) {
-    const element = document.createElement('div');
+  // A plate never moves: its box is set once per hovered control and only
+  // its opacity eases.
+  function createPlate() {
+    const element = fixedLayer('plate', 0, 0);
     const style = element.style;
-    style.position = 'absolute';
+    style.zIndex = '2147483646';
     style.boxSizing = 'border-box';
-    style.margin = '0';
-    style.padding = '0';
-    style.pointerEvents = 'none';
-    style.willChange = 'transform, opacity';
-    style.transition = `transform ${EASE_MS}ms ${EASE}, opacity ${EASE_MS}ms ${EASE}`;
-    style.transform = look.transform;
-    style.opacity = look.opacity;
-    return element;
+    style.contain = 'layout size style';
+    style.willChange = 'opacity';
+    style.transition = `opacity ${FADE_MS}ms ease-out`;
+    style.opacity = '0';
+    document.body.appendChild(element);
+    return { element, control: null, look: null, background: '', shown: false };
   }
 
   // Built once, before any `enter`, and kept in the DOM for good: showing it
   // is a visibility flip on layers that already exist. No CSS filter or
-  // backdrop: the shadow and fill rasterize once and the layers only move.
+  // backdrop: the shadow and fill rasterize once and the layers only move or
+  // fade.
   function createCursor() {
-    plate = fixedLayer('plate', 0, 0);
-    plate.style.zIndex = '2147483646';
-    plate.style.contain = 'layout size style';
-    plate.style.transform = 'translate3d(0px, 0px, 0)';
-    plateFill = easedLayer(LOOK.plateHidden);
-    plateFill.style.left = '0';
-    plateFill.style.top = '0';
-    plateFill.style.right = '0';
-    plateFill.style.bottom = '0';
-    plateFill.style.background = 'rgba(255, 255, 255, 0.14)';
-    plateFill.style.boxShadow = 'inset 0 0 0 1px rgba(255, 255, 255, 0.06)';
-    plate.appendChild(plateFill);
-    plateLook = LOOK.plateHidden;
-
+    plates = [createPlate(), createPlate()];
     const dot = fixedLayer('dot', DOT_BOX, DOT_BOX);
     dot.style.zIndex = '2147483647';
     dot.style.contain = 'strict';
     dot.style.overflow = 'hidden';
     dot.style.transform = PARKED;
-    dotFill = easedLayer(LOOK.dot);
+    const fill = document.createElement('div');
+    const style = fill.style;
     const inset = `${(DOT_BOX - DOT_SIZE) / 2}px`;
-    dotFill.style.left = inset;
-    dotFill.style.top = inset;
-    dotFill.style.width = `${DOT_SIZE}px`;
-    dotFill.style.height = `${DOT_SIZE}px`;
-    dotFill.style.borderRadius = '50%';
-    dotFill.style.background = 'rgba(236, 240, 232, 0.55)';
-    dotFill.style.border = '1px solid rgba(12, 18, 16, 0.32)';
-    dotFill.style.boxShadow = '0 1px 4px rgba(0, 0, 0, 0.24)';
-    dot.appendChild(dotFill);
-    dotLook = LOOK.dot;
-
-    document.body.appendChild(plate);
+    style.position = 'absolute';
+    style.boxSizing = 'border-box';
+    style.left = inset;
+    style.top = inset;
+    style.width = `${DOT_SIZE}px`;
+    style.height = `${DOT_SIZE}px`;
+    style.margin = '0';
+    style.padding = '0';
+    style.pointerEvents = 'none';
+    style.borderRadius = '50%';
+    style.background = 'rgba(236, 240, 232, 0.55)';
+    style.border = '1px solid rgba(12, 18, 16, 0.32)';
+    style.boxShadow = '0 1px 4px rgba(0, 0, 0, 0.24)';
+    dot.appendChild(fill);
     document.body.appendChild(dot);
     return dot;
-  }
-
-  function setLook(element, current, look) {
-    if (current === look) return look;
-    if (current.transform !== look.transform)
-      element.style.transform = look.transform;
-    if (current.opacity !== look.opacity) element.style.opacity = look.opacity;
-    return look;
-  }
-
-  // Dot and plate looks follow hover and press; called off the hot path.
-  function updateLook() {
-    const pressed = pressTarget !== null;
-    dotLook = setLook(
-      dotFill,
-      dotLook,
-      plateShown ? LOOK.dotOnPlate : pressed ? LOOK.dotPressed : LOOK.dot,
-    );
-    plateLook = setLook(
-      plateFill,
-      plateLook,
-      !plateShown ? LOOK.plateHidden : pressed ? LOOK.platePressed : LOOK.plate,
-    );
   }
 
   function showCursor() {
@@ -258,7 +223,7 @@
       visible = true;
       warmUntil = 0;
       cursor.style.visibility = 'visible';
-      plate.style.visibility = 'visible';
+      for (const plate of plates) plate.element.style.visibility = 'visible';
       startMeasuring();
     }
     noteMotion(clock());
@@ -269,7 +234,7 @@
       visible = false;
       cursor.style.visibility = 'hidden';
       cursor.style.transform = PARKED;
-      plate.style.visibility = 'hidden';
+      for (const plate of plates) plate.element.style.visibility = 'hidden';
       drawnX = NaN;
       drawnY = NaN;
     }
@@ -282,7 +247,6 @@
     hoverY = NaN;
     hitTarget = null;
     setHover(null);
-    plateHiddenAt = -Infinity;
   }
 
   // ── Highlight plate ──
@@ -310,16 +274,42 @@
   }
 
   function disabled(control) {
-    return (
+    if (
       control.disabled === true ||
-      control.getAttribute?.('aria-disabled') === 'true'
-    );
+      control.getAttribute?.('aria-disabled') === 'true' ||
+      control.control?.disabled === true
+    )
+      return true;
+    try {
+      return control.matches?.(':disabled') === true;
+    } catch {
+      return false;
+    }
   }
 
-  // Sizes the plate to the newly hovered control. Runs only when hover moves
-  // to another control, from the hover timer, after the hit test has already
-  // brought layout up to date.
-  function placePlate(control, morph = true) {
+  function setOpacity(plate, shown) {
+    if (plate.shown === shown) return;
+    plate.shown = shown;
+    plate.element.style.opacity = shown ? '1' : '0';
+  }
+
+  // Fill colour follows the press; written only when it changes.
+  function updateLook() {
+    const plate = activePlate;
+    if (!plate) return;
+    const background =
+      pressTarget !== null ? plate.look.pressed : plate.look.background;
+    if (plate.background === background) return;
+    plate.background = background;
+    plate.element.style.background = background;
+  }
+
+  // Puts a plate around the hovered control. Runs only from the hover timer
+  // (or a recheck), after the hit test has brought layout up to date.
+  // `remeasure` resizes the shown plate in place for the same control;
+  // otherwise the old plate fades out where it is and the other one fades in
+  // around the new control. Nothing slides.
+  function placePlate(control, remeasure = false) {
     if (!control || disabled(control) || !control.getBoundingClientRect) {
       hidePlate();
       return;
@@ -327,16 +317,12 @@
     const zoom = rootZoom();
     const scale = rectScale(zoom);
     const box = control.getBoundingClientRect();
-    const width = box.width * scale + 2 * PLATE_PADDING;
-    const height = box.height * scale + 2 * PLATE_PADDING;
-    if (
-      !(box.width > 0 && box.height > 0) ||
-      width > PLATE_MAX_WIDTH + 2 * PLATE_PADDING ||
-      height > PLATE_MAX_HEIGHT + 2 * PLATE_PADDING
-    ) {
+    if (!(box.width > 0 && box.height > 0)) {
       hidePlate();
       return;
     }
+    const width = box.width * scale + 2 * PLATE_PADDING;
+    const height = box.height * scale + 2 * PLATE_PADDING;
     const left = box.left * scale - PLATE_PADDING;
     const top = box.top * scale - PLATE_PADDING;
     const corner = String(getComputedStyle(control).borderTopLeftRadius ?? '');
@@ -350,62 +336,39 @@
             (Number.parseFloat(corner) || 0) * zoom + PLATE_PADDING,
           ),
         );
-    const previous = !morph
-      ? null
-      : plateShown || clock() - plateHiddenAt < PLATE_MORPH_MS
-        ? plateRect
-        : null;
-    plateRect = { left, top, width, height };
-    plateCenterX = left + width / 2;
-    plateCenterY = top + height / 2;
-    const style = plate.style;
+    const look =
+      width * height >= RING_MIN_AREA ? PLATE_LOOKS.ring : PLATE_LOOKS.fill;
+    let plate = activePlate;
+    if (!(remeasure && plate && plate.control === control)) {
+      // Back to a control whose plate is still fading out: that plate fades
+      // back in; otherwise the idle plate takes the new control.
+      plate =
+        plates.find(
+          (entry) => entry !== activePlate && entry.control === control,
+        ) ?? plates.find((entry) => entry !== activePlate);
+      if (activePlate && activePlate !== plate) setOpacity(activePlate, false);
+    }
+    const style = plate.element.style;
     style.left = `${left}px`;
     style.top = `${top}px`;
     style.width = `${width}px`;
     style.height = `${height}px`;
-    plateFill.style.borderRadius = `${radius}px`;
-    drawPlate();
-    if (previous) morphPlate(previous, plateRect);
-    plateShown = true;
+    style.borderRadius = `${radius}px`;
+    if (plate.look !== look) {
+      plate.look = look;
+      plate.background = '';
+      style.boxShadow = look.boxShadow;
+    }
+    plate.control = control;
+    activePlate = plate;
     updateLook();
-  }
-
-  // Slides the plate from the control it just left, on the compositor.
-  function morphPlate(from, to) {
-    if (typeof plateFill.animate !== 'function') return;
-    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
-    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
-    plateFill.animate(
-      [
-        {
-          transform: `translate(${dx}px, ${dy}px) scale(${from.width / to.width}, ${from.height / to.height})`,
-        },
-        { transform: 'scale(1)' },
-      ],
-      { duration: EASE_MS, easing: EASE },
-    );
+    setOpacity(plate, true);
   }
 
   function hidePlate() {
-    if (!plateShown) return;
-    plateShown = false;
-    plateHiddenAt = clock();
-    updateLook();
-  }
-
-  function plateShift(offset) {
-    const shift = offset * PLATE_PARALLAX;
-    return Math.max(-PLATE_SHIFT_MAX, Math.min(PLATE_SHIFT_MAX, shift));
-  }
-
-  // The plate leans a few px toward the pointer: one transform write.
-  function drawPlate() {
-    const px = snap(plateShift(x - plateCenterX));
-    const py = snap(plateShift(y - plateCenterY));
-    if (px === plateDrawnX && py === plateDrawnY) return;
-    plateDrawnX = px;
-    plateDrawnY = py;
-    plate.style.transform = `translate3d(${px}px, ${py}px, 0)`;
+    if (!activePlate) return;
+    setOpacity(activePlate, false);
+    activePlate = null;
   }
 
   function requestFrame() {
@@ -415,8 +378,8 @@
   }
 
   // The hot path: at most one pointermove for a held button (hit test first,
-  // while layout is still clean) and a transform write on the dot, plus one
-  // on the plate while it is shown. No other reads or writes.
+  // while layout is still clean) and a transform write on the dot. No other
+  // reads or writes; the plate does not move.
   function frame() {
     framePending = false;
     const now = clock();
@@ -436,7 +399,6 @@
         drawnX = x;
         drawnY = y;
         cursor.style.transform = `translate3d(${snap(x - DOT_BOX / 2)}px, ${snap(y - DOT_BOX / 2)}px, 0)`;
-        if (plateShown) drawPlate();
         frames += 1;
         if (moveStamp) {
           recordLag(now - moveStamp);
@@ -471,8 +433,16 @@
     return hitTarget;
   }
 
+  // The element a click at this point acts on: a button rather than the
+  // span inside it, and a label rather than the radio, checkbox or field it
+  // wraps. Nothing inside an aria-hidden subtree counts.
   function controlFor(element) {
-    return element?.closest?.(INTERACTIVE) ?? null;
+    let control = element?.closest?.(CONTROLS) ?? null;
+    if (!control) return null;
+    if (/^input$/i.test(control.tagName ?? ''))
+      control = control.parentElement?.closest?.('label') ?? control;
+    if (control.closest?.('[aria-hidden="true"]')) return null;
+    return control;
   }
 
   function setHover(control) {
@@ -490,7 +460,7 @@
     hoverX = x;
     hoverY = y;
     const control = controlFor(hitAt(false));
-    if (control === hovered && remeasure) placePlate(control, false);
+    if (control === hovered && remeasure) placePlate(control, true);
     else setHover(control);
   }
 
