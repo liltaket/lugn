@@ -4885,3 +4885,15 @@ body {
     transparent calc(50% + var(--strip-span) / 2)
   );
 }
+/* The compact music card under a camera (or another stacked top card) shows a
+   plain square thumbnail for every shape: no hero box, no fades. */
+#app-root[data-camera-visible='true']
+  .music-artwork[data-aspect][data-strip]
+  img,
+#app-root[data-stacked='true'] .music-artwork[data-aspect][data-strip] img {
+  aspect-ratio: auto;
+  height: 100%;
+  object-fit: cover;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
