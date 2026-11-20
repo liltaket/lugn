@@ -792,7 +792,7 @@ impl<'p> App<'p> {
     ) -> Result<()> {
         let hand_back = ReleaseTo {
             activation_id,
-            cursor: None,
+            cursor: leftmost_zone(&self.zones.zones).and_then(|z| z.hand_back_point(cursor)),
         };
         if !self.page_ready() {
             // Barriers are only armed with a page, but never keep a pointer

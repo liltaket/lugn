@@ -19,9 +19,12 @@ It is a separate binary next to `lugn-linux-agent`:
   the bottom edge and hands the captured pointer over. KDE only accepts a
   barrier that fills the whole edge, so the barrier is only armed while the
   KWin observer reports the cursor near the entry corner. A push down onto the
-  taskbar further right never meets it. Inside the approach area but outside
-  the entry corner (`hub_width_px + entry_slack_px` from the left), a push is
-  handed straight back and the barrier rests for 300 ms. Inside the corner
+  taskbar further right never meets it. The approach area reaches only 24 px
+  past the entry corner (`hub_width_px + entry_slack_px` from the left); a
+  push in that strip is handed straight back onto the bottom row and the
+  barrier rests for 300 ms. Every hand-back puts the pointer on the bottom row,
+  because KWin reports the activation point below the screen and a release
+  without a position would leave the pointer there, out of sight. Inside the corner
   the push is pending until it has gone `entry_push_px` further, mostly
   downward, within `entry_timeout_ms`; only then does the page get `enter`. A
   pending push that slides `entry_push_px` sideways, moves back up more than
@@ -178,7 +181,7 @@ lugn-hub-pointer` (or killing the process) frees it.
   cursor feels slow compared with the desktop
   pointer, lower it if it feels twitchy. Scroll is not scaled by gain. A wheel
   notch scrolls 48 px.
-- **Warm-up**: while the cursor is within `hub_width_px + entry_slack_px + 200`
+- **Warm-up**: while the cursor is within `hub_width_px + entry_slack_px + 24`
   px of the left edge and 220 px of the bottom (and the gate is open), the
   agent sends `warm {on: true}` and pings every 20 ms instead of every second,
   which keeps the Hub's Wi-Fi out of power save. It goes back to 1 s pings and

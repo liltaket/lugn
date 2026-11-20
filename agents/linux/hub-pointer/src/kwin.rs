@@ -31,7 +31,7 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 const LOAD_RETRIES: u32 = 8;
 const LOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
 /// The approach area reaches this far past the entry corner to the right...
-const APPROACH_EXTRA_X: i32 = 200;
+const APPROACH_EXTRA_X: i32 = 24;
 /// ...and this far up from the monitor's bottom edge.
 const APPROACH_HEIGHT: i32 = 220;
 
@@ -447,7 +447,7 @@ mod tests {
         assert_eq!(
             approach_for(MONITOR, 720),
             Approach {
-                max_x: 920,
+                max_x: 744,
                 min_y: 809
             }
         );
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(
             approach_for(offset, 720),
             Approach {
-                max_x: 820,
+                max_x: 644,
                 min_y: 859
             }
         );

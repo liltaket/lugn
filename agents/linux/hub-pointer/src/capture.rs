@@ -39,6 +39,14 @@ impl Zone {
         self.x + self.width as i32
     }
 
+    /// Where to put the pointer back after an activation we turn down. The
+    /// compositor reports the activation point past the edge (below the
+    /// screen); releasing without a position leaves the pointer there,
+    /// invisible, so it always goes back onto the bottom row.
+    pub fn hand_back_point(&self, cursor: Option<(f64, f64)>) -> Option<(f64, f64)> {
+        cursor.map(|(x, _)| self.bottom_point(x))
+    }
+
     /// Just above the bottom edge at desktop `x`, clamped into the zone.
     fn bottom_point(&self, x: f64) -> (f64, f64) {
         let y = self.bottom() as f64 - 1.0 - RETURN_INSET;
@@ -329,7 +337,7 @@ impl Pointer {
             self.state = State::Idle;
             return Err(ReleaseTo {
                 activation_id,
-                cursor: None,
+                cursor: self.zone.and_then(|z| z.hand_back_point(cursor)),
             });
         }
         self.state = State::Pending(Pending {
@@ -611,6 +619,20 @@ mod tests {
         };
         assert_eq!(leftmost_zone(&[upper, MONITOR]), Some(MONITOR));
         assert_eq!(leftmost_zone(&[]), None);
+    }
+
+    #[test]
+    fn hand_back_lands_on_the_bottom_row() {
+        // KWin reports the activation below the screen (y > 1029).
+        assert_eq!(
+            MONITOR.hand_back_point(Some((700.0, 1034.4))),
+            Some((700.0, 1026.0))
+        );
+        assert_eq!(
+            MONITOR.hand_back_point(Some((-3.0, 1030.0))),
+            Some((0.0, 1026.0))
+        );
+        assert_eq!(MONITOR.hand_back_point(None), None);
     }
 
     #[test]
@@ -1054,7 +1076,7 @@ mod tests {
             p.activate(Some(1), Some((100.0, 1028.0)), Instant::now()),
             Err(ReleaseTo {
                 activation_id: Some(1),
-                cursor: None
+                cursor: Some((100.0, 1026.0))
             })
         );
         assert!(!p.is_capturing());
