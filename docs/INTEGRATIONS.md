@@ -231,6 +231,57 @@ reconciliation from lighting the room during sleep/away. A user-selected
 dashboard scene remains an explicit command. Remote commands are attributed to
 the physical remote in Lugn's command ledger.
 
+## Voice assistants through Home Assistant
+
+`mqtt.assistantEntities` publishes a few Home Assistant entities, by MQTT
+discovery, that are meant to be exposed to Google Assistant, Alexa or Assist.
+Lugn owns these entities. A voice command reaches Lugn as an ordinary
+capability call, attributed to Home Assistant in the command ledger. Raw
+light entities should not be exposed to a voice assistant: Lugn would read
+a change made there as a manual override it did not make.
+
+| Config entry | Home Assistant entity | On                                                     | Off                                         | State                                      |
+| ------------ | --------------------- | ------------------------------------------------------ | ------------------------------------------- | ------------------------------------------ |
+| `lights[]`   | `light` (brightness)  | `lighting.set` power on, with the requested brightness | `lighting.set` power off                    | The target's reported power/brightness     |
+| `scenes[]`   | `switch`              | `lighting.activateScene`                               | `offSceneId`, only if this scene is current | On while the scene is Lugn's current scene |
+| `room`       | `light` (on/off)      | `onSceneId`, only when every light is off              | `offSceneId`                                | On while any light reports on              |
+
+Light state follows what the lamp reported and falls back to Lugn's intent
+until a report arrives. An unknown state stays unknown, and "on" for the room
+does nothing while any light state is unknown.
+
+Commands and state use separate topics under `baseTopic`
+(`<baseTopic>/<id>/set` and `<baseTopic>/<id>/state`), so a published state
+cannot return as a command. Commands run one at a time in arrival order,
+retained commands are ignored, and every command is answered with a fresh
+state publication, also when it changed nothing or failed. Discovery, state
+and `<baseTopic>/availability` are retained. The connection's last will
+marks the entities unavailable when Lugn stops or loses the broker.
+
+```json
+"assistantEntities": {
+  "lights": [
+    { "id": "taklampan", "name": "Taklampan", "target": "lighting.ceiling" }
+  ],
+  "scenes": [
+    { "id": "mysljus", "name": "Mysljus", "sceneId": "scene.soft_light" },
+    { "id": "vardagsljus", "name": "Vardagsljus", "sceneId": "scene.everyday_light" },
+    { "id": "fokus", "name": "Fokus", "sceneId": "scene.focus_light" },
+    { "id": "filmkvall", "name": "Filmkväll", "sceneId": "scene.movie_light" }
+  ],
+  "room": {
+    "id": "belysningen",
+    "name": "Belysningen",
+    "onSceneId": "scene.everyday_light"
+  }
+}
+```
+
+`discoveryPrefix` (default `homeassistant`), `baseTopic` (default
+`lugn/assistant`) and `offSceneId` (default `scene.all_off`)
+are optional. Removing an entry leaves its retained discovery message on the
+broker; delete the entity in Home Assistant to remove it.
+
 ## Nest Hubs / DashCast
 
 The runtime serves custom Bed and Desk room pages on a separate display

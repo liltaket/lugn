@@ -21,6 +21,7 @@ import {
   type WiimUpnpSubscriber,
 } from '../adapters/wiim-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
+import { AssistantEntitiesMqttAdapter } from '../adapters/assistant-entities-mqtt.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
 import { HomeAssistantPrinterAdapter } from '../adapters/home-assistant-printer.js';
 import { PrinterActivityService } from './printer-activity-service.js';
@@ -870,8 +871,11 @@ export async function startRuntime(
   let sensorAdapter: Stl27lMqttPresenceAdapter | undefined;
   const computerAdapters: ComputerMqttAdapter[] = [];
   let unsubscribeMqttStatus: (() => void) | undefined;
+  let assistantEntities: AssistantEntitiesMqttAdapter | undefined;
+  let unsubscribeAssistantEntities: (() => void) | undefined;
 
   if (config.mqtt) {
+    const assistantConfig = config.mqtt.assistantEntities;
     const mqttConfig: MqttSubscriberConfig = {
       url: config.mqtt.url,
       ...(config.mqtt.username === undefined
@@ -883,6 +887,17 @@ export async function startRuntime(
       ...(config.mqtt.clientId === undefined
         ? {}
         : { clientId: config.mqtt.clientId }),
+      ...(assistantConfig === undefined
+        ? {}
+        : {
+            // Assistant entities read unavailable when Lugn is gone.
+            will: {
+              topic: `${assistantConfig.baseTopic}/availability`,
+              payload: AssistantEntitiesMqttAdapter.offlinePayload,
+              qos: 1 as const,
+              retain: true,
+            },
+          }),
     };
     mqttSubscriber = (
       dependencies.createMqttSubscriber ??
@@ -1035,7 +1050,33 @@ export async function startRuntime(
           subscribe: (listener) => adapter.subscribe(listener),
         });
       }
+    const assistantPublish = mqttSubscriber.publish;
+    if (assistantConfig) {
+      if (!assistantPublish)
+        throw new Error('Assistant entities require MQTT publication support');
+      const adapter = new AssistantEntitiesMqttAdapter({
+        config: assistantConfig,
+        mqtt: {
+          subscribe: mqttSubscriber.subscribe.bind(mqttSubscriber),
+          publish: (topic, payload, options) =>
+            assistantPublish.call(mqttSubscriber, topic, payload, options),
+        },
+        getState: () => engine.state,
+        invoke: ({ capability, input }) =>
+          capabilities.invoke(capability, input, {
+            actor: { type: 'home_assistant', id: 'assistant_entities' },
+            source: 'assistant_entities',
+            reason: 'Voice assistant command through Home Assistant',
+          }),
+        onWarning: (message) => console.warn(`[lugn] ${message}`),
+      });
+      assistantEntities = adapter;
+      unsubscribeAssistantEntities = engine.stream.subscribe((update) => {
+        if (update.domains.includes('lighting')) adapter.observe();
+      });
+    }
     unsubscribeMqttStatus = mqttSubscriber.onStatus((status) => {
+      assistantEntities?.setBrokerConnected(status === 'connected');
       for (const adapter of opticalAdapters.values())
         adapter.setBrokerConnected(status === 'connected');
       for (const adapter of displayAdapters.values())
@@ -1219,6 +1260,8 @@ export async function startRuntime(
     for (const controller of displayControllers.values()) controller.dispose();
     for (const sensor of powerSensors.values()) sensor.dispose();
     for (const adapter of computerAdapters) adapter.stop();
+    unsubscribeAssistantEntities?.();
+    await assistantEntities?.stop();
     unsubscribeMqttStatus?.();
     if (goveeRefreshTimer) clearInterval(goveeRefreshTimer);
     await wiimMusic?.stop();
@@ -1263,6 +1306,8 @@ export async function startRuntime(
         controller.dispose();
       for (const sensor of powerSensors.values()) sensor.dispose();
       for (const adapter of computerAdapters) adapter.stop();
+      unsubscribeAssistantEntities?.();
+      await assistantEntities?.stop();
       unsubscribeMqttStatus?.();
       if (goveeRefreshTimer) clearInterval(goveeRefreshTimer);
       await wiimMusic?.stop();

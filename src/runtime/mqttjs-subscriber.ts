@@ -19,6 +19,8 @@ export type MqttSubscriberConfig = {
   clientId?: string;
   connectTimeoutMs?: number;
   reconnectPeriodMs?: number;
+  /** Published by the broker when this connection drops without a clean end. */
+  will?: { topic: string; payload: string; qos: 1; retain: boolean };
 };
 
 export type MqttSubscriberStatus =
@@ -85,6 +87,7 @@ export class MqttJsSubscriber implements PresenceMqttSubscriber {
         ...(this.config.password === undefined
           ? {}
           : { password: this.config.password }),
+        ...(this.config.will === undefined ? {} : { will: this.config.will }),
       });
       this.client = client;
       // MQTT.js can defer publish() while its outgoing store is processing.
