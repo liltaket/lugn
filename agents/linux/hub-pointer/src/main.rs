@@ -28,6 +28,7 @@ mod capture;
 mod coalesce;
 mod config;
 mod gate;
+mod keys;
 mod kwin;
 mod portal;
 mod protocol;
@@ -128,7 +129,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
     let cfg = Config::load(&config_path)?;
     log!(
         "config {}: listen {} hub_width_px {} entry_slack_px {} entry_push_px {} \
-         entry_timeout {:?} gain {} origins {:?} suppress_effects {:?}",
+         entry_timeout {:?} gain {} origins {:?} suppress_effects {:?} exit_on_key {}",
         config_path.display(),
         cfg.listen,
         cfg.hub_width_px,
@@ -137,7 +138,8 @@ async fn run(config_path: PathBuf) -> Result<()> {
         cfg.entry_timeout,
         cfg.gain,
         cfg.allowed_origins,
-        cfg.suppress_effects
+        cfg.suppress_effects,
+        cfg.exit_on_key
     );
     // Bind first so a port clash fails before anything touches the portal.
     let listener = TcpListener::bind(cfg.listen)
@@ -211,6 +213,16 @@ async fn run(config_path: PathBuf) -> Result<()> {
         _ => None,
     };
 
+    // Typing ends a capture. The watcher runs on its own threads; `key_tx`
+    // lives until the loop ends, so a disabled watcher never closes the
+    // channel.
+    let (key_tx, mut key_rx) = mpsc::channel::<keys::KeyDown>(16);
+    if cfg.exit_on_key {
+        keys::spawn(key_tx.clone());
+    } else {
+        log!("keys: exit_on_key = false; typing does not end a capture");
+    }
+
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
     let mut report = interval(LATENCY_REPORT_EVERY);
@@ -238,6 +250,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
             },
             Some(page) = page_rx.recv() => app.on_new_page(page).await,
             Some(event) = kwin_rx.recv() => app.on_kwin(event).await,
+            Some(keys::KeyDown) = key_rx.recv() => app.on_key().await,
             _ = sleep_until(move_due.unwrap_or(far)), if move_due.is_some() => {
                 app.on_move_due();
                 Ok(())
@@ -311,6 +324,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
         }
     };
     app.shutdown().await;
+    drop(key_tx);
     result
 }
 
@@ -571,6 +585,38 @@ impl<'p> App<'p> {
         self.disarm().await?;
         self.rearm_at = Some(Instant::now() + REARM_AFTER_ABORT);
         Ok(())
+    }
+
+    /// Ends a capture on our side, however `Pointer` decided it ends.
+    async fn finish(&mut self, to: ReleaseTo, ended: Ended) -> Result<()> {
+        match ended {
+            Ended::Exit(edge) => {
+                let edge = match edge {
+                    Exit::Top => "top",
+                    Exit::Left => "left",
+                    Exit::Right => "right",
+                };
+                log!("capture: left the Hub's {edge}, release to {:?}", to.cursor);
+                self.capture_ended();
+                self.release(to).await
+            }
+            Ended::Key => {
+                log!("capture: ending (key pressed), release to {:?}", to.cursor);
+                self.send_input(&AgentMsg::Leave);
+                self.capture_ended();
+                self.release(to).await
+            }
+            Ended::Abort(why) => self.abort_entry(to, why).await,
+        }
+    }
+
+    /// A key went down on the desktop keyboard. Outside a capture it means
+    /// nothing.
+    async fn on_key(&mut self) -> Result<()> {
+        match self.pointer.key_pressed() {
+            Some((to, ended)) => self.finish(to, ended).await,
+            None => Ok(()),
+        }
     }
 
     async fn on_entry_due(&mut self) -> Result<()> {
@@ -903,19 +949,8 @@ impl<'p> App<'p> {
                 for msg in &out.msgs {
                     self.send_input(msg);
                 }
-                match out.release {
-                    Some((to, Ended::Exit(edge))) => {
-                        let edge = match edge {
-                            Exit::Top => "top",
-                            Exit::Left => "left",
-                            Exit::Right => "right",
-                        };
-                        log!("capture: left the Hub's {edge}, release to {:?}", to.cursor);
-                        self.capture_ended();
-                        self.release(to).await?;
-                    }
-                    Some((to, Ended::Abort(why))) => self.abort_entry(to, why).await?,
-                    None => {}
+                if let Some((to, ended)) = out.release {
+                    self.finish(to, ended).await?;
                 }
             }
             EiEvent::SeatAdded(s) => {

@@ -174,6 +174,8 @@ struct Pending {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Active {
     activation_id: Option<u32>,
+    /// Desktop x where the barrier stopped the pointer, if the portal said.
+    start_x: Option<f64>,
     x: f64,
     y: f64,
 }
@@ -213,6 +215,8 @@ pub enum Abort {
     /// A button or the wheel was used; libei captured that event, so the
     /// desktop never sees it.
     Input,
+    /// A key went down on the desktop keyboard.
+    Key,
 }
 
 impl Abort {
@@ -222,6 +226,7 @@ impl Abort {
             Self::BackUp => "moved back up",
             Self::Timeout => "timed out",
             Self::Input => "button or wheel used; that event is lost",
+            Self::Key => "key pressed",
         }
     }
 }
@@ -231,6 +236,8 @@ impl Abort {
 pub enum Ended {
     /// The cursor left the Hub; the page needs `leave` (already in `msgs`).
     Exit(Exit),
+    /// A key press ended a shown cursor; the caller sends the page `leave`.
+    Key,
     /// The push never entered; the page saw nothing.
     Abort(Abort),
 }
@@ -394,6 +401,32 @@ impl Pointer {
         }
     }
 
+    /// A key went down on the desktop keyboard (which capture never takes):
+    /// typing means the hand is back on the desktop. A shown cursor goes
+    /// back where the pointer left the desktop, on the bottom row at the
+    /// activation x (below the Hub cursor if the portal gave no position);
+    /// a pending push is handed back like any other abort.
+    pub fn key_pressed(&mut self) -> Option<(ReleaseTo, Ended)> {
+        let out = match self.state {
+            State::Idle => return None,
+            State::Pending(p) => (self.abort_release(&p), Ended::Abort(Abort::Key)),
+            State::Active(a) => (
+                ReleaseTo {
+                    activation_id: a.activation_id,
+                    cursor: self
+                        .zone
+                        .zip(a.start_x)
+                        .map(|(zone, x)| zone.bottom_point(x))
+                        .or_else(|| self.mapping().map(|m| m.return_point(a.x))),
+                },
+                Ended::Key,
+            ),
+        };
+        self.state = State::Idle;
+        self.frame = FrameAcc::default();
+        Some(out)
+    }
+
     /// Aborts a pending push whose deadline has passed.
     pub fn timeout(&mut self, now: Instant) -> Option<ReleaseTo> {
         let State::Pending(p) = self.state else {
@@ -462,6 +495,7 @@ impl Pointer {
             let y = ((p.dy - push) * self.gain + ENTRY_INSET).clamp(0.0, map.h - 1.0);
             self.state = State::Active(Active {
                 activation_id: p.activation_id,
+                start_x: p.start_x,
                 x,
                 y,
             });
@@ -1136,6 +1170,67 @@ mod tests {
         assert!(p.is_pending());
         assert!(!p.deactivated(Some(5)));
         assert!(!p.is_capturing());
+    }
+
+    #[test]
+    fn key_press_returns_the_pointer_where_it_left() {
+        let mut p = hub();
+        assert_eq!(p.key_pressed(), None);
+        // Entered at 300 (activation reported below the screen), then
+        // wandered far across the Hub: it comes back above 300.
+        enter(&mut p, Some(11), 300.0);
+        p.motion(400.0, 300.0);
+        p.frame(Instant::now());
+        assert_eq!(
+            p.key_pressed(),
+            Some((
+                ReleaseTo {
+                    activation_id: Some(11),
+                    cursor: MONITOR.hand_back_point(Some((300.0, 1034.0))),
+                },
+                Ended::Key
+            ))
+        );
+        assert_eq!(
+            MONITOR.hand_back_point(Some((300.0, 1034.0))),
+            Some((300.0, 1026.0))
+        );
+        assert!(!p.is_capturing());
+        assert_eq!(p.key_pressed(), None);
+        // Later events of that capture are dropped.
+        p.motion(0.0, -500.0);
+        assert_eq!(p.frame(Instant::now()), FrameOutcome::default());
+
+        // Without an activation position: below the Hub cursor.
+        let mut p = hub();
+        let t0 = Instant::now();
+        p.activate(Some(12), None, t0).unwrap();
+        p.motion(0.0, 40.0);
+        assert!(p.frame(ms(t0, 5)).entered);
+        p.motion(-320.0, 0.0);
+        p.frame(ms(t0, 10));
+        assert_eq!(
+            p.key_pressed().map(|(to, e)| (to.cursor, e)),
+            Some((Some((140.0, 1026.0)), Ended::Key))
+        );
+
+        // A pending push is aborted where the hand went; the page saw nothing.
+        let mut p = hub();
+        p.activate(Some(13), Some((200.0, 1031.0)), t0).unwrap();
+        p.motion(6.0, 20.0);
+        p.frame(ms(t0, 5));
+        assert_eq!(
+            p.key_pressed(),
+            Some((
+                ReleaseTo {
+                    activation_id: Some(13),
+                    cursor: Some((206.0, 1026.0)),
+                },
+                Ended::Abort(Abort::Key)
+            ))
+        );
+        assert!(!p.is_capturing());
+        assert_eq!(p.pending_deadline(), None);
     }
 
     #[test]

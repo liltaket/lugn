@@ -39,6 +39,8 @@ struct RawConfig {
     game_app_ids: Vec<String>,
     #[serde(default = "default_fullscreen_ok_app_ids")]
     fullscreen_ok_app_ids: Vec<String>,
+    #[serde(default = "default_exit_on_key")]
+    exit_on_key: bool,
 }
 
 fn default_listen() -> String {
@@ -60,6 +62,9 @@ fn default_gain() -> f64 {
     2.0
 }
 fn default_log_latency() -> bool {
+    true
+}
+fn default_exit_on_key() -> bool {
     true
 }
 fn strings(list: &[&str]) -> Vec<String> {
@@ -122,6 +127,8 @@ pub struct Config {
     pub log_latency: bool,
     pub suppress_effects: Vec<String>,
     pub gate: Policy,
+    /// A key press on the desktop keyboard ends a capture.
+    pub exit_on_key: bool,
 }
 
 impl Config {
@@ -184,6 +191,7 @@ impl Config {
             log_latency: raw.log_latency,
             suppress_effects,
             gate: Policy::new(&raw.game_app_ids, &raw.fullscreen_ok_app_ids),
+            exit_on_key: raw.exit_on_key,
         })
     }
 }
@@ -219,6 +227,7 @@ mod tests {
         assert_eq!(cfg.gain, 2.0);
         assert!(cfg.log_latency);
         assert_eq!(cfg.suppress_effects, ["shakecursor"]);
+        assert!(cfg.exit_on_key);
         // Lists are kept normalized for case-insensitive matching.
         assert!(
             cfg.gate
@@ -249,6 +258,7 @@ mod tests {
             suppress_effects = []
             game_app_ids = ["MyGame"]
             fullscreen_ok_app_ids = ["Foo.desktop"]
+            exit_on_key = false
             "#,
             None,
         )
@@ -267,6 +277,7 @@ mod tests {
         assert!(cfg.suppress_effects.is_empty());
         assert_eq!(cfg.gate.game_app_ids, ["mygame"]);
         assert_eq!(cfg.gate.fullscreen_ok_app_ids, ["foo"]);
+        assert!(!cfg.exit_on_key);
     }
 
     #[test]
@@ -278,6 +289,7 @@ mod tests {
         assert_eq!(cfg.entry_timeout, Duration::from_millis(350));
         assert_eq!(cfg.gain, 2.0);
         assert_eq!(cfg.suppress_effects, ["shakecursor"]);
+        assert!(cfg.exit_on_key);
     }
 
     #[test]

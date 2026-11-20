@@ -45,3 +45,9 @@ suppress_effects = ["shakecursor"]
 # default (see README.md); matching ignores case.
 # game_app_ids = ["gamescope", "lutris", "heroic", "net.lutris.Lutris"]
 # fullscreen_ok_app_ids = ["zen", "firefox_firefox", "mpv", "vlc"]
+
+# Typing on the desktop keyboard ends a capture and puts the pointer back
+# where it left the screen (volume, media and brightness keys do not). Needs
+# read access to /dev/input/event* (logind grants it to the seat's user);
+# without it this is off.
+exit_on_key = true

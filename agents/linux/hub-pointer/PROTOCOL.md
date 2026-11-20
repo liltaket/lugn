@@ -79,10 +79,12 @@ next to its own rates (libei frames and `move`s sent per second).
 ## Safety
 
 The agent ends capture when the page disconnects, when no `pong` has arrived
-for 2.5 s, on the compositor's `Deactivated` signal, and on exit. A page that
-has not answered a `ping` for 2.5 s is treated as gone even when nothing is
-captured: the agent closes its socket and disarms the barrier, and the page
-reconnects as after any disconnect. Barriers are only armed while a page is
-connected and has sent `hello`, and while the focused window is not a game,
-so the desktop pointer is never captured with nothing to show it or in the
-middle of a game.
+for 2.5 s, on the compositor's `Deactivated` signal, and on exit. With
+`exit_on_key` (the default) a key press on the desktop keyboard also ends it:
+the page gets `leave` and the pointer goes back where it left the screen. A
+page that has not answered a `ping` for 2.5 s is treated as gone even when
+nothing is captured: the agent closes its socket and disarms the barrier, and
+the page reconnects as after any disconnect. Barriers are only armed while a
+page is connected and has sent `hello`, and while the focused window is not a
+game, so the desktop pointer is never captured with nothing to show it or in
+the middle of a game.

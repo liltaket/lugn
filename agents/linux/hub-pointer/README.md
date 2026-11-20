@@ -11,7 +11,8 @@ cursor out of the page's top edge (anywhere along it) or out of its left or
 right edge and the desktop pointer comes back just above the monitor's bottom
 edge: at the matching x through the top, in the corner through the left, and
 just past the Hub's width through the right. The Hub's bottom edge is a wall.
-The keyboard always stays on the desktop.
+The keyboard always stays on the desktop, and typing on it ends the capture:
+the pointer comes back where it left the screen.
 
 It is a separate binary next to `lugn-linux-agent`:
 
@@ -42,6 +43,9 @@ It is a separate binary next to `lugn-linux-agent`:
 - A small read-only **KWin script** reports the focused window, so nothing is
   captured while a game has focus, and whether the cursor is near the entry
   corner, so the agent can warm the Hub up before the pointer arrives.
+- A passive **keyboard watcher** reads the keyboards' `/dev/input/event*`
+  nodes and ends a capture when a key goes down (see
+  [Typing ends a capture](#typing-ends-a-capture)).
 - KWin's **shake-to-find** effect (`shakecursor`) is unloaded while the pointer
   is on the Hub and loaded back afterwards, so shaking the mouse on the Hub
   does not blow up the hidden desktop cursor.
@@ -79,6 +83,7 @@ Copy [config.example.toml](config.example.toml) to
 | `suppress_effects`      | `["shakecursor"]`    | KWin effects unloaded while the pointer is on the Hub. Empty disables                                    |
 | `game_app_ids`          | launchers, emulators | Window classes or desktop file names that count as games, also when windowed (see below)                 |
 | `fullscreen_ok_app_ids` | browsers, players    | Apps whose fullscreen windows do not count as games (see below)                                          |
+| `exit_on_key`           | `true`               | A key press on the desktop keyboard ends a capture (see below)                                           |
 
 Unknown keys are rejected (`zone_height` from the left-edge version is gone).
 The two id lists replace the defaults when set; the defaults are in
@@ -96,6 +101,34 @@ focus is left alone. The log shows `gate: blocked by <class> (<rule>)` and
 `gate: open`. If the KWin script cannot be loaded, the gate stays open.
 Window classes as KWin sees them (Zen is `zen`, snap Firefox is
 `firefox_firefox`) can be read with the KWin debug console.
+
+### Typing ends a capture
+
+Capture only takes the pointer, so keys always go to the desktop's focused
+window. The Hub has nothing to type into, so with `exit_on_key = true` the
+first key that goes down while the pointer is on the Hub sends `leave` and
+puts the desktop pointer back on the bottom row where it left the screen
+(the log says `capture: ending (key pressed)`). A key during a pending push
+hands it back like any other abort. Volume, mute, media, brightness and
+mic-mute keys do not end a capture; neither do held-key repeats, releases or
+mouse buttons.
+
+Keyboards are the input devices whose key capabilities include A and Space
+(`/sys/class/input/eventN/device/capabilities/key`). That includes virtual
+keyboards such as the one a key remapper (Toshy/xwaykeyz, keyd) creates, which
+matters because a remapper grabs the physical keyboard and only its virtual
+one then reports keys. Each keyboard is read on its own thread; the list is
+rescanned every 3 s, so a replugged or reconnected keyboard is picked up again.
+The log shows `keys: watching eventN ("name")` and `keys: lost eventN …`.
+
+It needs read access to the keyboard nodes. logind grants the seat's active
+user that through a `uaccess` ACL (`getfacl /dev/input/event4` shows
+`user:<you>:rw-`); no `input` group membership is needed. Without access the
+log says `keys: no readable keyboard` once and the feature stays off.
+
+Privacy: the nodes are opened read-only and never grabbed or written to, so
+the desktop sees every key as before. The watcher only notes that a key went
+down. It keeps no key data and logs no key codes.
 
 ## Run
 
@@ -154,6 +187,9 @@ and capture must always end quickly when something goes wrong.
   session and kwin gives the pointer back. Every portal call has a timeout,
   and if a Release or Disable gets no answer within 2 s the process exits on
   purpose to get that effect.
+- The keyboard watcher runs on its own threads and only hands the event loop
+  a "key went down" note, so it never holds up pointer input. It never grabs
+  a keyboard.
 - The WebSocket never blocks input handling. Each page has its own task and
   a bounded queue; a full queue counts as a dead page.
 
