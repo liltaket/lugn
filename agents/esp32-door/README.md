@@ -13,6 +13,7 @@ the room door. Design and rollout: [docs/DOOR-NODE.md](../../docs/DOOR-NODE.md).
 | `packages/voice.yaml`    | micro_wake_word (`hey_jarvis` placeholder) + voice_assistant                 |
 | `tools/probe.py`         | Prints device info and live states over the encrypted API                    |
 | `tools/capture.py`       | Records microphone audio to a WAV file through the `start_listening` action  |
+| `tools/listen.py`        | Starts one voice run without the wake word (push-to-talk) for the bridge     |
 | `components/audio_bands` | Octave band levels, A-weighted level and spectral flatness (host-tested DSP) |
 | `audio-bands-test.yaml`  | Compile check for `audio_bands` under a separate node name                   |
 | `secrets.example.yaml`   | Keys that `secrets.yaml` must define                                         |
