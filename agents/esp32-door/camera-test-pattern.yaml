@@ -1,0 +1,12 @@
+# Diagnostics only: the camera image with the sensor's colour-bar test
+# pattern, to tell a data-path fault from an optical one (lens, film, dark).
+substitutions:
+  name: lugn-door
+  friendly_name: Lugn dörrnod
+packages:
+  base: !include packages/base.yaml
+  camera: !include packages/camera.yaml
+  audio: !include packages/audio.yaml
+  voice: !include packages/voice.yaml
+esp32_camera:
+  test_pattern: true

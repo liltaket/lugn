@@ -62,18 +62,24 @@ adopt the node without the API key.
 
 ### Hardware findings (2026-11-20)
 
-- **Camera.** It did not answer on SCCB (I²C) at bring-up. Every probe address
-  timed out, so the module was not attached or its connector was not seated.
-  With no camera, probing blocked the main loop past the 5 s task watchdog and
-  the node fell into safe mode after five boots. So the production image
-  `door-node.yaml` has no camera; `door-node-camera.yaml` adds it once the
-  module answers.
-- **Heat.** The die temperature read 87 °C after boot and 94 °C with the wake
-  word running, at full transmit power, in open air on a desk. The radio now
-  transmits at 11 dB instead of 19.5 dB; the signal is about −45 dBm indoors
-  at full power, so there is a large margin. The camera adds more heat, and
-  the board has no camera power-down pin. Plan for a heatsink and a ventilated
-  mount, and watch the `Chiptemperatur` sensor.
+- **Camera.** At first it did not answer on SCCB (I²C); every probe address
+  timed out until the module was reseated in its connector. Without a camera,
+  probing blocked setup past the 5 s task watchdog, and after five boots the
+  node fell into safe mode. The watchdog is now 15 s, so a missing camera only
+  fails its own component. `door-node-no-camera.yaml` leaves the camera out.
+  With the module seated, the sensor's colour-bar test pattern
+  (`camera-test-pattern.yaml`) arrived intact. That separates data-path faults
+  from optical ones: the first all-black frames were optical. The 2X default
+  gain ceiling left a dim room black, so the ceiling is 16X with the second
+  auto-exposure stage on.
+- **Heat.** The die read 87 °C after boot and 94 °C with the wake word
+  running, on a desk in open air. Light modem sleep brought it to 79–81 °C.
+  A lower transmit power (11 dB instead of 19.5 dB) made no measurable
+  difference, but it is kept: the AP is received at about −40 dBm. The camera
+  adds heat, and the board has no camera power-down pin. Plan for a heatsink
+  and a ventilated mount, and watch the `Chiptemperatur` sensor. Light modem
+  sleep delays packets sent _to_ the node by up to a beacon interval (pings
+  of 100–300 ms); audio from the node is not affected.
 - **Microphone.** PDM on GPIO42 (clock) and GPIO41 (data), left channel. The
   right channel is silent.
 

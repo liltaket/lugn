@@ -1,0 +1,9 @@
+# The production image without the camera package, for a node whose camera
+# module is missing or broken.
+substitutions:
+  name: lugn-door
+  friendly_name: Lugn dörrnod
+packages:
+  base: !include packages/base.yaml
+  audio: !include packages/audio.yaml
+  voice: !include packages/voice.yaml

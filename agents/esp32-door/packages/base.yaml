@@ -15,6 +15,10 @@ esp32:
   variant: esp32s3
   flash_size: 8MB
   cpu_frequency: 240MHZ
+  # Probing a camera that does not answer blocks setup for several seconds;
+  # with the 5 s default that tripped the task watchdog on every boot and the
+  # node ended in safe mode. 15 s lets the camera fail on its own instead.
+  watchdog_timeout: 15s
   framework:
     type: esp-idf
     advanced:
