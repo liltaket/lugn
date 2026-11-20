@@ -1,0 +1,53 @@
+# lugn-hub-pointer configuration.
+# Default location: $XDG_CONFIG_HOME/lugn-linux-agent/hub-pointer.toml
+
+# Address the Hub page connects to: ws://<this-host>:8791/hub-pointer?token=...
+listen = "0.0.0.0:8791"
+
+# Shared secret, also held by Lugn. Required here unless the environment
+# variable LUGN_HUB_POINTER_TOKEN is set (the environment wins).
+token = "change-me"
+
+# Origins whose pages may connect (the Lugn dashboard URL as the Hub loads it).
+# An empty list allows any Origin; the token is then the only check.
+allowed_origins = ["http://192.168.10.132:8788"]
+
+# The Hub stands below the monitor, left edges level. hub_width_px is its
+# physical width in desktop logical px (screen width in cm times the
+# monitor's px per cm). A push down out of the bottom edge can enter the Hub
+# when it starts within hub_width_px + entry_slack_px of the monitor's left
+# edge.
+hub_width_px = 480
+entry_slack_px = 40
+
+# Entry resistance: after the barrier stops the pointer, it must be pushed
+# entry_push_px further, mostly downward, within entry_timeout_ms. Sliding
+# that far sideways, moving back up or running out of time hands it back to
+# the desktop instead.
+entry_push_px = 40
+entry_timeout_ms = 350
+
+# Hub CSS px per desktop logical px of mouse motion. The Nest Hub page is
+# 1024 CSS px on a ~15.5 cm wide screen (~66 px/cm); the 3657 px monitor is
+# ~119 cm wide (~30.7 px/cm), so 2.0 keeps the physical cursor speed similar.
+gain = 2.0
+
+# Log WebSocket ping round-trip p50/p95/max every 10 s.
+log_latency = true
+
+# KWin effects unloaded while the pointer is on the Hub (shake-to-find would
+# otherwise blow up the hidden desktop cursor). [] disables.
+suppress_effects = ["shakecursor"]
+
+# The barrier stays off while a game has focus: window classes starting with
+# steam_app_ or ending in .exe, classes or desktop files listed here, and any
+# fullscreen window not in fullscreen_ok_app_ids. Setting a list replaces its
+# default (see README.md); matching ignores case.
+# game_app_ids = ["gamescope", "lutris", "heroic", "net.lutris.Lutris"]
+# fullscreen_ok_app_ids = ["zen", "firefox_firefox", "mpv", "vlc"]
+
+# Typing on the desktop keyboard ends a capture and puts the pointer back
+# where it left the screen (volume, media and brightness keys do not). Needs
+# read access to /dev/input/event* (logind grants it to the seat's user);
+# without it this is off.
+exit_on_key = true

@@ -130,6 +130,39 @@ control POSTs require a same-origin browser request. Do not port-forward it to
 the public internet. The separate operational control panel is served at
 `/ui/` on the loopback HTTP listener and supports optional Clerk sign-in.
 
+### Desktop pointer on a Hub
+
+A Hub entry may add an optional `pointerBridge` so a desktop mouse can slide
+onto that Hub's page. The desktop runs `lugn-hub-pointer`
+([README](../agents/linux/hub-pointer/README.md),
+[wire protocol](../agents/linux/hub-pointer/PROTOCOL.md)); the Hub page
+connects to it directly and draws a virtual cursor.
+
+```json
+{
+  "id": "desk-hub",
+  "role": "desk",
+  "castHost": "192.168.10.166",
+  "tokenEnv": "LUGN_DESK_HUB_TOKEN_B64",
+  "pointerBridge": {
+    "url": "ws://192.168.10.20:8791/hub-pointer",
+    "tokenEnv": "LUGN_HUB_POINTER_TOKEN_B64"
+  }
+}
+```
+
+- `url` is the agent's full WebSocket endpoint, including the `/hub-pointer`
+  path, using `ws://` or `wss://`, without credentials, query or fragment. The
+  page connects to `<url>?token=<token>`.
+- `tokenEnv` names the environment variable holding the agent's shared token
+  (16 to 512 printable characters without spaces; a `_B64` name is decoded as
+  base64url, like Hub tokens). It must match the agent's token. A missing
+  variable stops startup, as a missing Hub token does.
+- Only that Hub's responses add the agent's origin to CSP `connect-src`, and
+  only that Hub's page receives the URL and token, from
+  `display-api/pointer-bridge`. Other Hubs get a 404 there and their page script
+  does nothing.
+
 ## Build and start
 
 From the repository root, after setting the environment variables:

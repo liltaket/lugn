@@ -3604,10 +3604,11 @@ h2 {
   inherits: true;
   initial-value: 0;
 }
-#app-root {
-  transition: --progress 1s linear;
-}
+/* The value is set on the play button and only its ring transitions it: a
+   transition of an inherited property on #app-root restyles the whole page
+   every frame, which a Hub cannot keep up with while something plays. */
 #app-root .play-button::before {
+  transition: --progress 1s linear;
   content: '';
   position: absolute;
   inset: -7px;
@@ -4123,8 +4124,7 @@ body {
     --art-glow 1.4s ease,
     --art-glow-soft 1.4s ease,
     --art-tint 1.4s ease,
-    --art-tint-2 1.4s ease,
-    --progress 1s linear;
+    --art-tint-2 1.4s ease;
 }
 #app-root[data-role='desk'] {
   --art-accent: #a4c7d2;
@@ -4891,6 +4891,36 @@ body {
   object-fit: cover;
   -webkit-mask-image: none;
   mask-image: none;
+}
+
+/* ── Hub pointer bridge (pointer-bridge.js) ──
+   A desktop-driven virtual cursor sets this attribute; synthetic input does
+   not trigger :active. Hover is drawn by the cursor's own highlight plate.
+   Pressed rules mirror the :active rules above with the same specificity;
+   nothing here applies without the bridge. */
+button[data-pointer-pressed]:not(:disabled) {
+  filter: brightness(1.15);
+}
+.presence-count-button[data-pointer-pressed]:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-raised);
+}
+.screen button[data-pointer-pressed]:not(:disabled) {
+  background-color: var(--surface-raised);
+}
+#app-root button[data-pointer-pressed]:not(:disabled) {
+  background-color: inherit;
+  transform: scale(0.97);
+}
+#app-root .scene-button[data-pointer-pressed]:not(:disabled),
+#app-root .light-off[data-pointer-pressed]:not(:disabled),
+#app-root .camera-choices button[data-pointer-pressed]:not(:disabled),
+#app-root .presence-count-button[data-pointer-pressed]:not(:disabled) {
+  transform: scale(0.96);
+  transition-duration: 0.12s;
+}
+#app-root .play-button[data-pointer-pressed]:not(:disabled) {
+  transform: scale(0.92);
 }
 
 /* ── 3D print live activity, 2026-11-20 ──

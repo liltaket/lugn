@@ -2,5 +2,6 @@ node_modules
 dist
 coverage
 agents/linux/target
+agents/linux/hub-pointer/target
 dist-bench
 bench/results
