@@ -1646,6 +1646,8 @@ function renderArtwork(payload, target) {
   root.dataset.artColor = 'false';
   refs.musicArtworkImage.hidden = true;
   refs.musicArtwork.dataset.state = url ? 'loading' : 'missing';
+  if (refs.musicArtworkImage.dataset)
+    refs.musicArtworkImage.dataset.trimming = 'false';
   if (url) refs.musicArtworkImage.setAttribute('src', url);
 }
 
@@ -3751,30 +3753,131 @@ refs.musicArtworkImage.addEventListener('error', () => {
   refs.musicArtwork.dataset.state = 'unavailable';
   root.dataset.artColor = 'false';
 });
-refs.musicArtworkImage.addEventListener('load', () => {
-  if (refs.musicArtwork.dataset.state !== 'loading') return;
-  refs.musicArtworkImage.hidden = false;
+// One presentation rule for every image shape: the hero always fills the
+// sleeve's width at the top, with the nearest of four boxes and a centered
+// crop of at most about a third, so covers, video thumbnails, panoramas and
+// portrait frames all read as the same sleeve. Only extreme strips are shown
+// whole inside the box over their own blur.
+//   tall 4:5 (0.45–0.8) · square 1:1 (0.8–1.2) · wide 3:2 (1.2–1.9)
+//   panorama 2:1 (1.9–3.2) · strip (beyond either end)
+function artworkShape(width, height) {
+  if (!width || !height) return 'square';
+  const ratio = width / height;
+  if (ratio > 3.2 || ratio < 0.45) return 'strip';
+  return ratio >= 1.9
+    ? 'panorama'
+    : ratio > 1.2
+      ? 'wide'
+      : ratio < 0.8
+        ? 'tall'
+        : 'square';
+}
+
+// Thumbnails often carry baked-in black bars (a 16:9 video in a 4:3 frame).
+// Find them on a small sample and return a cropped copy, or null.
+function trimmedArtwork(image) {
+  try {
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    if (!width || !height || width < 32 || height < 32) return null;
+    const sampleWidth = 64;
+    const sampleHeight = Math.max(8, Math.round((64 * height) / width));
+    const sample = document.createElement('canvas');
+    if (typeof sample?.getContext !== 'function') return null;
+    sample.width = sampleWidth;
+    sample.height = sampleHeight;
+    const context = sample.getContext('2d', { willReadFrequently: true });
+    if (!context) return null;
+    context.drawImage(image, 0, 0, sampleWidth, sampleHeight);
+    const pixels = context.getImageData(0, 0, sampleWidth, sampleHeight).data;
+    const dark = (x, y) => {
+      const index = (y * sampleWidth + x) * 4;
+      return Math.max(pixels[index], pixels[index + 1], pixels[index + 2]) < 22;
+    };
+    const rowDark = (y) => {
+      for (let x = 0; x < sampleWidth; x++) if (!dark(x, y)) return false;
+      return true;
+    };
+    const columnDark = (x) => {
+      for (let y = 0; y < sampleHeight; y++) if (!dark(x, y)) return false;
+      return true;
+    };
+    let top = 0;
+    while (top < sampleHeight / 2 && rowDark(top)) top += 1;
+    let bottom = sampleHeight - 1;
+    while (bottom > sampleHeight / 2 && rowDark(bottom)) bottom -= 1;
+    let left = 0;
+    while (left < sampleWidth / 2 && columnDark(left)) left += 1;
+    let right = sampleWidth - 1;
+    while (right > sampleWidth / 2 && columnDark(right)) right -= 1;
+    const cutY = (top + (sampleHeight - 1 - bottom)) / sampleHeight;
+    const cutX = (left + (sampleWidth - 1 - right)) / sampleWidth;
+    // Only real bars on both sides; a dark scene edge is not a letterbox.
+    const barsY = cutY >= 0.08 && top > 0 && bottom < sampleHeight - 1;
+    const barsX = cutX >= 0.08 && left > 0 && right < sampleWidth - 1;
+    if ((!barsY && !barsX) || bottom <= top || right <= left) return null;
+    // Crop only the axis that has bars, a half sample inside each bar edge.
+    const x = barsX ? Math.round(((left + 0.5) / sampleWidth) * width) : 0;
+    const y = barsY ? Math.round(((top + 0.5) / sampleHeight) * height) : 0;
+    const w = barsX
+      ? Math.round(((right - left) / sampleWidth) * width)
+      : width;
+    const h = barsY
+      ? Math.round(((bottom - top) / sampleHeight) * height)
+      : height;
+    const crop = document.createElement('canvas');
+    crop.width = w;
+    crop.height = h;
+    crop.getContext('2d')?.drawImage(image, x, y, w, h, 0, 0, w, h);
+    return crop.toDataURL('image/jpeg', 0.92);
+  } catch {
+    return null;
+  }
+}
+
+function presentArtwork() {
+  const image = refs.musicArtworkImage;
+  image.hidden = false;
   refs.musicArtwork.dataset.state = 'available';
   pulse(refs.musicArtwork, 'art-in');
-  const { naturalWidth: width, naturalHeight: height } = refs.musicArtworkImage;
-  refs.musicArtwork.dataset.aspect =
-    width && height
-      ? width / height > 1.2
-        ? 'wide'
-        : width / height < 0.85
-          ? 'tall'
-          : 'square'
-      : 'square';
-  // The full image sits at the top in its own proportions over a blurred copy,
-  // so square covers, video thumbnails and tall images all fit without cropping.
-  const source =
-    refs.musicArtworkImage.currentSrc || refs.musicArtworkImage.src;
+  refs.musicArtwork.dataset.aspect = artworkShape(
+    image.naturalWidth,
+    image.naturalHeight,
+  );
+  // A strip sits whole inside its box; its visible span lets CSS fade exactly
+  // at the image's own edges instead of the box's.
+  const ratio = image.naturalWidth / image.naturalHeight || 1;
+  const wideStrip = ratio > 1;
+  refs.musicArtwork.dataset.strip = wideStrip ? 'wide' : 'tall';
+  refs.musicArtwork.style?.setProperty(
+    '--strip-span',
+    `${Math.round(Math.min(1, wideStrip ? 2 / ratio : ratio) * 1000) / 10}%`,
+  );
+  // The hero sits at the top over a blurred copy of the same (trimmed) image.
+  const source = image.currentSrc || image.src;
   if (refs.musicArtwork.style && source)
     refs.musicArtwork.style.setProperty(
       '--art-url',
       `url("${String(source).replace(/["\\\n]/g, '')}")`,
     );
-  updateArtworkColor(refs.musicArtworkImage);
+  updateArtworkColor(image);
+}
+
+refs.musicArtworkImage.addEventListener('load', () => {
+  const image = refs.musicArtworkImage;
+  if (image.dataset?.trimming === 'true') {
+    image.dataset.trimming = 'false';
+    presentArtwork();
+    return;
+  }
+  if (refs.musicArtwork.dataset.state !== 'loading') return;
+  const trimmed = trimmedArtwork(image);
+  if (trimmed && image.dataset) {
+    image.dataset.trimming = 'true';
+    image.src = trimmed;
+    return;
+  }
+  presentArtwork();
 });
 document.addEventListener('keydown', (event) => {
   if (
