@@ -85,6 +85,12 @@ export type LugnDisplayHub = {
   role: 'bed' | 'desk';
   castHost: string;
   token: string;
+  /**
+   * Desktop pointer agent this Hub's page may connect to directly. The page
+   * connects to `${url}?token=${encodeURIComponent(token)}`; only this Hub's
+   * CSP allows the agent's origin.
+   */
+  pointerBridge?: { url: string; token: string };
 };
 
 export type LugnDisplayCastStatus = {
@@ -137,7 +143,8 @@ type HubRequest = {
   route: string;
 };
 
-type DisplayResourceCategory = 'html' | 'css' | 'js' | 'state';
+type DisplayResourceCategory =
+  'html' | 'css' | 'js' | 'state' | 'pointer-js' | 'pointer-config';
 
 function displayResourceCategory(
   route: string,
@@ -151,6 +158,10 @@ function displayResourceCategory(
       return 'js';
     case '/display-api/state':
       return 'state';
+    case '/pointer-bridge.js':
+      return 'pointer-js';
+    case '/display-api/pointer-bridge':
+      return 'pointer-config';
     default:
       return undefined;
   }
@@ -168,6 +179,8 @@ export class LugnDisplayServer {
   private readonly eventStreams = new Map<ServerResponse, string>();
   private nextDeliveryRevision = 0;
   private readonly instanceId = randomUUID();
+  /** Agent WebSocket origin per Hub, added to that Hub's CSP connect-src. */
+  private readonly pointerBridgeOrigins = new Map<string, string>();
 
   private readonly computerNowPlaying: ComputerNowPlayingSelector;
   private unsubscribeComputerObservations: (() => void) | undefined;
@@ -177,6 +190,13 @@ export class LugnDisplayServer {
       options.computerNowPlayingSelector ??
       new ComputerNowPlayingSelector(options.computerAudioMappings ?? {});
     validateOptions(options);
+    for (const hub of options.hubs) {
+      if (hub.pointerBridge)
+        this.pointerBridgeOrigins.set(
+          hub.id,
+          new URL(hub.pointerBridge.url).origin,
+        );
+    }
     this.acceptedHosts = buildAcceptedHosts(options);
     if (this.acceptedHosts.size === 0)
       throw new Error(
@@ -271,6 +291,11 @@ export class LugnDisplayServer {
         sendJson(response, 404, { error: 'not_found' });
         return;
       }
+      const pointerBridgeOrigin = this.pointerBridgeOrigins.get(
+        hubRequest.hub.id,
+      );
+      if (pointerBridgeOrigin)
+        setSecurityHeaders(response, pointerBridgeOrigin);
 
       if (request.method === 'GET') {
         const category = displayResourceCategory(hubRequest.route);
@@ -400,6 +425,36 @@ export class LugnDisplayServer {
           'display.js',
           'text/javascript; charset=utf-8',
         );
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        hubRequest.route === '/pointer-bridge.js'
+      ) {
+        await this.serveAsset(
+          response,
+          'pointer-bridge.js',
+          'text/javascript; charset=utf-8',
+        );
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        hubRequest.route === '/display-api/pointer-bridge'
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        const bridge = hubRequest.hub.pointerBridge;
+        if (!bridge) {
+          sendJson(response, 404, { error: 'pointer_bridge_not_configured' });
+          return;
+        }
+        sendJson(response, 200, { url: bridge.url, token: bridge.token });
         return;
       }
       if (
@@ -689,7 +744,7 @@ export class LugnDisplayServer {
 
   private async serveAsset(
     response: ServerResponse,
-    filename: 'display.html' | 'display.css' | 'display.js',
+    filename: UiAssetName,
     contentType: string,
   ): Promise<void> {
     const file = findUiAsset(filename);
@@ -1002,7 +1057,41 @@ function validateOptions(options: LugnDisplayServerOptions): void {
       );
     if (tokens.has(hub.token)) throw new Error('Duplicate display Hub token');
     tokens.add(hub.token);
+    if (hub.pointerBridge) {
+      if (!isPointerBridgeUrl(hub.pointerBridge.url))
+        throw new Error(
+          'Display Hub pointer bridge URL must be ws:// or wss:// with a host and no credentials, query or fragment',
+        );
+      if (!isPointerBridgeToken(hub.pointerBridge.token))
+        throw new Error(
+          'Display Hub pointer bridge token must be 16-512 printable characters without spaces',
+        );
+    }
   }
+}
+
+/** The page appends `?token=…`, so the URL must not carry its own query. */
+function isPointerBridgeUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    (url.protocol === 'ws:' || url.protocol === 'wss:') &&
+    url.hostname.length > 0 &&
+    !url.username &&
+    !url.password &&
+    !url.search &&
+    !url.hash &&
+    !value.includes('?') &&
+    !value.includes('#')
+  );
+}
+
+function isPointerBridgeToken(value: string): boolean {
+  return /^[\x21-\x7e]{16,512}$/.test(value);
 }
 
 function buildAcceptedHosts(options: LugnDisplayServerOptions): Set<string> {
@@ -1086,9 +1175,15 @@ function secretsEqual(supplied: string, configured: string): boolean {
   );
 }
 
-function findUiAsset(
-  filename: 'display.html' | 'display.css' | 'display.js',
-): string | undefined {
+type UiAssetName =
+  'display.html' | 'display.css' | 'display.js' | 'pointer-bridge.js';
+
+/**
+ * The UI directory is the first candidate holding the three core files; any
+ * other asset is served only from that same directory, so it never mixes
+ * versions with the page that loads it.
+ */
+function findUiAsset(filename: UiAssetName): string | undefined {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
   const candidateDirectories = [
     resolve(moduleDirectory, '../ui'),
@@ -1096,14 +1191,14 @@ function findUiAsset(
     resolve(process.cwd(), 'src/ui'),
   ];
   for (const directory of candidateDirectories) {
-    const candidate = resolve(directory, filename);
     if (
-      existsSync(candidate) &&
       existsSync(resolve(directory, 'display.html')) &&
       existsSync(resolve(directory, 'display.css')) &&
       existsSync(resolve(directory, 'display.js'))
-    )
-      return candidate;
+    ) {
+      const candidate = resolve(directory, filename);
+      return existsSync(candidate) ? candidate : undefined;
+    }
   }
   return undefined;
 }
@@ -1142,7 +1237,10 @@ function safeIssues(error: ZodError): Array<{ path: string; message: string }> {
   }));
 }
 
-function setSecurityHeaders(response: ServerResponse): void {
+function setSecurityHeaders(
+  response: ServerResponse,
+  pointerBridgeOrigin?: string,
+): void {
   response.setHeader('cache-control', 'no-store');
   response.setHeader(
     'content-security-policy',
@@ -1152,7 +1250,9 @@ function setSecurityHeaders(response: ServerResponse): void {
       "form-action 'none'",
       'frame-ancestors https://www.gstatic.com',
       "img-src 'self' data: blob:",
-      "connect-src 'self'",
+      pointerBridgeOrigin
+        ? `connect-src 'self' ${pointerBridgeOrigin}`
+        : "connect-src 'self'",
       "script-src 'self'",
       "style-src 'self'",
       "object-src 'none'",

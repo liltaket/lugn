@@ -4897,3 +4897,39 @@ body {
   -webkit-mask-image: none;
   mask-image: none;
 }
+
+/* ── Hub pointer bridge (pointer-bridge.js) ──
+   A desktop-driven virtual cursor sets these attributes; synthetic input does
+   not trigger :hover or :active. Pressed rules mirror the :active rules above
+   with the same specificity; nothing here applies without the bridge. */
+button[data-pointer-hover]:not(:disabled):not([data-pointer-pressed]),
+[role='button'][data-pointer-hover]:not([data-pointer-pressed]),
+a[data-pointer-hover]:not([data-pointer-pressed]),
+summary[data-pointer-hover]:not([data-pointer-pressed]),
+label[data-pointer-hover]:not([data-pointer-pressed]) {
+  filter: brightness(1.08);
+}
+button[data-pointer-pressed]:not(:disabled) {
+  filter: brightness(1.15);
+}
+.presence-count-button[data-pointer-pressed]:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-raised);
+}
+.screen button[data-pointer-pressed]:not(:disabled) {
+  background-color: var(--surface-raised);
+}
+#app-root button[data-pointer-pressed]:not(:disabled) {
+  background-color: inherit;
+  transform: scale(0.97);
+}
+#app-root .scene-button[data-pointer-pressed]:not(:disabled),
+#app-root .light-off[data-pointer-pressed]:not(:disabled),
+#app-root .camera-choices button[data-pointer-pressed]:not(:disabled),
+#app-root .presence-count-button[data-pointer-pressed]:not(:disabled) {
+  transform: scale(0.96);
+  transition-duration: 0.12s;
+}
+#app-root .play-button[data-pointer-pressed]:not(:disabled) {
+  transform: scale(0.92);
+}

@@ -578,6 +578,91 @@ describe('runtime configuration cross references', () => {
     );
   });
 
+  it('resolves an optional per-Hub pointer bridge and rejects malformed ones', () => {
+    const hub = {
+      id: 'desk-hub',
+      role: 'desk',
+      castHost: '192.168.10.166',
+      tokenEnv: 'DESK_HUB_TOKEN',
+    };
+    const withHub = (extra: Record<string, unknown>) => ({
+      ...minimal,
+      display: {
+        publicUrl: 'http://192.168.10.132:8788',
+        hubs: [{ ...hub, ...extra }],
+      },
+    });
+    const pointerSecret = 'pointer secret/with+chars';
+    const environment = {
+      HA_TOKEN: 'deterministic-test-token',
+      DESK_HUB_TOKEN: 'd'.repeat(32),
+      HUB_POINTER_TOKEN_B64: Buffer.from(pointerSecret, 'utf8').toString(
+        'base64url',
+      ),
+    };
+    expect(
+      loadConfig(withHub({}), environment).display?.hubs[0],
+    ).not.toHaveProperty('pointerBridge');
+    expect(
+      loadConfig(
+        withHub({
+          pointerBridge: {
+            url: 'ws://192.168.10.20:8791/hub-pointer',
+            tokenEnv: 'HUB_POINTER_TOKEN_B64',
+          },
+        }),
+        environment,
+      ).display?.hubs[0]?.pointerBridge,
+    ).toEqual({
+      url: 'ws://192.168.10.20:8791/hub-pointer',
+      token: pointerSecret,
+    });
+
+    const missing = captureConfigError(() =>
+      loadConfig(
+        withHub({
+          pointerBridge: {
+            url: 'ws://192.168.10.20:8791/hub-pointer',
+            tokenEnv: 'MISSING_POINTER_TOKEN',
+          },
+        }),
+        environment,
+      ),
+    );
+    expect(missing.message).toContain('MISSING_POINTER_TOKEN');
+
+    for (const [pointerBridge, message] of [
+      [
+        { url: 'http://192.168.10.20:8791/hub-pointer', tokenEnv: 'X' },
+        'must use ws:// or wss://',
+      ],
+      [
+        { url: 'ws://192.168.10.20:8791/hub-pointer?a=1', tokenEnv: 'X' },
+        'without credentials, query or fragment',
+      ],
+      [
+        { url: 'ws://user:pw@192.168.10.20:8791/hub-pointer', tokenEnv: 'X' },
+        'without credentials, query or fragment',
+      ],
+      [{ url: 'not a url', tokenEnv: 'X' }, 'must be a valid URL'],
+      [
+        {
+          url: 'ws://192.168.10.20:8791/hub-pointer',
+          tokenEnv: 'X',
+          origin: 'http://x',
+        },
+        'pointerBridge',
+      ],
+      [{ url: 'ws://192.168.10.20:8791/hub-pointer' }, 'tokenEnv'],
+    ] as const) {
+      const error = captureConfigError(() =>
+        loadConfig(withHub({ pointerBridge }), environment),
+      );
+      expect(error.message).toContain('Invalid configuration');
+      expect(error.message).toContain(message);
+    }
+  });
+
   it('decodes canonical base64url secret references and rejects malformed values without echoing them', () => {
     const secret = `a token with 'quotes" and backtick\n?`;
     const base64Config = {

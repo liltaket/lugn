@@ -1,0 +1,24 @@
+[Unit]
+Description=Lugn Hub pointer bridge (desktop pointer onto the Nest Hub page)
+PartOf=graphical-session.target
+DefaultDependencies=no
+After=basic.target graphical-session.target xdg-desktop-portal.service
+Conflicts=shutdown.target
+Before=shutdown.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart="%h/.local/bin/lugn-hub-pointer" --config "%E/lugn-linux-agent/hub-pointer.toml"
+# May hold LUGN_HUB_POINTER_TOKEN=...
+EnvironmentFile=-%E/lugn-linux-agent/hub-pointer.env
+UMask=0077
+# Needs the session bus (InputCapture portal); a crash or stop closes the
+# portal session, which returns the pointer to the desktop.
+Restart=on-failure
+RestartSec=5
+# 3 = "Allow" was declined in KDE's dialog; restarting would only ask again.
+RestartPreventExitStatus=3
+
+[Install]
+WantedBy=graphical-session.target

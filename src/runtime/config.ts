@@ -274,6 +274,50 @@ const MqttConfigSchema = z
     }
   });
 
+/**
+ * Desktop pointer agent (agents/linux/hub-pointer) for one Hub. The page
+ * connects to `${url}?token=…`, so `url` names the full endpoint including
+ * its path (normally `/hub-pointer`) and carries no query of its own.
+ */
+const DisplayPointerBridgeConfigSchema = z
+  .object({
+    url: z.string().superRefine((value, context) => {
+      let url: URL;
+      try {
+        url = new URL(value);
+      } catch {
+        context.addIssue({
+          code: 'custom',
+          message: 'pointerBridge.url must be a valid URL',
+        });
+        return;
+      }
+      if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+        context.addIssue({
+          code: 'custom',
+          message: 'pointerBridge.url must use ws:// or wss://',
+        });
+      }
+      if (
+        !url.hostname ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash ||
+        value.includes('?') ||
+        value.includes('#')
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message:
+            'pointerBridge.url must name a host and path without credentials, query or fragment',
+        });
+      }
+    }),
+    tokenEnv: EnvironmentNameSchema,
+  })
+  .strict();
+
 const DisplayConfigSchema = z
   .object({
     host: z.string().min(1).default('0.0.0.0'),
@@ -321,6 +365,7 @@ const DisplayConfigSchema = z
                 'castHost must be an IP address',
               ),
             tokenEnv: EnvironmentNameSchema,
+            pointerBridge: DisplayPointerBridgeConfigSchema.optional(),
           })
           .strict(),
       )
@@ -625,6 +670,7 @@ export type RuntimeConfig = {
       role: 'bed' | 'desk';
       castHost: string;
       token: string;
+      pointerBridge?: { url: string; token: string };
     }>;
   };
   cameraDashboard?: CameraDashboardConfig;
@@ -698,6 +744,17 @@ export function loadRuntimeConfig(
           role: hub.role,
           castHost: hub.castHost,
           token: requireEnvironmentValue(hub.tokenEnv, environment),
+          ...(hub.pointerBridge
+            ? {
+                pointerBridge: {
+                  url: hub.pointerBridge.url,
+                  token: requireEnvironmentValue(
+                    hub.pointerBridge.tokenEnv,
+                    environment,
+                  ),
+                },
+              }
+            : {}),
         })),
       }
     : undefined;

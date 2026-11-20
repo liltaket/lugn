@@ -156,6 +156,10 @@ const server = createServer(async (request, response) => {
       }
       if (route === 'display-api/state')
         return sendJson(response, 200, snapshot(scenario));
+      if (route === 'display-api/pointer-bridge')
+        return sendJson(response, 404, {
+          error: 'pointer_bridge_not_configured',
+        });
       if (request.method !== 'POST') return sendJson(response, 405, {});
       let raw = '';
       for await (const chunk of request) {
@@ -268,7 +272,7 @@ const server = createServer(async (request, response) => {
         ? 'tests/fixtures/hub/cover.svg'
         : !route
           ? 'src/ui/display.html'
-          : ['display.css', 'display.js'].includes(route)
+          : ['display.css', 'display.js', 'pointer-bridge.js'].includes(route)
             ? `src/ui/${route}`
             : null;
     if (!name) return sendJson(response, 404, {});

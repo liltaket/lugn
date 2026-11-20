@@ -1,0 +1,25 @@
+# lugn-hub-pointer configuration.
+# Default location: $XDG_CONFIG_HOME/lugn-linux-agent/hub-pointer.toml
+
+# Address the Hub page connects to: ws://<this-host>:8791/hub-pointer?token=...
+listen = "0.0.0.0:8791"
+
+# Shared secret, also held by Lugn. Required here unless the environment
+# variable LUGN_HUB_POINTER_TOKEN is set (the environment wins).
+token = "change-me"
+
+# Origins whose pages may connect (the Lugn dashboard URL as the Hub loads it).
+# An empty list allows any Origin; the token is then the only check.
+allowed_origins = ["http://192.168.10.132:8788"]
+
+# Height, in desktop logical px measured up from the monitor's bottom edge, of
+# the stretch of the left edge that captures the pointer.
+zone_height = 420
+
+# Hub CSS px per desktop logical px of mouse motion. The Hub Max page is
+# 1280x800 CSS px on a ~22 cm wide screen; the 3658 px monitor is ~80 cm, so
+# 1.0 keeps the physical cursor speed similar.
+gain = 1.0
+
+# Log WebSocket ping round-trip p50/p95/max every 10 s.
+log_latency = true

@@ -962,12 +962,15 @@ export async function startRuntime(
         host: config.display.host,
         port: config.display.port,
         allowedHosts: [new URL(config.display.publicUrl).host],
-        hubs: config.display.hubs.map(({ id, role, castHost, token }) => ({
-          id,
-          role,
-          castHost,
-          token,
-        })),
+        hubs: config.display.hubs.map(
+          ({ id, role, castHost, token, pointerBridge }) => ({
+            id,
+            role,
+            castHost,
+            token,
+            ...(pointerBridge ? { pointerBridge } : {}),
+          }),
+        ),
         capabilities,
         ...(artwork ? { artworkProvider: artwork } : {}),
         ...(cameraService && cameraMedia ? { cameraService, cameraMedia } : {}),
