@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Fixture only: a plain sliced-model render with a transparent background. -->
+  <defs>
+    <linearGradient id="body" x1="0" x2="1">
+      <stop offset="0" stop-color="#2b3533" />
+      <stop offset="0.55" stop-color="#46524f" />
+      <stop offset="1" stop-color="#232b2a" />
+    </linearGradient>
+  </defs>
+  <ellipse cx="256" cy="420" rx="120" ry="26" fill="#1f2726" />
+  <path d="M150 420 C150 330 120 290 150 220 C175 160 200 140 205 100 L307 100 C312 140 337 160 362 220 C392 290 362 330 362 420 Z" fill="url(#body)" />
+  <ellipse cx="256" cy="100" rx="51" ry="12" fill="#5a6663" />
+  <path d="M170 250 H342 M160 300 H352 M162 350 H350" stroke="#56625f" stroke-width="3" fill="none" />
+</svg>

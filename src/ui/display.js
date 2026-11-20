@@ -9,6 +9,7 @@ const PRESENCE_COUNT_URL = `${BASE_PATH}display-api/presence-count-one`;
 const ROUTINE_URL = `${BASE_PATH}display-api/routine`;
 const BEDTIME_URL = `${BASE_PATH}display-api/bedtime`;
 const SUGGESTION_URL = `${BASE_PATH}display-api/suggestion`;
+const PRINT_LIGHT_URL = `${BASE_PATH}display-api/printer/light`;
 const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
@@ -66,6 +67,18 @@ const refs = {
   cameraPlaceholder: document.querySelector('#camera-placeholder'),
   cameraStatus: document.querySelector('#camera-status'),
   musicSection: document.querySelector('.music-section'),
+  printActivity: document.querySelector('#print-activity'),
+  printImage: document.querySelector('#print-image'),
+  printName: document.querySelector('#print-name'),
+  printTitle: document.querySelector('#print-title'),
+  printProgress: document.querySelector('#print-progress'),
+  printPercent: document.querySelector('#print-percent'),
+  printTime: document.querySelector('#print-time'),
+  printEta: document.querySelector('#print-eta'),
+  printDetail: document.querySelector('#print-detail'),
+  printLight: document.querySelector('#print-light'),
+  activitySwap: document.querySelector('#activity-swap'),
+  activitySwapLabel: document.querySelector('#activity-swap-label'),
   musicHeading: document.querySelector('#music-heading'),
   contextStrip: document.querySelector('#context-strip'),
   contextTitle: document.querySelector('#context-title'),
@@ -183,6 +196,12 @@ const metricRefs = new Map(
   ]),
 );
 
+// The 3D print shown as a live activity, and which card the user put below a camera.
+let printActivity = null;
+let printSwapChoice = null;
+let printImageKey = null;
+// A tapped light shows its requested state until Home Assistant reports it.
+let printLightRequest = null;
 let cameraActive = null;
 const cameraDismissedIds = new Set();
 let cameraCloseHoldUntil = 0;
@@ -475,6 +494,8 @@ function progressSample(values) {
 function setClock() {
   renderMusicProgress();
   updateCameraCountdown();
+  renderPrintTime();
+  renderPrintLight();
   if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
     setConnection('offline', 'Inga färska uppdateringar från Lugn.');
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
@@ -1646,6 +1667,8 @@ function renderArtwork(payload, target) {
   root.dataset.artColor = 'false';
   refs.musicArtworkImage.hidden = true;
   refs.musicArtwork.dataset.state = url ? 'loading' : 'missing';
+  if (refs.musicArtworkImage.dataset)
+    refs.musicArtworkImage.dataset.trimming = 'false';
   if (url) refs.musicArtworkImage.setAttribute('src', url);
 }
 
@@ -2871,6 +2894,7 @@ function render(payload) {
   renderPresenceCorrection(payload);
   renderMusic(payload);
   renderCamera(payload);
+  renderPrinter(payload);
   setClock();
 }
 
@@ -3172,13 +3196,243 @@ function syncMusicPresentation() {
 }
 
 // Reflow only between gestures: a state update must not move a target under a finger.
+// The right column holds at most two live activities: a top card (camera, else
+// the print) and the music card under it. With a camera, music and a print at
+// once, the camera keeps the top and the print and music share the lower card.
 function syncExpandedLighting() {
   if (interactionPointers.size) return;
-  root.dataset.lightingExpanded = String(
-    root.dataset.musicVisible === 'false' &&
-      root.dataset.cameraVisible === 'false',
-  );
+  const camera = root.dataset.cameraVisible === 'true';
+  const music = root.dataset.musicVisible === 'true';
+  const print = !!printActivity;
+  if (!print || !camera) printSwapChoice = null;
+  const lower =
+    camera && print
+      ? (printSwapChoice ??
+        (music && !printNeedsAttention(printActivity) ? 'music' : 'print'))
+      : 'music';
+  root.dataset.printSlot = !print
+    ? 'none'
+    : camera
+      ? lower === 'print'
+        ? 'lower'
+        : 'none'
+      : 'top';
+  root.dataset.stacked = String(camera || print);
+  root.dataset.lowerCard = lower;
+  if (refs.printActivity)
+    refs.printActivity.hidden = root.dataset.printSlot === 'none';
+  if (refs.activitySwap) {
+    refs.activitySwap.hidden = !(camera && print);
+    if (camera && print) {
+      const other = lower === 'print' ? 'music' : 'print';
+      refs.activitySwap.dataset.shows = other;
+      setText(
+        refs.activitySwapLabel,
+        other === 'print'
+          ? `${printActivity.name} ${printPercentText(printActivity)}`.trim()
+          : 'Musik',
+      );
+      refs.activitySwap.setAttribute(
+        'aria-label',
+        other === 'print' ? 'Visa utskriften' : 'Visa musiken',
+      );
+    }
+  }
+  root.dataset.lightingExpanded = String(!music && !camera && !print);
 }
+
+// ── 3D print live activity ──
+// Shown while the printer prepares, prints or pauses, and for a short while
+// after a result. Read-only: the Hub never controls the printer.
+const printStageWords = [
+  [/^paused_filament_runout$/, 'Filamentet är slut'],
+  [/^paused_/, 'Pausad'],
+  [/heatbed|heat_bed/, 'Värmer bädden'],
+  [/hotend|extruder_temperature|nozzle_temp/, 'Värmer munstycket'],
+  [/bed_leveling|scanning_bed/, 'Nivellerar bädden'],
+  [/first_layer/, 'Kontrollerar första lagret'],
+  [/build_plate|foreign_object/, 'Kontrollerar plattan'],
+  [/filament/, 'Byter filament'],
+  [/cleaning_nozzle/, 'Rengör munstycket'],
+  [/calibrat|homing|sweeping|motor_noise|lidar/, 'Kalibrerar'],
+  [/cooling/, 'Svalnar'],
+];
+
+function printNeedsAttention(activity) {
+  return ['paused', 'failed', 'finished'].includes(activity?.status);
+}
+
+function printPercentText(activity) {
+  return Number.isFinite(activity?.progress) ? `${activity.progress} %` : '';
+}
+
+// The stage only when it says more than the bar does, e.g. `värmer bädden`.
+function printStageText(activity) {
+  if (!activity.stage || activity.stage === 'printing') return '';
+  const words = printStageWords.find(([pattern]) =>
+    pattern.test(activity.stage),
+  );
+  return words ? words[1].toLowerCase() : '';
+}
+
+function printDurationText(minutes) {
+  if (minutes < 1) return 'under en minut';
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} h ${rest} min` : `${hours} h`;
+}
+
+function renderPrintTime() {
+  const activity = printActivity;
+  if (!activity || !refs.printTime) return;
+  // Two short lines: how long is left, then when it is done, or the stage
+  // when the printer is doing something other than printing.
+  let text = '';
+  let eta = '';
+  const stage = printStageText(activity);
+  if (activity.status === 'finished') {
+    text = 'Klar';
+    if (Number.isFinite(activity.statusSince))
+      eta = `kl. ${timeFormat.format(new Date(activity.statusSince))}`;
+  } else if (activity.status === 'failed') {
+    text = 'Misslyckades';
+    eta = 'kolla skrivaren';
+  } else if (activity.status === 'paused') {
+    if (Number.isFinite(activity.remainingMinutes))
+      text = `${printDurationText(activity.remainingMinutes)} kvar`;
+    eta = stage || 'pausad';
+  } else if (Number.isFinite(activity.endsAt)) {
+    const minutes = Math.max(
+      0,
+      Math.round((activity.endsAt - estimatedServerNow()) / 60000),
+    );
+    text = `${printDurationText(minutes)} kvar`;
+    eta = stage || `klar ${timeFormat.format(new Date(activity.endsAt))}`;
+  } else if (Number.isFinite(activity.remainingMinutes)) {
+    text = `${printDurationText(activity.remainingMinutes)} kvar`;
+    eta = stage;
+  } else {
+    text = stage ? stage[0].toUpperCase() + stage.slice(1) : '';
+  }
+  setText(refs.printTime, text);
+  setText(refs.printEta, eta);
+}
+
+function renderPrinter(payload) {
+  const activity =
+    payload?.printer && typeof payload.printer === 'object'
+      ? payload.printer
+      : null;
+  printActivity = activity;
+  if (!refs.printActivity) return;
+  if (activity) {
+    refs.printActivity.dataset.status = activity.status;
+    setText(refs.printName, activity.name);
+    setText(refs.printTitle, activity.task || 'Utskrift');
+    const progress = Number.isFinite(activity.progress) ? activity.progress : 0;
+    root.style.setProperty('--print-progress', `${progress}%`);
+    refs.printProgress.setAttribute('aria-valuenow', String(progress));
+    setText(refs.printPercent, printPercentText(activity) || '—');
+    const detail = [];
+    if (
+      activity.status === 'preparing' &&
+      activity.nozzle &&
+      Number.isFinite(activity.nozzle.target) &&
+      activity.nozzle.target > 0
+    )
+      detail.push(
+        `Munstycke ${activity.nozzle.current}/${activity.nozzle.target}°`,
+      );
+    if (
+      activity.status === 'preparing' &&
+      activity.bed &&
+      Number.isFinite(activity.bed.target) &&
+      activity.bed.target > 0
+    )
+      detail.push(`Bädd ${activity.bed.current}/${activity.bed.target}°`);
+    if (
+      !detail.length &&
+      Number.isFinite(activity.layer) &&
+      Number.isFinite(activity.totalLayers) &&
+      activity.totalLayers > 0
+    )
+      detail.push(`Lager ${activity.layer} av ${activity.totalLayers}`);
+    setText(refs.printDetail, detail.join(' · '));
+    const imageKey = activity.imageUrl || null;
+    if (imageKey !== printImageKey) {
+      printImageKey = imageKey;
+      refs.printActivity.dataset.image = 'missing';
+      refs.printImage.hidden = true;
+      if (imageKey) {
+        refs.printImage.onload = () => {
+          if (printImageKey !== imageKey) return;
+          refs.printImage.hidden = false;
+          refs.printActivity.dataset.image = 'ready';
+        };
+        refs.printImage.onerror = () => {
+          if (printImageKey === imageKey) refs.printImage.hidden = true;
+        };
+        refs.printImage.src = imageKey;
+      } else refs.printImage.removeAttribute('src');
+    }
+    renderPrintTime();
+  }
+  renderPrintLight();
+  syncExpandedLighting();
+}
+
+function renderPrintLight() {
+  const button = refs.printLight;
+  if (!button) return;
+  const reported =
+    typeof printActivity?.light === 'boolean' ? printActivity.light : null;
+  if (
+    printLightRequest &&
+    (reported === printLightRequest.on ||
+      monotonicNow() > printLightRequest.until)
+  )
+    printLightRequest = null;
+  button.hidden = reported === null;
+  const on = printLightRequest ? printLightRequest.on : reported === true;
+  button.setAttribute('aria-pressed', String(on));
+  if (refs.printActivity)
+    refs.printActivity.dataset.lamp =
+      reported === null ? 'unknown' : on ? 'on' : 'off';
+  button.dataset.pending = String(!!printLightRequest);
+  button.disabled = isUnavailable() || printLightRequest?.sending === true;
+}
+
+if (refs.printLight)
+  refs.printLight.addEventListener('click', async () => {
+    if (
+      typeof printActivity?.light !== 'boolean' ||
+      printLightRequest?.sending ||
+      isUnavailable()
+    )
+      return;
+    const on = !(printLightRequest
+      ? printLightRequest.on
+      : printActivity.light);
+    const request = { on, until: monotonicNow() + 8000, sending: true };
+    printLightRequest = request;
+    renderPrintLight();
+    try {
+      await postJson(PRINT_LIGHT_URL, { on });
+      if (printLightRequest === request) request.sending = false;
+    } catch {
+      if (printLightRequest === request) printLightRequest = null;
+      showToast('Lampan i skrivaren svarade inte. Försök igen.', 'error');
+    }
+    renderPrintLight();
+  });
+
+if (refs.activitySwap)
+  refs.activitySwap.addEventListener('click', () => {
+    printSwapChoice =
+      refs.activitySwap.dataset.shows === 'print' ? 'print' : 'music';
+    syncExpandedLighting();
+  });
 
 refs.musicMenu.addEventListener('click', () => {
   musicMenuOpen = !musicMenuOpen;
@@ -3751,30 +4005,131 @@ refs.musicArtworkImage.addEventListener('error', () => {
   refs.musicArtwork.dataset.state = 'unavailable';
   root.dataset.artColor = 'false';
 });
-refs.musicArtworkImage.addEventListener('load', () => {
-  if (refs.musicArtwork.dataset.state !== 'loading') return;
-  refs.musicArtworkImage.hidden = false;
+// One presentation rule for every image shape: the hero always fills the
+// sleeve's width at the top, with the nearest of four boxes and a centered
+// crop of at most about a third, so covers, video thumbnails, panoramas and
+// portrait frames all read as the same sleeve. Only extreme strips are shown
+// whole inside the box over their own blur.
+//   tall 4:5 (0.45–0.8) · square 1:1 (0.8–1.2) · wide 3:2 (1.2–1.9)
+//   panorama 2:1 (1.9–3.2) · strip (beyond either end)
+function artworkShape(width, height) {
+  if (!width || !height) return 'square';
+  const ratio = width / height;
+  if (ratio > 3.2 || ratio < 0.45) return 'strip';
+  return ratio >= 1.9
+    ? 'panorama'
+    : ratio > 1.2
+      ? 'wide'
+      : ratio < 0.8
+        ? 'tall'
+        : 'square';
+}
+
+// Thumbnails often carry baked-in black bars (a 16:9 video in a 4:3 frame).
+// Find them on a small sample and return a cropped copy, or null.
+function trimmedArtwork(image) {
+  try {
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    if (!width || !height || width < 32 || height < 32) return null;
+    const sampleWidth = 64;
+    const sampleHeight = Math.max(8, Math.round((64 * height) / width));
+    const sample = document.createElement('canvas');
+    if (typeof sample?.getContext !== 'function') return null;
+    sample.width = sampleWidth;
+    sample.height = sampleHeight;
+    const context = sample.getContext('2d', { willReadFrequently: true });
+    if (!context) return null;
+    context.drawImage(image, 0, 0, sampleWidth, sampleHeight);
+    const pixels = context.getImageData(0, 0, sampleWidth, sampleHeight).data;
+    const dark = (x, y) => {
+      const index = (y * sampleWidth + x) * 4;
+      return Math.max(pixels[index], pixels[index + 1], pixels[index + 2]) < 22;
+    };
+    const rowDark = (y) => {
+      for (let x = 0; x < sampleWidth; x++) if (!dark(x, y)) return false;
+      return true;
+    };
+    const columnDark = (x) => {
+      for (let y = 0; y < sampleHeight; y++) if (!dark(x, y)) return false;
+      return true;
+    };
+    let top = 0;
+    while (top < sampleHeight / 2 && rowDark(top)) top += 1;
+    let bottom = sampleHeight - 1;
+    while (bottom > sampleHeight / 2 && rowDark(bottom)) bottom -= 1;
+    let left = 0;
+    while (left < sampleWidth / 2 && columnDark(left)) left += 1;
+    let right = sampleWidth - 1;
+    while (right > sampleWidth / 2 && columnDark(right)) right -= 1;
+    const cutY = (top + (sampleHeight - 1 - bottom)) / sampleHeight;
+    const cutX = (left + (sampleWidth - 1 - right)) / sampleWidth;
+    // Only real bars on both sides; a dark scene edge is not a letterbox.
+    const barsY = cutY >= 0.08 && top > 0 && bottom < sampleHeight - 1;
+    const barsX = cutX >= 0.08 && left > 0 && right < sampleWidth - 1;
+    if ((!barsY && !barsX) || bottom <= top || right <= left) return null;
+    // Crop only the axis that has bars, a half sample inside each bar edge.
+    const x = barsX ? Math.round(((left + 0.5) / sampleWidth) * width) : 0;
+    const y = barsY ? Math.round(((top + 0.5) / sampleHeight) * height) : 0;
+    const w = barsX
+      ? Math.round(((right - left) / sampleWidth) * width)
+      : width;
+    const h = barsY
+      ? Math.round(((bottom - top) / sampleHeight) * height)
+      : height;
+    const crop = document.createElement('canvas');
+    crop.width = w;
+    crop.height = h;
+    crop.getContext('2d')?.drawImage(image, x, y, w, h, 0, 0, w, h);
+    return crop.toDataURL('image/jpeg', 0.92);
+  } catch {
+    return null;
+  }
+}
+
+function presentArtwork() {
+  const image = refs.musicArtworkImage;
+  image.hidden = false;
   refs.musicArtwork.dataset.state = 'available';
   pulse(refs.musicArtwork, 'art-in');
-  const { naturalWidth: width, naturalHeight: height } = refs.musicArtworkImage;
-  refs.musicArtwork.dataset.aspect =
-    width && height
-      ? width / height > 1.2
-        ? 'wide'
-        : width / height < 0.85
-          ? 'tall'
-          : 'square'
-      : 'square';
-  // The full image sits at the top in its own proportions over a blurred copy,
-  // so square covers, video thumbnails and tall images all fit without cropping.
-  const source =
-    refs.musicArtworkImage.currentSrc || refs.musicArtworkImage.src;
+  refs.musicArtwork.dataset.aspect = artworkShape(
+    image.naturalWidth,
+    image.naturalHeight,
+  );
+  // A strip sits whole inside its box; its visible span lets CSS fade exactly
+  // at the image's own edges instead of the box's.
+  const ratio = image.naturalWidth / image.naturalHeight || 1;
+  const wideStrip = ratio > 1;
+  refs.musicArtwork.dataset.strip = wideStrip ? 'wide' : 'tall';
+  refs.musicArtwork.style?.setProperty(
+    '--strip-span',
+    `${Math.round(Math.min(1, wideStrip ? 2 / ratio : ratio) * 1000) / 10}%`,
+  );
+  // The hero sits at the top over a blurred copy of the same (trimmed) image.
+  const source = image.currentSrc || image.src;
   if (refs.musicArtwork.style && source)
     refs.musicArtwork.style.setProperty(
       '--art-url',
       `url("${String(source).replace(/["\\\n]/g, '')}")`,
     );
-  updateArtworkColor(refs.musicArtworkImage);
+  updateArtworkColor(image);
+}
+
+refs.musicArtworkImage.addEventListener('load', () => {
+  const image = refs.musicArtworkImage;
+  if (image.dataset?.trimming === 'true') {
+    image.dataset.trimming = 'false';
+    presentArtwork();
+    return;
+  }
+  if (refs.musicArtwork.dataset.state !== 'loading') return;
+  const trimmed = trimmedArtwork(image);
+  if (trimmed && image.dataset) {
+    image.dataset.trimming = 'true';
+    image.src = trimmed;
+    return;
+  }
+  presentArtwork();
 });
 document.addEventListener('keydown', (event) => {
   if (

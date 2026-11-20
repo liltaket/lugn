@@ -37,6 +37,10 @@ import type {
 import type { StateEventStream } from '../core/event-stream.js';
 import type { ArtworkProvider } from '../core/artwork.js';
 import {
+  PrinterLightUnavailableError,
+  type PrinterActivityProvider,
+} from './printer-activity-service.js';
+import {
   ExperienceRequestError,
   type ExperienceApi,
 } from '../application/experience-api.js';
@@ -121,6 +125,8 @@ export type LugnDisplayServerOptions = {
   cameraService?: CameraDashboardService;
   cameraMedia?: CameraMediaProvider;
   environmentProvider?: () => EnvironmentSnapshot;
+  /** Optional 3D printer shown as a live activity while it prints. */
+  printer?: PrinterActivityProvider;
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
 };
 
@@ -415,6 +421,39 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'GET' &&
+        hubRequest.route.startsWith('/display-api/printer/cover/')
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        const token =
+          /^\/display-api\/printer\/cover\/([A-Za-z0-9_-]{32})$/.exec(
+            hubRequest.route,
+          )?.[1];
+        const asset = token
+          ? await this.options.printer?.readCover(token)
+          : null;
+        if (!asset) {
+          sendJson(response, 404, { error: 'printer_cover_unavailable' });
+          return;
+        }
+        response.writeHead(200, {
+          // The token changes with every new cover, so one fetch per print.
+          'cache-control': 'private, max-age=86400, immutable',
+          'content-type': asset.contentType,
+          'content-length': asset.body.byteLength,
+          'x-content-type-options': 'nosniff',
+          'cross-origin-resource-policy': 'same-origin',
+        });
+        response.end(asset.body);
+        return;
+      }
+      if (
+        request.method === 'GET' &&
         hubRequest.route.startsWith('/display-api/artwork/')
       ) {
         if (
@@ -460,6 +499,41 @@ export class LugnDisplayServer {
           this.lastHubPollAt.set(hubRequest.hub.id, Date.now());
         }
         sendJson(response, 200, this.snapshot(hubRequest.hub));
+        return;
+      }
+      if (
+        request.method === 'POST' &&
+        hubRequest.route === '/display-api/printer/light'
+      ) {
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        const input = z
+          .object({ on: z.boolean() })
+          .strict()
+          .parse(await readJsonBody(request));
+        if (!this.options.printer) {
+          sendJson(response, 404, { error: 'printer_not_configured' });
+          return;
+        }
+        try {
+          await this.options.printer.setLight(input.on);
+          sendJson(response, 200, { accepted: true });
+        } catch (error) {
+          sendJson(
+            response,
+            error instanceof PrinterLightUnavailableError ? 409 : 502,
+            {
+              error:
+                error instanceof PrinterLightUnavailableError
+                  ? 'printer_light_unavailable'
+                  : 'printer_light_failed',
+            },
+          );
+        }
         return;
       }
       if (
@@ -596,6 +670,10 @@ export class LugnDisplayServer {
       castStatus: this.options.castStatus?.(hub.id) ?? { state: 'unknown' },
       environment:
         this.options.environmentProvider?.() ?? emptyEnvironmentSnapshot(),
+      printer:
+        this.options.printer?.snapshot(
+          `${this.pathForHub(hub.id)}display-api/printer/cover/`,
+        ) ?? null,
     };
   }
 
@@ -656,12 +734,14 @@ export class LugnDisplayServer {
     const unsubscribeExperience =
       this.options.experience?.subscribe(scheduleSend);
     const unsubscribeCamera = this.options.cameraMedia?.subscribe(scheduleSend);
+    const unsubscribePrinter = this.options.printer?.subscribe(scheduleSend);
     const heartbeat = setInterval(send, 5_000);
     response.once('close', () => {
       unsubscribe();
       unsubscribeArtwork?.();
       unsubscribeExperience?.();
       unsubscribeCamera?.();
+      unsubscribePrinter?.();
       clearInterval(heartbeat);
       if (pendingUpdate) clearImmediate(pendingUpdate);
       this.eventStreams.delete(response);

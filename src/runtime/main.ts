@@ -22,6 +22,8 @@ import {
 } from '../adapters/wiim-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
+import { HomeAssistantPrinterAdapter } from '../adapters/home-assistant-printer.js';
+import { PrinterActivityService } from './printer-activity-service.js';
 import { HomeAssistantHomePresenceAdapter } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantSunAdapter } from '../adapters/home-assistant-sun.js';
 import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
@@ -247,6 +249,9 @@ export async function startRuntime(
     config.homeAssistant.environment,
     systemClock,
   );
+  const homeAssistantPrinter = config.homeAssistant.printer
+    ? new HomeAssistantPrinterAdapter(config.homeAssistant.printer, systemClock)
+    : undefined;
   const deviceIds = Object.keys(config.homeAssistant.entities);
   const baseScenes = withRoomPresets(config.scenes ?? defaultScenes, deviceIds);
   const defaultSceneId = resolveRoomDefaultSceneId(
@@ -735,6 +740,7 @@ export async function startRuntime(
     homeAssistantSwitch?.acceptStateChangedEvent(event);
     homeAssistantMusic?.acceptStateChangedEvent(event);
     homeAssistantEnvironment.acceptStateChangedEvent(event);
+    homeAssistantPrinter?.acceptStateChangedEvent(event);
     for (const sensor of powerSensors.values())
       sensor.acceptStateChangedEvent(event);
     homeAssistantHomePresence.acceptStateChangedEvent(event);
@@ -772,6 +778,7 @@ export async function startRuntime(
           cameraSeed = states;
           for (const state of states) {
             homeAssistantSun.acceptState(state);
+            homeAssistantPrinter?.acceptState(state);
             for (const sensor of powerSensors.values())
               if (
                 typeof state === 'object' &&
@@ -1099,6 +1106,18 @@ export async function startRuntime(
         musicPlaybackPoliciesProvider: () =>
           engine.getMusicPlaybackPolicySnapshots(),
         environmentProvider: () => homeAssistantEnvironment.snapshot(),
+        ...(homeAssistantPrinter
+          ? {
+              printer: new PrinterActivityService(
+                homeAssistantPrinter,
+                {
+                  baseUrl: config.homeAssistant.baseUrl,
+                  token: config.homeAssistant.token,
+                },
+                homeAssistantFetch,
+              ),
+            }
+          : {}),
         castStatus: (hubId) => {
           const lastHubPollAt =
             displayRefs.displayServer?.lastHubHeartbeatAt(hubId);
