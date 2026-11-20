@@ -551,7 +551,7 @@ async fn capture(
             "--format",
             "s16",
             "--latency",
-            "20ms",
+            "10ms",
             "-",
         ])
         .stdin(Stdio::null())
