@@ -474,6 +474,7 @@ function progressSample(values) {
 
 function setClock() {
   renderMusicProgress();
+  updateCameraCountdown();
   if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
     setConnection('offline', 'Inga färska uppdateringar från Lugn.');
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
@@ -3234,6 +3235,69 @@ window.addEventListener('blur', () => {
 });
 
 // Camera media is scoped to one server-issued view. No HA credentials enter the browser.
+
+// Two canvases under the live image keep the last frame on screen: a sharp copy
+// in the same place and a soft, blurred fill for the letterbox. A frame swap can
+// then never show black, even if the Hub's browser repaints the image late.
+let cameraCanvases = null;
+function cameraUnderlays() {
+  if (cameraCanvases) return cameraCanvases;
+  const frame = refs.cameraImage?.parentElement;
+  if (typeof frame?.insertBefore !== 'function') return null;
+  const make = (className) => {
+    const canvas = document.createElement('canvas');
+    if (typeof canvas?.getContext !== 'function') return null;
+    canvas.className = className;
+    canvas.setAttribute('aria-hidden', 'true');
+    frame.insertBefore(canvas, refs.cameraImage);
+    return canvas;
+  };
+  const blur = make('camera-blur');
+  const under = blur && make('camera-under');
+  cameraCanvases = blur && under ? { blur, under } : null;
+  return cameraCanvases;
+}
+function paintCameraUnderlay() {
+  const image = refs.cameraImage;
+  if (!image?.complete || !image.naturalWidth || image.hidden) return;
+  const canvases = cameraUnderlays();
+  if (!canvases) return;
+  try {
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    canvases.under.width = width;
+    canvases.under.height = height;
+    canvases.under.getContext('2d')?.drawImage(image, 0, 0, width, height);
+    canvases.blur.width = 48;
+    canvases.blur.height = Math.max(1, Math.round((48 * height) / width));
+    canvases.blur
+      .getContext('2d')
+      ?.drawImage(image, 0, 0, canvases.blur.width, canvases.blur.height);
+  } catch {
+    // A frame that cannot be drawn leaves the previous underlay in place.
+  }
+}
+function clearCameraUnderlay() {
+  if (!cameraCanvases) return;
+  cameraCanvases.under.width = 0;
+  cameraCanvases.blur.width = 0;
+}
+// The close button's ring shows the time left of the view.
+function updateCameraCountdown() {
+  if (!cameraActive) return;
+  const left = Math.max(
+    0,
+    Math.ceil((cameraActive.expiresAt - estimatedServerNow()) / 1000),
+  );
+  const total = Number(
+    latestPayload?.cameraDashboard?.settings?.durationSeconds,
+  );
+  setText(refs.cameraCountdown, `${left} s`);
+  refs.cameraClose.style?.setProperty(
+    '--cam-left',
+    String(Number.isFinite(total) && total > 0 ? Math.min(1, left / total) : 1),
+  );
+}
 function cameraMediaUrl(value) {
   if (typeof value !== 'string' || !/^(\/|\.\/)/.test(value)) return null;
   try {
@@ -3258,6 +3322,7 @@ function stopCameraMedia() {
   refs.cameraImage.onerror = null;
   refs.cameraImage.removeAttribute('src');
   refs.cameraImage.hidden = true;
+  clearCameraUnderlay();
   if (cameraObjectUrl) URL.revokeObjectURL(cameraObjectUrl);
   cameraObjectUrl = null;
   cameraMediaKey = null;
@@ -3340,6 +3405,7 @@ function startCameraImages(active, epoch) {
       failures = 0;
       refs.cameraImage.hidden = false;
       refs.cameraPlaceholder.hidden = true;
+      window.setTimeout(paintCameraUnderlay, 80);
       refs.cameraStatus.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
       cameraImageTimer = window.setTimeout(frame, 1000);
     } catch {
@@ -3506,10 +3572,7 @@ function renderCamera(payload) {
   }
   setText(refs.cameraName, active.name);
   setText(refs.cameraReason, active.reason || 'Manuellt öppnad');
-  setText(
-    refs.cameraCountdown,
-    `${Math.max(0, Math.ceil((active.expiresAt - estimatedServerNow()) / 1000))} s`,
-  );
+  updateCameraCountdown();
   refs.cameraImage.alt = `${active.name}, senast hämtade kamerabild`;
   const key = `${active.id}|${active.imageUrl ?? ''}`;
   if (cameraMediaKey !== key) void startCameraMedia(active);
@@ -3693,6 +3756,15 @@ refs.musicArtworkImage.addEventListener('load', () => {
   refs.musicArtworkImage.hidden = false;
   refs.musicArtwork.dataset.state = 'available';
   pulse(refs.musicArtwork, 'art-in');
+  const { naturalWidth: width, naturalHeight: height } = refs.musicArtworkImage;
+  refs.musicArtwork.dataset.aspect =
+    width && height
+      ? width / height > 1.2
+        ? 'wide'
+        : width / height < 0.85
+          ? 'tall'
+          : 'square'
+      : 'square';
   // The full image sits at the top in its own proportions over a blurred copy,
   // so square covers, video thumbnails and tall images all fit without cropping.
   const source =

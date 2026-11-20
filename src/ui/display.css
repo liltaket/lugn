@@ -4622,3 +4622,187 @@ body {
   aspect-ratio: auto;
   height: 200px;
 }
+
+/* ── Camera, clean edition ──
+   One card: the live image fills it over a soft blur of itself; the camera's
+   name is a small chip on the image and Stäng is a round ✕ whose ring runs
+   down with the view's time. Reason, countdown digits and status stay in the
+   accessible text only. Card y 20–288, music card from 302. */
+#app-root .camera-panel {
+  display: block;
+  height: 268px;
+  padding: 8px;
+}
+#app-root .camera-frame {
+  position: relative;
+  width: 100%;
+  height: 252px;
+  border-radius: 22px;
+  overflow: hidden;
+  background:
+    radial-gradient(80% 90% at 50% 40%, rgba(238, 241, 232, 0.06), transparent),
+    var(--art-panel);
+}
+#app-root .camera-frame .camera-blur,
+#app-root .camera-frame .camera-under,
+#app-root .camera-frame img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+#app-root .camera-frame .camera-blur {
+  object-fit: cover;
+  filter: blur(18px) saturate(1.2) brightness(0.6);
+  transform: scale(1.2);
+}
+#app-root .camera-frame .camera-under,
+#app-root .camera-frame img {
+  object-fit: contain;
+}
+#app-root .camera-frame img {
+  max-height: none;
+  animation: redesign-fade-in 0.45s ease;
+}
+#app-root #camera-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  color: var(--ink-2);
+  animation: redesign-breathe 1.6s ease-in-out infinite;
+}
+@keyframes redesign-breathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+#app-root .camera-caption {
+  position: absolute;
+  inset: 20px 20px auto 20px;
+  min-height: 0;
+  padding: 0;
+  display: block;
+  pointer-events: none;
+  z-index: 2;
+}
+#app-root .camera-caption > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 14px 0 11px;
+  border-radius: 16px;
+  background: rgba(14, 19, 20, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+#app-root .camera-caption > div::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #8fd6a0;
+  box-shadow: 0 0 0 3px rgba(143, 214, 160, 0.18);
+}
+#app-root .camera-caption strong {
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 600;
+}
+#app-root .camera-caption span:not(#camera-countdown),
+#app-root #camera-countdown {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+#app-root .camera-caption button,
+#app-root #camera-close {
+  position: absolute;
+  top: 180px;
+  right: 0;
+  width: 48px;
+  height: 48px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  font-size: 0;
+  color: var(--ink);
+  background: rgba(14, 19, 20, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  pointer-events: auto;
+}
+#app-root #camera-close::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: center / contain no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6 6 18'/%3E%3C/svg%3E");
+  mask: center / contain no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6 6 18'/%3E%3C/svg%3E");
+}
+#app-root #camera-close::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: conic-gradient(
+    rgba(238, 241, 232, 0.9) calc(var(--cam-left, 1) * 360deg),
+    rgba(238, 241, 232, 0.12) 0
+  );
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 2.5px),
+    #000 calc(100% - 2.5px)
+  );
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 2.5px),
+    #000 calc(100% - 2.5px)
+  );
+  transition: background 1s linear;
+}
+#app-root .camera-status {
+  display: none;
+}
+
+/* ── Wide artwork (video thumbnails): a gentle 3:2 crop that fills more of
+   the sleeve and melts into its blurred copy instead of ending on a line. */
+#app-root .music-artwork[data-aspect='wide'] img {
+  aspect-ratio: 3 / 2;
+  height: auto;
+  object-fit: cover;
+  -webkit-mask-image: linear-gradient(to bottom, #000 45%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 45%, transparent 100%);
+}
+#app-root .music-artwork[data-aspect='wide']::before {
+  filter: blur(30px) saturate(1.35) brightness(0.72);
+}
+#app-root .music-artwork[data-aspect='square'] img {
+  -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
+}
+#app-root[data-camera-visible='true'] .music-artwork[data-aspect] img {
+  aspect-ratio: auto;
+  height: 100%;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+#app-root .camera-caption > div {
+  flex-direction: row;
+  width: auto;
+  max-width: calc(100% - 64px);
+}
+#app-root .camera-caption strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
