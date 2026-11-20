@@ -30,6 +30,8 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 /// unloadScript deletes asynchronously; loadScript answers -1 until it is gone.
 const LOAD_RETRIES: u32 = 8;
 const LOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
+/// How often a running script is checked for and reloaded if KWin dropped it.
+const WATCH_EVERY: Duration = Duration::from_secs(3);
 /// The approach area reaches this far past the entry corner to the right...
 const APPROACH_EXTRA_X: i32 = 24;
 /// ...and this far up from the monitor's bottom edge.
@@ -41,6 +43,9 @@ pub enum KwinEvent {
     Window(Option<gate::Window>),
     /// The cursor entered (`true`) or left the approach area.
     Approach(bool),
+    /// KWin dropped the script (seen after KWin reloads its scripts); until
+    /// it is back, nothing reports the window or the approach area.
+    ScriptLost,
 }
 
 /// Cursor area, in desktop logical px, that counts as about to enter.
@@ -232,21 +237,48 @@ impl Script {
 
 impl ScriptTask {
     async fn run(self, mut rx: mpsc::UnboundedReceiver<ScriptCmd>) {
-        while let Some(cmd) = rx.recv().await {
-            match cmd {
-                ScriptCmd::Load(approach) => match self.load(approach).await {
-                    Ok(id) => log!(
-                        "kwin: observer script {id} running (approach x <= {} y >= {})",
-                        approach.max_x,
-                        approach.min_y
-                    ),
-                    Err(e) => {
-                        log!("kwin: observer script failed: {e:#}; game gate open, no warm-up");
-                        // Fail open: forget whatever the old script said.
-                        let _ = self.events.send(KwinEvent::Window(None)).await;
-                        let _ = self.events.send(KwinEvent::Approach(false)).await;
-                    }
+        // The approach area of the script that should be running, if any.
+        let mut wanted: Option<Approach> = None;
+        let mut watch = tokio::time::interval(WATCH_EVERY);
+        watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            let cmd = tokio::select! {
+                cmd = rx.recv() => match cmd {
+                    Some(cmd) => cmd,
+                    None => return,
                 },
+                _ = watch.tick(), if wanted.is_some() => {
+                    // KWin sometimes drops scripts loaded at runtime (a
+                    // reconfigure reloads only the configured ones). Put ours
+                    // back; meanwhile the agent falls back to an always-armed
+                    // barrier.
+                    match self.loaded().await {
+                        Ok(true) | Err(_) => continue,
+                        Ok(false) => {
+                            log!("kwin: observer script vanished; reloading it");
+                            let _ = self.events.send(KwinEvent::ScriptLost).await;
+                            ScriptCmd::Load(wanted.expect("checked"))
+                        }
+                    }
+                }
+            };
+            match cmd {
+                ScriptCmd::Load(approach) => {
+                    wanted = Some(approach);
+                    match self.load(approach).await {
+                        Ok(id) => log!(
+                            "kwin: observer script {id} running (approach x <= {} y >= {})",
+                            approach.max_x,
+                            approach.min_y
+                        ),
+                        Err(e) => {
+                            log!("kwin: observer script failed: {e:#}; game gate open, no warm-up");
+                            // Fail open: forget whatever the old script said.
+                            let _ = self.events.send(KwinEvent::Window(None)).await;
+                            let _ = self.events.send(KwinEvent::ScriptLost).await;
+                        }
+                    }
+                }
                 ScriptCmd::Unload(done) => {
                     match self.unload().await {
                         Ok(true) => log!("kwin: observer script unloaded"),
@@ -259,6 +291,17 @@ impl ScriptTask {
                 }
             }
         }
+    }
+
+    async fn loaded(&self) -> Result<bool> {
+        call(
+            &self.conn,
+            "/Scripting",
+            "org.kde.kwin.Scripting",
+            "isScriptLoaded",
+            &(self.plugin.as_str(),),
+        )
+        .await
     }
 
     fn write_file(&self, text: &str) -> Result<()> {

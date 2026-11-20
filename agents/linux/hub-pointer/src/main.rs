@@ -799,6 +799,14 @@ impl<'p> App<'p> {
                     self.sync_arm().await?;
                 }
             }
+            KwinEvent::ScriptLost => {
+                // Without the observer the barrier stays armed while a page is
+                // connected, as before the approach gate, until it reports in.
+                self.approach_known = false;
+                self.warm.approach = false;
+                self.update_warm();
+                self.sync_arm().await?;
+            }
         }
         Ok(())
     }
