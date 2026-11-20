@@ -31,7 +31,7 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 const LOAD_RETRIES: u32 = 8;
 const LOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
 /// How often a running script is checked for and reloaded if KWin dropped it.
-const WATCH_EVERY: Duration = Duration::from_secs(3);
+const WATCH_EVERY: Duration = Duration::from_secs(1);
 /// The approach area reaches this far past the entry corner to the right...
 const APPROACH_EXTRA_X: i32 = 24;
 /// ...and this far up from the monitor's bottom edge.
@@ -351,8 +351,20 @@ impl ScriptTask {
             }
             tokio::time::sleep(LOAD_RETRY_DELAY).await;
         };
-        let path = format!("/Scripting/Script{id}");
-        call::<_, ()>(&self.conn, &path, "org.kde.kwin.Script", "run", &()).await?;
+        // KWin numbers scripts by list length, so after any removal in the
+        // middle of its list the id's D-Bus path can belong to another
+        // script (tools that load, run and stop helper scripts, such as
+        // kdotool, then stop the wrong one). Scripting.start() runs every
+        // loaded script that is not running yet, ours included, without
+        // going through that path.
+        call::<_, ()>(
+            &self.conn,
+            "/Scripting",
+            "org.kde.kwin.Scripting",
+            "start",
+            &(),
+        )
+        .await?;
         Ok(id)
     }
 }
