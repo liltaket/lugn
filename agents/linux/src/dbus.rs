@@ -430,7 +430,9 @@ async fn session_connected(output: &mut SessionOutput, collect_artwork: bool) ->
     let owners = owner_stream(&connection).await?;
     let properties =
         signal_stream(&connection, PROPERTIES, MPRIS_PATH, "PropertiesChanged").await?;
-    let mut signals = select_all(vec![owners, properties]);
+    // A seek moves Position without PropertiesChanged; refresh that player.
+    let seeked = signal_stream(&connection, PLAYER, MPRIS_PATH, "Seeked").await?;
+    let mut signals = select_all(vec![owners, properties, seeked]);
     let mut state = SessionState {
         collect_artwork,
         ..Default::default()
@@ -468,6 +470,14 @@ async fn session_connected(output: &mut SessionOutput, collect_artwork: bool) ->
                         if names.is_empty() { continue; }
                         let (interface, changed, invalidated): PropertyChange = message.body().deserialize()?;
                         if !relevant_media_change(&interface, &changed, &invalidated) { continue; }
+                        output.players(None).await?;
+                        state.refresh_players(&connection, names).await;
+                    }
+                    Some("Seeked") => {
+                        let names: Vec<_> = state.players.iter()
+                            .filter(|(_, player)| Some(player.owner.as_str()) == message_sender(&message).as_deref())
+                            .map(|(name, _)| name.clone()).collect();
+                        if names.is_empty() { continue; }
                         output.players(None).await?;
                         state.refresh_players(&connection, names).await;
                     }
@@ -543,6 +553,37 @@ fn parse_media(name: &str, root: Properties, mut player: Properties) -> Media {
         album: string(&metadata, "xesam:album"),
         content_type: string(&metadata, "xesam:contentType"),
         artwork: None,
+        ..position(&player, &metadata)
+    }
+}
+
+/// Position and length only when the player reports a real length; a live
+/// stream or a page without duration stays without progress.
+fn position(player: &Properties, metadata: &Properties) -> Media {
+    let length = metadata.get("mpris:length").and_then(|value| {
+        i64::try_from(value).ok().or_else(|| {
+            u64::try_from(value)
+                .ok()
+                .and_then(|v| i64::try_from(v).ok())
+        })
+    });
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok());
+    match (
+        length,
+        player
+            .get("Position")
+            .and_then(|value| i64::try_from(value).ok()),
+    ) {
+        (Some(length), Some(position)) if length > 0 && position >= 0 => Media {
+            length_us: Some(length as u64),
+            position_us: Some((position as u64).min(length as u64)),
+            position_at_ms: at,
+            ..Default::default()
+        },
+        _ => Media::default(),
     }
 }
 
@@ -770,6 +811,21 @@ mod tests {
         assert_eq!(escaped.len(), 1);
         assert_eq!(escaped[0].playback_status.as_deref(), Some("Playing"));
         assert!(serde_json::to_vec(&escaped).unwrap().len() <= MAX_MEDIA_BYTES);
+    }
+
+    #[test]
+    fn position_needs_a_real_length_and_is_clamped_to_it() {
+        let player: Properties = [("Position".into(), OwnedValue::from(90_000_000_i64))].into();
+        let metadata: Properties =
+            [("mpris:length".into(), OwnedValue::from(60_000_000_i64))].into();
+        let media = position(&player, &metadata);
+        assert_eq!(media.length_us, Some(60_000_000));
+        assert_eq!(media.position_us, Some(60_000_000));
+        assert!(media.position_at_ms.is_some());
+        let no_length: Properties = Properties::new();
+        assert_eq!(position(&player, &no_length), Media::default());
+        let zero: Properties = [("mpris:length".into(), OwnedValue::from(0_i64))].into();
+        assert_eq!(position(&player, &zero), Media::default());
     }
 
     #[test]

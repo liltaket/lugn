@@ -10,6 +10,9 @@ export type ComputerNowPlaying = {
   application: string | null;
   deviceId: string;
   reason: string;
+  positionSeconds?: number;
+  durationSeconds?: number;
+  positionUpdatedAt?: number;
 };
 type PlayerHistory = {
   playback: Media['playback'];
@@ -249,6 +252,15 @@ export class ComputerNowPlayingSelector {
         selected.identity?.trim() ||
         selected.desktopEntry?.trim() ||
         selected.player,
+      ...(selected.positionSeconds !== undefined &&
+      selected.durationSeconds !== undefined &&
+      selected.positionUpdatedAt !== undefined
+        ? {
+            positionSeconds: selected.positionSeconds,
+            durationSeconds: selected.durationSeconds,
+            positionUpdatedAt: selected.positionUpdatedAt,
+          }
+        : {}),
     };
   }
 }

@@ -28,7 +28,7 @@ pub async fn collect(
     if let Some(id) = spotify_id(&url) {
         return Some(Artwork::Spotify { id: id.to_owned() });
     }
-    // Only Firefox's own ephemeral MPRIS thumbnail cache is readable.
+    // Only Firefox's (or Zen's) own ephemeral MPRIS thumbnail cache is readable.
     if !firefox_player(player, identity, desktop_entry) {
         return None;
     }
@@ -42,8 +42,16 @@ pub async fn collect(
 fn firefox_player(player: &str, identity: Option<&str>, desktop_entry: Option<&str>) -> bool {
     (player.starts_with("org.mpris.MediaPlayer2.firefox.")
         || player == "org.mpris.MediaPlayer2.firefox")
-        && matches!(identity, Some("Firefox") | Some("Mozilla firefox_firefox"))
-        && matches!(desktop_entry, Some("firefox") | Some("firefox_firefox"))
+        && matches!(
+            (identity, desktop_entry),
+            (
+                Some("Firefox") | Some("Mozilla firefox_firefox"),
+                Some("firefox") | Some("firefox_firefox")
+            ) | (
+                Some("Mozilla zen") | Some("Zen"),
+                Some("zen") | Some("zen-browser")
+            )
+        )
 }
 
 fn spotify_id(url: &str) -> Option<&str> {
@@ -72,6 +80,9 @@ fn firefox_image(home: &Path, url: &str) -> Option<Artwork> {
             "firefox",
             "firefox-mpris",
         ],
+        // Zen (a Firefox build) keeps the same cache under its own profile root.
+        vec![".config", "zen", "firefox-mpris"],
+        vec![".zen", "firefox-mpris"],
     ] {
         let cache = components
             .iter()
@@ -168,6 +179,37 @@ mod tests {
             .save(&path)
             .unwrap();
         path
+    }
+    #[test]
+    fn zen_uses_its_own_firefox_cache_and_identity() {
+        let player = "org.mpris.MediaPlayer2.firefox.instance_1_42";
+        assert!(firefox_player(player, Some("Mozilla zen"), Some("zen")));
+        assert!(firefox_player(
+            player,
+            Some("Mozilla firefox_firefox"),
+            Some("firefox_firefox")
+        ));
+        assert!(!firefox_player(
+            player,
+            Some("Mozilla zen"),
+            Some("firefox")
+        ));
+        assert!(!firefox_player(
+            "org.mpris.MediaPlayer2.zen",
+            Some("Mozilla zen"),
+            Some("zen")
+        ));
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join(".config/zen/firefox-mpris/123_1.png");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        image::RgbImage::from_pixel(400, 400, image::Rgb([20, 40, 70]))
+            .save(&path)
+            .unwrap();
+        let url = format!("file://{}", path.display());
+        assert!(matches!(
+            firefox_image(home.path(), &url),
+            Some(Artwork::Inline { .. })
+        ));
     }
     #[test]
     fn spotify_is_exact_and_never_accepts_other_urls() {

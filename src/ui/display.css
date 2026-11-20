@@ -2799,3 +2799,1261 @@ h2 {
   background: center / contain no-repeat
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='12' fill='%231ed760'/%3E%3Cpath d='M5.3 9.1c4.4-1.3 9.3-.9 13 1.3M6.2 12.1c3.7-1.1 7.9-.7 11.1 1.2M7 15c3.1-.8 6.2-.5 8.9 1' fill='none' stroke='%23151515' stroke-linecap='round' stroke-width='1.5'/%3E%3C/svg%3E");
 }
+
+/* ───────── Hub redesign, 2026-11 (Samlad · Lugn) ─────────
+   One coherent layer over the established controls and state handling.
+   Geometry is drawn on a 1024 × 600 Bed canvas; Desk uses the same scale at
+   960 × 600 and zooms to 1280 × 800. The left column holds the room: date,
+   clock, air, the people count, scenes with Släck as the sixth tile, and a
+   bar with the cameras and the quiet menus. The right column is music; it
+   narrows when nothing plays and no camera shows, and shares its height with
+   the camera when one is open. Volume −/+ is gone: the ring around
+   play/pause shows the level and the selector says who controls it.
+   The Bed overlay (x896–1024, y0–72) stays free of text and touch targets. */
+#app-root {
+  --W: 1024px;
+  --lx: 20px;
+  --rw: 372px;
+  --lw: calc(var(--W) - 60px - var(--rw));
+  --rx: calc(var(--W) - 20px - var(--rw));
+  --ink: #eef1e8;
+  --ink-2: rgba(238, 241, 232, 0.64);
+  --ink-3: rgba(238, 241, 232, 0.42);
+  --quiet: rgba(238, 241, 232, 0.64);
+  --muted: rgba(238, 241, 232, 0.42);
+  --glass: rgba(238, 241, 232, 0.055);
+  --glass-2: rgba(238, 241, 232, 0.09);
+  --glass-3: rgba(238, 241, 232, 0.14);
+  --hair: rgba(238, 241, 232, 0.08);
+  --ground: #141c1b;
+  --panel: #1c2523;
+  --surface: #1c2523;
+  --surface-raised: #26302e;
+  --accent: #e7bc78;
+  --accent-contrast: #241d12;
+  --volume-level: 0;
+  --move: 0.55s cubic-bezier(0.2, 0.9, 0.25, 1);
+  position: relative;
+  width: var(--W);
+  height: 600px;
+  margin: 0;
+  overflow: hidden;
+  font-family: system-ui, sans-serif;
+  background:
+    radial-gradient(
+      60% 90% at 96% 0%,
+      var(--art-raised, transparent),
+      transparent 70%
+    ),
+    radial-gradient(70% 80% at 0% 110%, rgba(231, 188, 120, 0.1), transparent),
+    var(--ground);
+}
+#app-root[data-role='desk'] {
+  --W: 960px;
+  --rw: 340px;
+  --accent: #a4c7d2;
+  --accent-contrast: #10232a;
+}
+#app-root[data-time='night'] {
+  --ground: #0f1514;
+  --panel: #161d1c;
+  --ink: #e8dfcd;
+  --ink-2: rgba(232, 223, 205, 0.6);
+  --ink-3: rgba(232, 223, 205, 0.4);
+  --quiet: rgba(232, 223, 205, 0.6);
+  --muted: rgba(232, 223, 205, 0.4);
+}
+#app-root[data-role='bed'][data-time='night'] {
+  --ground: #0b0f0e;
+  --panel: #121817;
+  --accent: #b8955e;
+}
+/* Nothing plays and no camera shows: music narrows, the room gets the space. */
+#app-root[data-lighting-expanded='true'] {
+  --rw: 248px;
+}
+#app-root[data-role='desk'][data-lighting-expanded='true'] {
+  --rw: 248px;
+}
+#app-root button {
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+#app-root button:active:not(:disabled) {
+  background-color: inherit;
+  transform: scale(0.97);
+}
+
+/* ── Header: date over the clock, air on one line, people in a capsule ── */
+#app-root .clock-date {
+  left: 22px;
+  top: 26px;
+  width: auto;
+  font-size: 18px;
+  line-height: 24px;
+  color: var(--ink-2);
+}
+#app-root .clock-date::first-letter {
+  text-transform: uppercase;
+}
+#app-root .clock-time,
+#app-root[data-feedback='true'] .clock-time {
+  left: 16px;
+  top: 52px;
+  width: auto;
+  font-size: 104px;
+  line-height: 100px;
+  font-weight: 400;
+  letter-spacing: -0.045em;
+  color: var(--ink);
+}
+#app-root .presence-count-button,
+#app-root[data-lighting-expanded='true'] .presence-count-button {
+  left: auto;
+  right: calc(var(--W) - var(--lx) - var(--lw));
+  top: 86px;
+  width: auto;
+  height: 60px;
+  min-width: 0;
+  padding: 0 22px 0 17px;
+  gap: 9px;
+  border: 0;
+  border-radius: 30px;
+  background: var(--glass-2);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  color: var(--ink);
+  transition:
+    right var(--move),
+    background 0.25s;
+}
+#app-root .presence-count-button:disabled {
+  background: var(--glass);
+}
+#app-root .presence-count-button svg {
+  width: 24px;
+  height: 24px;
+  color: var(--ink-2);
+}
+#app-root #presence-count-value {
+  font-size: 38px;
+  line-height: 44px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+#app-root .environment-grid,
+#app-root[data-role='bed'] .environment-grid,
+#app-root[data-lighting-expanded='true'] .environment-grid,
+#app-root[data-role='bed'][data-lighting-expanded='true'] .environment-grid {
+  left: 22px;
+  top: 166px;
+  width: calc(var(--lw) - 4px);
+  height: 26px;
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  overflow: hidden;
+}
+#app-root .environment-metric,
+#app-root[data-role='bed'] [data-metric='pm25'] {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+  min-width: 0;
+}
+#app-root .metric-label {
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--ink-3);
+}
+#app-root [data-metric='temperature'] .metric-label,
+#app-root [data-metric='humidity'] .metric-label {
+  width: 17px;
+  height: 17px;
+  align-self: center;
+  font-size: 0;
+  background: var(--ink-3);
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
+}
+#app-root [data-metric='temperature'] .metric-label {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 13.6V5a2 2 0 1 1 4 0v8.6a4 4 0 1 1-4 0Z'/%3E%3Cpath d='M12 9v7'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 13.6V5a2 2 0 1 1 4 0v8.6a4 4 0 1 1-4 0Z'/%3E%3Cpath d='M12 9v7'/%3E%3C/svg%3E");
+}
+#app-root [data-metric='humidity'] .metric-label {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.5s-6 6.6-6 11a6 6 0 0 0 12 0c0-4.4-6-11-6-11Z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.5s-6 6.6-6 11a6 6 0 0 0 12 0c0-4.4-6-11-6-11Z'/%3E%3C/svg%3E");
+}
+#app-root .metric-value,
+#app-root[data-lighting-expanded='true'] .metric-value {
+  font-size: 17px;
+  line-height: 22px;
+  font-weight: 500;
+}
+#app-root .metric-unit {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink-2);
+}
+#app-root .metric-state {
+  display: none;
+}
+#app-root .environment-metric[data-state='stale'] .metric-value,
+#app-root .environment-metric[data-state='missing'] .metric-value {
+  color: var(--ink-3);
+}
+
+/* ── Scenes ── */
+#app-root .scene-grid,
+#app-root[data-lighting-expanded='true'] .scene-grid {
+  left: var(--lx);
+  top: 222px;
+  width: var(--lw);
+  height: 278px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 10px;
+  transition: width var(--move);
+}
+#app-root[data-scene-layout='row'] .scene-grid {
+  height: 204px;
+}
+#app-root .scene-grid[data-paged='true'] {
+  height: 150px;
+}
+#app-root .screen .scene-button,
+#app-root .scene-button,
+#app-root .scene-button[data-icon='true'] {
+  grid-column: span 2;
+  padding: 16px 16px 15px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  color: var(--ink);
+  transition:
+    background 0.35s,
+    box-shadow 0.35s,
+    color 0.35s,
+    transform 0.15s;
+}
+#app-root .scene-grid[data-count='1'] .scene-button {
+  grid-column: span 6;
+}
+#app-root .scene-grid[data-count='2'] .scene-button,
+#app-root .scene-grid[data-count='4'] .scene-button {
+  grid-column: span 3;
+}
+#app-root .scene-grid[data-count='5'] .scene-button:nth-child(n + 4) {
+  grid-column: span 2;
+}
+#app-root[data-scene-layout='row']
+  .scene-grid[data-count='5']
+  .scene-button:nth-child(n + 4) {
+  grid-column: span 3;
+}
+#app-root .scene-icon {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--scene-color);
+}
+#app-root .scene-icon::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.16;
+}
+#app-root .scene-icon svg {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  stroke-width: 1.8;
+}
+#app-root .scene-button .scene-name,
+#app-root .scene-button[data-icon='true'] .scene-name {
+  font-size: 18px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* The filled tile already says which scene is on; the status words stay in the
+   button's accessible name (Valt, Bekräftat, Skickar …), not on the tile. */
+#app-root .scene-button .scene-status,
+#app-root .light-off .scene-status {
+  display: none;
+}
+#app-root .scene-button[aria-pressed='true'] {
+  background:
+    radial-gradient(
+      120% 140% at 0% 0%,
+      rgba(255, 255, 255, 0.35),
+      transparent 55%
+    ),
+    var(--scene-color);
+  color: #1e1a14;
+  box-shadow: 0 10px 40px -10px var(--scene-color);
+}
+#app-root .scene-button[aria-pressed='true'] .scene-icon {
+  color: #1e1a14;
+}
+#app-root .scene-button[aria-pressed='true'] .scene-icon::before {
+  opacity: 0.12;
+}
+#app-root[data-time='night'] .scene-button[aria-pressed='true'] {
+  filter: brightness(0.62) saturate(0.85);
+}
+#app-root .scene-button[data-state='pending']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.16) 50%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  animation: redesign-shimmer 0.9s linear infinite;
+}
+@keyframes redesign-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+#app-root .scene-button[data-state='offline'] {
+  opacity: 0.55;
+}
+/* Släck shares the pause button's language: the light round button. */
+#app-root .light-off,
+#app-root[data-lighting-expanded='true'] .light-off {
+  left: calc(var(--lx) + (var(--lw) - 20px) * 2 / 3 + 20px);
+  top: 366px;
+  width: calc((var(--lw) - 20px) / 3);
+  height: 134px;
+  padding: 16px 16px 15px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--glass-2);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  color: var(--ink);
+  transition:
+    left var(--move),
+    width var(--move),
+    background 0.3s;
+}
+#app-root .light-off .scene-icon {
+  width: 42px;
+  height: 42px;
+  color: #18201f;
+}
+#app-root .light-off .scene-icon::before {
+  background: var(--ink);
+  opacity: 1;
+}
+#app-root .light-off[aria-pressed='true'] {
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1.5px rgba(238, 241, 232, 0.3);
+}
+#app-root .light-off[aria-pressed='true'] .scene-icon {
+  color: var(--ink);
+}
+#app-root .light-off[aria-pressed='true'] .scene-icon::before {
+  background: var(--glass-3);
+}
+/* Other scene counts: Släck becomes a full-width row under the scenes. */
+#app-root[data-scene-layout='row'] .light-off {
+  left: var(--lx);
+  top: 438px;
+  width: var(--lw);
+  height: 66px;
+  padding: 0 22px 0 9px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  border-radius: 33px;
+}
+#app-root[data-scene-layout='row'] .light-off .scene-icon {
+  width: 48px;
+  height: 48px;
+}
+#app-root[data-scene-layout='row'] .light-off .scene-copy {
+  width: auto;
+  margin: 0;
+}
+#app-root .scene-pagination,
+#app-root[data-lighting-expanded='true'] .scene-pagination {
+  left: var(--lx);
+  top: 382px;
+  width: var(--lw);
+  height: 48px;
+}
+#app-root[data-scene-layout='row'] .scene-pagination {
+  top: 382px;
+}
+#app-root .scene-pagination button,
+#app-root .context-pagination button,
+#app-root .camera-pagination button {
+  border: 0;
+  border-radius: 24px;
+  background: var(--glass-2);
+  color: var(--ink);
+}
+
+/* Rutiner and Musikens villkor take the scene area. */
+#app-root .context-panel,
+#app-root .music-details {
+  left: var(--lx);
+  top: 222px;
+  width: var(--lw);
+  height: 278px;
+  padding: 18px;
+  border: 0;
+  border-radius: 30px;
+  background: #1b2422;
+  box-shadow: inset 0 0 0 1px var(--hair);
+  z-index: 4;
+}
+#app-root .context-panel ~ .light-off,
+#app-root[data-music-details='true'] .light-off {
+  z-index: 1;
+}
+
+/* Feedback sits over the air line, never over a touch target. */
+#app-root .feedback-slot {
+  left: var(--lx);
+  top: 160px;
+  width: var(--lw);
+  z-index: 6;
+}
+#app-root .connection-notice,
+#app-root .toast {
+  border-radius: 22px;
+  padding: 8px 16px;
+  font-size: 15px;
+  background: rgba(40, 52, 49, 0.97);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Bottom bar: cameras directly, quiet menus at the end ── */
+#app-root .hub-sill button {
+  top: 520px;
+  height: 60px;
+  width: 60px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 30px;
+  font-size: 0;
+  color: var(--ink-2);
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  transition:
+    left var(--move),
+    background 0.25s;
+}
+#app-root .hub-sill button::before,
+#app-root .music-details-button::before {
+  content: '';
+  display: block;
+  width: 22px;
+  height: 22px;
+  margin: auto;
+  background: currentColor;
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
+}
+#app-root .hub-sill [aria-expanded='true'],
+#app-root .music-details-button[aria-expanded='true'] {
+  border: 0;
+  background: var(--glass-3);
+  color: var(--ink);
+}
+#app-root #music-menu {
+  left: calc(var(--lx) + var(--lw) - 60px);
+}
+#app-root #music-menu::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 18.2V5.8l10.5-2v12'/%3E%3Ccircle cx='6.7' cy='18.2' r='2.4'/%3E%3Ccircle cx='17.2' cy='15.8' r='2.4'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 18.2V5.8l10.5-2v12'/%3E%3Ccircle cx='6.7' cy='18.2' r='2.4'/%3E%3Ccircle cx='17.2' cy='15.8' r='2.4'/%3E%3C/svg%3E");
+}
+#app-root #context-details-button {
+  left: calc(var(--lx) + var(--lw) - 128px);
+}
+#app-root #context-details-button::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 17.5h18M6.5 17.5a5.5 5.5 0 0 1 11 0M12 5v3M5.2 8.7l1.8 1.8M18.8 8.7 17 10.5'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 17.5h18M6.5 17.5a5.5 5.5 0 0 1 11 0M12 5v3M5.2 8.7l1.8 1.8M18.8 8.7 17 10.5'/%3E%3C/svg%3E");
+}
+#app-root #camera-menu {
+  display: none;
+}
+#app-root .music-details-button {
+  display: block;
+  position: absolute;
+  left: calc(var(--lx) + var(--lw) - 196px);
+  top: 520px;
+  width: 60px;
+  height: 60px;
+  min-width: 0;
+  padding: 0;
+  font-size: 0;
+  border: 0;
+  border-radius: 30px;
+  color: var(--ink-2);
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  pointer-events: auto;
+  transition: left var(--move);
+}
+#app-root .music-details-button[hidden] {
+  display: none;
+}
+#app-root .music-details-button::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 11v5.5M12 7.6v.1'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 11v5.5M12 7.6v.1'/%3E%3C/svg%3E");
+}
+#app-root .camera-choices,
+#app-root .camera-choices[hidden],
+#app-root .music-section[data-camera='true'] .camera-choices {
+  position: absolute;
+  left: var(--lx);
+  top: 520px;
+  right: auto;
+  width: auto;
+  height: 60px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 30px;
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  pointer-events: auto;
+  z-index: 3;
+}
+#app-root .camera-choices:empty {
+  display: none;
+}
+#app-root .camera-choices button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 52px;
+  min-height: 0;
+  padding: 0 20px 0 9px;
+  border: 0;
+  border-radius: 26px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+#app-root .camera-choices button::before {
+  content: '';
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background:
+    center / 19px no-repeat
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23eef1e8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.8' y='6' width='13.2' height='12' rx='2.6'/%3E%3Cpath d='m16 10.5 5.2-3v9L16 13.5'/%3E%3C/svg%3E"),
+    var(--glass-2);
+}
+#app-root .camera-choices button[aria-pressed='true'] {
+  background: var(--ink);
+  color: #18201f;
+}
+#app-root .camera-choices button[aria-pressed='true']::before {
+  background:
+    center / 19px no-repeat
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2318201f' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.8' y='6' width='13.2' height='12' rx='2.6'/%3E%3Cpath d='m16 10.5 5.2-3v9L16 13.5'/%3E%3C/svg%3E"),
+    rgba(0, 0, 0, 0.1);
+}
+#app-root .camera-pagination {
+  display: none;
+}
+
+/* ── Music column ── */
+#app-root .music-section,
+#app-root[data-music-details='true'] .music-section {
+  display: contents;
+}
+#app-root .music-section .music-feature,
+#app-root[data-feedback='true'] .music-section .music-feature,
+#app-root[data-camera-visible='true'] .music-section .music-feature {
+  display: block;
+  position: absolute;
+  left: var(--rx);
+  top: 20px;
+  width: var(--rw);
+  height: 560px;
+  right: auto;
+  bottom: auto;
+  border-radius: 30px;
+  overflow: hidden;
+  opacity: 1;
+  visibility: visible;
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  transition:
+    left var(--move),
+    width var(--move),
+    top var(--move),
+    height var(--move);
+}
+#app-root .music-section .music-artwork {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+/* Artwork keeps its own proportions: the full image at the top, fading into a
+   blurred copy of itself. Square covers, 16:9 video thumbnails and tall images
+   all fit the tall sleeve without cropping. */
+#app-root .music-section .music-artwork::before {
+  content: '';
+  position: absolute;
+  inset: -40px;
+  background: var(--art-url, none) center / cover no-repeat;
+  filter: blur(34px) saturate(1.3) brightness(0.62);
+  transform: scale(1.1);
+}
+#app-root .music-section .music-artwork img {
+  position: absolute;
+  inset: 0 0 auto 0;
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  object-position: top center;
+  -webkit-mask-image: linear-gradient(to bottom, #000 74%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 74%, transparent 100%);
+}
+#app-root[data-camera-visible='true'] .music-section .music-artwork::before {
+  display: none;
+}
+#app-root[data-camera-visible='true'] .music-section .music-artwork img {
+  height: 100%;
+  object-fit: cover;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+#app-root .music-feature::after {
+  background: linear-gradient(
+    to bottom,
+    rgba(18, 24, 23, 0.35) 0%,
+    transparent 22%,
+    transparent 38%,
+    rgba(18, 24, 23, 0.82) 70%,
+    rgba(18, 24, 23, 0.96) 100%
+  );
+}
+#app-root .music-section .music-now-playing {
+  left: 20px;
+  top: auto;
+  bottom: 150px;
+  width: calc(100% - 40px);
+  height: auto;
+}
+#app-root .music-section .music-now-playing strong {
+  font-size: 27px;
+  line-height: 31px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+#app-root .music-section .music-now-playing span {
+  font-size: 16px;
+  line-height: 20px;
+  color: var(--ink-2);
+}
+#app-root #music-player-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+/* Source switch: top left of the sleeve, clear of the Bed overlay. */
+#app-root .music-presets {
+  position: absolute;
+  left: calc(var(--rx) + 16px);
+  top: 36px;
+  right: auto;
+  width: auto;
+  height: 42px;
+  display: flex;
+  gap: 0;
+  padding: 3px;
+  border-radius: 21px;
+  background: rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  pointer-events: auto;
+  z-index: 2;
+  transition: left var(--move);
+}
+#app-root .music-preset-button {
+  height: 36px;
+  min-height: 0;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+#app-root .music-preset-button[aria-pressed='true'] {
+  border: 0;
+  background: rgba(238, 241, 232, 0.92);
+  color: #18201f;
+  font-weight: 600;
+}
+/* The island: Automatisk/Manuell and play/pause in one capsule. */
+#app-root .music-section .music-volume-policy {
+  position: absolute;
+  left: calc(var(--rx) + 14px);
+  top: 458px;
+  width: calc(var(--rw) - 28px);
+  height: 76px;
+  padding: 8px 90px 8px 8px;
+  border: 0;
+  border-radius: 38px;
+  background: rgba(238, 241, 232, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(238, 241, 232, 0.1);
+  pointer-events: auto;
+  z-index: 2;
+  transition:
+    left var(--move),
+    width var(--move),
+    top var(--move);
+}
+#app-root .volume-authority {
+  height: 60px;
+  padding: 3px;
+  gap: 0;
+  border-radius: 30px;
+  background: rgba(0, 0, 0, 0.22);
+}
+#app-root .volume-authority button {
+  flex: 1;
+  height: 54px;
+  min-height: 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 27px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 16px;
+  font-weight: 500;
+  transition:
+    background 0.3s,
+    color 0.3s;
+}
+#app-root .volume-authority button[aria-pressed='true'] {
+  border: 0;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+#app-root .music-section #music-authority-state[data-notice='true'],
+#app-root .music-section .music-command-state[data-notice='true'] {
+  left: 6px;
+  bottom: auto;
+  top: 86px;
+  width: calc(var(--rw) - 40px);
+  max-height: 36px;
+  font-size: 13px;
+  line-height: 18px;
+}
+#app-root .play-button {
+  left: calc(var(--rx) + var(--rw) - 14px - 69px);
+  top: 465px;
+  right: auto;
+  width: 62px;
+  height: 62px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--ink);
+  color: #18201f;
+  z-index: 3;
+  overflow: visible;
+  transition:
+    left var(--move),
+    top var(--move);
+}
+/* The ring shows how far into the track or video playback is. */
+@property --progress {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+#app-root {
+  transition: --progress 1s linear;
+}
+#app-root .play-button::before {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--accent) calc(var(--progress) * 360deg),
+    rgba(238, 241, 232, 0.14) 0
+  );
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 3px),
+    #000 calc(100% - 3px)
+  );
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 3px),
+    #000 calc(100% - 3px)
+  );
+  pointer-events: none;
+}
+#app-root[data-progress='false'] .play-button::before {
+  background: rgba(238, 241, 232, 0.14);
+}
+#app-root #music-playback-icon {
+  transform: scale(0.82);
+}
+/* Volume is a thin, quiet bar under the selector; −/+ and the words are gone.
+   The reported value stays readable for assistive technology. */
+#app-root .volume-control,
+#app-root[data-music-visible='false'] .volume-control {
+  display: block;
+  position: absolute;
+  left: calc(var(--rx) + 24px);
+  top: 548px;
+  right: auto;
+  width: calc(var(--rw) - 48px);
+  height: 4px;
+  padding: 0;
+  border-radius: 2px;
+  background: rgba(238, 241, 232, 0.12);
+  overflow: hidden;
+  font-size: 0;
+  color: transparent;
+  transition:
+    left var(--move),
+    width var(--move);
+}
+#app-root .volume-control::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--volume-level) * 100%);
+  border-radius: 2px;
+  background: rgba(238, 241, 232, 0.5);
+  transition: width 0.6s ease;
+}
+#app-root .volume-control .volume-step,
+#app-root .volume-control .volume-label {
+  display: none;
+}
+#app-root #music-volume-value {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+#app-root[data-music-visible='false'] .volume-control,
+#app-root[data-volume-notice='true'] .volume-control {
+  display: none;
+}
+#app-root[data-volume-notice='true'] .music-section .music-now-playing {
+  top: auto;
+  bottom: 176px;
+}
+
+/* ── Nothing playing: a resting record, a title and two source buttons ── */
+#app-root[data-music-visible='false'] .music-artwork,
+#app-root[data-music-visible='false'] .music-feature::after {
+  display: none;
+}
+#app-root[data-music-visible='false'] .music-feature {
+  background:
+    radial-gradient(
+      90% 50% at 50% 26%,
+      rgba(238, 241, 232, 0.07),
+      transparent 70%
+    ),
+    rgba(238, 241, 232, 0.04);
+}
+#app-root[data-music-visible='false'] .music-feature::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 60px;
+  width: 170px;
+  height: 170px;
+  margin-left: -85px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, #0f1514 0 3.5%, transparent 4%),
+    radial-gradient(circle, var(--accent) 0 16%, transparent 16.5%),
+    repeating-radial-gradient(
+      circle,
+      rgba(238, 241, 232, 0.05) 0 1px,
+      transparent 1px 5px
+    ),
+    radial-gradient(circle at 35% 30%, #2e3b38, #161e1d 70%);
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.35),
+    inset 0 0 0 1px var(--hair);
+}
+#app-root[data-music-visible='false'] .music-section .music-now-playing {
+  left: 12px;
+  bottom: 152px;
+  width: calc(100% - 24px);
+  text-align: center;
+  align-items: center;
+}
+#app-root[data-music-visible='false'] .music-section .music-now-playing strong {
+  font-size: 21px;
+  line-height: 26px;
+}
+#app-root[data-music-visible='false'] .music-section .music-now-playing span {
+  font-size: 14px;
+}
+#app-root[data-music-visible='false'] .music-presets {
+  left: calc(var(--rx) + 12px);
+  top: 440px;
+  width: calc(var(--rw) - 24px);
+  height: 128px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 1fr 1fr;
+  gap: 8px;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+#app-root[data-music-visible='false'] .music-preset-button,
+#app-root[data-music-visible='false']
+  .music-preset-button[aria-pressed='true'] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 60px;
+  padding: 0 16px 0 6px;
+  border-radius: 30px;
+  background: var(--glass-2);
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 600;
+  text-align: left;
+}
+#app-root[data-music-visible='false'] .music-preset-button::before {
+  content: '';
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background:
+    54% 50% / 20px no-repeat
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8 5.2v13.6a.8.8 0 0 0 1.2.7l11-6.8a.8.8 0 0 0 0-1.4l-11-6.8a.8.8 0 0 0-1.2.7Z' fill='%2318201f'/%3E%3C/svg%3E"),
+    var(--ink);
+}
+/* Routine shortcuts take the top of the quiet music column. */
+#app-root .context-strip,
+#app-root .bedtime-dock,
+#app-root[data-lighting-expanded='true'] .context-strip,
+#app-root[data-lighting-expanded='true'] .bedtime-dock {
+  left: calc(var(--rx) + 12px);
+  top: 32px;
+  width: calc(var(--rw) - 24px);
+  height: auto;
+  max-height: 200px;
+  padding: 14px;
+  border-radius: 22px;
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  flex-direction: column;
+  align-items: stretch;
+  z-index: 3;
+}
+#app-root .bedtime-dock,
+#app-root[data-lighting-expanded='true'] .bedtime-dock {
+  top: 248px;
+  max-height: 120px;
+  flex-wrap: wrap;
+}
+#app-root .context-copy strong,
+#app-root .context-copy span {
+  -webkit-line-clamp: 2;
+}
+#app-root .context-action,
+#app-root .bedtime-dock button {
+  min-height: 46px;
+  border: 0;
+  border-radius: 23px;
+  background: var(--glass-2);
+  color: var(--ink);
+}
+
+/* ── Camera open: the camera takes the top of the music column ── */
+#app-root .camera-panel {
+  left: var(--rx);
+  right: auto;
+  top: 20px;
+  width: var(--rw);
+  height: auto;
+  padding: 8px;
+  gap: 4px;
+  border-radius: 30px;
+  background: rgba(28, 37, 35, 0.98);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  pointer-events: auto;
+  z-index: 4;
+  animation: redesign-cam-in 0.5s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+@keyframes redesign-cam-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.97);
+  }
+}
+#app-root .camera-frame {
+  order: -1;
+  flex: none;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 0;
+  border-radius: 22px;
+  overflow: hidden;
+  background: #0e1314;
+  align-items: center;
+}
+#app-root .camera-frame img {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+  image-rendering: auto;
+  filter: contrast(1.04) saturate(1.06);
+}
+#app-root .camera-caption {
+  flex: none;
+  min-height: 52px;
+  padding: 0 0 0 8px;
+  align-items: center;
+}
+#app-root .camera-caption strong {
+  font-size: 16px;
+  line-height: 20px;
+}
+#app-root .camera-caption span:not(#camera-countdown) {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+#app-root .camera-caption button {
+  min-width: 0;
+  height: 48px;
+  min-height: 0;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 24px;
+  background: var(--glass-2);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+#app-root .camera-status {
+  display: none;
+}
+/* Music becomes a compact card under the camera; pause and authority stay. */
+#app-root[data-camera-visible='true'] .music-section .music-feature {
+  top: 302px;
+  height: 278px;
+  background: rgba(238, 241, 232, 0.05);
+}
+#app-root[data-camera-visible='true'] .music-section .music-artwork {
+  left: 14px;
+  top: 14px;
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  overflow: hidden;
+}
+#app-root[data-camera-visible='true'] .music-feature::after {
+  display: none;
+}
+#app-root[data-camera-visible='true'] .music-section .music-now-playing {
+  display: flex;
+  left: 100px;
+  top: 22px;
+  bottom: auto;
+  width: calc(100% - 180px);
+}
+#app-root[data-camera-visible='true'] .music-section .music-now-playing strong {
+  font-size: 20px;
+  line-height: 24px;
+  -webkit-line-clamp: 1;
+}
+#app-root[data-camera-visible='true'] .music-section .music-now-playing span {
+  font-size: 14px;
+}
+#app-root[data-camera-visible='true'] .music-section .music-volume-policy {
+  display: block;
+  top: 404px;
+  height: 66px;
+  padding: 3px;
+  background: none;
+  box-shadow: none;
+}
+#app-root[data-camera-visible='true'] .music-section .music-transport {
+  display: contents;
+}
+#app-root[data-camera-visible='true'] .play-button {
+  left: calc(var(--rx) + var(--rw) - 14px - 58px);
+  top: 316px;
+  width: 58px;
+  height: 58px;
+}
+#app-root[data-camera-visible='true'] .volume-control {
+  top: 476px;
+}
+#app-root[data-camera-visible='true'] .music-presets {
+  left: calc(var(--rx) + 14px);
+  top: 522px;
+  width: calc(var(--rw) - 28px);
+  height: 44px;
+}
+#app-root[data-camera-visible='true'] .music-preset-button {
+  flex: 1;
+}
+#app-root[data-camera-visible='true'][data-music-visible='false']
+  .music-feature::before {
+  display: none;
+}
+#app-root[data-camera-visible='true'][data-music-visible='false']
+  .music-section
+  .music-now-playing {
+  left: 20px;
+  top: 20px;
+  width: calc(100% - 40px);
+  text-align: left;
+  align-items: flex-start;
+}
+#app-root[data-camera-visible='true'][data-music-visible='false']
+  .music-presets {
+  top: 384px;
+  height: 182px;
+  grid-template-rows: none;
+  grid-template-columns: 1fr 1fr;
+}
+#app-root[data-camera-visible='true'][data-music-visible='false']
+  .music-preset-button {
+  flex-direction: column;
+  justify-content: center;
+  height: auto;
+  padding: 10px;
+  border-radius: 22px;
+  background: var(--glass);
+  font-size: 16px;
+  text-align: center;
+}
+#app-root[data-camera-visible='true'][data-music-visible='false']
+  .music-preset-button::before {
+  width: 60px;
+  height: 60px;
+  background:
+    55% 50% / 24px no-repeat
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8 5.2v13.6a.8.8 0 0 0 1.2.7l11-6.8a.8.8 0 0 0 0-1.4l-11-6.8a.8.8 0 0 0-1.2.7Z' fill='%2318201f'/%3E%3C/svg%3E"),
+    var(--ink);
+  box-shadow: 0 0 0 6px rgba(238, 241, 232, 0.06);
+}
+@media (prefers-reduced-motion: reduce) {
+  #app-root *,
+  #app-root *::before {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+/* A paged scene grid keeps two short rows: names only. */
+#app-root .scene-grid[data-paged='true'] .scene-icon {
+  display: none;
+}
+#app-root .scene-grid[data-paged='true'] .scene-button {
+  padding: 10px 14px;
+  justify-content: flex-end;
+}
+
+/* ── Bottom line, 2026-11-20: Släck allt and the cameras share one row ──
+   The quiet menus (Villkor, Rutiner, Musik) and scene paging are not shown;
+   five scenes fill two rows above. */
+html,
+body {
+  background: #141c1b;
+}
+#app-root .hub-sill button,
+#app-root .music-details-button,
+#app-root .scene-pagination,
+#app-root[data-lighting-expanded='true'] .scene-pagination {
+  display: none;
+}
+#app-root .scene-grid,
+#app-root[data-scene-layout='row'] .scene-grid,
+#app-root[data-lighting-expanded='true'] .scene-grid,
+#app-root .scene-grid[data-paged='true'] {
+  top: 222px;
+  height: 282px;
+}
+#app-root .scene-grid[data-count='5'] .scene-button:nth-child(n + 4),
+#app-root[data-scene-layout='row']
+  .scene-grid[data-count='5']
+  .scene-button:nth-child(n + 4) {
+  grid-column: span 3;
+}
+#app-root .light-off,
+#app-root[data-scene-layout='row'] .light-off,
+#app-root[data-lighting-expanded='true'] .light-off {
+  left: var(--lx);
+  top: 520px;
+  width: calc(var(--lw) - 290px);
+  height: 60px;
+  padding: 0 22px 0 6px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  border-radius: 30px;
+}
+#app-root .light-off .scene-icon,
+#app-root[data-scene-layout='row'] .light-off .scene-icon {
+  width: 48px;
+  height: 48px;
+}
+#app-root .light-off .scene-copy,
+#app-root[data-scene-layout='row'] .light-off .scene-copy {
+  width: auto;
+  margin: 0;
+}
+#app-root .camera-choices,
+#app-root .camera-choices[hidden],
+#app-root .music-section[data-camera='true'] .camera-choices {
+  left: calc(var(--lx) + var(--lw) - 280px);
+  width: 280px;
+}
+#app-root .camera-choices button {
+  flex: 1;
+  justify-content: center;
+  padding: 0 14px 0 9px;
+}

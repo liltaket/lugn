@@ -57,6 +57,19 @@ const StateMessageSchema = SequencedEnvelope.extend({
           content_type: Text.nullable(),
           // Optional presentation failure must not discard valid desktop state.
           artwork: ComputerArtworkSchema.nullable().catch(null).optional(),
+          position_us: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional()
+            .catch(undefined),
+          length_us: z.number().int().positive().optional().catch(undefined),
+          position_at_ms: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional()
+            .catch(undefined),
         }),
       )
       .max(64)
@@ -439,6 +452,16 @@ function normalize(message: StateMessage): ComputerReadings {
         album: media.album,
         contentType: media.content_type,
         ...(media.artwork ? { artwork: media.artwork } : {}),
+        ...(media.position_us !== undefined &&
+        media.length_us !== undefined &&
+        media.position_at_ms !== undefined
+          ? {
+              positionSeconds:
+                Math.min(media.position_us, media.length_us) / 1_000_000,
+              durationSeconds: media.length_us / 1_000_000,
+              positionUpdatedAt: media.position_at_ms,
+            }
+          : {}),
       })) ?? null,
   };
 }

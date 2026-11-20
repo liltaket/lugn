@@ -30,6 +30,14 @@ pub struct Media {
     pub content_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artwork: Option<Artwork>,
+    /// MPRIS Position in microseconds, sampled at `position_at_ms` (Unix ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_us: Option<u64>,
+    /// MPRIS `mpris:length` in microseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_us: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_at_ms: Option<u64>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Observations {

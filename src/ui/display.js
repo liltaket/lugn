@@ -204,6 +204,8 @@ let contextDetailsOpen = false;
 let contextPage = 0;
 let contextItems = [];
 let musicMenuOpen = false;
+// Latest playback position sample for the ring around play/pause.
+let musicProgress = null;
 let volumeAuthorityNotice = false;
 let volumeCommandNotice = false;
 const interactionPointers = new Set();
@@ -353,9 +355,24 @@ function roleName(role) {
   return role === 'bed' ? 'bed' : role === 'desk' ? 'desk' : 'unknown';
 }
 
+// The layout is drawn 600 px tall and scaled to the Hub's viewport height; the
+// canvas takes the viewport's own width, so the whole screen is used. A very
+// narrow viewport is scaled by width instead, keeping the left column usable.
+function fitScreen() {
+  const width = globalThis.innerWidth;
+  const height = globalThis.innerHeight;
+  if (!root.style || !width || !height) return;
+  const minimumWidth = 900;
+  const zoom = Math.min(height / 600, width / minimumWidth);
+  root.style.zoom = String(zoom);
+  root.style.setProperty('--W', `${width / zoom}px`);
+}
+globalThis.addEventListener?.('resize', fitScreen);
+
 function setRole(role) {
   const resolved = roleName(role);
   root.dataset.role = resolved;
+  fitScreen();
   if (refs.musicPresets && presetRoleKey !== resolved) {
     const presets =
       resolved === 'desk'
@@ -392,7 +409,45 @@ function setConnection(state, message, retry = false) {
   renderCamera(latestPayload);
 }
 
+// The ring around play/pause shows how far into the track or video playback is.
+// Samples come from the player (Home Assistant) or the computer agent (MPRIS);
+// between samples the position advances with server time while playing.
+function renderMusicProgress() {
+  if (!root.style) return;
+  const sample = musicProgress;
+  let fraction = 0;
+  if (sample) {
+    const elapsed = sample.playing
+      ? Math.max(0, (estimatedServerNow() - sample.at) / 1000)
+      : 0;
+    fraction = Math.max(
+      0,
+      Math.min(1, (sample.position + elapsed) / sample.duration),
+    );
+  }
+  root.style.setProperty('--progress', fraction.toFixed(4));
+  root.dataset.progress = String(!!sample);
+}
+
+function progressSample(values) {
+  return values &&
+    typeof values.positionSeconds === 'number' &&
+    typeof values.durationSeconds === 'number' &&
+    typeof values.positionUpdatedAt === 'number' &&
+    Number.isFinite(values.positionSeconds) &&
+    Number.isFinite(values.durationSeconds) &&
+    Number.isFinite(values.positionUpdatedAt) &&
+    values.durationSeconds > 0
+    ? {
+        position: values.positionSeconds,
+        duration: values.durationSeconds,
+        at: values.positionUpdatedAt,
+      }
+    : null;
+}
+
 function setClock() {
+  renderMusicProgress();
   if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
     setConnection('offline', 'Inga färska uppdateringar från Lugn.');
   const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
@@ -541,7 +596,12 @@ function sceneButtonFor(scene) {
 function renderScenes(payload) {
   if (!refs.sceneGrid) return;
   const allScenes = getSceneList(payload);
-  const presets = allScenes.filter((scene) => scene.id !== 'scene.all_off');
+  // The Hub shows the room's own scenes; custom (Govee) presets stay in the
+  // control panel for now.
+  const presets = allScenes.filter(
+    (scene) =>
+      scene.id !== 'scene.all_off' && !scene.id.startsWith('scene.custom_'),
+  );
   const off = allScenes.find((scene) => scene.id === 'scene.all_off');
   refs.sceneOff.hidden = !off;
   refs.sceneOff.disabled =
@@ -557,6 +617,9 @@ function renderScenes(payload) {
     refs.sceneGrid.dataset.count = String(
       Math.min(presets.length - scenePage * pageSize, pageSize),
     );
+    // Five scenes leave the sixth grid cell for Släck; other counts give it a row.
+    root.dataset.sceneLayout =
+      off && pages === 1 && presets.length === 5 ? 'six' : 'row';
   }
   refs.scenePrevious.disabled = scenePage === 0;
   refs.sceneNext.disabled = scenePage === pages - 1;
@@ -2428,6 +2491,8 @@ function renderMusic(payload) {
     setText(refs.musicVolumeObservedLabel, 'Nu');
     refs.musicVolumeObservedLabel.dataset.stale = 'false';
     refs.musicVolumeValue.value = '—';
+    root.style?.setProperty('--volume-level', '0');
+    musicProgress = null;
     refs.musicVolumeValue.setAttribute(
       'aria-label',
       'Spelarens rapporterade volym',
@@ -2648,6 +2713,21 @@ function renderMusic(payload) {
   renderArtwork(payload, musicTarget);
   refs.musicVolumeValue.value = formatVolume(volume);
   setText(refs.musicVolumeValue, refs.musicVolumeValue.value);
+  // The thin bar under the selector draws the reported level.
+  root.style?.setProperty(
+    '--volume-level',
+    String(typeof volume === 'number' ? Math.max(0, Math.min(1, volume)) : 0),
+  );
+  // Computer media (Optical) has its own position; never mix it with the receiver's.
+  const sample = computer
+    ? computer.status === 'playing'
+      ? progressSample(computer)
+      : null
+    : progressSample(observed);
+  musicProgress = sample
+    ? { ...sample, playing: isPlaying && !reportedOnly }
+    : null;
+  renderMusicProgress();
 }
 
 function render(payload) {
@@ -3236,11 +3316,17 @@ function renderCamera(payload) {
   if (cameraActive && !active && document.activeElement === refs.cameraClose)
     refs.cameraMenu.focus?.();
   cameraActive = active;
+  for (const button of refs.cameraChoices.children)
+    button.setAttribute(
+      'aria-pressed',
+      String(!!active && button.dataset.cameraId === active.cameraId),
+    );
   refs.cameraPanel.hidden = !active && !showingPending;
   if (!allowed || !viewerAllowed) cameraChoicesOpen = false;
   if (refs.cameraPagination)
     refs.cameraPagination.hidden = !cameraChoicesOpen || cameraPages <= 1;
-  refs.cameraChoices.hidden = !cameraChoicesOpen;
+  // The cameras live in the bottom bar as direct choices.
+  refs.cameraChoices.hidden = false;
   refs.cameraMenu.setAttribute('aria-expanded', String(cameraChoicesOpen));
   refs.cameraMenu.textContent =
     cameraActionRequests > 0
@@ -3471,6 +3557,15 @@ refs.musicArtworkImage.addEventListener('load', () => {
   if (refs.musicArtwork.dataset.state !== 'loading') return;
   refs.musicArtworkImage.hidden = false;
   refs.musicArtwork.dataset.state = 'available';
+  // The full image sits at the top in its own proportions over a blurred copy,
+  // so square covers, video thumbnails and tall images all fit without cropping.
+  const source =
+    refs.musicArtworkImage.currentSrc || refs.musicArtworkImage.src;
+  if (refs.musicArtwork.style && source)
+    refs.musicArtwork.style.setProperty(
+      '--art-url',
+      `url("${String(source).replace(/["\\\n]/g, '')}")`,
+    );
   updateArtworkColor(refs.musicArtworkImage);
 });
 document.addEventListener('keydown', (event) => {

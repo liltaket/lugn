@@ -322,6 +322,7 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
     };
     const artist = available ? boundedText('media_artist', 1024) : null;
     const album = available ? boundedText('media_album_name', 1024) : null;
+    const position = available ? mediaPosition(attributes) : null;
     const observation: MusicObservation = {
       target,
       available,
@@ -342,6 +343,7 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
         title: available ? text('media_title') : null,
         ...(artist === null ? {} : { artist }),
         ...(album === null ? {} : { album }),
+        ...(position ?? {}),
       },
       provenance: {
         actor: { type: 'home_assistant' },
@@ -373,4 +375,33 @@ function parseObservationTime(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+/** Home Assistant reports a position sample and when it was taken. */
+function mediaPosition(attributes: Record<string, unknown>): {
+  positionSeconds: number;
+  durationSeconds: number;
+  positionUpdatedAt: number;
+} | null {
+  const position = attributes['media_position'];
+  const duration = attributes['media_duration'];
+  const updated = attributes['media_position_updated_at'];
+  if (
+    typeof position !== 'number' ||
+    typeof duration !== 'number' ||
+    typeof updated !== 'string' ||
+    !Number.isFinite(position) ||
+    !Number.isFinite(duration) ||
+    position < 0 ||
+    duration <= 0 ||
+    duration > 86_400
+  )
+    return null;
+  const updatedAt = Date.parse(updated);
+  if (!Number.isFinite(updatedAt) || updatedAt < 0) return null;
+  return {
+    positionSeconds: Math.min(position, duration),
+    durationSeconds: duration,
+    positionUpdatedAt: Math.round(updatedAt),
+  };
 }
