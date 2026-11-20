@@ -139,7 +139,7 @@ export type ComputerPlaybackMqttPort = PresenceMqttSubscriber & {
   publish(
     topic: string,
     payload: string,
-    options: { qos: 1; retain: false },
+    options: { qos: 1; retain: boolean },
     signal?: AbortSignal,
   ): Promise<void>;
 };

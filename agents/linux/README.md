@@ -5,7 +5,7 @@ computer telemetry over MQTT and does not depend on the Lugn runtime. Default
 operation is observation-only. Optional authenticated MQTT control supports exact
 MPRIS Pause and lease-bound Resume; it provides no shell commands, input injection,
 screen capture or window control. A second opt-in, `display_control_enabled`,
-accepts display sleep/wake requests (see below). A third opt-in switches a WiiM to
+accepts display sleep/wake requests (see below). Fast WiiM Optical switching, on by default, switches a WiiM to
 its Optical input when the computer plays sound (see below). Lugn-side consumption belongs to a
 separate PR.
 
@@ -159,20 +159,22 @@ PowerDevil lists as holding the machine awake: for example "Playing video" or
 topics, freshness rules and what each acknowledgment does and does not prove. No
 command text from configuration or MQTT ever reaches a process.
 
-## Optional fast WiiM Optical switching
+## Fast WiiM Optical switching
 
-Disabled by default. Set `optical_switch_enabled = true` and `wiim_host` (the WiiM's
-LAN address). When the computer plays real, sustained sound and the WiiM is not
-playing its own music, the agent switches the WiiM to Optical itself over the WiiM
-HTTP API. It does not use MQTT or Lugn, so the switch lands about
-`optical_min_audible_ms` (default 400) plus one LAN round trip after the sound starts.
+On by default. When the computer plays real, sustained sound and the WiiM is not
+playing its own music, the agent switches the WiiM to Optical itself over the
+WiiM HTTP API. It does not use MQTT or Lugn for the switch, so it lands about
+`optical_min_audible_ms` (default 400) plus one LAN round trip after the sound
+starts. The WiiM is found automatically (SSDP, then confirmed with the WiiM's
+own player status); set `wiim_host` only when there are several or none is found.
+`optical_switch_enabled = false` turns it off.
 
 - **Audibility:** the agent captures the sink monitor with `pw-record` and keeps only
   a loudness decision per 20 ms frame; samples are never stored, logged or sent. A
   run counts when it lasts at least `optical_min_audible_ms` (200–5000), is mostly
-  above -55 dBFS and tolerates gaps up to 200 ms, so a notification blip or a few
-  clicks never switch the input. This is the only source that checks real samples:
-  the PipeWire stream observation above does not.
+  above `optical_level_db` (default -55) and tolerates gaps up to 200 ms, so a
+  notification blip or a few clicks never switch the input. This is the only source
+  that checks real samples: the PipeWire stream observation above does not.
 - **Which sink:** by default the default sink is followed. Set `optical_audio_sink` to
   the exact node name of the sink wired to the WiiM (`pactl list short sinks`) so
   sound on other outputs, such as HDMI, is ignored.
@@ -182,13 +184,21 @@ HTTP API. It does not use MQTT or Lugn, so the switch lands about
   it switches. Paused, stopped or idle: the switch is sent and then confirmed by
   reading the WiiM's input back.
 - **One decision per run of sound:** after a switch, or after deciding not to, the
-  agent waits for the sound to stop (1.5 s of silence) before it acts again, so a
-  deliberate input choice is not fought. After three failed switches it gives up
-  until the sound has stopped.
+  agent waits for `optical_release_ms` (default 1500) of silence before it acts
+  again, so a deliberate input choice is not fought. After three failed switches it
+  gives up until the sound has stopped.
+- **Tuning from Lugn:** with MQTT credentials the agent also accepts these settings
+  from Lugn's control panel and reports its state back; Lugn's values replace the
+  ones in this file, and `optical_remote_settings = false` ignores them. See the
+  [OPTICAL v1 contract](protocol/OPTICAL.md), which also explains the WiiM protocol.
+  The broker ACL needs subscribe on `optical/settings` and publish on `optical/state`.
 - **Security:** the WiiM serves HTTPS with a self-signed certificate, so the chain is
   not validated (handshake signatures are). Only the two fixed commands
-  `getPlayerStatus` and `setPlayerCmd:switchmode:optical` are ever sent; `wiim_host`
-  accepts a hostname or IPv4 address with an optional port only. Use a trusted LAN.
+  `getPlayerStatus` and `setPlayerCmd:switchmode:optical` are ever sent. A host
+  received over MQTT must be a private IPv4 address or a `.local` name; `wiim_host`
+  in this file accepts a hostname or IPv4 address with an optional port. The search
+  sends one multicast SSDP request and probes only private IPv4 responders, retrying
+  every 30 seconds up to every 5 minutes while no single WiiM is found.
 - The change shows up in Home Assistant, and therefore in Lugn, as an ordinary
   source change on the WiiM.
 

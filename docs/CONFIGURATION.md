@@ -20,7 +20,9 @@ Current configuration covers:
 - MQTT connection, topic and freshness window for STL27L events;
 - optional computer observations through `mqtt.computers`, including opt-in
   presence-driven display sleep/wake per computer, with defaults here and live
-  settings in the control panel (see [Computer integration](COMPUTER.md));
+  settings in the control panel (see [Computer integration](COMPUTER.md)),
+  and the defaults for fast WiiM Optical switching (`opticalSwitch`, on by
+  default), also tunable in the panel;
 - prelight targets and duration;
 - scenes and optional Bed/Desk Hub roles, Cast receiver addresses and tokens.
 

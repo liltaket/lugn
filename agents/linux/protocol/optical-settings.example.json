@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "device_id": "desktop",
+  "generation": "0b0e5f4c-41d5-4fd6-8f77-2f7a9a8c3a10",
+  "enabled": true,
+  "wiim_host": null,
+  "audio_sink": "alsa_output.pci-0000_00_1f.3.iec958-stereo",
+  "min_audible_ms": 400,
+  "release_ms": 1500,
+  "level_db": -55
+}

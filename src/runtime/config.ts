@@ -29,6 +29,11 @@ import {
 import { ComputerDeviceIdSchema } from '../core/computer.js';
 import { PowerSensorThresholdsSchema } from '../core/display-power.js';
 import {
+  OpticalSwitchSettingsSchema,
+  defaultOpticalSwitchSettings,
+  type OpticalSwitchSettings,
+} from '../core/optical-switch-settings.js';
+import {
   WindowLightingSchema,
   type WindowLighting,
 } from '../core/window-lighting.js';
@@ -140,6 +145,34 @@ const DisplayPowerConfigSchema = z
 
 export type DisplayPowerConfig = z.output<typeof DisplayPowerConfigSchema>;
 
+/**
+ * Fast WiiM Optical switching in the computer's agent. On by default: with no
+ * address the agent finds the WiiM itself. These are the defaults; the control
+ * panel's saved values win.
+ */
+const OpticalSwitchConfigSchema = z
+  .object({
+    enabled: OpticalSwitchSettingsSchema.shape.enabled.default(
+      defaultOpticalSwitchSettings().enabled,
+    ),
+    wiimHost: OpticalSwitchSettingsSchema.shape.wiimHost.default(
+      defaultOpticalSwitchSettings().wiimHost,
+    ),
+    audioSink: OpticalSwitchSettingsSchema.shape.audioSink.default(
+      defaultOpticalSwitchSettings().audioSink,
+    ),
+    minAudibleMs: OpticalSwitchSettingsSchema.shape.minAudibleMs.default(
+      defaultOpticalSwitchSettings().minAudibleMs,
+    ),
+    releaseMs: OpticalSwitchSettingsSchema.shape.releaseMs.default(
+      defaultOpticalSwitchSettings().releaseMs,
+    ),
+    levelDb: OpticalSwitchSettingsSchema.shape.levelDb.default(
+      defaultOpticalSwitchSettings().levelDb,
+    ),
+  })
+  .strict();
+
 const ComputerMqttConfigSchema = z
   .object({
     deviceId: ComputerDeviceIdSchema,
@@ -164,6 +197,8 @@ const ComputerMqttConfigSchema = z
     maxAgeMs: z.number().int().min(1_000).max(300_000).default(90_000),
     /** Opt-in display sleep/wake over DISPLAY v1; requires MQTT credentials. */
     display: DisplayPowerConfigSchema.optional(),
+    /** Publishes optical switch settings to the agent; on unless `enabled: false`. */
+    opticalSwitch: OpticalSwitchConfigSchema.prefault({}),
   })
   .strict();
 
@@ -614,6 +649,7 @@ export type RuntimeConfig = {
       baseTopic: string;
       maxAgeMs: number;
       display?: DisplayPowerConfig | undefined;
+      opticalSwitch: OpticalSwitchSettings;
     }>;
   };
   display?: {

@@ -2,7 +2,7 @@
 //! QoS packets, so reconnect cannot replay an obsolete desktop observation.
 use crate::{
     config::Config,
-    control, display,
+    control, display, optical,
     state::{Availability, ChangeNotification, Observations, Snapshot, classify},
 };
 use anyhow::{Result, ensure};
@@ -19,6 +19,9 @@ struct Broker {
     commands: Option<tokio::sync::mpsc::Sender<control::Delivery>>,
     display_topic: String,
     display_commands: Option<tokio::sync::mpsc::Sender<display::Delivery>>,
+    device_id: String,
+    optical_topic: String,
+    optical_remote: Option<optical::Handle>,
     control_clock: Option<(u64, std::time::Instant)>,
 }
 impl Broker {
@@ -60,6 +63,9 @@ impl Broker {
             commands: None,
             display_topic: config.topic("display/command"),
             display_commands: None,
+            device_id: config.device_id.clone(),
+            optical_topic: config.topic("optical/settings"),
+            optical_remote: None,
             control_clock: None,
         })
     }
@@ -101,6 +107,18 @@ impl Broker {
                     // Same bounded ingress as media control; the retain flag is
                     // kept so the actor can reject retained deliveries.
                     let _ = commands.try_send(display::Delivery::new(command, message.retain));
+                }
+            }
+        }
+        if let Event::Incoming(Packet::Publish(message)) = &event {
+            if message.topic == self.optical_topic {
+                // Retained or live, a valid settings message wins; an invalid one
+                // is ignored whole and the previous settings keep running.
+                if let (Some(handle), Some(remote)) = (
+                    &self.optical_remote,
+                    optical::Remote::parse(&self.device_id, &message.payload),
+                ) {
+                    handle.apply_remote(remote);
                 }
             }
         }
@@ -196,6 +214,15 @@ async fn changed_display(status: &mut Option<watch::Receiver<display::Status>>) 
         None => std::future::pending().await,
     }
 }
+async fn changed_optical(status: &mut Option<watch::Receiver<optical::Status>>) -> Result<()> {
+    match status {
+        Some(status) => {
+            status.changed().await?;
+            Ok(())
+        }
+        None => std::future::pending().await,
+    }
+}
 async fn next_display_ack(runtime: &mut Option<display::Runtime>) -> Option<display::Ack> {
     match runtime {
         Some(runtime) => runtime.acks.recv().await,
@@ -236,6 +263,28 @@ async fn publish_display(
     b.publish(c.topic("display/state"), serde_json::to_vec(&state)?, true)
         .await
 }
+async fn publish_optical(
+    b: &mut Broker,
+    c: &Config,
+    status: &mut watch::Receiver<optical::Status>,
+    sequence: &mut u64,
+) -> Result<()> {
+    *sequence += 1;
+    ensure!(
+        *sequence <= 9_007_199_254_740_991,
+        "optical sequence exhausted"
+    );
+    let state = optical::State {
+        schema_version: 1,
+        device_id: c.device_id.clone(),
+        sequence: *sequence,
+        timestamp_ms: control::now_ms(),
+        heartbeat_interval_ms: c.heartbeat_secs * 1000,
+        status: status.borrow_and_update().clone(),
+    };
+    b.publish(c.topic("optical/state"), serde_json::to_vec(&state)?, true)
+        .await
+}
 async fn next_control_ack(runtime: &mut Option<control::Runtime>) -> Option<control::Ack> {
     match runtime {
         Some(runtime) => runtime.acks.recv().await,
@@ -268,12 +317,17 @@ async fn publish_control(
     ensure!(payload.len() <= 64 * 1024, "control state exceeds budget");
     b.publish(c.topic("control/state"), payload, true).await
 }
+/// Process-lifetime inputs that outlive a broker connection.
+struct Wiring {
+    feeds: display::Feeds,
+    optical: Option<optical::Handle>,
+}
 async fn connected(
     b: &mut Broker,
     c: &Config,
     session: &str,
     states: &mut watch::Receiver<Observations>,
-    feeds: &display::Feeds,
+    wiring: &Wiring,
     sequence: &mut u64,
     connected_once: &mut bool,
 ) -> Result<()> {
@@ -317,7 +371,7 @@ async fn connected(
                 "Display control has no backend (no WAYLAND_DISPLAY or DISPLAY); requests will be rejected"
             );
         }
-        let runtime = display::spawn(context.clone(), backend, feeds.clone());
+        let runtime = display::spawn(context.clone(), backend, wiring.feeds.clone());
         b.display_commands = Some(runtime.commands.clone());
         if b.control_clock.is_none() {
             b.control_clock = Some((control::now_ms(), std::time::Instant::now()));
@@ -329,6 +383,21 @@ async fn connected(
     if c.display_control_enabled && display.is_none() {
         eprintln!("Display control subscription denied; observations continue");
     }
+    // Settings from Lugn need an authenticated broker; without the subscription
+    // (or credentials) the agent keeps its own file's settings.
+    let optical_credentials = c.mqtt_username.as_deref().is_some_and(|v| !v.is_empty())
+        && c.mqtt_password.as_deref().is_some_and(|v| !v.is_empty());
+    if let Some(handle) = &wiring.optical {
+        if c.optical_remote_settings && optical_credentials {
+            if b.subscribe_control(c.topic("optical/settings")).await? {
+                b.optical_remote = Some(handle.clone());
+            } else {
+                eprintln!("Optical settings subscription denied; using the local settings");
+            }
+        }
+    }
+    let mut optical_status = wiring.optical.as_ref().map(|handle| handle.status.clone());
+    let mut optical_sequence = 0;
     let display_backend = display.as_ref().and_then(|r| r.backend);
     let mut display_status = display.as_ref().map(|r| r.status.clone());
     let mut display_sequence = 0;
@@ -358,7 +427,11 @@ async fn connected(
         )
         .await?;
     }
+    if let Some(status) = &mut optical_status {
+        publish_optical(b, c, status, &mut optical_sequence).await?;
+    }
     let interval = Duration::from_secs(c.heartbeat_secs);
+    let mut optical_deadline = tokio::time::Instant::now() + interval;
     let mut deadline = tokio::time::Instant::now() + interval;
     let mut control_deadline = tokio::time::Instant::now() + interval;
     let mut display_deadline = tokio::time::Instant::now() + interval;
@@ -368,6 +441,7 @@ async fn connected(
         Ack(Box<control::Ack>),
         Display,
         DisplayAck(Box<display::Ack>),
+        Optical,
     }
     loop {
         let work = tokio::select! {
@@ -379,6 +453,8 @@ async fn connected(
             result = changed_display(&mut display_status) => { result?; Work::Display },
             _ = tokio::time::sleep_until(display_deadline), if display.is_some() => Work::Display,
             ack = next_display_ack(&mut display) => { match ack { Some(ack) => Work::DisplayAck(Box::new(ack)), None => anyhow::bail!("display actor stopped") } },
+            result = changed_optical(&mut optical_status) => { result?; Work::Optical },
+            _ = tokio::time::sleep_until(optical_deadline), if optical_status.is_some() => Work::Optical,
             result = b.poll() => { result?; continue; }
         };
         match work {
@@ -401,6 +477,12 @@ async fn connected(
                     .await?;
                 }
                 display_deadline = tokio::time::Instant::now() + interval;
+            }
+            Work::Optical => {
+                if let Some(status) = &mut optical_status {
+                    publish_optical(b, c, status, &mut optical_sequence).await?;
+                }
+                optical_deadline = tokio::time::Instant::now() + interval;
             }
             Work::DisplayAck(ack) => {
                 if ack.session_id == session && ack.connection_id == context.connection_id {
@@ -444,13 +526,15 @@ async fn connected(
 }
 #[cfg(test)]
 pub async fn run(c: Config, states: watch::Receiver<Observations>) -> Result<()> {
-    run_with(c, states, display::Feeds::none()).await
+    run_with(c, states, display::Feeds::none(), None).await
 }
 pub async fn run_with(
     c: Config,
     mut states: watch::Receiver<Observations>,
     feeds: display::Feeds,
+    optical: Option<optical::Handle>,
 ) -> Result<()> {
+    let wiring = Wiring { feeds, optical };
     let session = uuid::Uuid::new_v4().to_string();
     let mut sequence = 0;
     let mut connected_once = false;
@@ -464,7 +548,7 @@ pub async fn run_with(
         let mut broker = Broker::new(&c, &session)?;
         let start = tokio::time::Instant::now();
         tokio::select! {
-            result = connected(&mut broker, &c, &session, &mut states, &feeds, &mut sequence, &mut connected_once) => {
+            result = connected(&mut broker, &c, &session, &mut states, &wiring, &mut sequence, &mut connected_once) => {
                 // Avoid dumping options or credentials in errors.
                 if result.is_err() { eprintln!("MQTT connection lost/unavailable; retrying"); }
             }

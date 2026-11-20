@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "device_id": "desktop",
+  "sequence": 17,
+  "timestamp_ms": 1795000030000,
+  "heartbeat_interval_ms": 30000,
+  "phase": "sound",
+  "capture": "ok",
+  "host": "192.168.10.194",
+  "host_source": "discovered",
+  "wiim": {
+    "reachable": true,
+    "optical": true,
+    "playing": false
+  },
+  "discovered": ["192.168.10.194"],
+  "last_switch": {
+    "outcome": "switched",
+    "timestamp_ms": 1795000000000,
+    "latency_ms": 412
+  },
+  "settings_source": "lugn",
+  "settings_generation": "0b0e5f4c-41d5-4fd6-8f77-2f7a9a8c3a10"
+}

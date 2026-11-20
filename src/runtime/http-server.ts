@@ -289,6 +289,10 @@ export class LugnHttpServer {
         name: 'display-power.js',
         contentType: 'text/javascript; charset=utf-8',
       },
+      '/ui/optical-switch.js': {
+        name: 'optical-switch.js',
+        contentType: 'text/javascript; charset=utf-8',
+      },
       '/ui/styles.css': {
         name: 'styles.css',
         contentType: 'text/css; charset=utf-8',
