@@ -412,6 +412,79 @@
           </div>
         </section>
         <section
+          id="print-activity"
+          class="print-activity"
+          aria-labelledby="print-title"
+          data-status="idle"
+          data-image="missing"
+          hidden
+        >
+          <div class="print-plate" aria-hidden="true">
+            <svg
+              class="print-fallback"
+              viewBox="0 0 24 24"
+              width="34"
+              height="34"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linejoin="round"
+            >
+              <path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z" />
+              <path d="M4 7.5 12 12l8-4.5M12 12v9" />
+            </svg>
+            <img id="print-image" alt="" decoding="async" hidden />
+          </div>
+          <div class="print-copy">
+            <span class="print-kicker" id="print-name">3D-skrivare</span>
+            <strong id="print-title">Utskrift</strong>
+          </div>
+          <div class="print-figures">
+            <strong id="print-percent">—</strong>
+            <span class="print-when"
+              ><span id="print-time"></span><span id="print-eta"></span
+            ></span>
+          </div>
+          <div
+            id="print-progress"
+            class="print-progress"
+            role="progressbar"
+            aria-label="Utskriftens förlopp"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          ></div>
+          <span id="print-detail" class="print-detail"></span>
+          <button
+            id="print-light"
+            class="print-light"
+            type="button"
+            aria-pressed="false"
+            aria-label="Lampan i skrivaren"
+            hidden
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="20"
+              height="20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="M9 17.5h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2v1.5h5V16c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3Z"
+              />
+            </svg>
+          </button>
+        </section>
+        <button id="activity-swap" class="activity-swap" type="button" hidden>
+          <span class="activity-swap-mark" aria-hidden="true"></span
+          ><span id="activity-swap-label"></span>
+        </button>
+        <section
           class="music-details"
           id="music-details"
           aria-labelledby="music-details-heading"

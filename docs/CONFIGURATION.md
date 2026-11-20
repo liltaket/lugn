@@ -91,6 +91,32 @@ engine; override `homeAssistant.bilresa.button1Entities` or
 See [IKEA BILRESA](INTEGRATIONS.md#ikea-bilresa) for the gesture-to-room-action
 mapping.
 
+## 3D printer
+
+`homeAssistant.printer` is optional. It follows one printer from
+the Bambu Lab Home Assistant integration (`ha-bambulab`) and shows the print as
+a live activity on the Hubs (see [Hub dashboard](UI.md#current-hub-dashboard)).
+All entity IDs come from the device prefix, for example
+`sensor.<entityPrefix>_print_status`, `_print_progress`, `_remaining_time`,
+`_current_stage`, `_current_layer`, `_total_layer_count`, `_task_name`,
+`_printer_name`, `_printable_objects`, the nozzle and bed temperatures,
+`image.<entityPrefix>_cover_image` and `light.<entityPrefix>_chamber_light`.
+The only command Lugn sends is `light.turn_on` or `light.turn_off` for the
+chamber light, when someone taps the lamp button on a Hub; it never starts, pauses or
+stops a print.
+
+```json
+"printer": { "entityPrefix": "a1_0123456789abcde" }
+```
+
+- `name` overrides the printer's own name sensor on the Hub.
+- `resultVisibleMinutes` (default 20, 0–240) keeps a finished or failed print
+  on the Hubs for that long after the status changed.
+
+Lugn fetches the cover image through Home Assistant's image proxy with its own
+token and serves it to the Hubs under an opaque per-cover link. The browser never
+receives a Home Assistant URL or token.
+
 ## Persistence
 
 The runtime stores versioned lighting and music intent in

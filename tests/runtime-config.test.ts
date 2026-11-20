@@ -605,6 +605,40 @@ describe('runtime configuration cross references', () => {
   });
 });
 
+describe('optional 3D printer', () => {
+  const base = {
+    homeAssistant: {
+      baseUrl: 'http://ha.local',
+      tokenEnv: 'HA_TOKEN',
+      entities: { 'lighting.ceiling': 'light.ceiling' },
+    },
+    scenes: [],
+  };
+  it('is absent unless configured and keeps its defaults', () => {
+    expect(loadConfig(base).homeAssistant.printer).toBeUndefined();
+    expect(
+      loadConfig({
+        ...base,
+        homeAssistant: {
+          ...base.homeAssistant,
+          printer: { entityPrefix: 'a1_0123456789abcde' },
+        },
+      }).homeAssistant.printer,
+    ).toEqual({ entityPrefix: 'a1_0123456789abcde', resultVisibleMinutes: 20 });
+  });
+  it('rejects an entity prefix that is not a plain HA object id', () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        homeAssistant: {
+          ...base.homeAssistant,
+          printer: { entityPrefix: 'sensor.a1' },
+        },
+      }),
+    ).toThrow();
+  });
+});
+
 function loadConfig(
   config: unknown,
   environment: NodeJS.ProcessEnv = { HA_TOKEN: 'deterministic-test-token' },

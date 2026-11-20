@@ -4,6 +4,7 @@ import {
 } from '../core/cameras.js';
 import { HomeAssistantMusicMappingsSchema } from '../adapters/home-assistant-music.js';
 import { HomeAssistantEnvironmentMappingsSchema } from '../adapters/home-assistant-environment.js';
+import { HomeAssistantPrinterConfigSchema } from '../adapters/home-assistant-printer.js';
 import { HomeAssistantHomePresenceConfigSchema } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantButtonMappingsSchema } from '../adapters/home-assistant-button.js';
 import { HomeAssistantBilresaConfigSchema } from '../adapters/home-assistant-bilresa.js';
@@ -213,6 +214,7 @@ const HomeAssistantConfigSchema = z
       co2: 'sensor.alpstuga_air_quality_monitor_koldioxid',
       pm25: 'sensor.alpstuga_air_quality_monitor_pm25',
     }),
+    printer: HomeAssistantPrinterConfigSchema.optional(),
     switches: z
       .record(SemanticSwitchIdSchema, z.string().regex(/^switch\.[a-z0-9_]+$/))
       .default({}),
@@ -601,6 +603,7 @@ export type RuntimeConfig = {
       co2: string;
       pm25: string;
     };
+    printer?: z.output<typeof HomeAssistantPrinterConfigSchema>;
   };
   mqtt?: {
     url: string;
@@ -771,6 +774,9 @@ export function loadRuntimeConfig(
       switches: fileConfig.homeAssistant.switches,
       music: fileConfig.homeAssistant.music,
       environment: fileConfig.homeAssistant.environment,
+      ...(fileConfig.homeAssistant.printer === undefined
+        ? {}
+        : { printer: fileConfig.homeAssistant.printer }),
     },
     ...(mqtt === undefined ? {} : { mqtt }),
     ...(fileConfig.presenceControl === undefined

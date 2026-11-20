@@ -22,7 +22,8 @@ if (!Number.isInteger(port) || port < 1024 || port > 65535)
 function snapshot(scenario) {
   if (!scenarios.has(scenario)) {
     const data = structuredClone(fixture);
-    data.role = scenario === 'desk' ? 'desk' : 'bed';
+    data.role =
+      scenario === 'desk' || scenario.endsWith('-desk') ? 'desk' : 'bed';
     data.scenes.push({ id: 'scene.party', name: 'Party' });
     data.routines.bedtime = {
       nightRoutineId: 'bedtime-night',
@@ -73,6 +74,86 @@ function snapshot(scenario) {
       });
     if (scenario === 'art-error')
       data.artwork['music.room'].url = '/missing-art.svg';
+    const printing = (overrides = {}) => ({
+      name: 'Bertil',
+      status: 'printing',
+      stage: 'printing',
+      progress: 45,
+      remainingMinutes: 29,
+      endsAt: data.generatedAt + 29 * 60000,
+      layer: 22,
+      totalLayers: 144,
+      task: 'Stand + Box + 3 till',
+      nozzle: { current: 220, target: 220 },
+      bed: { current: 60, target: 60 },
+      statusSince: data.generatedAt - 40 * 60000,
+      observedAt: data.generatedAt,
+      imageUrl: `/${scenario}/display-api/printer/cover/fixture`,
+      light: false,
+      ...overrides,
+    });
+    if (scenario.startsWith('print') || scenario.startsWith('camera'))
+      data.printer = printing();
+    if (scenario === 'print-solo' || scenario === 'camera-print-solo')
+      data.state.music.devices['music.room'].observed.playback = 'paused';
+    if (scenario === 'print-paused')
+      data.printer = printing({
+        status: 'paused',
+        stage: 'paused_filament_runout',
+        progress: 71,
+        remainingMinutes: 12,
+      });
+    if (scenario === 'print-prep')
+      data.printer = printing({
+        status: 'preparing',
+        stage: 'heatbed_preheating',
+        progress: 0,
+        layer: 0,
+        nozzle: { current: 141, target: 220 },
+        bed: { current: 38, target: 60 },
+        task: 'Vase',
+      });
+    if (scenario === 'print-long')
+      data.printer = printing({
+        task: 'Articulated Dragon Full… + 6 till',
+        light: true,
+      });
+    if (scenario === 'print-done')
+      data.printer = printing({
+        status: 'finished',
+        stage: 'idle',
+        progress: 100,
+        remainingMinutes: 0,
+        endsAt: null,
+        layer: 144,
+        statusSince: data.generatedAt - 4 * 60000,
+      });
+    if (scenario.startsWith('camera'))
+      data.cameraDashboard = {
+        generation: 'fixture',
+        settings: {
+          enabled: true,
+          automaticEnabled: true,
+          durationSeconds: 30,
+          cameras: { entrance: true },
+          triggers: {},
+          viewers: ['bed', 'desk', 'web'],
+        },
+        definitions: [
+          { id: 'entrance', name: 'Entré', enabled: true, available: true },
+        ],
+        triggers: [],
+        active: {
+          id: 'fixture-view',
+          cameraId: 'entrance',
+          name: 'Entré',
+          reason: 'Person vid entrén',
+          expiresAt: data.generatedAt + 3600000,
+          manual: false,
+          imageUrl: `/${scenario}/display-api/cameras/fixture-view/entrance/image`,
+        },
+      };
+    if (scenario === 'camera') delete data.printer;
     if (scenario === 'many')
       data.scenes.push(
         ...Array.from({ length: 7 }, (_, index) => ({
@@ -130,6 +211,17 @@ const server = createServer(async (request, response) => {
         'running',
         'art-error',
         'many',
+        'print',
+        'print-solo',
+        'print-paused',
+        'print-prep',
+        'print-done',
+        'print-long',
+        'camera',
+        'camera-print',
+        'camera-print-solo',
+        'print-desk',
+        'camera-print-desk',
       ].includes(scenario) &&
       path !== '/fixture-cover.svg'
     )
@@ -138,6 +230,23 @@ const server = createServer(async (request, response) => {
     if (route.startsWith('display-api/')) {
       if (offline)
         return sendJson(response, 503, { error: 'simulated_offline' });
+      const fixtureImage =
+        route === 'display-api/printer/cover/fixture'
+          ? (process.env.LUGN_PREVIEW_PRINT_COVER ??
+            new URL('tests/fixtures/hub/print-cover.svg', root))
+          : route.startsWith('display-api/cameras/fixture-view/')
+            ? new URL('tests/fixtures/hub/camera.svg', root)
+            : null;
+      if (fixtureImage) {
+        const body = await readFile(fixtureImage);
+        response.writeHead(200, {
+          'content-type': String(fixtureImage).endsWith('.png')
+            ? 'image/png'
+            : 'image/svg+xml',
+          'cache-control': 'no-store',
+        });
+        return response.end(body);
+      }
       if (route === 'display-api/events') {
         response.writeHead(200, {
           'content-type': 'text/event-stream',
@@ -250,6 +359,12 @@ const server = createServer(async (request, response) => {
         const policy = data.musicVolumePolicies['music.room'];
         policy.mode = body.mode;
         policy.activeOwner = body.mode === 'auto' ? 'lugn' : 'manual';
+      } else if (route === 'display-api/printer/light') {
+        if (!data.printer) return sendJson(response, 404, {});
+        setTimeout(() => {
+          data.printer.light = body.on === true;
+          data.state.revision++;
+        }, 900);
       } else if (route === 'display-api/presence-count-one')
         data.state.presence.personCount = 1;
       else return sendJson(response, 404, {});
@@ -286,7 +401,7 @@ const server = createServer(async (request, response) => {
       'content-type': type,
       'cache-control': 'no-store',
       'content-security-policy':
-        "default-src 'self'; img-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+        "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'",
     });
     response.end(content);
   } catch {
@@ -295,6 +410,6 @@ const server = createServer(async (request, response) => {
 });
 server.listen(port, '127.0.0.1', () =>
   console.log(
-    `Simulated Hub only: http://127.0.0.1:${port}/bed/ (desk, morning, running, legacy, art-error, many)`,
+    `Simulated Hub only: http://127.0.0.1:${port}/bed/ (desk, morning, running, legacy, art-error, many, print, print-solo, print-paused, print-prep, print-done, print-long, camera, camera-print, camera-print-solo)`,
   ),
 );
