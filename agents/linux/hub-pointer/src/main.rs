@@ -57,6 +57,8 @@ const REARM_AFTER_OUTSIDE_CORNER: Duration = Duration::from_millis(300);
 /// moved back up, timed out, clicked), so a slide along the edge does not
 /// re-trigger on every pixel.
 const REARM_AFTER_ABORT: Duration = Duration::from_millis(400);
+/// Pause after the pointer leaves the Hub, before the corner can take it again.
+const REARM_AFTER_EXIT: Duration = Duration::from_millis(800);
 const REARM_AFTER_DISABLED: Duration = Duration::from_secs(1);
 const REARM_AFTER_FAILURE: Duration = Duration::from_secs(5);
 const EI_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -598,16 +600,26 @@ impl<'p> App<'p> {
                 };
                 log!("capture: left the Hub's {edge}, release to {:?}", to.cursor);
                 self.capture_ended();
-                self.release(to).await
+                self.release(to).await?;
+                self.rest_after_exit().await
             }
             Ended::Key => {
                 log!("capture: ending (key pressed), release to {:?}", to.cursor);
                 self.send_input(&AgentMsg::Leave);
                 self.capture_ended();
-                self.release(to).await
+                self.release(to).await?;
+                self.rest_after_exit().await
             }
             Ended::Abort(why) => self.abort_entry(to, why).await,
         }
+    }
+
+    /// Coming back from the Hub, the hand is often still moving; resting the
+    /// barrier keeps a jitter from capturing the pointer straight again.
+    async fn rest_after_exit(&mut self) -> Result<()> {
+        self.disarm().await?;
+        self.rearm_at = Some(Instant::now() + REARM_AFTER_EXIT);
+        Ok(())
     }
 
     /// A key went down on the desktop keyboard. Outside a capture it means

@@ -13,9 +13,12 @@ const DISCRETE_PER_NOTCH: f64 = 120.0;
 /// How far above the monitor's bottom edge (and right of its left edge) the
 /// pointer comes back, so it does not immediately hit the barrier again.
 const RETURN_INSET: f64 = 2.0;
+/// After leaving the Hub the pointer comes back this far above the bottom
+/// edge, so a jitter cannot push it straight back into the barrier.
+const EXIT_INSET: f64 = 48.0;
 /// Hub px below the top edge where the cursor lands on entry, so a small
 /// upward jitter right after entry does not leave again.
-const ENTRY_INSET: f64 = 24.0;
+const ENTRY_INSET: f64 = 64.0;
 /// Desktop px a pending push may drift back up before it counts as a retreat.
 const BACK_UP_PX: f64 = 4.0;
 
@@ -45,6 +48,13 @@ impl Zone {
     /// invisible, so it always goes back onto the bottom row.
     pub fn hand_back_point(&self, cursor: Option<(f64, f64)>) -> Option<(f64, f64)> {
         cursor.map(|(x, _)| self.bottom_point(x))
+    }
+
+    /// Where the pointer comes back after leaving the Hub: `EXIT_INSET`
+    /// above the bottom edge at desktop `x`, clamped into the zone.
+    fn exit_point(&self, x: f64) -> (f64, f64) {
+        let (x, y) = self.bottom_point(x);
+        (x, (y + RETURN_INSET - EXIT_INSET).max(self.y as f64))
     }
 
     /// Just above the bottom edge at desktop `x`, clamped into the zone.
@@ -116,18 +126,18 @@ impl Mapping {
     /// top at `hub_x`: just above the monitor's bottom edge, at the matching x.
     pub fn return_point(&self, hub_x: f64) -> (f64, f64) {
         let x = self.zone.x as f64 + hub_x * self.hub_width / self.w;
-        self.zone.bottom_point(x)
+        self.zone.exit_point(x)
     }
 
     /// Out through the Hub's left edge: the monitor's bottom-left corner.
     pub fn return_left(&self) -> (f64, f64) {
-        self.zone.bottom_point(self.zone.x as f64 + RETURN_INSET)
+        self.zone.exit_point(self.zone.x as f64 + RETURN_INSET)
     }
 
     /// Out through the Hub's right edge: just right of the Hub's width.
     pub fn return_right(&self) -> (f64, f64) {
         self.zone
-            .bottom_point(self.zone.x as f64 + self.hub_width + RETURN_INSET)
+            .exit_point(self.zone.x as f64 + self.hub_width + RETURN_INSET)
     }
 }
 
@@ -416,7 +426,7 @@ impl Pointer {
                     cursor: self
                         .zone
                         .zip(a.start_x)
-                        .map(|(zone, x)| zone.bottom_point(x))
+                        .map(|(zone, x)| zone.exit_point(x))
                         .or_else(|| self.mapping().map(|m| m.return_point(a.x))),
                 },
                 Ended::Key,
@@ -728,7 +738,7 @@ mod tests {
         for cx in [0.0, 1.0, 100.25, 280.0, 559.0] {
             let (rx, ry) = m.return_point(m.enter_x(Some(cx)));
             assert!((rx - cx).abs() < 1e-9, "cx {cx} -> {rx}");
-            assert_eq!(ry, 1026.0);
+            assert_eq!(ry, 980.0);
         }
         // The last column comes back just inside the Hub's width.
         let (rx, _) = m.return_point(1279.0);
@@ -740,7 +750,44 @@ mod tests {
         };
         let narrow = Mapping { zone: tiny, ..m };
         assert_eq!(narrow.return_point(1279.0).0, 299.0);
-        assert_eq!(narrow.return_right(), (299.0, 1026.0));
+        assert_eq!(narrow.return_right(), (299.0, 980.0));
+    }
+
+    #[test]
+    fn exits_return_above_the_bottom_edge_but_hand_backs_stay_on_it() {
+        // Leaving the Hub: EXIT_INSET above the bottom row (1028).
+        let exit_y = MONITOR.bottom() as f64 - 1.0 - EXIT_INSET;
+        assert_eq!(exit_y, 980.0);
+        let m = map();
+        assert_eq!(m.return_point(640.0), (280.0, exit_y));
+        assert_eq!(m.return_left(), (2.0, exit_y));
+        assert_eq!(m.return_right(), (562.0, exit_y));
+        // A zone shorter than the inset clamps onto its top row.
+        let short = Mapping {
+            zone: Zone {
+                y: 100,
+                height: 30,
+                ..MONITOR
+            },
+            ..m
+        };
+        assert_eq!(short.return_point(640.0), (280.0, 100.0));
+
+        // Hand-backs and aborted pushes stay on the bottom row.
+        let bottom_y = MONITOR.bottom() as f64 - 1.0 - RETURN_INSET;
+        assert_eq!(bottom_y, 1026.0);
+        assert_eq!(
+            MONITOR.hand_back_point(Some((280.0, 1034.0))),
+            Some((280.0, bottom_y))
+        );
+        let mut p = hub();
+        let t0 = Instant::now();
+        p.activate(Some(1), Some((280.0, 1031.0)), t0).unwrap();
+        p.motion(0.0, -5.0);
+        assert_eq!(
+            aborted(&p.frame(ms(t0, 5))),
+            Some((Some((280.0, bottom_y)), Abort::BackUp))
+        );
     }
 
     #[test]
@@ -762,7 +809,7 @@ mod tests {
         assert!(out.entered);
         assert_eq!(out.release, None);
         let x = map().enter_x(Some(282.0));
-        assert_eq!(out.msgs, [AgentMsg::Enter { x, y: 24.5 }]);
+        assert_eq!(out.msgs, [AgentMsg::Enter { x, y: 64.5 }]);
         assert!(p.is_active() && !p.is_pending());
         assert_eq!(p.pending_deadline(), None);
         // The deadline no longer applies once entered.
@@ -773,7 +820,7 @@ mod tests {
     #[test]
     fn commit_point_is_inset_and_scaled_by_gain() {
         let mut p = hub_with_gain(2.0);
-        assert_eq!(enter(&mut p, None, 0.0), (0.0, 24.0));
+        assert_eq!(enter(&mut p, None, 0.0), (0.0, 64.0));
         // An overshoot within the committing frame carries on, gain scaled.
         let mut p = hub_with_gain(2.0);
         let t0 = Instant::now();
@@ -781,7 +828,7 @@ mod tests {
         p.motion(10.0, 50.0);
         let out = p.frame(ms(t0, 5));
         let x = map().enter_x(Some(150.0));
-        assert_eq!(out.msgs, [AgentMsg::Enter { x, y: 44.0 }]);
+        assert_eq!(out.msgs, [AgentMsg::Enter { x, y: 84.0 }]);
         // A huge push clamps to the last row.
         let mut p = hub_with_gain(2.0);
         p.activate(None, Some((140.0, 1028.0)), t0).unwrap();
@@ -796,7 +843,7 @@ mod tests {
         p.motion(0.0, 40.0);
         assert_eq!(
             p.frame(ms(t0, 5)).msgs,
-            [AgentMsg::Enter { x: 640.0, y: 24.0 }]
+            [AgentMsg::Enter { x: 640.0, y: 64.0 }]
         );
     }
 
@@ -804,7 +851,14 @@ mod tests {
     fn small_upward_jitter_after_entry_does_not_exit() {
         let mut p = hub();
         enter(&mut p, Some(1), 280.0);
-        p.motion(0.0, -20.0);
+        p.motion(0.0, -60.0);
+        let out = p.frame(Instant::now());
+        assert_eq!(out.msgs, [AgentMsg::Move { x: 640.0, y: 4.0 }]);
+        assert!(p.is_active());
+        // At the default gain the inset absorbs 32 desktop px of jitter.
+        let mut p = hub_with_gain(2.0);
+        enter(&mut p, Some(1), 280.0);
+        p.motion(0.0, -30.0);
         let out = p.frame(Instant::now());
         assert_eq!(out.msgs, [AgentMsg::Move { x: 640.0, y: 4.0 }]);
         assert!(p.is_active());
@@ -914,7 +968,7 @@ mod tests {
         p.motion(-10.0, 5.0);
         p.motion(-10.0, 100.0);
         let out = p.frame(now);
-        assert_eq!(out.msgs, [AgentMsg::Move { x: 620.0, y: 129.0 }]);
+        assert_eq!(out.msgs, [AgentMsg::Move { x: 620.0, y: 169.0 }]);
         assert_eq!(out.release, None);
 
         p.motion(659.0, 5000.0);
@@ -938,7 +992,7 @@ mod tests {
         p.motion(-10.0, 3.0);
         assert_eq!(
             p.frame(Instant::now()).msgs,
-            [AgentMsg::Move { x: 620.0, y: 30.0 }]
+            [AgentMsg::Move { x: 620.0, y: 70.0 }]
         );
     }
 
@@ -950,7 +1004,7 @@ mod tests {
         p.motion(320.0, 50.0);
         p.frame(now);
         // Sideways motion in the same frame still counts toward the exit x.
-        p.motion(0.0, -74.0);
+        p.motion(0.0, -114.0);
         assert_eq!(p.frame(now).msgs, [AgentMsg::Move { x: 960.0, y: 0.0 }]);
         p.motion(-320.0, -0.5);
         p.button(0x110, true);
@@ -961,7 +1015,7 @@ mod tests {
             Some((
                 ReleaseTo {
                     activation_id: Some(9),
-                    cursor: Some((280.0, 1026.0)),
+                    cursor: Some((280.0, 980.0)),
                 },
                 Ended::Exit(Exit::Top)
             ))
@@ -989,7 +1043,7 @@ mod tests {
             Some((
                 ReleaseTo {
                     activation_id: Some(7),
-                    cursor: Some((2.0, 1026.0)),
+                    cursor: Some((2.0, 980.0)),
                 },
                 Ended::Exit(Exit::Left)
             ))
@@ -1003,7 +1057,7 @@ mod tests {
         enter(&mut p, Some(8), 280.0);
         let now = Instant::now();
         p.motion(639.0, 0.0);
-        assert_eq!(p.frame(now).msgs, [AgentMsg::Move { x: 1279.0, y: 24.0 }]);
+        assert_eq!(p.frame(now).msgs, [AgentMsg::Move { x: 1279.0, y: 64.0 }]);
         // The last column is still inside: a push short of one more px
         // stays clamped there.
         p.motion(0.5, 0.0);
@@ -1016,7 +1070,7 @@ mod tests {
             Some((
                 ReleaseTo {
                     activation_id: Some(8),
-                    cursor: Some((562.0, 1026.0)),
+                    cursor: Some((562.0, 980.0)),
                 },
                 Ended::Exit(Exit::Right)
             ))
@@ -1024,10 +1078,10 @@ mod tests {
         // Out through the top-left corner counts as the top.
         let mut p = hub();
         enter(&mut p, None, 0.0);
-        p.motion(-5.0, -30.0);
+        p.motion(-5.0, -70.0);
         let out = p.frame(now);
         assert_eq!(out.release.map(|r| r.1), Some(Ended::Exit(Exit::Top)));
-        assert_eq!(out.release.unwrap().0.cursor, Some((0.0, 1026.0)));
+        assert_eq!(out.release.unwrap().0.cursor, Some((0.0, 980.0)));
     }
 
     #[test]
@@ -1052,7 +1106,7 @@ mod tests {
         let mut p = hub();
         enter(&mut p, None, 0.0);
         let now = Instant::now();
-        p.motion(1200.0, 676.0);
+        p.motion(1200.0, 636.0);
         p.button(0x110, true);
         p.button(0x111, false);
         p.button(0x113, true);
@@ -1141,7 +1195,7 @@ mod tests {
             p.end(),
             Some(ReleaseTo {
                 activation_id: Some(3),
-                cursor: Some((140.0, 1026.0)),
+                cursor: Some((140.0, 980.0)),
             })
         );
         // A pending push ends where the hand went, and needs no `leave`.
@@ -1186,7 +1240,9 @@ mod tests {
             Some((
                 ReleaseTo {
                     activation_id: Some(11),
-                    cursor: MONITOR.hand_back_point(Some((300.0, 1034.0))),
+                    // Above the bottom edge like any exit, so it cannot
+                    // brush the barrier straight away.
+                    cursor: Some((300.0, 980.0)),
                 },
                 Ended::Key
             ))
@@ -1211,7 +1267,7 @@ mod tests {
         p.frame(ms(t0, 10));
         assert_eq!(
             p.key_pressed().map(|(to, e)| (to.cursor, e)),
-            Some((Some((140.0, 1026.0)), Ended::Key))
+            Some((Some((140.0, 980.0)), Ended::Key))
         );
 
         // A pending push is aborted where the hand went; the page saw nothing.

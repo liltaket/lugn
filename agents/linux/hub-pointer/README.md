@@ -32,7 +32,10 @@ It is a separate binary next to `lugn-linux-agent`:
   4 px, times out, or sees a button or wheel event is handed back where the
   hand went, and the barrier rests for 400 ms. libei has already taken that
   button or wheel event, so that click is lost (the log says so). Without the
-  KWin observer the barrier stays armed while a page is connected. The exact
+  KWin observer the barrier stays armed while a page is connected. Leaving
+  the Hub (through an edge or by typing) puts the pointer back 48 px above
+  the bottom edge and rests the barrier for 800 ms, so a hand still in motion
+  is not captured again straight away. The exact
   line KDE accepts is tried from four candidates on the first arm and
   remembered.
 - **libei** (through the `reis` crate) delivers relative motion, buttons and
@@ -74,8 +77,8 @@ Copy [config.example.toml](config.example.toml) to
 | `listen`                | `"0.0.0.0:8791"`     | WebSocket address; the page connects to `ws://<host>:<port>/hub-pointer?token=…`                         |
 | `token`                 | required             | Shared secret, compared in constant time. `LUGN_HUB_POINTER_TOKEN` in the environment overrides it       |
 | `allowed_origins`       | `[]`                 | Allowed `Origin` headers for the upgrade, e.g. `["http://192.168.10.132:8788"]`. Empty allows any Origin |
-| `hub_width_px`          | `560`                | The Hub's physical width, in desktop logical px. Positions along the edge scale by page width / this     |
-| `entry_slack_px`        | `60`                 | How far past the Hub's right edge a push down still enters (at the Hub's last column)                    |
+| `hub_width_px`          | `480`                | The Hub's physical width, in desktop logical px. Positions along the edge scale by page width / this     |
+| `entry_slack_px`        | `40`                 | How far past the Hub's right edge a push down still enters (at the Hub's last column)                    |
 | `entry_push_px`         | `40`                 | Desktop px a push must carry on, mostly downward, before it enters; the same sideways aborts             |
 | `entry_timeout_ms`      | `350`                | A push that has not entered by then is handed back to the desktop                                        |
 | `gain`                  | `2.0`                | Hub CSS px per desktop logical px of motion                                                              |
@@ -107,7 +110,7 @@ Window classes as KWin sees them (Zen is `zen`, snap Firefox is
 Capture only takes the pointer, so keys always go to the desktop's focused
 window. The Hub has nothing to type into, so with `exit_on_key = true` the
 first key that goes down while the pointer is on the Hub sends `leave` and
-puts the desktop pointer back on the bottom row where it left the screen
+puts the desktop pointer back just above the bottom edge where it left the screen
 (the log says `capture: ending (key pressed)`). A key during a pending push
 hands it back like any other abort. Volume, mute, media, brightness and
 mic-mute keys do not end a capture; neither do held-key repeats, releases or

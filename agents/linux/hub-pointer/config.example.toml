@@ -17,8 +17,8 @@ allowed_origins = ["http://192.168.10.132:8788"]
 # monitor's px per cm). A push down out of the bottom edge can enter the Hub
 # when it starts within hub_width_px + entry_slack_px of the monitor's left
 # edge.
-hub_width_px = 560
-entry_slack_px = 60
+hub_width_px = 480
+entry_slack_px = 40
 
 # Entry resistance: after the barrier stops the pointer, it must be pushed
 # entry_push_px further, mostly downward, within entry_timeout_ms. Sliding

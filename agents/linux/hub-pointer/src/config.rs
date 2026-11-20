@@ -47,10 +47,10 @@ fn default_listen() -> String {
     "0.0.0.0:8791".into()
 }
 fn default_hub_width_px() -> u32 {
-    560
+    480
 }
 fn default_entry_slack_px() -> u32 {
-    60
+    40
 }
 fn default_entry_push_px() -> u32 {
     40
@@ -220,8 +220,8 @@ mod tests {
         assert_eq!(cfg.listen, "0.0.0.0:8791".parse().unwrap());
         assert_eq!(cfg.token, "abc");
         assert!(cfg.allowed_origins.is_empty());
-        assert_eq!(cfg.hub_width_px, 560);
-        assert_eq!(cfg.entry_slack_px, 60);
+        assert_eq!(cfg.hub_width_px, 480);
+        assert_eq!(cfg.entry_slack_px, 40);
         assert_eq!(cfg.entry_push_px, 40);
         assert_eq!(cfg.entry_timeout, Duration::from_millis(350));
         assert_eq!(cfg.gain, 2.0);
@@ -283,8 +283,8 @@ mod tests {
     #[test]
     fn example_config_parses() {
         let cfg = Config::parse(include_str!("../config.example.toml"), None).unwrap();
-        assert_eq!(cfg.hub_width_px, 560);
-        assert_eq!(cfg.entry_slack_px, 60);
+        assert_eq!(cfg.hub_width_px, 480);
+        assert_eq!(cfg.entry_slack_px, 40);
         assert_eq!(cfg.entry_push_px, 40);
         assert_eq!(cfg.entry_timeout, Duration::from_millis(350));
         assert_eq!(cfg.gain, 2.0);
