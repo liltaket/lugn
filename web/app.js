@@ -150,10 +150,15 @@ let mappingDraft = [];
 const l2Pending = new Set();
 
 class SessionExpiredError extends Error {}
+class TokenRejectedError extends Error {}
 class ClerkAuthorizationError extends Error {}
 
 tokenHelp.textContent =
   'Använd installationens lokala HTTPS-adress eller en SSH-tunnel. Hämta åtkomsttoken på Lugn-värden enligt docs/OPERATIONS.md i ett privat terminalfönster och klistra in den bara här.';
+
+tokenInput.addEventListener('input', () => {
+  tokenInput.removeAttribute('aria-invalid');
+});
 
 loginForm.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -234,9 +239,11 @@ function setLiveStatus(label, tone = 'neutral') {
   liveStatus.dataset.tone = tone;
 }
 
-function setLoginError(message) {
+function setLoginError(message, tokenRejected = false) {
   loginError.textContent = message;
   loginError.hidden = !message;
+  if (tokenRejected) tokenInput.setAttribute('aria-invalid', 'true');
+  else tokenInput.removeAttribute('aria-invalid');
 }
 
 function updateLoginPresentation() {
@@ -391,7 +398,7 @@ async function startSession(credential, automatic) {
         throw new Error('Det här Clerk-kontot har inte åtkomst till Lugn.');
       }
       if (response.status === 401 || response.status === 403)
-        throw new Error('Kontrollera token och försök igen.');
+        throw new TokenRejectedError('Kontrollera token och försök igen.');
       throw new Error('Sessionen kunde inte skapas. Försök igen.');
     }
 
@@ -412,7 +419,7 @@ async function startSession(credential, automatic) {
     if (error instanceof SessionExpiredError) {
       setLoginError('Sessionen kunde inte verifieras. Logga in igen.');
     } else if (error instanceof Error) {
-      setLoginError(error.message);
+      setLoginError(error.message, error instanceof TokenRejectedError);
     } else {
       setLoginError('Sessionen kunde inte skapas. Försök igen.');
     }
