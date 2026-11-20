@@ -36,6 +36,10 @@ function state(
     timestamp_ms: NOW,
     heartbeat_interval_ms: 30_000,
     backend: 'kscreen',
+    power: 'on',
+    outputs: [{ connector: 'DP-1', power: 'on' }],
+    power_changed_at_ms: null,
+    input_idle: true,
     last_command: null,
     ...overrides,
   };

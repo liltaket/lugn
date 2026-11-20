@@ -249,8 +249,9 @@ Lugn can put a computer's display to sleep when the room is empty and wake it
 again on return, as the old Windows bridge did. It is off by default and is
 configured per computer. It needs the Linux agent's `display_control_enabled`
 option (see `agents/linux/protocol/DISPLAY.md`) and authenticated MQTT, exactly like
-playback control. Lugn owns the policy; the agent only runs one fixed
-`kscreen-doctor --dpms off|on` (or `xset`) request.
+playback control. Lugn owns the policy; the agent runs one fixed
+`kscreen-doctor --dpms off|on` (or `xset`) request and reports what the GPU is
+doing.
 
 ```json
 {
@@ -262,17 +263,10 @@ playback control. Lugn owns the policy; the agent only runs one fixed
         "deviceId": "kuffe",
         "display": {
           "offAfterEmptyMs": 120000,
-          "reassertOffMs": 900000,
           "wakeOnEntry": true,
           "wakeInQuietHours": false,
           "inhibitOnActivity": true,
-          "activeInhibitMaxMs": 1800000,
-          "powerSensor": {
-            "entityId": "sensor.monitor_plug_power",
-            "onAboveWatts": 15,
-            "standbyBelowWatts": 3,
-            "settleMs": 20000
-          }
+          "activeInhibitMaxMs": 1800000
         }
       }
     ]
@@ -280,70 +274,92 @@ playback control. Lugn owns the policy; the agent only runs one fixed
 }
 ```
 
-`"display": {}` enables everything with the defaults shown (except
-`powerSensor`, which is optional).
+`"display": {}` enables everything with the defaults shown. `reassertOffMs` (default
+15 minutes) and `powerSensor` are only for the open-loop fallback below.
 
-### There is no feedback
+### Feedback instead of guessing
 
-A monitor reports nothing back. An acknowledged request means the desktop accepted
-it, never that the panel is dark, and a sleeping display can wake again on a
-bump, a notification or a signal change. The policy is therefore built from
-intent and a low-rate repeat, not from an assumed state.
+A monitor reports nothing about itself, but the kernel reports the picture signal
+per connector (`/sys/class/drm/card*-*/dpms`). The agent publishes it as
+`power` (`on`, `off`, `partial`, `none`, `unknown`) and acknowledges a request as
+`applied` only after that state followed. It is the GPU's view, not proof the panel
+is dark, but it removes the need for a power-metering plug on this hardware. It
+also catches what exit status misses: on the reference desktop two of the first
+four requests exited 0 and changed nothing, and were reported `not_observed`
+once verification existed.
 
-### Policy
+The agent also reports `input_idle`: no keyboard or pointer input for two minutes,
+**ignoring idle inhibitors**. The ordinary `idle` observation honors inhibitors, so a
+playing video or a busy tool keeps it `false` and it cannot tell a person from an
+inhibitor.
+
+### Policy with feedback
 
 - **Sleep.** Once presence is `confirmed_empty` (or Home Assistant says `away`) and
-  has stayed so for `offAfterEmptyMs`, Lugn requests `off`. The room's own exit
-  grace has already run by then. While the room stays empty the request is
-  repeated every `reassertOffMs` (default 15 minutes) because the display may have
-  woken. The repeat is harmless: the request is idempotent.
+  has stayed so for `offAfterEmptyMs`, Lugn requests `off`, but only while the
+  display is observed `on` (or `partial`). A display already dark, or a monitor not
+  on the bus, gets nothing. There are no blind repeats.
+- **Never while someone types.** Recent real input (`input_idle: false`) holds sleep
+  for as long as it lasts, however the presence sensor sees the room. A game or
+  video (`gaming`/`video` activity) holds it for at most `activeInhibitMaxMs`
+  after the room emptied, so a looping clip cannot keep an empty room lit forever.
+  `inhibitOnActivity: false` disables both.
+- **Few, spaced retries.** A request that changed nothing (`not_observed`) is
+  retried after 30 s and 1 min, then Lugn stops and reports `problem: off_failed`
+  until the room is occupied and empty again. After an applied sleep the next
+  request waits at least ten minutes, which also covers the agent's state lagging
+  its acknowledgment, and at most four applied sleeps are sent per empty period
+  (`problem: keeps_waking`). A display that wakes by itself (a bump, or a
+  presence miss) is therefore left alone for ten minutes rather than fought.
 - **Tracking loss is not absence.** `unknown` presence sends nothing, and it does
-  not restart the empty wait. A sleep is never requested for a room that is
-  merely unseen.
-- **Wake.** When presence is confirmed `occupied` again, Lugn sends `on` **once**,
-  and only if it had itself requested a sleep in that empty period. It does not
-  wake a display it never put to sleep, never repeats a wake "to be sure", and is
-  skipped in quiet hours (23:00–06:00 Stockholm, like music) unless
-  `wakeInQuietHours` is set. Mouse or keyboard input remains the reliable wake.
-- **Inhibit.** While the room is empty but the computer reports recent input
-  (`idle: false`) or a game/video, sleep waits. This lasts at most
-  `activeInhibitMaxMs` after the room emptied, so a looping video in an empty room
-  cannot keep the display lit forever. Set `inhibitOnActivity: false` to disable.
-  The agent's `idle_secs` (default 300) decides how soon input counts as idle.
-- **Failures.** A rejected, uncertain or unacknowledged request is retried with
-  backoff (30 s, 1 m, 2 m, 5 m, then 10 m). A request is only ever sent while the
-  computer observation and the display state are live, fresh and from the same
-  session; otherwise Lugn waits for them, it does not queue.
+  not restart the empty wait.
+- **Wake.** When presence is confirmed `occupied` again, Lugn sends `on` **once**
+  (at most three attempts if it changed nothing) and only if it put the display to
+  sleep, or the agent's last request was such a sleep, which survives a restart of
+  Lugn but not of the agent connection. It does not wake a display that is already
+  on or that it did not put to sleep, is skipped in quiet hours (23:00–06:00
+  Stockholm, like music) unless `wakeInQuietHours` is set, and reports
+  `problem: wake_unavailable` when no monitor is on the bus. Mouse or keyboard
+  input remains the reliable wake.
+- **Waiting, not queueing.** A request is only sent while the computer observation
+  and the display state are live, fresh and from the same session.
 
-### Power-metering smart plug (evidence)
+### Open-loop fallback (no `power` reported)
 
-Optionally, a smart plug that measures power between the wall and the monitor can
-serve as _evidence_ of whether the monitor draws power. Lugn only **reads** it
-(a Home Assistant `sensor.*` in watts, also kW or mW) and never switches its relay.
-Evidence changes timing but never starts an action by itself:
+On a system where the kernel offers no readable state (`power: unknown`, for
+example some non-DRM setups) the policy does what it did before feedback existed:
+one sleep request after the wait, repeated every `reassertOffMs` while the room
+stays empty, with a capped hold for recent activity (`idle: false`) when the agent
+cannot report `input_idle`, and failures retried with backoff. A wake is sent once
+per return. In that mode only, an optional power-metering plug can serve as
+evidence:
 
-- draw above `onAboveWatts` after a sleep request: repeat sooner (about two
-  minutes after the last attempt, never in a tight loop);
-- draw below `standbyBelowWatts`: the display is dark, so repeats back off to a
-  six-hour safety net, and no first sleep request is sent to a display that is
-  already in standby;
-- after a wake, standby means it did not take: retry (at most three attempts);
-  draw means it did, and an already-drawing display is not sent a wake at all;
-- between the two thresholds the previous settled class is kept (hysteresis).
+```json
+{
+  "powerSensor": {
+    "entityId": "sensor.monitor_plug_power",
+    "onAboveWatts": 15,
+    "standbyBelowWatts": 3,
+    "settleMs": 20000
+  }
+}
+```
 
-A change of class is reported only after it has held for `settleMs`, because
-power-up inrush and the decay after power-off cross the thresholds briefly. An
-unavailable or non-numeric reading, an energy unit (`kWh`) or a Home Assistant
-disconnect turns evidence to `unknown`, and the plain `reassertOffMs` timing
-applies. **The thresholds are placeholders: measure your monitor in use and in
-standby and set them from those readings.**
+Lugn only **reads** the plug (a Home Assistant `sensor.*` in watts, also kW or mW)
+and never switches its relay. Draw after a sleep request shortens the repeat to
+about two minutes; standby backs it off to six hours and suppresses a first
+request; after a wake, standby means it did not take (retry, at most three) and
+draw means it did. A class change counts only after it held for `settleMs`.
+Thresholds are placeholders: measure the monitor in use and in standby. The plug
+is also reported in the status alongside the agent's reading, where it is the only
+way to see a monitor that sleeps by itself while the GPU still sends a picture.
 
 ### State
 
 `state.computer.displays[deviceId]` (state, SSE and the `computer` stream patch)
 shows `control` (`available` only while a request could be sent), `desired`
-(`off`/`on`/`null`), `inhibited`, `lastRequest` (`applied`, `rejected`,
-`uncertain`, `failed`), `nextAttemptAt` and the plug `evidence`. None of these is
-an observation of the panel. Status is not restored after a restart: a restart
-starts a fresh empty wait, and a display Lugn put to sleep before the restart is
-not woken unless it is put to sleep again first.
+(`off`/`on`/`null`), `inhibited` (`recent_input`, `recent_activity`,
+`video_or_game`), `observed` (`power`, `inputIdle`, `changedAt`), `lastRequest`
+(`applied`, `rejected`, `uncertain`, `failed`, with the agent's reason),
+`problem`, `nextAttemptAt` and any plug `evidence`. Status is not restored after a
+restart: a restart starts a fresh empty wait.

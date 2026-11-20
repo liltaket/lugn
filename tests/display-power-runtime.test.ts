@@ -109,7 +109,7 @@ const ROOT = 'lugn/computers/kuffe';
 const MINUTE = 60_000;
 
 describe('display power in the composed runtime', () => {
-  it('sleeps and wakes the display from room presence, with plug evidence from Home Assistant', async () => {
+  it('sleeps and wakes the display from room presence using the agent’s display feedback, with plug evidence alongside', async () => {
     vi.useFakeTimers({
       toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'],
     });
@@ -135,6 +135,8 @@ describe('display power in the composed runtime', () => {
     (observation['observations'] as Record<string, unknown>)['idle'] = true;
     observation['inference'] = { activity: 'idle', basis: 'locked_or_idle' };
     const lastCommand = { value: null as unknown };
+    // The agent's view of the GPU: it follows each acknowledged command.
+    const kernel = { power: 'on' as 'on' | 'off', inputIdle: true };
     const heartbeat = () => {
       observation['sequence'] = ++observationSequence;
       observation['timestamp_ms'] = Date.now();
@@ -150,6 +152,10 @@ describe('display power in the composed runtime', () => {
           timestamp_ms: Date.now(),
           heartbeat_interval_ms: 30_000,
           backend: 'kscreen',
+          power: kernel.power,
+          outputs: [{ connector: 'DP-1', power: kernel.power }],
+          power_changed_at_ms: null,
+          input_idle: kernel.inputIdle,
           last_command: lastCommand.value,
         }),
       );
@@ -164,6 +170,7 @@ describe('display power in the composed runtime', () => {
     mqtt.onPublish = (topic, payload) => {
       if (topic !== `${ROOT}/display/command`) return;
       lastDisplayCommand = payload;
+      kernel.power = JSON.parse(payload).action === 'off' ? 'off' : 'on';
       const command = ComputerDisplayCommandSchema.parse(JSON.parse(payload));
       const ack = {
         schema_version: 1,
@@ -311,31 +318,28 @@ describe('display power in the composed runtime', () => {
         lastRequest: { action: 'off', outcome: 'applied' },
       });
 
-      // The plug still shows draw, so the request is repeated after a couple of
-      // minutes rather than after the usual quarter hour.
-      await advance(2 * MINUTE);
-      expect(mqtt.publications).toHaveLength(2);
-
-      // Now the plug settles at standby: no more repeats for hours.
+      // No blind repeats: the agent reported the display off, so Lugn is quiet
+      // for hours, whatever the plug says.
       await plug(1.2);
       await advance(MINUTE);
-      expect(engine.state.computer.displays?.['kuffe']?.evidence).toMatchObject(
-        { state: 'standby', watts: 1.2 },
-      );
+      expect(engine.state.computer.displays?.['kuffe']).toMatchObject({
+        observed: { power: 'off', inputIdle: true },
+        evidence: { state: 'standby', watts: 1.2 },
+      });
       await advance(3 * 60 * MINUTE);
-      expect(mqtt.publications).toHaveLength(2);
+      expect(mqtt.publications).toHaveLength(1);
 
-      // Someone is back: exactly one wake, verified by the plug.
+      // Someone is back: exactly one wake, confirmed by the agent.
       await presence('occupied');
       await advance(5_000);
-      expect(mqtt.publications).toHaveLength(3);
+      expect(mqtt.publications).toHaveLength(2);
       expect(
         ComputerDisplayCommandSchema.parse(JSON.parse(lastDisplayCommand!))
           .action,
       ).toBe('on');
       await plug(32);
       await advance(30 * MINUTE);
-      expect(mqtt.publications).toHaveLength(3);
+      expect(mqtt.publications).toHaveLength(2);
     } finally {
       await runtime?.stop();
       await rm(directory, { recursive: true, force: true });

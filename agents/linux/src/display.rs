@@ -1,15 +1,19 @@
 //! Opt-in display power requests (DISPLAY v1). Observation v1 and CONTROL v1
 //! are unchanged.
 //!
-//! The agent is a dumb, idempotent actuator: Lugn decides when the display
-//! should sleep or wake. There is deliberately no physical feedback. A request
-//! the desktop accepted is reported as `applied`, which never proves that the
-//! panel is dark: monitors can ignore the request or wake again on their own.
+//! The agent is an idempotent actuator: Lugn decides when the display should
+//! sleep or wake. It also reports what the GPU is doing, read from the kernel's
+//! per-connector `dpms` state, and only acknowledges a request as `applied`
+//! once that state reached the target. That is the GPU's view of the picture
+//! signal, not proof that the panel is dark (a monitor can show its own "no
+//! signal" message or sleep by itself); where the kernel offers no such state
+//! the reading is `unknown` and `applied` falls back to "the command exited 0".
 use crate::control::{Context, now_ms, uuid_valid};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -17,7 +21,15 @@ use tokio::sync::{mpsc, watch};
 
 /// Upper bound for one backend invocation. Longer is reported as uncertain.
 const EXEC_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long after a successful command the kernel state may take to follow.
+/// Observed latency is 0.5-1.5 s.
+pub const VERIFY_WINDOW: Duration = Duration::from_secs(3);
+const VERIFY_STEP: Duration = Duration::from_millis(100);
+/// Baseline sampling of the kernel state; sysfs offers no change notification.
+const POLL: Duration = Duration::from_secs(2);
 const CACHE_CAPACITY: usize = 64;
+const MAX_OUTPUTS: usize = 16;
+const DRM_ROOT: &str = "/sys/class/drm";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,6 +59,94 @@ pub enum Reason {
     Unavailable,
     Timeout,
     Failed,
+    /// The command exited 0 but the kernel state did not follow in time.
+    NotObserved,
+    /// The command ran but no connected output exists to put to sleep or wake.
+    NoOutput,
+}
+
+/// The GPU's picture-signal state. `none`: connectors exist but none is
+/// connected (for example a monitor that dropped off the bus). `unknown`: the
+/// kernel offers no readable state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Power {
+    On,
+    Off,
+    Partial,
+    #[serde(rename = "none")]
+    Absent,
+    #[default]
+    Unknown,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputState {
+    pub connector: String,
+    /// `on`, `off` or `unknown` for one connector.
+    pub power: Power,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reading {
+    pub power: Power,
+    pub outputs: Vec<OutputState>,
+}
+
+/// Reads every connected connector's `dpms` under a DRM sysfs root. `Standby`
+/// and `Suspend` count as off. Writeback and disconnected connectors are skipped.
+pub fn read_drm(root: &Path) -> Reading {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Reading::default();
+    };
+    let mut outputs = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(connector) = name
+            .strip_prefix("card")
+            .and_then(|rest| rest.split_once('-'))
+            .map(|(_, connector)| connector.to_string())
+        else {
+            continue;
+        };
+        let valid = !connector.is_empty()
+            && connector.len() <= 64
+            && connector
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        let path = entry.path();
+        let connected = std::fs::read_to_string(path.join("status"))
+            .is_ok_and(|status| status.trim() == "connected");
+        if !valid || connector.starts_with("Writeback") || !connected {
+            continue;
+        }
+        let power = match std::fs::read_to_string(path.join("dpms")) {
+            Ok(value) if value.trim() == "On" => Power::On,
+            Ok(value) if matches!(value.trim(), "Off" | "Standby" | "Suspend") => Power::Off,
+            _ => Power::Unknown,
+        };
+        outputs.push(OutputState { connector, power });
+        if outputs.len() >= MAX_OUTPUTS {
+            break;
+        }
+    }
+    outputs.sort_by(|a, b| a.connector.cmp(&b.connector));
+    let power = if outputs.is_empty() {
+        Power::Absent
+    } else if outputs.iter().any(|o| o.power == Power::Unknown) {
+        Power::Unknown
+    } else if outputs.iter().all(|o| o.power == Power::On) {
+        Power::On
+    } else if outputs.iter().all(|o| o.power == Power::Off) {
+        Power::Off
+    } else {
+        Power::Partial
+    };
+    Reading { power, outputs }
+}
+
+/// Reads the display state. Replaceable so tests never touch real hardware.
+pub type Observer = Arc<dyn Fn() -> Reading + Send + Sync>;
+pub fn drm_observer() -> Observer {
+    Arc::new(|| read_drm(Path::new(DRM_ROOT)))
 }
 
 /// How a display is put to sleep. Only fixed argument vectors are ever run;
@@ -124,10 +224,18 @@ pub struct LastCommand {
     pub timestamp_ms: u64,
 }
 /// What the actuator can say about itself. `last_command` is the last request
-/// this connection executed, never an observation of the panel.
+/// this connection executed; `power`/`outputs` are the GPU's picture-signal
+/// state, not an observation of the panel itself.
 #[derive(Clone, PartialEq, Eq, Default)]
 pub struct Status {
     pub last_command: Option<LastCommand>,
+    pub power: Power,
+    pub outputs: Vec<OutputState>,
+    /// When `power` last changed while this process was watching.
+    pub power_changed_at_ms: Option<u64>,
+    /// No keyboard/pointer input for the configured time, ignoring idle
+    /// inhibitors; `None` when the compositor cannot report it.
+    pub input_idle: Option<bool>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct State {
@@ -139,6 +247,10 @@ pub struct State {
     pub timestamp_ms: u64,
     pub heartbeat_interval_ms: u64,
     pub backend: Option<Backend>,
+    pub power: Power,
+    pub outputs: Vec<OutputState>,
+    pub power_changed_at_ms: Option<u64>,
+    pub input_idle: Option<bool>,
     pub last_command: Option<LastCommand>,
 }
 
@@ -211,18 +323,50 @@ async fn run_program(program: &str, args: &[&str]) -> Result<(), Reason> {
     }
 }
 
-pub fn spawn(context: Context, backend: Option<Backend>) -> Runtime {
-    spawn_with(context, backend, backend.map(process_executor))
+pub fn spawn(
+    context: Context,
+    backend: Option<Backend>,
+    input_idle: watch::Receiver<Option<bool>>,
+) -> Runtime {
+    spawn_with(
+        context,
+        backend,
+        backend.map(process_executor),
+        drm_observer(),
+        input_idle,
+        VERIFY_WINDOW,
+    )
 }
 pub fn spawn_with(
     context: Context,
     backend: Option<Backend>,
     executor: Option<Executor>,
+    observer: Observer,
+    input_idle: watch::Receiver<Option<bool>>,
+    verify_window: Duration,
 ) -> Runtime {
     let (commands, rx) = mpsc::channel(8);
-    let (status_tx, status) = watch::channel(Status::default());
+    let initial = observer();
+    let (status_tx, status) = watch::channel(Status {
+        last_command: None,
+        power: initial.power,
+        outputs: initial.outputs,
+        power_changed_at_ms: None,
+        input_idle: *input_idle.borrow(),
+    });
     let (ack_tx, acks) = mpsc::channel(32);
-    let task = tokio::spawn(run(context, executor, rx, status_tx, ack_tx));
+    let task = tokio::spawn(run(
+        context,
+        executor,
+        Actor {
+            observer,
+            verify_window,
+        },
+        rx,
+        status_tx,
+        ack_tx,
+        input_idle,
+    ));
     Runtime {
         commands,
         status,
@@ -237,16 +381,101 @@ struct Cached {
     ack: Ack,
     expires_at_ms: u64,
 }
+struct Actor {
+    observer: Observer,
+    verify_window: Duration,
+}
+impl Actor {
+    /// Samples the kernel state and publishes any change.
+    fn observe(&self, status: &watch::Sender<Status>) -> Reading {
+        let reading = (self.observer)();
+        status.send_if_modified(|s| {
+            let mut changed = false;
+            if s.power != reading.power {
+                s.power = reading.power;
+                s.power_changed_at_ms = Some(now_ms());
+                changed = true;
+            }
+            if s.outputs != reading.outputs {
+                s.outputs = reading.outputs.clone();
+                changed = true;
+            }
+            changed
+        });
+        reading
+    }
+
+    /// Waits for the kernel state to follow a command that exited 0.
+    async fn verify(&self, action: Action, status: &watch::Sender<Status>) -> Verdict {
+        let target = match action {
+            Action::Off => Power::Off,
+            Action::On => Power::On,
+        };
+        let mut reading = self.observe(status);
+        if reading.power == Power::Unknown {
+            return Verdict::Unobservable;
+        }
+        let end = Instant::now() + self.verify_window;
+        loop {
+            if reading.power == target {
+                return Verdict::Reached;
+            }
+            if reading.power == Power::Absent {
+                return Verdict::NoOutput;
+            }
+            if Instant::now() >= end {
+                return Verdict::NotObserved;
+            }
+            tokio::time::sleep(VERIFY_STEP).await;
+            reading = self.observe(status);
+        }
+    }
+}
+enum Verdict {
+    Reached,
+    /// The kernel offers no readable state; the exit code is all there is.
+    Unobservable,
+    NoOutput,
+    NotObserved,
+}
 
 async fn run(
     context: Context,
     executor: Option<Executor>,
+    actor: Actor,
     mut commands: mpsc::Receiver<Delivery>,
     status: watch::Sender<Status>,
     acks: mpsc::Sender<Ack>,
+    mut input_idle: watch::Receiver<Option<bool>>,
 ) {
     let mut cache: HashMap<String, Cached> = HashMap::new();
-    while let Some(delivery) = commands.recv().await {
+    let mut ticker = tokio::time::interval(POLL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut input_open = true;
+    loop {
+        let delivery = tokio::select! {
+            delivery = commands.recv() => match delivery {
+                Some(delivery) => delivery,
+                None => return,
+            },
+            _ = ticker.tick() => {
+                actor.observe(&status);
+                continue;
+            }
+            changed = input_idle.changed(), if input_open => {
+                if changed.is_err() {
+                    input_open = false;
+                } else {
+                    let value = *input_idle.borrow_and_update();
+                    status.send_if_modified(|s| {
+                        let changed = s.input_idle != value;
+                        s.input_idle = value;
+                        changed
+                    });
+                }
+                continue;
+            }
+        };
         let now = now_ms();
         cache.retain(|_, entry| entry.expires_at_ms > now);
         let command = &delivery.command;
@@ -265,23 +494,34 @@ async fn run(
             let ack = match &executor {
                 None => ack(&context, command, Outcome::Rejected, Reason::Unavailable),
                 Some(executor) => {
+                    let work = async {
+                        executor(command.action).await?;
+                        Ok::<_, Reason>(actor.verify(command.action, &status).await)
+                    };
                     let result = tokio::time::timeout_at(
                         tokio::time::Instant::from_std(delivery.deadline()),
-                        executor(command.action),
+                        work,
                     )
                     .await
                     .unwrap_or(Err(Reason::Timeout));
-                    match (result, command.action) {
-                        (Ok(()), Action::Off) => {
-                            ack(&context, command, Outcome::Applied, Reason::DisplayOff)
+                    let done = match command.action {
+                        Action::Off => Reason::DisplayOff,
+                        Action::On => Reason::DisplayOn,
+                    };
+                    match result {
+                        Ok(Verdict::Reached | Verdict::Unobservable) => {
+                            ack(&context, command, Outcome::Applied, done)
                         }
-                        (Ok(()), Action::On) => {
-                            ack(&context, command, Outcome::Applied, Reason::DisplayOn)
+                        Ok(Verdict::NoOutput) => {
+                            ack(&context, command, Outcome::Rejected, Reason::NoOutput)
                         }
-                        (Err(Reason::Timeout), _) => {
+                        Ok(Verdict::NotObserved) => {
+                            ack(&context, command, Outcome::Uncertain, Reason::NotObserved)
+                        }
+                        Err(Reason::Timeout) => {
                             ack(&context, command, Outcome::Uncertain, Reason::Timeout)
                         }
-                        (Err(reason), _) => ack(&context, command, Outcome::Rejected, reason),
+                        Err(reason) => ack(&context, command, Outcome::Rejected, reason),
                     }
                 }
             };
@@ -293,15 +533,14 @@ async fn run(
                     expires_at_ms: command.expires_at_ms,
                 },
             );
-            status.send_replace(Status {
-                last_command: Some(LastCommand {
-                    command_id: ack.command_id.clone(),
-                    action: ack.action,
-                    outcome: ack.outcome,
-                    reason: ack.reason,
-                    timestamp_ms: ack.timestamp_ms,
-                }),
-            });
+            let last = LastCommand {
+                command_id: ack.command_id.clone(),
+                action: ack.action,
+                outcome: ack.outcome,
+                reason: ack.reason,
+                timestamp_ms: ack.timestamp_ms,
+            };
+            status.send_modify(|s| s.last_command = Some(last));
             ack
         };
         if acks.send(ack).await.is_err() {

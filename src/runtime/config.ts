@@ -76,7 +76,7 @@ const DisplayPowerConfigSchema = z
       .min(10_000)
       .max(86_400_000)
       .default(120_000),
-    /** The sleep request is repeated this often while the room stays empty. */
+    /** Open-loop fallback only (no display state from the agent): repeat interval. */
     reassertOffMs: z
       .number()
       .int()

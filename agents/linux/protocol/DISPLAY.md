@@ -21,16 +21,37 @@ The agent runs one fixed command per request:
 picks `xset` on Wayland. With no backend the agent still publishes state with
 `backend: null` and rejects requests as `unavailable`.
 
-**There is no feedback.** A monitor may ignore the request, wake by itself on
-input or a signal change, or be switched off physically. `applied` therefore
-means _the desktop accepted the request_ (the command exited successfully),
-never that the panel is dark or lit. `last_command` in the state is the last
-request this connection executed, not an observation of the display. Consumers
-that need evidence should measure it elsewhere, for example with a power-metering
-smart plug; Lugn can do this (see `docs/COMPUTER.md`).
+**Feedback.** The agent samples the kernel's per-connector `dpms` state under
+`/sys/class/drm/card*-*/` (connected connectors only; `Standby`/`Suspend` count as
+off) every 2 seconds and every 100 ms while it verifies a request. It publishes it
+as `power`: `on`, `off`, `partial` (outputs disagree), `none` (connectors exist but
+none is connected, for example a monitor that dropped off the bus) or `unknown`
+(the kernel offers nothing readable). On the reference desktop the kernel value
+follows a `kscreen-doctor --dpms` request within 0.5–1.5 s. This is the GPU's view
+of the picture signal, **not proof that the panel is dark**: a monitor can show its
+own "no signal" message for a few seconds, or go to standby while the GPU still
+sends a picture.
 
-Requests are idempotent: asking for `off` twice is harmless, which is why a
-controller may repeat it at a low rate to cover a display that woke again.
+An `applied` acknowledgment therefore means the kernel state reached the target
+within three seconds of the command exiting successfully. A command that exits 0
+and changes nothing is `uncertain`/`not_observed`. This really happened on the
+reference desktop (two of four early requests were acknowledged by exit status
+while the picture signal never dropped, cause not established) and is why exit
+status alone is not trusted. KWin also re-wakes the display on any input event. Where `power` is `unknown`, `applied` falls
+back to "the command exited 0" and consumers must not assume the display changed.
+
+Separately, `input_idle` reports whether there was no keyboard or pointer input
+for `display_input_idle_secs` (default 120), using `ext_idle_notifier_v1` version 2
+`get_input_idle_notification`, which **ignores idle inhibitors**. Observation v1's
+`idle` honors them, so a playing video or a busy tool keeps it `false` and it
+cannot tell a person from an inhibitor. `null` means the compositor cannot report
+it. It is published only here, never in observation v1.
+
+Requests are idempotent: asking for `off` twice is harmless. With a reported
+`power` a controller should send only to change the observed state and not repeat
+blindly; the state's `power`, `outputs` (connector, `on`/`off`/`unknown`, at most
+16), `power_changed_at_ms` and `last_command` (this connection's last request) let
+it verify, and `input_idle` lets it avoid acting while someone is at the keyboard.
 
 ## Topics and wire limits
 
@@ -86,9 +107,11 @@ session/connection, `timestamp_ms`, `outcome` and `reason`:
 | `rejected`  | `retained`, `expired`, `invalid_command`, `wrong_session`, `wrong_connection`, `id_conflict`, `busy`, `unavailable`, `failed` |
 | `uncertain` | `timeout`                                                                                                                     |
 
-`failed` is a non-zero backend exit, `unavailable` a missing program or backend.
-`uncertain` means the backend did not finish in time and the request may still
-have landed. Never infer success from a missing acknowledgment, and treat
+`failed` is a non-zero backend exit, `unavailable` a missing program or backend,
+`no_output` that no connected output exists to act on. `not_observed` means the
+command exited 0 but the kernel state did not follow (the display did not
+change). `timeout` means the backend did not finish in time and the request may
+still have landed. Never infer success from a missing acknowledgment, and treat
 `uncertain` as "retry later, subject to backoff".
 
 A bounded cache of 64 command IDs deduplicates redelivery: the same payload

@@ -5,12 +5,18 @@ import type {
   DisplayPowerSnapshot,
 } from '../core/display-power.js';
 import type { RoomState } from '../core/schemas.js';
-import type { ComputerDisplayTransport } from '../adapters/computer-display-mqtt.js';
+import type {
+  ComputerDisplayState,
+  ComputerDisplayTransport,
+} from '../adapters/computer-display-mqtt.js';
 
 export type DisplayPowerPolicy = {
   /** Confirmed-empty time before the first sleep request. */
   offAfterEmptyMs: number;
-  /** While the room stays empty the sleep request is repeated this often. */
+  /**
+   * Only for agents that cannot report the display state: while the room stays
+   * empty the sleep request is repeated this often. Not used with feedback.
+   */
   reassertOffMs: number;
   /** Wake the display when someone is confirmed back after Lugn put it to sleep. */
   wakeOnEntry: boolean;
@@ -18,7 +24,7 @@ export type DisplayPowerPolicy = {
   wakeInQuietHours: boolean;
   /** Hold sleep while the computer reports recent input or a game/video. */
   inhibitOnActivity: boolean;
-  /** Activity can postpone sleep for at most this long after the room emptied. */
+  /** Game/video (and idle-less activity) can postpone sleep for at most this long. */
   activeInhibitMaxMs: number;
 };
 
@@ -31,7 +37,7 @@ export const defaultDisplayPowerPolicy: DisplayPowerPolicy = {
   activeInhibitMaxMs: 1_800_000,
 };
 
-/** Evidence-driven timing. Without evidence only `reassertOffMs` applies. */
+/** Plug evidence timing, used only when the agent reports no display state. */
 const EVIDENCE_OFF_GRACE_MS = 60_000;
 /** Evidence flips are debounced by the sensor; look only after they could land. */
 const EVIDENCE_SETTLE_MARGIN_MS = 15_000;
@@ -39,10 +45,22 @@ const EVIDENCE_ON_REASSERT_MIN_MS = 120_000;
 const EVIDENCE_STANDBY_BACKSTOP_MS = 6 * 60 * 60_000;
 const WAKE_RETRY_MS = 15_000;
 const WAKE_VERIFY_MS = 20_000;
+/** At most this many wake requests per return, counting failed ones. */
 const WAKE_MAX_ATTEMPTS = 3;
+/** At most this many unconfirmed sleep requests per empty period. */
+const OFF_MAX_ATTEMPTS = 3;
+/**
+ * After a sleep request took effect, a display that reads lit again is either
+ * state still catching up, a bump, or a presence miss. Do not send another
+ * for this long, and give up after a few applied requests per empty period.
+ */
+const REPEAT_HOLD_MS = 10 * 60_000;
+const OFF_APPLICATIONS_MAX = 4;
 const FAILURE_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000, 600_000];
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
+type Problem = NonNullable<DisplayPowerSnapshot['problem']>;
+type Power = ComputerDisplayState['power'];
 type Options = {
   deviceId: string;
   clock: Clock;
@@ -59,14 +77,19 @@ type Options = {
 /**
  * Presence-driven display sleep and wake for one computer.
  *
- * The monitor gives no feedback, so the policy works from intent: once the
- * room is confirmed empty (and the computer is not visibly in use) it requests
- * sleep, and it repeats that request at a low rate because a sleeping display
- * can be woken again by anything. Wake is sent once per confirmed return and
- * only for a sleep Lugn itself requested; it is never repeated to "make sure",
- * and tracking loss (`unknown` presence) triggers neither. An optional power
- * sensor, when present, only shortens or lengthens those repeats and verifies a
- * wake; it never starts one.
+ * With an agent that reports the GPU's display state ("feedback mode") the
+ * observed state drives everything: sleep is sent only while the display is
+ * observed on, the agent acknowledges only after the state followed, and there
+ * are no blind repeats. Retries are few and spaced (a request that exited
+ * successfully without effect is `not_observed`), and a display that wakes by
+ * itself while the room reads empty is left alone for a while instead of being
+ * fought. Without that report the policy falls back to the cautious open-loop
+ * mode: one sleep request, repeated at a low rate, optionally informed by a
+ * power-metering plug.
+ *
+ * In both modes sleep never starts while real input is recent, `unknown`
+ * presence sends nothing, and a wake is sent once per confirmed return, only
+ * after Lugn itself put the display to sleep.
  */
 export class DisplayPowerController {
   private emptySince: number | null = null;
@@ -75,10 +98,16 @@ export class DisplayPowerController {
   private offRequested = false;
   private offAppliedAt: number | null = null;
   private lastOffAttemptAt = 0;
+  private offAttempts = 0;
+  private offApplications = 0;
+  private lastExternalWakeAt = 0;
+  private prevPower: Power | null = null;
+  private startupChecked = false;
   private wakeNeeded = false;
   private wakeAttempts = 0;
   private lastWakeAttemptAt = 0;
   private wakeVerifyAt: number | null = null;
+  private problem: Problem | null = null;
   private failures = 0;
   private lastFailureAt = 0;
   private lastRequest: DisplayPowerSnapshot['lastRequest'] = null;
@@ -119,33 +148,69 @@ export class DisplayPowerController {
     if (!state) return;
     const { clock, policy } = this.options;
     const now = clock.now();
+    const snapshot = this.options.transport.getSnapshot();
+    const observation = snapshot?.fresh ? snapshot.state : null;
+    const power =
+      observation && observation.power !== 'unknown' ? observation.power : null;
+    const feedback = power !== null;
+    const inputIdle = observation?.input_idle ?? null;
     const evidence = this.options.evidence?.() ?? null;
     const away = state.presence.home.state === 'away';
     const empty = state.presence.state === 'confirmed_empty' || away;
     const occupied = state.presence.state === 'occupied' && !away;
+    this.problem = null;
+
+    // A display that lights up while the room reads empty and we did not ask.
+    if (power !== null) {
+      if (
+        empty &&
+        this.prevPower === 'off' &&
+        (power === 'on' || power === 'partial')
+      )
+        this.lastExternalWakeAt = now;
+      this.prevPower = power;
+    }
 
     if (empty) {
       this.emptySince ??= now;
       this.wakeNeeded = false;
       this.wakeVerifyAt = null;
     } else if (occupied && this.emptySince !== null) {
-      // Back in the room. Only a sleep Lugn itself requested earns a wake.
-      if (this.offRequested && policy.wakeOnEntry) {
+      // Back in the room. Only a sleep Lugn itself requested earns a wake. The
+      // agent's last command lets that survive a restart of this process.
+      const ours =
+        this.offRequested ||
+        (power === 'off' && lastCommandWasOurSleep(observation));
+      if (ours && policy.wakeOnEntry) {
         this.wakeNeeded = true;
         this.wakeAttempts = 0;
       }
       this.leaveEmpty();
     }
+    if (!this.startupChecked && observation) {
+      // After a restart of Lugn nothing remembers a sleep requested before it.
+      this.startupChecked = true;
+      if (
+        occupied &&
+        this.emptySince === null &&
+        power === 'off' &&
+        lastCommandWasOurSleep(observation) &&
+        policy.wakeOnEntry
+      ) {
+        this.wakeNeeded = true;
+        this.wakeAttempts = 0;
+      }
+    }
 
-    const ready = this.ready(state);
+    const ready = this.ready(state, snapshot, observation);
     const inhibited =
       empty && this.emptySince !== null
-        ? this.inhibitReason(state, now, this.emptySince)
+        ? this.inhibitReason(state, now, this.emptySince, inputIdle)
         : null;
     let dueAt: number | null = null;
     let action: 'off' | 'on' | null = null;
 
-    if (this.wakeVerifyAt !== null && occupied) {
+    if (!feedback && this.wakeVerifyAt !== null && occupied) {
       if (now >= this.wakeVerifyAt) {
         this.wakeVerifyAt = null;
         if (evidence?.state === 'standby') this.wakeNeeded = true;
@@ -154,13 +219,20 @@ export class DisplayPowerController {
     if (this.wakeNeeded && occupied) {
       if (
         !policy.wakeOnEntry ||
-        this.wakeAttempts >= WAKE_MAX_ATTEMPTS ||
-        // The display is already drawing power: nothing to wake.
-        evidence?.state === 'on' ||
+        // Already lit, by the agent's account or the plug's.
+        power === 'on' ||
+        (!feedback && evidence?.state === 'on') ||
         (!policy.wakeInQuietHours && this.options.isQuietHours())
       )
         this.wakeNeeded = false;
-      else {
+      else if (power === 'none') {
+        // The monitor is not on the bus; a wake request has nothing to act on.
+        this.wakeNeeded = false;
+        this.problem = 'wake_unavailable';
+      } else if (this.wakeAttempts >= WAKE_MAX_ATTEMPTS) {
+        this.wakeNeeded = false;
+        this.problem = 'wake_failed';
+      } else {
         const due = this.afterBackoff(
           Math.max(now, this.lastWakeAttemptAt + WAKE_RETRY_MS),
         );
@@ -169,9 +241,15 @@ export class DisplayPowerController {
       }
     } else if (empty && this.emptySince !== null) {
       if (inhibited) {
-        // Re-evaluate when the inhibit window ends; input changes arrive as
-        // computer observations.
-        dueAt = minDue(dueAt, this.emptySince + policy.activeInhibitMaxMs);
+        // Capped inhibits end by themselves; real input arrives as an update.
+        if (inhibited !== 'recent_input')
+          dueAt = minDue(dueAt, this.emptySince + policy.activeInhibitMaxMs);
+      } else if (feedback) {
+        const due = this.feedbackOffDue(power, this.emptySince);
+        if (due !== null) {
+          dueAt = minDue(dueAt, due);
+          if (due <= now) action = 'off';
+        }
       } else if (this.offAppliedAt === null && evidence?.state === 'standby') {
         // Already dark by the plug's account. A change in evidence re-evaluates.
       } else {
@@ -181,11 +259,41 @@ export class DisplayPowerController {
       }
     }
 
-    if (action && ready && !this.sending) void this.send(action);
+    if (action && ready && !this.sending) void this.send(action, feedback);
     // A due request that cannot be sent waits for the transport, not a timer.
     const armAt = this.sending || (action && !ready) ? null : dueAt;
     this.rearm(armAt, now);
-    this.emit(empty ? 'off' : occupied ? 'on' : null, inhibited, ready, armAt);
+    this.emit(
+      empty ? 'off' : occupied ? 'on' : null,
+      inhibited,
+      ready,
+      armAt,
+      observation,
+    );
+  }
+
+  /** When the display should next be put to sleep, or null for never (now). */
+  private feedbackOffDue(
+    power: Power | null,
+    emptySince: number,
+  ): number | null {
+    // Dark already (or no monitor on the bus): there is nothing to do.
+    if (power === 'off' || power === 'none') return null;
+    if (this.offAttempts >= OFF_MAX_ATTEMPTS) {
+      this.problem = 'off_failed';
+      return null;
+    }
+    if (this.offApplications >= OFF_APPLICATIONS_MAX) {
+      this.problem = 'keeps_waking';
+      return null;
+    }
+    let due = emptySince + this.options.policy.offAfterEmptyMs;
+    // The agent's state can lag its acknowledgement by a moment, so a display
+    // still reading lit right after an applied request is not a reason to send
+    // another. The same hold covers a wake by input or by a presence miss.
+    const last = Math.max(this.offAppliedAt ?? 0, this.lastExternalWakeAt);
+    if (last > 0) due = Math.max(due, last + REPEAT_HOLD_MS);
+    return this.afterBackoff(due);
   }
 
   private offDue(
@@ -236,9 +344,13 @@ export class DisplayPowerController {
     state: RoomState,
     now: number,
     emptySince: number,
+    inputIdle: boolean | null,
   ): DisplayPowerInhibitReason | null {
     const { policy } = this.options;
     if (!policy.inhibitOnActivity) return null;
+    // Real keyboard or pointer input means a person is at the computer, however
+    // the presence sensor sees the room. Never capped.
+    if (inputIdle === false) return 'recent_input';
     if (now - emptySince >= policy.activeInhibitMaxMs) return null;
     const computer = state.computer.devices[this.options.deviceId];
     if (
@@ -247,39 +359,48 @@ export class DisplayPowerController {
       computer.freshness !== 'fresh'
     )
       return null;
-    if (computer.observed.idle === false) return 'recent_activity';
+    // Without input-only idle, "not idle" may be a video or an idle inhibitor.
+    if (inputIdle === null && computer.observed.idle === false)
+      return 'recent_activity';
     if (['gaming', 'video'].includes(computer.activity.classification))
       return 'video_or_game';
     return null;
   }
 
   /** Requests need a live, matching computer observation and display transport. */
-  private ready(state: RoomState): boolean {
-    const snapshot = this.options.transport.getSnapshot();
+  private ready(
+    state: RoomState,
+    snapshot: ReturnType<ComputerDisplayTransport['getSnapshot']>,
+    observation: ComputerDisplayState | null,
+  ): boolean {
     const computer = state.computer.devices[this.options.deviceId];
     return (
       !!snapshot?.fresh &&
-      snapshot.state.backend !== null &&
+      !!observation &&
+      observation.backend !== null &&
       !!computer &&
       computer.availability === 'online' &&
       computer.freshness === 'fresh' &&
-      computer.sessionId === snapshot.state.session_id
+      computer.sessionId === observation.session_id
     );
   }
 
-  private async send(action: 'off' | 'on'): Promise<void> {
+  private async send(action: 'off' | 'on', feedback: boolean): Promise<void> {
     this.sending = true;
     const epoch = this.epoch;
     let outcome: 'applied' | 'rejected' | 'uncertain' | 'failed' = 'failed';
+    let reason: string | null = null;
     try {
-      outcome = (await this.options.transport.sendCommand(action)).outcome;
+      const ack = await this.options.transport.sendCommand(action);
+      outcome = ack.outcome;
+      reason = ack.reason;
     } catch {
       outcome = 'failed';
     }
     this.sending = false;
     if (this.disposed) return;
     const now = this.options.clock.now();
-    this.lastRequest = { action, outcome, at: now };
+    this.lastRequest = { action, outcome, reason, at: now };
     if (action === 'off') this.lastOffAttemptAt = now;
     else {
       this.lastWakeAttemptAt = now;
@@ -288,9 +409,11 @@ export class DisplayPowerController {
     if (outcome === 'applied') {
       this.failures = 0;
       if (action === 'off') {
+        this.offAttempts = 0;
         if (epoch === this.epoch) {
           this.offRequested = true;
           this.offAppliedAt = now;
+          this.offApplications += 1;
         } else if (this.options.policy.wakeOnEntry) {
           // Someone came back while the request was in flight.
           this.wakeNeeded = true;
@@ -298,13 +421,20 @@ export class DisplayPowerController {
         }
       } else {
         this.wakeNeeded = false;
-        this.wakeVerifyAt = now + this.wakeVerifyMs();
+        // The agent confirmed the display state; only open-loop wakes need a check.
+        if (!feedback) this.wakeVerifyAt = now + this.wakeVerifyMs();
       }
     } else {
       this.failures += 1;
       this.lastFailureAt = now;
-      // An uncertain sleep request may still have landed.
-      if (action === 'off' && outcome === 'uncertain') {
+      if (action === 'off' && feedback) this.offAttempts += 1;
+      // An unconfirmed sleep request may still have landed, unless the agent
+      // watched and saw nothing happen.
+      if (
+        action === 'off' &&
+        outcome === 'uncertain' &&
+        reason !== 'not_observed'
+      ) {
         if (epoch === this.epoch) this.offRequested = true;
         else if (this.options.policy.wakeOnEntry) {
           this.wakeNeeded = true;
@@ -320,6 +450,9 @@ export class DisplayPowerController {
     this.offRequested = false;
     this.offAppliedAt = null;
     this.failures = 0;
+    this.offAttempts = 0;
+    this.offApplications = 0;
+    this.lastExternalWakeAt = 0;
     this.epoch += 1;
   }
 
@@ -342,6 +475,7 @@ export class DisplayPowerController {
     inhibited: DisplayPowerInhibitReason | null,
     ready: boolean,
     armAt: number | null,
+    observation: ComputerDisplayState | null,
   ): void {
     const snapshot: DisplayPowerSnapshot = {
       deviceId: this.options.deviceId,
@@ -349,6 +483,14 @@ export class DisplayPowerController {
       desired,
       inhibited,
       lastRequest: this.lastRequest,
+      observed: observation
+        ? {
+            power: observation.power,
+            inputIdle: observation.input_idle,
+            changedAt: observation.power_changed_at_ms,
+          }
+        : null,
+      problem: this.problem,
       nextAttemptAt: inhibited ? null : armAt,
       evidence: this.options.evidence?.() ?? null,
     };
@@ -357,6 +499,19 @@ export class DisplayPowerController {
     this.published = key;
     this.options.publish(snapshot);
   }
+}
+
+/** The agent's last request was a sleep that took effect (or may have). */
+function lastCommandWasOurSleep(
+  observation: ComputerDisplayState | null,
+): boolean {
+  const last = observation?.last_command;
+  return (
+    !!last &&
+    last.action === 'off' &&
+    (last.outcome === 'applied' ||
+      (last.outcome === 'uncertain' && last.reason !== 'not_observed'))
+  );
 }
 
 function minDue(current: number | null, next: number): number {

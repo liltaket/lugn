@@ -1,9 +1,78 @@
 use super::*;
 use serde_json::Value;
+use std::sync::Mutex;
 use std::{
     collections::BTreeSet,
     sync::atomic::{AtomicUsize, Ordering},
 };
+
+/// Tests without a kernel observer: only the exit status is known.
+fn spawn_with(context: Context, backend: Option<Backend>, executor: Option<Executor>) -> Runtime {
+    super::spawn_with(
+        context,
+        backend,
+        executor,
+        Arc::new(Reading::default),
+        watch::channel(None).1,
+        Duration::from_millis(300),
+    )
+}
+fn reading(power: Power) -> Reading {
+    let output = |power| OutputState {
+        connector: "DP-1".into(),
+        power,
+    };
+    match power {
+        Power::On | Power::Off => Reading {
+            power,
+            outputs: vec![output(power)],
+        },
+        _ => Reading {
+            power,
+            outputs: vec![],
+        },
+    }
+}
+/// A shared "kernel state" plus an observer over it.
+fn kernel(initial: Power) -> (Observer, Arc<Mutex<Reading>>) {
+    let shared = Arc::new(Mutex::new(reading(initial)));
+    let view = shared.clone();
+    (Arc::new(move || view.lock().unwrap().clone()), shared)
+}
+/// Exit 0, with the kernel state following `follow` after a short delay.
+fn following(shared: Arc<Mutex<Reading>>, follow: bool) -> Executor {
+    Arc::new(move |action| {
+        let shared = shared.clone();
+        Box::pin(async move {
+            if follow {
+                let target = if action == Action::Off {
+                    Power::Off
+                } else {
+                    Power::On
+                };
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    *shared.lock().unwrap() = reading(target);
+                });
+            }
+            Ok(())
+        })
+    })
+}
+fn observed_runtime(
+    observer: Observer,
+    executor: Executor,
+    input: watch::Receiver<Option<bool>>,
+) -> Runtime {
+    super::spawn_with(
+        context(),
+        Some(Backend::Kscreen),
+        Some(executor),
+        observer,
+        input,
+        Duration::from_millis(600),
+    )
+}
 
 const OFF: &str = include_str!("../protocol/display-command-off.example.json");
 const ON: &str = include_str!("../protocol/display-command-on.example.json");
@@ -91,6 +160,10 @@ fn fixtures_roundtrip_and_match_the_schemas() {
     let state: State = serde_json::from_str(STATE).unwrap();
     assert_eq!(serde_json::to_value(&state).unwrap(), expected);
     exact_fields(&expected, &state_schema);
+    exact_fields(
+        &expected["outputs"][0],
+        &state_schema["properties"]["outputs"]["items"],
+    );
     exact_fields(
         &expected["last_command"],
         &state_schema["properties"]["last_command"]["oneOf"][1],
@@ -315,4 +388,150 @@ async fn program_runner_maps_spawn_and_exit_failures() {
     );
     assert_eq!(run_program("true", &[]).await, Ok(()));
     assert_eq!(run_program("false", &[]).await, Err(Reason::Failed));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn applied_is_acknowledged_only_after_the_kernel_state_follows() {
+    let (observer, shared) = kernel(Power::On);
+    let mut runtime = observed_runtime(observer, following(shared, true), watch::channel(None).1);
+    assert_eq!(runtime.status.borrow().power, Power::On);
+    let ack = roundtrip(&mut runtime, delivery(fresh(Action::Off))).await;
+    assert_eq!(
+        (ack.outcome, ack.reason),
+        (Outcome::Applied, Reason::DisplayOff)
+    );
+    let status = runtime.status.borrow().clone();
+    assert_eq!(status.power, Power::Off);
+    assert_eq!(status.outputs, reading(Power::Off).outputs);
+    assert!(status.power_changed_at_ms.is_some());
+    // Waking checks the same way.
+    let ack = roundtrip(&mut runtime, delivery(fresh(Action::On))).await;
+    assert_eq!(
+        (ack.outcome, ack.reason),
+        (Outcome::Applied, Reason::DisplayOn)
+    );
+    assert_eq!(runtime.status.borrow().power, Power::On);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_exit_zero_that_changes_nothing_is_not_applied() {
+    // This is exactly what happened live: the command exited 0 while the
+    // display stayed lit.
+    let (observer, shared) = kernel(Power::On);
+    let mut runtime = observed_runtime(observer, following(shared, false), watch::channel(None).1);
+    let ack = roundtrip(&mut runtime, delivery(fresh(Action::Off))).await;
+    assert_eq!(
+        (ack.outcome, ack.reason),
+        (Outcome::Uncertain, Reason::NotObserved)
+    );
+    let last = runtime.status.borrow().last_command.clone().unwrap();
+    assert_eq!(last.outcome, Outcome::Uncertain);
+    assert_eq!(runtime.status.borrow().power, Power::On);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn no_connected_output_is_rejected_without_waiting() {
+    let (observer, shared) = kernel(Power::Absent);
+    let mut runtime = observed_runtime(observer, following(shared, false), watch::channel(None).1);
+    let started = Instant::now();
+    let ack = roundtrip(&mut runtime, delivery(fresh(Action::On))).await;
+    assert_eq!(
+        (ack.outcome, ack.reason),
+        (Outcome::Rejected, Reason::NoOutput)
+    );
+    assert!(started.elapsed() < Duration::from_millis(400));
+    assert_eq!(runtime.status.borrow().power, Power::Absent);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_request_for_the_state_already_reached_is_applied_at_once() {
+    let (observer, shared) = kernel(Power::Off);
+    let mut runtime = observed_runtime(observer, following(shared, false), watch::channel(None).1);
+    let ack = roundtrip(&mut runtime, delivery(fresh(Action::Off))).await;
+    assert_eq!(
+        (ack.outcome, ack.reason),
+        (Outcome::Applied, Reason::DisplayOff)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn unreadable_kernel_state_falls_back_to_the_exit_status() {
+    let (observer, shared) = kernel(Power::Unknown);
+    let mut runtime = observed_runtime(observer, following(shared, false), watch::channel(None).1);
+    let ack = roundtrip(&mut runtime, delivery(fresh(Action::Off))).await;
+    assert_eq!(
+        (ack.outcome, ack.reason),
+        (Outcome::Applied, Reason::DisplayOff)
+    );
+    assert_eq!(runtime.status.borrow().power, Power::Unknown);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn input_idle_and_external_power_changes_reach_the_status() {
+    let (observer, shared) = kernel(Power::On);
+    let (input_tx, input_rx) = watch::channel(None);
+    let mut runtime =
+        observed_runtime(observer.clone(), following(shared.clone(), false), input_rx);
+    assert_eq!(runtime.status.borrow().input_idle, None);
+    input_tx.send(Some(true)).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), runtime.status.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(runtime.status.borrow().input_idle, Some(true));
+    // The periodic sampler publishes a change nobody asked for (a wake by input).
+    let actor = Actor {
+        observer,
+        verify_window: Duration::from_millis(10),
+    };
+    let (status_tx, status_rx) = watch::channel(Status::default());
+    actor.observe(&status_tx);
+    assert_eq!(status_rx.borrow().power, Power::On);
+    *shared.lock().unwrap() = reading(Power::Off);
+    actor.observe(&status_tx);
+    let status = status_rx.borrow().clone();
+    assert_eq!(status.power, Power::Off);
+    assert!(status.power_changed_at_ms.is_some());
+}
+
+fn connector(root: &Path, name: &str, status: &str, dpms: Option<&str>) {
+    let dir = root.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("status"), format!("{status}\n")).unwrap();
+    match dpms {
+        Some(dpms) => std::fs::write(dir.join("dpms"), format!("{dpms}\n")).unwrap(),
+        None => {
+            let _ = std::fs::remove_file(dir.join("dpms"));
+        }
+    }
+}
+
+#[test]
+fn drm_reading_aggregates_connected_connectors_only() {
+    let root = tempfile::tempdir().unwrap();
+    // Missing root: the kernel state is unknowable.
+    assert_eq!(read_drm(&root.path().join("nope")).power, Power::Unknown);
+    // Only unconnected connectors: the monitor has dropped off the bus.
+    connector(root.path(), "card1-DP-2", "disconnected", Some("Off"));
+    connector(root.path(), "card1-Writeback-1", "connected", Some("On"));
+    std::fs::create_dir_all(root.path().join("version")).unwrap();
+    assert_eq!(read_drm(root.path()).power, Power::Absent);
+    connector(root.path(), "card1-DP-1", "connected", Some("On"));
+    let reading = read_drm(root.path());
+    assert_eq!(reading.power, Power::On);
+    assert_eq!(
+        reading.outputs,
+        vec![OutputState {
+            connector: "DP-1".into(),
+            power: Power::On
+        }]
+    );
+    connector(root.path(), "card1-DP-1", "connected", Some("Off"));
+    assert_eq!(read_drm(root.path()).power, Power::Off);
+    connector(root.path(), "card1-DP-1", "connected", Some("Standby"));
+    assert_eq!(read_drm(root.path()).power, Power::Off);
+    connector(root.path(), "card1-HDMI-A-1", "connected", Some("On"));
+    assert_eq!(read_drm(root.path()).power, Power::Partial);
+    connector(root.path(), "card1-DP-1", "connected", None);
+    assert_eq!(read_drm(root.path()).power, Power::Unknown);
 }

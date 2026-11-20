@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ComputerDisplayAck,
+  ComputerDisplayState,
   ComputerDisplayTransport,
 } from '../src/adapters/computer-display-mqtt.js';
 import {
@@ -46,21 +47,54 @@ function harness(
     fresh: true,
     backend: 'kscreen' as 'kscreen' | null,
     outcome: 'applied' as ComputerDisplayAck['outcome'],
+    reason: null as ComputerDisplayAck['reason'] | null,
     reject: false,
     hold: undefined as Promise<void> | undefined,
     sent: [] as Array<'on' | 'off'>,
+    /** Agent-reported GPU display state; `unknown` means no feedback. */
+    power: 'unknown' as ComputerDisplayState['power'],
+    inputIdle: null as boolean | null,
+    lastCommand: null as ComputerDisplayState['last_command'],
+    changedAt: null as number | null,
+    /** The agent's state only catches up with an acknowledged command later. */
+    lag: false,
     getSnapshot() {
       return {
         fresh: transport.fresh,
         receivedAtMs: 0,
-        state: { session_id: SESSION, backend: transport.backend },
+        state: {
+          session_id: SESSION,
+          backend: transport.backend,
+          power: transport.power,
+          outputs: [],
+          power_changed_at_ms: transport.changedAt,
+          input_idle: transport.inputIdle,
+          last_command: transport.lastCommand,
+        },
       };
     },
     sendCommand: vi.fn(async (action: 'on' | 'off') => {
       transport.sent.push(action);
       if (transport.hold) await transport.hold;
       if (transport.reject) throw new Error('no ack');
-      return { outcome: transport.outcome } as ComputerDisplayAck;
+      if (
+        transport.outcome === 'applied' &&
+        transport.power !== 'unknown' &&
+        !transport.lag
+      )
+        transport.power = action === 'off' ? 'off' : 'on';
+      transport.lastCommand = {
+        command_id: '77777777-7777-4777-8777-777777777777',
+        action,
+        outcome: transport.outcome,
+        reason: transport.reason ?? 'display_off',
+        timestamp_ms: 0,
+      };
+      return {
+        outcome: transport.outcome,
+        reason:
+          transport.reason ?? (action === 'off' ? 'display_off' : 'display_on'),
+      } as ComputerDisplayAck;
     }),
   };
   let evidence: DisplayPowerEvidence | undefined;
@@ -408,6 +442,226 @@ describe('DisplayPowerController', () => {
       await h.set({ presence: 'occupied' });
       await h.advance(60 * MINUTE);
       expect(h.transport.sent).toEqual([]);
+    });
+  });
+
+  describe('with agent display feedback', () => {
+    beforeEach(() => {
+      h.transport.power = 'on';
+      h.transport.inputIdle = true;
+    });
+
+    it('sleeps once while the display is observed on and never repeats blindly', async () => {
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      expect(h.published.at(-1)).toMatchObject({
+        observed: { power: 'off', inputIdle: true },
+        lastRequest: { action: 'off', outcome: 'applied' },
+      });
+      await h.advance(6 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('sends nothing when the display is already dark or not on the bus', async () => {
+      h.transport.power = 'off';
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(10 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      h.transport.power = 'none';
+      h.controller.observe();
+      await h.advance(10 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+    });
+
+    it('treats a partially lit multi-monitor setup as lit', async () => {
+      h.transport.power = 'partial';
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('never sleeps while real input is recent, however long the room reads empty', async () => {
+      h = harness({ activeInhibitMaxMs: 30 * MINUTE });
+      h.transport.power = 'on';
+      h.transport.inputIdle = false;
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(3 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      expect(h.published.at(-1)).toMatchObject({ inhibited: 'recent_input' });
+      // The user stops typing: sleep follows at once, the wait having passed.
+      h.transport.inputIdle = true;
+      h.controller.observe();
+      await flush();
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('is not fooled by an idle inhibitor: no recent input means sleep', async () => {
+      // The compositor-level idle is false (a video or an agent holds an
+      // inhibitor) but nobody has touched the keyboard.
+      await h.set({ presence: 'confirmed_empty', idle: false });
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('still holds sleep for a game or video, but only for the configured window', async () => {
+      h = harness({ activeInhibitMaxMs: 30 * MINUTE });
+      h.transport.power = 'on';
+      h.transport.inputIdle = true;
+      await h.set({ presence: 'confirmed_empty', activity: 'video' });
+      await h.advance(29 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      await h.advance(MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('retries a request that exited fine but changed nothing, then gives up', async () => {
+      h.transport.outcome = 'uncertain';
+      h.transport.reason = 'not_observed';
+      h.transport.power = 'on';
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      await h.advance(29_999);
+      expect(h.transport.sent).toHaveLength(1);
+      await h.advance(1);
+      expect(h.transport.sent).toHaveLength(2);
+      await h.advance(MINUTE);
+      expect(h.transport.sent).toHaveLength(3);
+      // Three unconfirmed attempts: stop and say so, instead of looping.
+      await h.advance(6 * 60 * MINUTE);
+      expect(h.transport.sent).toHaveLength(3);
+      expect(h.published.at(-1)).toMatchObject({ problem: 'off_failed' });
+    });
+
+    it('does not fight a display that wakes by itself, and gives up if it keeps doing so', async () => {
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      h.transport.power = 'on'; // a bump or a presence miss
+      h.controller.observe();
+      await h.advance(9 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      await h.advance(MINUTE + 1);
+      expect(h.transport.sent).toEqual(['off', 'off']);
+      for (let i = 0; i < 2; i++) {
+        h.transport.power = 'on';
+        h.controller.observe();
+        await h.advance(10 * MINUTE + 1);
+      }
+      expect(h.transport.sent).toHaveLength(4);
+      h.transport.power = 'on';
+      h.controller.observe();
+      await h.advance(60 * MINUTE);
+      expect(h.transport.sent).toHaveLength(4);
+      expect(h.published.at(-1)).toMatchObject({ problem: 'keeps_waking' });
+    });
+
+    it('does not resend while the agent’s state still lags an acknowledged sleep', async () => {
+      // Acknowledged, but the next state the controller sees still reads lit.
+      h.transport.lag = true;
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      await h.advance(9 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+      // The state catches up: dark, so nothing is ever sent again.
+      h.transport.power = 'off';
+      h.controller.observe();
+      await h.advance(6 * 60 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('resends once after the hold if the display really is lit again, at most four times', async () => {
+      h.transport.lag = true;
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      for (let i = 0; i < 40; i++) await h.advance(MINUTE);
+      expect(h.transport.sent.filter((a) => a === 'off')).toHaveLength(4);
+      expect(h.published.at(-1)).toMatchObject({ problem: 'keeps_waking' });
+    });
+
+    it('wakes once on return, only for a display observed off after Lugn put it to sleep', async () => {
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      await h.set({ presence: 'occupied' });
+      expect(h.transport.sent).toEqual(['off', 'on']);
+      await h.advance(60 * MINUTE);
+      expect(h.transport.sent).toEqual(['off', 'on']);
+    });
+
+    it('does not wake a display that is already lit', async () => {
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      h.transport.power = 'on';
+      await h.set({ presence: 'occupied' });
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
+    it('reports an unavailable wake when no monitor is on the bus', async () => {
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      h.transport.power = 'none';
+      await h.set({ presence: 'occupied' });
+      expect(h.transport.sent).toEqual(['off']);
+      expect(h.published.at(-1)).toMatchObject({ problem: 'wake_unavailable' });
+    });
+
+    it('retries a wake that changed nothing at most three times', async () => {
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      h.transport.outcome = 'uncertain';
+      h.transport.reason = 'not_observed';
+      await h.set({ presence: 'occupied' });
+      // Step through time so each acknowledgement is processed in between.
+      for (let i = 0; i < 12; i++) await h.advance(MINUTE);
+      expect(h.transport.sent.filter((a) => a === 'on')).toHaveLength(3);
+      expect(h.published.at(-1)).toMatchObject({ problem: 'wake_failed' });
+    });
+
+    it('wakes after a restart of Lugn from the agent’s record of its own sleep', async () => {
+      h.transport.power = 'off';
+      h.transport.lastCommand = {
+        command_id: '77777777-7777-4777-8777-777777777777',
+        action: 'off',
+        outcome: 'applied',
+        reason: 'display_off',
+        timestamp_ms: 0,
+      };
+      await h.set({ presence: 'occupied' });
+      expect(h.transport.sent).toEqual(['on']);
+
+      // A display that went dark for another reason is left alone.
+      h = harness();
+      h.transport.power = 'off';
+      h.transport.inputIdle = true;
+      await h.set({ presence: 'occupied' });
+      await h.advance(10 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+    });
+
+    it('wakes after a restart of Lugn that happened while the room was empty', async () => {
+      h.transport.power = 'off';
+      h.transport.lastCommand = {
+        command_id: '77777777-7777-4777-8777-777777777777',
+        action: 'off',
+        outcome: 'applied',
+        reason: 'display_off',
+        timestamp_ms: 0,
+      };
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(10 * MINUTE);
+      expect(h.transport.sent).toEqual([]);
+      await h.set({ presence: 'occupied' });
+      expect(h.transport.sent).toEqual(['on']);
+    });
+
+    it('never wakes in quiet hours', async () => {
+      await h.set({ presence: 'confirmed_empty' });
+      await h.advance(2 * MINUTE);
+      h.setQuiet(true);
+      await h.set({ presence: 'occupied' });
+      expect(h.transport.sent).toEqual(['off']);
     });
   });
 

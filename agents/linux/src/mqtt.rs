@@ -215,6 +215,7 @@ async fn publish_display(
         *sequence <= 9_007_199_254_740_991,
         "display sequence exhausted"
     );
+    let current = status.borrow_and_update().clone();
     let state = display::State {
         schema_version: 1,
         device_id: context.device_id.clone(),
@@ -224,7 +225,11 @@ async fn publish_display(
         timestamp_ms: control::now_ms(),
         heartbeat_interval_ms: c.heartbeat_secs * 1000,
         backend,
-        last_command: status.borrow_and_update().last_command.clone(),
+        power: current.power,
+        outputs: current.outputs,
+        power_changed_at_ms: current.power_changed_at_ms,
+        input_idle: current.input_idle,
+        last_command: current.last_command,
     };
     b.publish(c.topic("display/state"), serde_json::to_vec(&state)?, true)
         .await
@@ -266,6 +271,7 @@ async fn connected(
     c: &Config,
     session: &str,
     states: &mut watch::Receiver<Observations>,
+    input_idle: &watch::Receiver<Option<bool>>,
     sequence: &mut u64,
     connected_once: &mut bool,
 ) -> Result<()> {
@@ -309,7 +315,7 @@ async fn connected(
                 "Display control has no backend (no WAYLAND_DISPLAY or DISPLAY); requests will be rejected"
             );
         }
-        let runtime = display::spawn(context.clone(), backend);
+        let runtime = display::spawn(context.clone(), backend, input_idle.clone());
         b.display_commands = Some(runtime.commands.clone());
         if b.control_clock.is_none() {
             b.control_clock = Some((control::now_ms(), std::time::Instant::now()));
@@ -434,7 +440,15 @@ async fn connected(
     // Runtime Drop aborts the dedicated actor, dropping every lease and cache
     // before a reconnect. A D-Bus method already sent cannot be retracted.
 }
-pub async fn run(c: Config, mut states: watch::Receiver<Observations>) -> Result<()> {
+#[cfg(test)]
+pub async fn run(c: Config, states: watch::Receiver<Observations>) -> Result<()> {
+    run_with(c, states, watch::channel(None).1).await
+}
+pub async fn run_with(
+    c: Config,
+    mut states: watch::Receiver<Observations>,
+    input_idle: watch::Receiver<Option<bool>>,
+) -> Result<()> {
     let session = uuid::Uuid::new_v4().to_string();
     let mut sequence = 0;
     let mut connected_once = false;
@@ -448,7 +462,7 @@ pub async fn run(c: Config, mut states: watch::Receiver<Observations>) -> Result
         let mut broker = Broker::new(&c, &session)?;
         let start = tokio::time::Instant::now();
         tokio::select! {
-            result = connected(&mut broker, &c, &session, &mut states, &mut sequence, &mut connected_once) => {
+            result = connected(&mut broker, &c, &session, &mut states, &input_idle, &mut sequence, &mut connected_once) => {
                 // Avoid dumping options or credentials in errors.
                 if result.is_err() { eprintln!("MQTT connection lost/unavailable; retrying"); }
             }

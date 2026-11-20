@@ -21,6 +21,7 @@ export const unknownDisplayPowerEvidence = (): DisplayPowerEvidence => ({
 });
 
 export const DisplayPowerInhibitReasonSchema = z.enum([
+  'recent_input',
   'recent_activity',
   'video_or_game',
 ]);
@@ -42,9 +43,24 @@ export const DisplayPowerSnapshotSchema = z.object({
     .object({
       action: z.enum(['on', 'off']),
       outcome: z.enum(['applied', 'rejected', 'uncertain', 'failed']),
+      reason: z.string().max(64).nullable().optional(),
       at: z.number().nonnegative(),
     })
     .nullable(),
+  /** What the agent reports about the picture signal; absent without feedback. */
+  observed: z
+    .object({
+      power: z.enum(['on', 'off', 'partial', 'none', 'unknown']),
+      inputIdle: z.boolean().nullable(),
+      changedAt: z.number().nonnegative().nullable(),
+    })
+    .nullable()
+    .optional(),
+  /** Why Lugn stopped trying until the room is occupied and empty again. */
+  problem: z
+    .enum(['off_failed', 'keeps_waking', 'wake_failed', 'wake_unavailable'])
+    .nullable()
+    .optional(),
   nextAttemptAt: z.number().nonnegative().nullable(),
   evidence: DisplayPowerEvidenceSchema.nullable(),
 });

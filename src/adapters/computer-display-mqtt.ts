@@ -27,6 +27,8 @@ const Reason = z.enum([
   'unavailable',
   'timeout',
   'failed',
+  'not_observed',
+  'no_output',
 ]);
 export const ComputerDisplayStateSchema = z.strictObject({
   ...Identity,
@@ -34,6 +36,19 @@ export const ComputerDisplayStateSchema = z.strictObject({
   timestamp_ms: Integer,
   heartbeat_interval_ms: Integer.min(5_000).max(300_000),
   backend: z.enum(['kscreen', 'xset']).nullable(),
+  /** The GPU's picture-signal state across connected outputs. */
+  power: z.enum(['on', 'off', 'partial', 'none', 'unknown']),
+  outputs: z
+    .array(
+      z.strictObject({
+        connector: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+        power: z.enum(['on', 'off', 'unknown']),
+      }),
+    )
+    .max(16),
+  power_changed_at_ms: Integer.nullable(),
+  /** No real keyboard/pointer input recently, ignoring idle inhibitors. */
+  input_idle: z.boolean().nullable(),
   last_command: z
     .strictObject({
       command_id: UUID,

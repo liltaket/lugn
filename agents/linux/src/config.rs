@@ -31,6 +31,8 @@ pub struct Config {
     pub display_control_enabled: bool,
     #[serde(default)]
     pub display_backend: crate::display::BackendSetting,
+    #[serde(default = "display_input_idle")]
+    pub display_input_idle_secs: u32,
     #[serde(default)]
     pub video_app_ids: Vec<String>,
     #[serde(default)]
@@ -47,6 +49,9 @@ fn heartbeat() -> u64 {
 }
 fn idle() -> u32 {
     300
+}
+fn display_input_idle() -> u32 {
+    120
 }
 impl Config {
     pub fn load(path: &std::path::Path) -> Result<Self> {
@@ -91,6 +96,10 @@ impl Config {
         ensure!(
             (1..=86400).contains(&self.idle_secs),
             "idle_secs must be 1–86400"
+        );
+        ensure!(
+            (10..=3600).contains(&self.display_input_idle_secs),
+            "display_input_idle_secs must be 10–3600"
         );
         ensure!(
             self.mqtt_username.is_some() || self.mqtt_password.is_none(),

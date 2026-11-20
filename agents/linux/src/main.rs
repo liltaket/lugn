@@ -22,7 +22,14 @@ async fn main() -> Result<()> {
     let config = config::Config::load(std::path::Path::new(&path))?;
     let (tx, mut rx) = mpsc::channel(64);
     let (latest, states) = watch::channel(state::Observations::default());
-    idle::spawn(tx.clone(), config.idle_secs);
+    let (input_idle_tx, input_idle) = watch::channel(None);
+    idle::spawn(
+        tx.clone(),
+        config.idle_secs,
+        config
+            .display_control_enabled
+            .then_some((input_idle_tx, config.display_input_idle_secs)),
+    );
     tokio::spawn(audio::run(tx.clone()));
     tokio::spawn(dbus::session(tx.clone(), config.collect_artwork));
     tokio::spawn(dbus::network(tx.clone()));
@@ -35,7 +42,7 @@ async fn main() -> Result<()> {
             }
         }
     });
-    let result = mqtt::run(config, states).await;
+    let result = mqtt::run_with(config, states, input_idle).await;
     kwin::cleanup().await;
     result
 }

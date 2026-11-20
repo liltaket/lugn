@@ -34,3 +34,6 @@ collect_artwork = false
 # "kscreen" or "xset". Requires MQTT username/password and broker ACLs.
 display_control_enabled = false
 display_backend = "auto"
+# Idle time (seconds, 10-3600) after which `input_idle` becomes true. It follows
+# keyboard/pointer input only and ignores idle inhibitors such as video players.
+display_input_idle_secs = 120

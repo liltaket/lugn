@@ -4,9 +4,18 @@
   "session_id": "11111111-1111-4111-8111-111111111111",
   "connection_id": "22222222-2222-4222-8222-222222222222",
   "sequence": 3,
-  "timestamp_ms": 1770000000500,
+  "timestamp_ms": 1770000001500,
   "heartbeat_interval_ms": 30000,
   "backend": "kscreen",
+  "power": "off",
+  "outputs": [
+    {
+      "connector": "DP-1",
+      "power": "off"
+    }
+  ],
+  "power_changed_at_ms": 1770000000300,
+  "input_idle": true,
   "last_command": {
     "command_id": "77777777-7777-4777-8777-777777777777",
     "action": "off",

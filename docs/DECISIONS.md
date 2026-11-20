@@ -140,7 +140,7 @@ Do not design core behavior around it until tested.
 
 A power-monitoring smart plug is a promising way to infer active vs standby, but thresholds and transients must be measured.
 
-Implemented as read-only evidence for display sleep/wake (`mqtt.computers[].display.powerSensor`): it shortens or lengthens repeats and verifies a wake, never starts an action, and its thresholds are placeholders until measured.
+Display sleep/wake now uses the kernel's per-connector DPMS state, reported by the Linux agent, as feedback, so a plug is not needed there. A metering plug remains an optional, read-only evidence source (`mqtt.computers[].display.powerSensor`) for the open-loop fallback; its thresholds are placeholders until measured.
 
 ### Exact technical stack
 
