@@ -2432,7 +2432,9 @@ h2 {
 }
 /* Camera appears automatically even when music/routines are open. */
 .screen[data-camera-visible='true'] .context-strip,
-.screen[data-camera-visible='true'] .bedtime-dock {
+.screen[data-camera-visible='true'] .bedtime-dock,
+.screen[data-stacked='true'] .context-strip,
+.screen[data-stacked='true'] .bedtime-dock {
   display: none;
 }
 .screen .context-panel,
@@ -3392,7 +3394,7 @@ h2 {
 }
 #app-root .music-section .music-feature,
 #app-root[data-feedback='true'] .music-section .music-feature,
-#app-root[data-camera-visible='true'] .music-section .music-feature {
+#app-root[data-stacked='true'] .music-section .music-feature {
   display: block;
   position: absolute;
   left: var(--rx);
@@ -3441,10 +3443,10 @@ h2 {
   -webkit-mask-image: linear-gradient(to bottom, #000 74%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 74%, transparent 100%);
 }
-#app-root[data-camera-visible='true'] .music-section .music-artwork::before {
+#app-root[data-stacked='true'] .music-section .music-artwork::before {
   display: none;
 }
-#app-root[data-camera-visible='true'] .music-section .music-artwork img {
+#app-root[data-stacked='true'] .music-section .music-artwork img {
   height: 100%;
   object-fit: cover;
   -webkit-mask-image: none;
@@ -3880,12 +3882,12 @@ h2 {
   display: none;
 }
 /* Music becomes a compact card under the camera; pause and authority stay. */
-#app-root[data-camera-visible='true'] .music-section .music-feature {
+#app-root[data-stacked='true'] .music-section .music-feature {
   top: 302px;
   height: 278px;
   background: rgba(238, 241, 232, 0.05);
 }
-#app-root[data-camera-visible='true'] .music-section .music-artwork {
+#app-root[data-stacked='true'] .music-section .music-artwork {
   left: 14px;
   top: 14px;
   width: 72px;
@@ -3893,25 +3895,25 @@ h2 {
   border-radius: 16px;
   overflow: hidden;
 }
-#app-root[data-camera-visible='true'] .music-feature::after {
+#app-root[data-stacked='true'] .music-feature::after {
   display: none;
 }
-#app-root[data-camera-visible='true'] .music-section .music-now-playing {
+#app-root[data-stacked='true'] .music-section .music-now-playing {
   display: flex;
   left: 100px;
   top: 22px;
   bottom: auto;
   width: calc(100% - 180px);
 }
-#app-root[data-camera-visible='true'] .music-section .music-now-playing strong {
+#app-root[data-stacked='true'] .music-section .music-now-playing strong {
   font-size: 20px;
   line-height: 24px;
   -webkit-line-clamp: 1;
 }
-#app-root[data-camera-visible='true'] .music-section .music-now-playing span {
+#app-root[data-stacked='true'] .music-section .music-now-playing span {
   font-size: 14px;
 }
-#app-root[data-camera-visible='true'] .music-section .music-volume-policy {
+#app-root[data-stacked='true'] .music-section .music-volume-policy {
   display: block;
   top: 404px;
   height: 66px;
@@ -3919,32 +3921,32 @@ h2 {
   background: none;
   box-shadow: none;
 }
-#app-root[data-camera-visible='true'] .music-section .music-transport {
+#app-root[data-stacked='true'] .music-section .music-transport {
   display: contents;
 }
-#app-root[data-camera-visible='true'] .play-button {
+#app-root[data-stacked='true'] .play-button {
   left: calc(var(--rx) + var(--rw) - 14px - 58px);
   top: 316px;
   width: 58px;
   height: 58px;
 }
-#app-root[data-camera-visible='true'] .volume-control {
+#app-root[data-stacked='true'] .volume-control {
   top: 476px;
 }
-#app-root[data-camera-visible='true'] .music-presets {
+#app-root[data-stacked='true'] .music-presets {
   left: calc(var(--rx) + 14px);
   top: 522px;
   width: calc(var(--rw) - 28px);
   height: 44px;
 }
-#app-root[data-camera-visible='true'] .music-preset-button {
+#app-root[data-stacked='true'] .music-preset-button {
   flex: 1;
 }
-#app-root[data-camera-visible='true'][data-music-visible='false']
+#app-root[data-stacked='true'][data-music-visible='false']
   .music-feature::before {
   display: none;
 }
-#app-root[data-camera-visible='true'][data-music-visible='false']
+#app-root[data-stacked='true'][data-music-visible='false']
   .music-section
   .music-now-playing {
   left: 20px;
@@ -3953,14 +3955,13 @@ h2 {
   text-align: left;
   align-items: flex-start;
 }
-#app-root[data-camera-visible='true'][data-music-visible='false']
-  .music-presets {
+#app-root[data-stacked='true'][data-music-visible='false'] .music-presets {
   top: 384px;
   height: 182px;
   grid-template-rows: none;
   grid-template-columns: 1fr 1fr;
 }
-#app-root[data-camera-visible='true'][data-music-visible='false']
+#app-root[data-stacked='true'][data-music-visible='false']
   .music-preset-button {
   flex-direction: column;
   justify-content: center;
@@ -3971,7 +3972,7 @@ h2 {
   font-size: 16px;
   text-align: center;
 }
-#app-root[data-camera-visible='true'][data-music-visible='false']
+#app-root[data-stacked='true'][data-music-visible='false']
   .music-preset-button::before {
   width: 60px;
   height: 60px;
@@ -4213,7 +4214,7 @@ body {
   flex: 1 1 0;
 }
 #app-root[data-music-visible='false'] .music-presets::before,
-#app-root[data-camera-visible='true'][data-music-visible='false']
+#app-root[data-stacked='true'][data-music-visible='false']
   .music-presets::before {
   display: none;
 }
@@ -4501,27 +4502,24 @@ body {
   bottom: 176px;
 }
 /* With a camera open the compact card offers the other source the same way. */
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .music-presets {
+#app-root[data-stacked='true'][data-music-visible='true'] .music-presets {
   right: auto;
   left: calc(var(--rx) + 14px);
   top: 522px;
   height: 44px;
   width: calc(var(--rw) - 28px);
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .music-preset-button {
+#app-root[data-stacked='true'][data-music-visible='true'] .music-preset-button {
   flex: 1;
   justify-content: center;
   height: 44px;
   border-radius: 22px;
   font-size: 14px;
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .volume-control {
+#app-root[data-stacked='true'][data-music-visible='true'] .volume-control {
   width: calc(var(--rw) - 48px);
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
+#app-root[data-stacked='true'][data-music-visible='true']
   .music-section
   .music-now-playing {
   top: 22px;
@@ -4575,28 +4573,25 @@ body {
 }
 /* Compact card under a camera (y 302–580): artwork 316–388, selector 403–463,
    volume bar centered between selector and the source row 522–566. */
-#app-root[data-camera-visible='true'] .music-section .music-volume-policy {
+#app-root[data-stacked='true'] .music-section .music-volume-policy {
   top: 400px;
 }
-#app-root[data-camera-visible='true'] .play-button {
+#app-root[data-stacked='true'] .play-button {
   top: 323px;
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .volume-control,
-#app-root[data-camera-visible='true'] .volume-control {
+#app-root[data-stacked='true'][data-music-visible='true'] .volume-control,
+#app-root[data-stacked='true'] .volume-control {
   left: calc(var(--rx) + 22px);
   top: 491px;
   width: calc(var(--rw) - 44px);
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .music-presets {
+#app-root[data-stacked='true'][data-music-visible='true'] .music-presets {
   right: auto;
   left: calc(var(--rx) + 14px);
   top: 522px;
   width: calc(var(--rw) - 28px);
 }
-#app-root[data-camera-visible='true'][data-music-visible='true']
-  .music-preset-button {
+#app-root[data-stacked='true'][data-music-visible='true'] .music-preset-button {
   width: auto;
 }
 #app-root .clock-date {
@@ -4790,7 +4785,7 @@ body {
   -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
 }
-#app-root[data-camera-visible='true'] .music-artwork[data-aspect] img {
+#app-root[data-stacked='true'] .music-artwork[data-aspect] img {
   aspect-ratio: auto;
   height: 100%;
   -webkit-mask-image: none;
@@ -4926,4 +4921,327 @@ button[data-pointer-pressed]:not(:disabled) {
 }
 #app-root .play-button[data-pointer-pressed]:not(:disabled) {
   transform: scale(0.92);
+}
+
+/* ── 3D print live activity, 2026-11-20 ──
+   The print takes the top card of the right column (y 20–288), the music card
+   stays under it (y 302–580). A camera borrows the top card: the print then
+   shares the lower card with music, and a chip on the camera swaps them.
+   Card rows: plate + name/title (14–118), percent · time · lamp (136–184),
+   progress (206–216), layer line (230–248). Flat like the music card: the
+   status color lives in the bar, and in the words only when a print needs
+   you (paused, failed). The model
+   sits on a pale plate so a black filament render still reads. */
+#app-root .print-activity {
+  --print-ink: #9fdca6;
+  --print-bar: #7cc98a;
+  --print-tint: rgba(124, 201, 138, 0.06);
+  --print-plate: #dfe7db;
+  --print-plate-lit: #efe6cc;
+  --print-lamp: #efd79b;
+  --print-lamp-ink: #33290f;
+  position: absolute;
+  left: var(--rx);
+  top: 20px;
+  width: var(--rw);
+  height: 268px;
+  border-radius: 30px;
+  overflow: hidden;
+  z-index: 3;
+  color: var(--ink);
+  background:
+    linear-gradient(var(--print-tint), var(--print-tint)), var(--panel);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  animation: redesign-cam-in 0.5s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+#app-root .print-activity[hidden] {
+  display: none;
+}
+#app-root[data-print-slot='lower'] .print-activity {
+  top: 302px;
+  height: 278px;
+}
+#app-root .print-activity[data-status='paused'] {
+  --print-ink: #e7bc78;
+  --print-bar: #d9a95c;
+  --print-tint: rgba(231, 188, 120, 0.06);
+}
+#app-root .print-activity[data-status='failed'] {
+  --print-ink: #ee9a86;
+  --print-bar: #d8735c;
+  --print-tint: rgba(238, 154, 134, 0.06);
+}
+
+#app-root .print-plate {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  width: 104px;
+  height: 104px;
+  border-radius: 22px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: rgba(24, 32, 31, 0.45);
+  background: var(--print-plate);
+  transition: background-color 0.4s ease;
+}
+/* The chamber light only warms the plate the model stands on. */
+#app-root .print-activity[data-lamp='on'] .print-plate {
+  background: var(--print-plate-lit);
+}
+#app-root[data-time='night'] .print-plate {
+  filter: brightness(0.72);
+}
+#app-root .print-plate img {
+  position: absolute;
+  inset: 8px;
+  width: calc(100% - 16px);
+  height: calc(100% - 16px);
+  object-fit: contain;
+}
+#app-root .print-activity[data-image='ready'] .print-fallback {
+  display: none;
+}
+
+#app-root .print-copy {
+  position: absolute;
+  left: 134px;
+  right: 18px;
+  top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#app-root .print-kicker {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+#app-root #print-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 18px;
+  line-height: 23px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+/* Percent, time left and the lamp share one row, well clear of the bar. */
+#app-root .print-figures {
+  position: absolute;
+  left: 20px;
+  right: 76px;
+  top: 136px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+#app-root #print-percent {
+  flex: none;
+  font-size: 44px;
+  line-height: 48px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+#app-root .print-when {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+#app-root #print-time,
+#app-root #print-eta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#app-root #print-time {
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--ink);
+}
+#app-root #print-eta {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-3);
+}
+/* Only a print that needs you colors its words. */
+#app-root .print-activity[data-status='paused'] #print-eta,
+#app-root .print-activity[data-status='failed'] #print-eta {
+  color: var(--print-ink);
+}
+#app-root .print-progress {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 206px;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--glass-2);
+}
+#app-root .print-progress::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--print-progress, 0%);
+  min-width: 10px;
+  border-radius: inherit;
+  background: var(--print-bar);
+  transition: width 1.2s ease;
+}
+#app-root .print-detail {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 230px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+#app-root[data-print-slot='lower'] .print-figures {
+  top: 140px;
+}
+#app-root[data-print-slot='lower'] .print-light {
+  top: 142px;
+}
+#app-root[data-print-slot='lower'] .print-progress {
+  top: 212px;
+}
+#app-root[data-print-slot='lower'] .print-detail {
+  top: 238px;
+}
+
+/* Chamber light: a round icon button at the end of the percent row; lit, it
+   fills warm. A slow fade says Home Assistant has not confirmed the tap. */
+#app-root .print-light {
+  position: absolute;
+  right: 16px;
+  top: 138px;
+  width: 44px;
+  height: 44px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: var(--ink-2);
+  background: var(--glass-2);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease,
+    box-shadow 0.3s ease;
+}
+#app-root .print-light[hidden] {
+  display: none;
+}
+#app-root .print-light svg {
+  width: 22px;
+  height: 22px;
+}
+#app-root .print-light[aria-pressed='true'] {
+  color: var(--print-lamp-ink);
+  background: var(--print-lamp);
+  box-shadow: none;
+}
+#app-root .print-light[data-pending='true'] {
+  animation: print-pending 1.4s ease-in-out infinite;
+}
+@keyframes print-pending {
+  50% {
+    opacity: 0.55;
+  }
+}
+#app-root .print-activity[data-lamp='unknown'] .print-figures {
+  right: 18px;
+}
+
+/* The print in the lower card hides the music card it shares that place with. */
+#app-root[data-stacked='true'][data-lower-card='print'][data-print-slot='lower']
+  .music-section
+  .music-feature,
+#app-root[data-stacked='true'][data-lower-card='print'][data-print-slot='lower']
+  .music-section
+  .music-volume-policy,
+#app-root[data-stacked='true'][data-lower-card='print'][data-print-slot='lower']
+  .music-section
+  .music-presets,
+#app-root[data-stacked='true'][data-lower-card='print'][data-print-slot='lower']
+  .music-section
+  .play-button,
+#app-root[data-stacked='true'][data-lower-card='print'][data-print-slot='lower']
+  .music-section
+  .volume-control {
+  display: none;
+}
+
+/* Camera + print + music: the chip on the camera shows the hidden one. */
+#app-root .activity-swap {
+  position: absolute;
+  left: calc(var(--rx) + 20px);
+  top: 224px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: calc(var(--rw) - 110px);
+  height: 40px;
+  padding: 0 16px 0 10px;
+  border: 0;
+  border-radius: 20px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: rgba(14, 19, 20, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+#app-root .activity-swap[hidden] {
+  display: none;
+}
+#app-root .activity-swap > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#app-root .activity-swap-mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(14, 19, 20, 1) 54%, transparent 56%),
+    conic-gradient(
+      #9fdca6 var(--print-progress, 0%),
+      rgba(238, 241, 232, 0.18) 0
+    );
+}
+#app-root .activity-swap[data-shows='music'] .activity-swap-mark {
+  background: none;
+}
+#app-root .activity-swap[data-shows='music'] .activity-swap-mark::before {
+  content: '♪';
+  display: block;
+  font-size: 17px;
+  line-height: 22px;
+  text-align: center;
 }

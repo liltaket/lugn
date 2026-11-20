@@ -71,6 +71,13 @@ Saving requires the same web session, same-origin request and CSRF token as othe
 edits, is checked against the settings generation so stale edits are rejected,
 and applies at once. See [Computer integration](COMPUTER.md#settings-in-the-control-panel).
 
+The Datorer page also has a **Datorljud till WiiM** section for the agent's fast
+WiiM Optical switching: the live status per computer and a settings form (master
+switch, how long sound must last, silence that ends it, sensitivity, WiiM
+address, sound output). Saves use the same session, same-origin and CSRF checks
+and generation conflict detection. See
+[Computer integration](COMPUTER.md#fast-wiim-optical-switching).
+
 ## Current Hub dashboard
 
 Lugn serves its own room dashboard for Nest Hubs. It is a custom Lugn page, not
@@ -114,6 +121,29 @@ volume `−` / `+` buttons. When nothing plays and no camera shows, the music
 column narrows and the room controls widen; it shows a resting record and the
 two sources as play buttons. An open camera takes the top of the music column
 and music becomes a compact card under it.
+
+The right column holds at most two live activities: a top card and the music
+card under it. While the optional 3D printer (see
+[3D printer](CONFIGURATION.md#3d-printer)) prepares, prints or is paused, and
+for `resultVisibleMinutes` after it finishes or fails, the print takes the top
+card: the model's cover image on a pale plate, the printer's name, the task
+name, the percentage, time left with the estimated finish (or the stage, such
+as `värmer bädden`, when the printer is not simply printing), a green
+progress bar, and the layer count (nozzle and bed temperatures while it heats).
+The task name fits two lines: one name keeps up to 60 characters, and several
+parts read `Stand + Box + 5 till`, with the names shortened first so the count
+always shows. A round lamp button at the end of the percentage row switches
+the printer's chamber light; it appears only while Home Assistant reports the
+light on or off, shows the tapped state at once and pulses until Home
+Assistant confirms it. While the light is on, the button fills warm and the
+plate the model stands on turns warm too. The card is flat like the music
+card; the status color appears in the progress bar, and in the words only
+for a paused or failed print.
+A paused print turns amber and a failed one red. A camera has priority and
+borrows the top card; the print and the music then share the lower card. Music
+keeps it while it plays, unless the print is paused, finished or failed; a chip
+on the camera (`A1 45 %` or `Musik`) swaps the two until the camera closes.
+The Hub never starts, pauses or stops a print.
 
 There are no individual light sliders on this Hub view.
 Home/away gates automatic lighting and music behavior only; the explicit

@@ -12,9 +12,18 @@ import { RoutineApi } from './routine-api.js';
 import { IntelligenceSettingsStore } from './intelligence-settings-store.js';
 import { IntelligenceApi } from './intelligence-api.js';
 import { createComputerIntelligenceRuntime } from './computer-intelligence-runtime.js';
+import { CompositeMusicAdapter } from '../adapters/composite-music.js';
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
+import {
+  WiimMusicAdapter,
+  createWiimHttpsTransport,
+  type WiimTransport,
+  type WiimUpnpSubscriber,
+} from '../adapters/wiim-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
+import { HomeAssistantPrinterAdapter } from '../adapters/home-assistant-printer.js';
+import { PrinterActivityService } from './printer-activity-service.js';
 import { HomeAssistantHomePresenceAdapter } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantSunAdapter } from '../adapters/home-assistant-sun.js';
 import { HomeAssistantButtonAdapter } from '../adapters/home-assistant-button.js';
@@ -59,6 +68,13 @@ import {
   settingsFromConfig,
 } from '../application/display-power-settings-service.js';
 import { DisplayPowerSettingsStore } from './display-power-settings-store.js';
+import {
+  OpticalSwitchApi,
+  type OpticalAgentSource,
+} from '../application/optical-switch-api.js';
+import { OpticalSwitchSettingsService } from '../application/optical-switch-settings-service.js';
+import { ComputerOpticalMqttAdapter } from '../adapters/computer-optical-mqtt.js';
+import { OpticalSwitchSettingsStore } from './optical-switch-settings-store.js';
 import { CapabilityRegistry } from '../application/capabilities.js';
 import { Stl27lPresenceControlAdapter } from '../adapters/stl27l-presence-control.js';
 import {
@@ -109,6 +125,8 @@ export type LugnRuntimeDependencies = {
   createHomeAssistantSocket?: HomeAssistantSocketFactory;
   createDashCastAdapter?: () => DashCastAdapter;
   createSensorSocket?: SensorSocketFactory;
+  wiimTransport?: WiimTransport;
+  wiimUpnpSubscriber?: WiimUpnpSubscriber;
 };
 
 /** Upper bound on the post-connect state query, beyond its own fetch timeout. */
@@ -197,10 +215,43 @@ export async function startRuntime(
           systemClock,
         )
       : undefined;
+  const wiimMusicMappings = config.wiim?.music ?? {};
+  const wiimMusic =
+    Object.keys(wiimMusicMappings).length > 0
+      ? new WiimMusicAdapter(
+          { targets: wiimMusicMappings },
+          dependencies.wiimTransport ?? createWiimHttpsTransport(),
+          systemClock,
+          dependencies.wiimUpnpSubscriber
+            ? { subscribeUpnp: dependencies.wiimUpnpSubscriber }
+            : {},
+        )
+      : undefined;
+  const allMusicMappings = {
+    ...config.homeAssistant.music,
+    ...wiimMusicMappings,
+  };
+  const allMusicTargetIds = Object.keys(allMusicMappings);
+  const musicAdapter =
+    homeAssistantMusic && wiimMusic
+      ? new CompositeMusicAdapter([
+          {
+            targets: Object.keys(config.homeAssistant.music),
+            adapter: homeAssistantMusic,
+          },
+          {
+            targets: Object.keys(wiimMusicMappings),
+            adapter: wiimMusic,
+          },
+        ])
+      : (wiimMusic ?? homeAssistantMusic);
   const homeAssistantEnvironment = new HomeAssistantEnvironmentAdapter(
     config.homeAssistant.environment,
     systemClock,
   );
+  const homeAssistantPrinter = config.homeAssistant.printer
+    ? new HomeAssistantPrinterAdapter(config.homeAssistant.printer, systemClock)
+    : undefined;
   const deviceIds = Object.keys(config.homeAssistant.entities);
   const baseScenes = withRoomPresets(config.scenes ?? defaultScenes, deviceIds);
   const defaultSceneId = resolveRoomDefaultSceneId(
@@ -229,10 +280,10 @@ export async function startRuntime(
       ...scenes.map((scene) => scene.id),
       ...scenePresetStore.deletedSceneIds,
     ],
-    ...(Object.keys(config.homeAssistant.music).length === 0
+    ...(allMusicTargetIds.length === 0
       ? {}
       : {
-          expectedMusicTargetIds: Object.keys(config.homeAssistant.music),
+          expectedMusicTargetIds: allMusicTargetIds,
         }),
     onWarning: (message) => console.warn(`[lugn] ${message}`),
   });
@@ -264,9 +315,10 @@ export async function startRuntime(
   const playbackAdapters = new Map<string, ComputerPlaybackMqttAdapter>();
   const displayAdapters = new Map<string, ComputerDisplayMqttAdapter>();
   const displayControllers = new Map<string, DisplayPowerController>();
+  const opticalAdapters = new Map<string, ComputerOpticalMqttAdapter>();
   const powerSensors = new Map<string, HomeAssistantPowerSensorAdapter>();
   const controlRoutes = Object.fromEntries(
-    Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+    Object.entries(allMusicMappings).flatMap(([target, mapping]) =>
       mapping.computerAudio?.playbackControl
         ? [[target, mapping.computerAudio]]
         : [],
@@ -324,16 +376,17 @@ export async function startRuntime(
     ...(config.lightingControlModes === undefined
       ? {}
       : { lightingControlModes: config.lightingControlModes }),
-    ...(homeAssistantMusic === undefined
+    ...(musicAdapter === undefined
       ? {}
       : {
           music: {
             targets: Object.fromEntries(
-              Object.entries(config.homeAssistant.music).map(
-                ([target, mapping]) => [target, mapping.sources],
-              ),
+              Object.entries(allMusicMappings).map(([target, mapping]) => [
+                target,
+                mapping.sources,
+              ]),
             ),
-            adapter: homeAssistantMusic,
+            adapter: musicAdapter,
             observationTrusted: (target) => isMusicObservationTrusted(target),
           },
         }),
@@ -452,9 +505,9 @@ export async function startRuntime(
     `${lightingIntentPath}.routines.json`,
     createRoutineTemplates({
       lightTargets: deviceIds,
-      ...(Object.keys(config.homeAssistant.music)[0] === undefined
+      ...(allMusicTargetIds[0] === undefined
         ? {}
-        : { musicTarget: Object.keys(config.homeAssistant.music)[0]! }),
+        : { musicTarget: allMusicTargetIds[0] }),
     }),
     (message) => console.warn(`[lugn] ${message}`),
   );
@@ -472,9 +525,9 @@ export async function startRuntime(
       )
         .filter(([, values]) => values.power !== false)
         .map(([target]) => target),
-      ...(Object.keys(config.homeAssistant.music)[0] === undefined
+      ...(allMusicTargetIds[0] === undefined
         ? {}
-        : { musicTarget: Object.keys(config.homeAssistant.music)[0]! }),
+        : { musicTarget: allMusicTargetIds[0] }),
     },
   });
   const intelligenceStore = new IntelligenceSettingsStore(
@@ -491,7 +544,7 @@ export async function startRuntime(
       ({ deviceId }) => deviceId,
     ),
     computerAudio: Object.fromEntries(
-      Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+      Object.entries(allMusicMappings).flatMap(([target, mapping]) =>
         mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
       ),
     ),
@@ -518,20 +571,43 @@ export async function startRuntime(
       ]),
     ),
   });
-  const experience = new DisplayPowerApi(
-    new IntelligenceApi(
-      new RoutineApi(routines, routineStore),
-      computerIntelligence.service,
+  // Fast WiiM Optical switching: every configured computer gets it, on by
+  // default. Lugn only holds and publishes the settings; the agent switches.
+  const opticalSwitchStore = new OpticalSwitchSettingsStore(
+    `${lightingIntentPath}.optical-switch.json`,
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  await opticalSwitchStore.load();
+  const opticalSwitchSettings = new OpticalSwitchSettingsService({
+    repository: opticalSwitchStore,
+    defaults: Object.fromEntries(
+      (config.mqtt?.computers ?? []).map((computer) => [
+        computer.deviceId,
+        computer.opticalSwitch,
+      ]),
     ),
-    displaySettings,
+  });
+  const opticalAgents = new Map<string, OpticalAgentSource>();
+  const experience = new OpticalSwitchApi(
+    new DisplayPowerApi(
+      new IntelligenceApi(
+        new RoutineApi(routines, routineStore),
+        computerIntelligence.service,
+      ),
+      displaySettings,
+    ),
+    opticalSwitchSettings,
+    opticalAgents,
   );
   let syncingHomeAssistantStates = false;
   let homeAssistantConnection: HomeAssistantConnection | undefined;
   const trustedMusicTargets = new Set<string>();
   const reconciledMusicTargets = new Set<string>();
   isMusicObservationTrusted = (target) =>
-    homeAssistantConnection?.isCurrent() === true &&
-    trustedMusicTargets.has(target);
+    wiimMusic?.hasTarget(target)
+      ? wiimMusic.isTargetTrusted(target)
+      : homeAssistantConnection?.isCurrent() === true &&
+        trustedMusicTargets.has(target);
   // Only actual adapter emissions count; rejected old/invalid reports cannot
   // restore trust. Seeding emissions remain provisional until the query succeeds.
   homeAssistantMusic?.subscribe(({ target }) => {
@@ -542,15 +618,18 @@ export async function startRuntime(
     ).add(target);
     if (!syncingHomeAssistantStates) computerPlayback?.observe();
   });
+  wiimMusic?.subscribe(() => {
+    computerPlayback?.observe();
+  });
   const musicObservationTrust = (): Record<string, boolean> =>
     Object.fromEntries(
-      Object.keys(config.homeAssistant.music).map((target) => [
+      allMusicTargetIds.map((target) => [
         target,
         isMusicObservationTrusted(target),
       ]),
     );
   const computerAudioMappings = Object.fromEntries(
-    Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+    Object.entries(allMusicMappings).flatMap(([target, mapping]) =>
       mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
     ),
   );
@@ -564,6 +643,11 @@ export async function startRuntime(
   });
   // Presence and computer changes re-evaluate display power; the controller's
   // own status updates re-enter harmlessly and publish only on change.
+  const unsubscribeOpticalSettings = opticalSwitchSettings.subscribe(() => {
+    // A saved change reaches the agent at once, retained for its next connection.
+    for (const adapter of opticalAdapters.values())
+      void adapter.publishSettings();
+  });
   const unsubscribeDisplaySettings = displaySettings.subscribe(() => {
     for (const controller of displayControllers.values()) controller.observe();
   });
@@ -579,40 +663,40 @@ export async function startRuntime(
       for (const controller of displayControllers.values())
         controller.observe();
   });
-  const artwork = homeAssistantMusic
-    ? new HomeAssistantArtworkService(
-        {
-          baseUrl: config.homeAssistant.baseUrl,
-          token: config.homeAssistant.token,
-          entities: Object.fromEntries(
-            Object.entries(config.homeAssistant.music).map(
-              ([target, mapping]) => [target, mapping.entityId],
-            ),
-          ),
-          metadataProvider: (target) =>
-            homeAssistantMusic.artworkMetadata(target),
-          observationTrusted: (target) => isMusicObservationTrusted(target),
-          computer: {
-            selector: computerNowPlaying,
-            routes: Object.fromEntries(
-              Object.entries(computerAudioMappings).filter(
-                ([, mapping]) => mapping.artwork === true,
+  const artwork =
+    homeAssistantMusic || wiimMusic
+      ? new HomeAssistantArtworkService(
+          {
+            baseUrl: config.homeAssistant.baseUrl,
+            token: config.homeAssistant.token,
+            entities: Object.fromEntries(
+              Object.entries(config.homeAssistant.music).map(
+                ([target, mapping]) => [target, mapping.entityId],
               ),
             ),
-          },
-          excludedSources: Object.fromEntries(
-            Object.entries(config.homeAssistant.music).flatMap(
-              ([target, mapping]) =>
+            metadataProvider: (target) =>
+              homeAssistantMusic?.artworkMetadata(target) ?? null,
+            observationTrusted: (target) => isMusicObservationTrusted(target),
+            computer: {
+              selector: computerNowPlaying,
+              routes: Object.fromEntries(
+                Object.entries(computerAudioMappings).filter(
+                  ([, mapping]) => mapping.artwork === true,
+                ),
+              ),
+            },
+            excludedSources: Object.fromEntries(
+              Object.entries(allMusicMappings).flatMap(([target, mapping]) =>
                 mapping.computerAudio
                   ? [[target, [mapping.computerAudio.source]]]
                   : [],
+              ),
             ),
-          ),
-        },
-        homeAssistantFetch,
-        systemClock,
-      )
-    : undefined;
+          },
+          homeAssistantFetch,
+          systemClock,
+        )
+      : undefined;
   const cameraStore = config.cameraDashboard
     ? new CameraSettingsStore(
         `${lightingIntentPath}.cameras.json`,
@@ -656,6 +740,7 @@ export async function startRuntime(
     homeAssistantSwitch?.acceptStateChangedEvent(event);
     homeAssistantMusic?.acceptStateChangedEvent(event);
     homeAssistantEnvironment.acceptStateChangedEvent(event);
+    homeAssistantPrinter?.acceptStateChangedEvent(event);
     for (const sensor of powerSensors.values())
       sensor.acceptStateChangedEvent(event);
     homeAssistantHomePresence.acceptStateChangedEvent(event);
@@ -693,6 +778,7 @@ export async function startRuntime(
           cameraSeed = states;
           for (const state of states) {
             homeAssistantSun.acceptState(state);
+            homeAssistantPrinter?.acceptState(state);
             for (const sensor of powerSensors.values())
               if (
                 typeof state === 'object' &&
@@ -922,7 +1008,36 @@ export async function startRuntime(
         }),
       );
     }
+    const opticalPublish = mqttSubscriber.publish;
+    if (opticalPublish)
+      for (const computer of config.mqtt.computers ?? []) {
+        const deviceId = computer.deviceId;
+        const adapter = new ComputerOpticalMqttAdapter({
+          deviceId,
+          baseTopic: computer.baseTopic,
+          maxAgeMs: Math.min(300_000, computer.maxAgeMs),
+          clock: systemClock,
+          mqtt: {
+            subscribe: mqttSubscriber.subscribe.bind(mqttSubscriber),
+            publish: opticalPublish.bind(mqttSubscriber),
+          },
+          settings: () => {
+            const settings = opticalSwitchSettings.effective(deviceId);
+            return settings
+              ? { settings, generation: opticalSwitchSettings.generation() }
+              : undefined;
+          },
+          onWarning: (message) => console.warn(`[lugn] ${message}`),
+        });
+        opticalAdapters.set(deviceId, adapter);
+        opticalAgents.set(deviceId, {
+          status: () => adapter.status(),
+          subscribe: (listener) => adapter.subscribe(listener),
+        });
+      }
     unsubscribeMqttStatus = mqttSubscriber.onStatus((status) => {
+      for (const adapter of opticalAdapters.values())
+        adapter.setBrokerConnected(status === 'connected');
       for (const adapter of displayAdapters.values())
         adapter.setBrokerConnected(status === 'connected');
       for (const adapter of playbackAdapters.values())
@@ -949,6 +1064,9 @@ export async function startRuntime(
       home_assistant: homeAssistantSocket.status,
       ...(goveeLighting
         ? { govee: goveeConnected ? 'connected' : 'disconnected' }
+        : {}),
+      ...(wiimMusic
+        ? { wiim: wiimMusic.isConnected() ? 'connected' : 'disconnected' }
         : {}),
       mqtt: mqttSubscriber?.status ?? 'not_configured',
     }),
@@ -980,7 +1098,8 @@ export async function startRuntime(
         scenesProvider: () => Array.from(engine.scenes.values()),
         stateProvider: () => engine.state,
         musicObservationConnectedProvider: () =>
-          homeAssistantSocket.status === 'connected',
+          homeAssistantSocket.status === 'connected' ||
+          (wiimMusic?.isConnected() ?? false),
         musicObservationTrustProvider: musicObservationTrust,
         stateStream: engine.stream,
         computerAudioMappings,
@@ -990,6 +1109,18 @@ export async function startRuntime(
         musicPlaybackPoliciesProvider: () =>
           engine.getMusicPlaybackPolicySnapshots(),
         environmentProvider: () => homeAssistantEnvironment.snapshot(),
+        ...(homeAssistantPrinter
+          ? {
+              printer: new PrinterActivityService(
+                homeAssistantPrinter,
+                {
+                  baseUrl: config.homeAssistant.baseUrl,
+                  token: config.homeAssistant.token,
+                },
+                homeAssistantFetch,
+              ),
+            }
+          : {}),
         castStatus: (hubId) => {
           const lastHubPollAt =
             displayRefs.displayServer?.lastHubHeartbeatAt(hubId);
@@ -1039,6 +1170,7 @@ export async function startRuntime(
     for (const adapter of computerAdapters) adapter.start();
     for (const adapter of playbackAdapters.values()) adapter.start();
     for (const adapter of displayAdapters.values()) adapter.start();
+    for (const adapter of opticalAdapters.values()) adapter.start();
     await seedHomeAssistantObservations(
       config.homeAssistant.baseUrl,
       config.homeAssistant.token,
@@ -1054,6 +1186,7 @@ export async function startRuntime(
       },
     );
     if (mqttSubscriber) mqttSubscriber.start();
+    wiimMusic?.start();
     homeAssistantSocket.start();
     await http.start();
     await displayServer?.start();
@@ -1067,6 +1200,7 @@ export async function startRuntime(
     unsubscribeComputerNowPlaying();
     unsubscribeDisplayPower();
     unsubscribeDisplaySettings();
+    unsubscribeOpticalSettings();
     routines.dispose();
     computerIntelligence.dispose();
     cameraMedia?.dispose();
@@ -1081,11 +1215,13 @@ export async function startRuntime(
     presenceFeedback.dispose();
     for (const adapter of playbackAdapters.values()) adapter.stop();
     for (const adapter of displayAdapters.values()) adapter.stop();
+    for (const adapter of opticalAdapters.values()) adapter.stop();
     for (const controller of displayControllers.values()) controller.dispose();
     for (const sensor of powerSensors.values()) sensor.dispose();
     for (const adapter of computerAdapters) adapter.stop();
     unsubscribeMqttStatus?.();
     if (goveeRefreshTimer) clearInterval(goveeRefreshTimer);
+    await wiimMusic?.stop();
     homeAssistantSocket.stop();
     await lightingIntentStore.stop().catch(() => undefined);
     engine.dispose();
@@ -1107,7 +1243,7 @@ export async function startRuntime(
       unsubscribeComputerNowPlaying();
       unsubscribeDisplayPower();
       unsubscribeDisplaySettings();
-      unsubscribeDisplaySettings();
+      unsubscribeOpticalSettings();
       routines.dispose();
       computerIntelligence.dispose();
       cameraMedia?.dispose();
@@ -1122,12 +1258,14 @@ export async function startRuntime(
       presenceFeedback.dispose();
       for (const adapter of playbackAdapters.values()) adapter.stop();
       for (const adapter of displayAdapters.values()) adapter.stop();
+      for (const adapter of opticalAdapters.values()) adapter.stop();
       for (const controller of displayControllers.values())
         controller.dispose();
       for (const sensor of powerSensors.values()) sensor.dispose();
       for (const adapter of computerAdapters) adapter.stop();
       unsubscribeMqttStatus?.();
       if (goveeRefreshTimer) clearInterval(goveeRefreshTimer);
+      await wiimMusic?.stop();
       homeAssistantSocket.stop();
       try {
         await mqttSubscriber?.stop();

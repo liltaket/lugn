@@ -347,9 +347,20 @@ describe('composed runtime integration', () => {
           source: 'Optical In',
           title: '4',
         });
-        expect(mqtt.publications).toHaveLength(2);
-        const [pausePublication, resumePublication] = mqtt.publications;
-        for (const publication of mqtt.publications) {
+        // Lugn also publishes the computer's optical switch settings, retained.
+        expect(
+          mqtt.publications.filter(
+            (p) => p.topic === `${root}/optical/settings`,
+          ),
+        ).toEqual([
+          expect.objectContaining({ options: { qos: 1, retain: true } }),
+        ]);
+        const commands = mqtt.publications.filter(
+          (p) => p.topic !== `${root}/optical/settings`,
+        );
+        expect(commands).toHaveLength(2);
+        const [pausePublication, resumePublication] = commands;
+        for (const publication of commands) {
           expect(publication.topic).toBe(`${root}/control/command`);
           expect(publication.options).toEqual({ qos: 1, retain: false });
           expect(JSON.parse(publication.payload)).toMatchObject({

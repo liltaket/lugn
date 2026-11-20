@@ -33,6 +33,21 @@ pub struct Config {
     pub display_backend: crate::display::BackendSetting,
     #[serde(default = "display_input_idle")]
     pub display_input_idle_secs: u32,
+    #[serde(default = "yes")]
+    pub optical_switch_enabled: bool,
+    /// Unset: the agent looks for a WiiM on the LAN.
+    pub wiim_host: Option<String>,
+    pub optical_audio_sink: Option<String>,
+    #[serde(default = "optical_min_audible")]
+    pub optical_min_audible_ms: u32,
+    #[serde(default = "optical_release")]
+    pub optical_release_ms: u32,
+    #[serde(default = "optical_level")]
+    pub optical_level_db: i32,
+    /// Accept optical settings and report optical state over MQTT. Takes effect
+    /// only with MQTT credentials.
+    #[serde(default = "yes")]
+    pub optical_remote_settings: bool,
     #[serde(default)]
     pub video_app_ids: Vec<String>,
     #[serde(default)]
@@ -52,6 +67,18 @@ fn idle() -> u32 {
 }
 fn display_input_idle() -> u32 {
     120
+}
+fn yes() -> bool {
+    true
+}
+fn optical_min_audible() -> u32 {
+    400
+}
+fn optical_release() -> u32 {
+    1500
+}
+fn optical_level() -> i32 {
+    -55
 }
 impl Config {
     pub fn load(path: &std::path::Path) -> Result<Self> {
@@ -101,6 +128,24 @@ impl Config {
             (10..=3600).contains(&self.display_input_idle_secs),
             "display_input_idle_secs must be 10–3600"
         );
+        ensure!(
+            crate::optical::MIN_AUDIBLE_MS.contains(&self.optical_min_audible_ms),
+            "optical_min_audible_ms must be 200–5000"
+        );
+        ensure!(
+            crate::optical::RELEASE_MS.contains(&self.optical_release_ms),
+            "optical_release_ms must be 500–10000"
+        );
+        ensure!(
+            crate::optical::LEVEL_DB.contains(&self.optical_level_db),
+            "optical_level_db must be -80 to -20"
+        );
+        if let Some(host) = &self.wiim_host {
+            crate::wiim::validate_host(host)?;
+        }
+        if let Some(sink) = &self.optical_audio_sink {
+            crate::optical::validate_sink(sink)?;
+        }
         ensure!(
             self.mqtt_username.is_some() || self.mqtt_password.is_none(),
             "MQTT password requires username"
@@ -162,6 +207,29 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn optical_switching_is_on_by_default_and_validated() {
+        let mut c: Config = toml::from_str("device_id='desktop'\nmqtt_host='localhost'").unwrap();
+        assert!(c.optical_switch_enabled);
+        assert!(c.optical_remote_settings);
+        assert!(c.wiim_host.is_none());
+        assert_eq!(c.optical_min_audible_ms, 400);
+        assert_eq!(c.optical_release_ms, 1500);
+        assert_eq!(c.optical_level_db, -55);
+        assert!(c.validate().is_ok());
+        c.wiim_host = Some("http://wiim".into());
+        assert!(c.validate().is_err());
+        c.wiim_host = Some("192.168.1.50".into());
+        assert!(c.validate().is_ok());
+        c.optical_min_audible_ms = 50;
+        assert!(c.validate().is_err());
+        c.optical_min_audible_ms = 400;
+        c.optical_release_ms = 50;
+        assert!(c.validate().is_err());
+        c.optical_release_ms = 1500;
+        c.optical_level_db = -5;
+        assert!(c.validate().is_err());
     }
     #[test]
     fn rejects_wildcards_and_invalid_intervals() {

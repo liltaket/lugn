@@ -14,6 +14,14 @@ import {
 } from '../src/runtime/config.js';
 
 const temporaryDirectories: string[] = [];
+const opticalDefaults = {
+  enabled: true,
+  wiimHost: null,
+  audioSink: null,
+  minAudibleMs: 400,
+  releaseMs: 1_500,
+  levelDb: -55,
+};
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0))
@@ -281,6 +289,43 @@ describe('runtime configuration cross references', () => {
     expect(() => invalid({ unknownKey: true })).toThrow();
   });
 
+  it('turns fast WiiM Optical switching on for every computer and lets the configuration tune it', () => {
+    const configured = (opticalSwitch: unknown) =>
+      loadConfig({
+        ...minimal,
+        mqtt: {
+          url: 'mqtt://broker.test:1883',
+          computers: [{ deviceId: 'kuffe', opticalSwitch }],
+        },
+      });
+    expect(configured({}).mqtt?.computers?.[0]?.opticalSwitch).toEqual(
+      opticalDefaults,
+    );
+    expect(
+      configured({
+        wiimHost: '192.168.10.194',
+        audioSink: 'alsa_output.iec958-stereo',
+        minAudibleMs: 250,
+      }).mqtt?.computers?.[0]?.opticalSwitch,
+    ).toEqual({
+      ...opticalDefaults,
+      wiimHost: '192.168.10.194',
+      audioSink: 'alsa_output.iec958-stereo',
+      minAudibleMs: 250,
+    });
+    expect(
+      configured({ enabled: false }).mqtt?.computers?.[0]?.opticalSwitch
+        ?.enabled,
+    ).toBe(false);
+    for (const invalid of [
+      { wiimHost: '8.8.8.8' },
+      { minAudibleMs: 50 },
+      { levelDb: -5 },
+      { unknownKey: true },
+    ])
+      expect(() => configured(invalid)).toThrow();
+  });
+
   it('defaults computer MQTT integrations and validates their topic and freshness settings', () => {
     expect(
       loadConfig({ ...minimal, mqtt: { url: 'mqtt://broker.test:1883' } }).mqtt
@@ -303,11 +348,13 @@ describe('runtime configuration cross references', () => {
         deviceId: 'workstation',
         baseTopic: 'lugn/computers',
         maxAgeMs: 90_000,
+        opticalSwitch: opticalDefaults,
       },
       {
         deviceId: 'media_pc',
         baseTopic: 'custom/desktops',
         maxAgeMs: 120_000,
+        opticalSwitch: opticalDefaults,
       },
     ]);
 
@@ -687,6 +734,40 @@ describe('runtime configuration cross references', () => {
       expect(error.message).toContain('invalid base64url encoding');
       expect(error.message).not.toContain(malformed);
     }
+  });
+});
+
+describe('optional 3D printer', () => {
+  const base = {
+    homeAssistant: {
+      baseUrl: 'http://ha.local',
+      tokenEnv: 'HA_TOKEN',
+      entities: { 'lighting.ceiling': 'light.ceiling' },
+    },
+    scenes: [],
+  };
+  it('is absent unless configured and keeps its defaults', () => {
+    expect(loadConfig(base).homeAssistant.printer).toBeUndefined();
+    expect(
+      loadConfig({
+        ...base,
+        homeAssistant: {
+          ...base.homeAssistant,
+          printer: { entityPrefix: 'a1_0123456789abcde' },
+        },
+      }).homeAssistant.printer,
+    ).toEqual({ entityPrefix: 'a1_0123456789abcde', resultVisibleMinutes: 20 });
+  });
+  it('rejects an entity prefix that is not a plain HA object id', () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        homeAssistant: {
+          ...base.homeAssistant,
+          printer: { entityPrefix: 'sensor.a1' },
+        },
+      }),
+    ).toThrow();
   });
 });
 

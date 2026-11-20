@@ -17,7 +17,7 @@ HOME="$fixture/home with space" PATH="$fixture/bin:$PATH" bash "$repo_root/deplo
   "$(command -v node)" "$fixture/release with space" "$fixture/runtime config.json" \
   "$fixture/private env" "$fixture/bridge config.json" "$fixture/platform secret.env"
 unit="$fixture/home with space/.config/systemd/user/lugn-govee-effects.service"
-[[ $(rg -c '^EnvironmentFile=' "$unit") == 2 ]]
+[[ $(grep -c '^EnvironmentFile=' "$unit") == 2 ]]
 output=$(systemd-analyze --user verify "$unit" 2>&1)
 if [[ "$output" == *'lugn-govee-effects.service:'* ]]; then
   printf '%s\n' "$output" >&2

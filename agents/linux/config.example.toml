@@ -37,3 +37,23 @@ display_backend = "auto"
 # Idle time (seconds, 10-3600) after which `input_idle` becomes true. It follows
 # keyboard/pointer input only and ignores idle inhibitors such as video players.
 display_input_idle_secs = 120
+
+# Fast WiiM Optical switching (see README and protocol/OPTICAL.md). On by default:
+# when the computer plays sustained, audible sound and the WiiM is paused or idle,
+# the agent switches the WiiM to Optical directly. Needs pw-record from pipewire-bin.
+optical_switch_enabled = true
+# Unset: the agent finds the WiiM on the LAN. Set it when there are several.
+# wiim_host = "192.168.1.50"
+# Exact PipeWire sink node name wired to the WiiM (pactl list short sinks).
+# Leave unset to follow the default sink.
+# optical_audio_sink = "alsa_output.pci-0000_00_1f.3.iec958-stereo"
+# Sustained sound needed before switching, milliseconds (200-5000). Lower is faster.
+optical_min_audible_ms = 400
+# Silence that ends a run of sound, milliseconds (500-10000).
+optical_release_ms = 1500
+# Loudness a frame needs to count as sound, dBFS (-80 to -20). Lower hears quieter sound.
+optical_level_db = -55
+# Accept these settings from Lugn's control panel and report state over MQTT.
+# Only with MQTT credentials; the broker ACL needs subscribe on optical/settings
+# and publish on optical/state.
+optical_remote_settings = true

@@ -243,6 +243,52 @@ be retracted by a local timeout. This is guarded best effort; ambiguous outcomes
 never establish ownership. No shell commands, seeking, volume control, computer
 power control or generic D-Bus invocation is exposed.
 
+## Fast WiiM Optical switching
+
+The Linux agent switches the WiiM to its Optical input by itself as soon as the
+computer plays real, sustained sound and the WiiM is not playing its own music.
+It is **on by default** for every configured computer: with no address the agent
+finds the WiiM on the LAN. Lugn does not decide or switch anything; it holds the
+settings, publishes them to the agent (retained, OPTICAL v1) and shows what the
+agent reports. The mechanism, the WiiM HTTP API it uses and the audibility rules
+are in `agents/linux/protocol/OPTICAL.md`.
+
+The optional `opticalSwitch` entry of a computer in `mqtt.computers` sets the
+defaults (all fields optional):
+
+```json
+{
+  "deviceId": "kuffe",
+  "opticalSwitch": {
+    "enabled": true,
+    "wiimHost": null,
+    "audioSink": "alsa_output.pci-0000_00_1f.3.iec958-stereo",
+    "minAudibleMs": 400,
+    "releaseMs": 1500,
+    "levelDb": -55
+  }
+}
+```
+
+`enabled: false` makes the agent leave the WiiM alone. `wiimHost` is a private
+IPv4 address or `.local` name for when discovery finds none or several.
+`audioSink` pins the capture to the sink wired to the WiiM so sound on other
+outputs is ignored. `minAudibleMs` (200-5000) is how long sound must last before
+the switch, so lower is faster; `releaseMs` (500-10000) is the silence that ends
+a run of sound, after which the next sound is a new decision; `levelDb` (-80 to
+-20) is how quiet a sound may be and still count.
+
+The Datorer page has a **Datorljud till WiiM** section: the live status per
+computer (what the agent is doing, which WiiM it found or was given and how,
+what the WiiM is doing, the last switch and how long it took) and a form for all
+of the above. What is saved there overrides the configured defaults, is
+published to the agent at once and survives restarts
+(`<state path>.optical-switch.json`). Saves are checked against the settings
+generation like the display settings. The status says when the agent has not
+received the saved settings yet or still uses its own file, which happens when
+it has no MQTT credentials or the broker ACL lacks `optical/settings` (subscribe)
+and `optical/state` (publish).
+
 ## Optional display sleep and wake
 
 Lugn can put a computer's display to sleep when the room is empty and wake it

@@ -3,7 +3,9 @@ import {
   type CameraDashboardConfig,
 } from '../core/cameras.js';
 import { HomeAssistantMusicMappingsSchema } from '../adapters/home-assistant-music.js';
+import { WiimMusicMappingsSchema } from '../adapters/wiim-music.js';
 import { HomeAssistantEnvironmentMappingsSchema } from '../adapters/home-assistant-environment.js';
+import { HomeAssistantPrinterConfigSchema } from '../adapters/home-assistant-printer.js';
 import { HomeAssistantHomePresenceConfigSchema } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantButtonMappingsSchema } from '../adapters/home-assistant-button.js';
 import { HomeAssistantBilresaConfigSchema } from '../adapters/home-assistant-bilresa.js';
@@ -28,6 +30,11 @@ import {
 } from '../core/schemas.js';
 import { ComputerDeviceIdSchema } from '../core/computer.js';
 import { PowerSensorThresholdsSchema } from '../core/display-power.js';
+import {
+  OpticalSwitchSettingsSchema,
+  defaultOpticalSwitchSettings,
+  type OpticalSwitchSettings,
+} from '../core/optical-switch-settings.js';
 import {
   WindowLightingSchema,
   type WindowLighting,
@@ -140,6 +147,34 @@ const DisplayPowerConfigSchema = z
 
 export type DisplayPowerConfig = z.output<typeof DisplayPowerConfigSchema>;
 
+/**
+ * Fast WiiM Optical switching in the computer's agent. On by default: with no
+ * address the agent finds the WiiM itself. These are the defaults; the control
+ * panel's saved values win.
+ */
+const OpticalSwitchConfigSchema = z
+  .object({
+    enabled: OpticalSwitchSettingsSchema.shape.enabled.default(
+      defaultOpticalSwitchSettings().enabled,
+    ),
+    wiimHost: OpticalSwitchSettingsSchema.shape.wiimHost.default(
+      defaultOpticalSwitchSettings().wiimHost,
+    ),
+    audioSink: OpticalSwitchSettingsSchema.shape.audioSink.default(
+      defaultOpticalSwitchSettings().audioSink,
+    ),
+    minAudibleMs: OpticalSwitchSettingsSchema.shape.minAudibleMs.default(
+      defaultOpticalSwitchSettings().minAudibleMs,
+    ),
+    releaseMs: OpticalSwitchSettingsSchema.shape.releaseMs.default(
+      defaultOpticalSwitchSettings().releaseMs,
+    ),
+    levelDb: OpticalSwitchSettingsSchema.shape.levelDb.default(
+      defaultOpticalSwitchSettings().levelDb,
+    ),
+  })
+  .strict();
+
 const ComputerMqttConfigSchema = z
   .object({
     deviceId: ComputerDeviceIdSchema,
@@ -164,6 +199,8 @@ const ComputerMqttConfigSchema = z
     maxAgeMs: z.number().int().min(1_000).max(300_000).default(90_000),
     /** Opt-in display sleep/wake over DISPLAY v1; requires MQTT credentials. */
     display: DisplayPowerConfigSchema.optional(),
+    /** Publishes optical switch settings to the agent; on unless `enabled: false`. */
+    opticalSwitch: OpticalSwitchConfigSchema.prefault({}),
   })
   .strict();
 
@@ -213,6 +250,7 @@ const HomeAssistantConfigSchema = z
       co2: 'sensor.alpstuga_air_quality_monitor_koldioxid',
       pm25: 'sensor.alpstuga_air_quality_monitor_pm25',
     }),
+    printer: HomeAssistantPrinterConfigSchema.optional(),
     switches: z
       .record(SemanticSwitchIdSchema, z.string().regex(/^switch\.[a-z0-9_]+$/))
       .default({}),
@@ -416,6 +454,12 @@ const PresenceFeedbackConfigSchema = z
   })
   .strict();
 
+const WiimConfigSchema = z
+  .object({
+    music: WiimMusicMappingsSchema.default({}),
+  })
+  .strict();
+
 const FileConfigSchema = z
   .object({
     http: z
@@ -437,6 +481,7 @@ const FileConfigSchema = z
       })
       .strict()
       .optional(),
+    wiim: WiimConfigSchema.optional(),
     homeAssistant: HomeAssistantConfigSchema,
     lightingControlModes: LightingControlModesSchema.default({}),
     windowLighting: WindowLightingSchema.optional(),
@@ -498,6 +543,32 @@ const FileConfigSchema = z
         context.addIssue({
           code: 'custom',
           path: ['homeAssistant', 'music', target, 'computerAudio', 'deviceId'],
+          message: 'Computer audio device must be configured in mqtt.computers',
+        });
+    }
+    for (const [target, mapping] of Object.entries(config.wiim?.music ?? {})) {
+      if (target in config.homeAssistant.music)
+        context.addIssue({
+          code: 'custom',
+          path: ['wiim', 'music', target],
+          message: `Music target ${target} cannot be configured in both homeAssistant.music and wiim.music`,
+        });
+      if (
+        mapping.computerAudio?.playbackControl &&
+        (!config.mqtt?.usernameEnv || !config.mqtt.passwordEnv)
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['wiim', 'music', target, 'computerAudio', 'playbackControl'],
+          message: 'Computer playback requires authenticated MQTT credentials',
+        });
+      if (
+        mapping.computerAudio &&
+        !configuredComputers.has(mapping.computerAudio.deviceId)
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['wiim', 'music', target, 'computerAudio', 'deviceId'],
           message: 'Computer audio device must be configured in mqtt.computers',
         });
     }
@@ -614,6 +685,9 @@ export function validateRuntimeFileConfig(value: unknown): void {
 
 export type RuntimeConfig = {
   govee?: { socketPath: string };
+  wiim?: {
+    music: z.output<typeof WiimMusicMappingsSchema>;
+  };
   windowLighting?: WindowLighting;
   presenceControl?: z.output<typeof PresenceControlConfigSchema>;
   presenceFeedback?: z.output<typeof PresenceFeedbackConfigSchema>;
@@ -646,6 +720,7 @@ export type RuntimeConfig = {
       co2: string;
       pm25: string;
     };
+    printer?: z.output<typeof HomeAssistantPrinterConfigSchema>;
   };
   mqtt?: {
     url: string;
@@ -659,6 +734,7 @@ export type RuntimeConfig = {
       baseTopic: string;
       maxAgeMs: number;
       display?: DisplayPowerConfig | undefined;
+      opticalSwitch: OpticalSwitchSettings;
     }>;
   };
   display?: {
@@ -817,6 +893,7 @@ export function loadRuntimeConfig(
       ...(clerk === undefined ? {} : { clerk }),
     },
     ...(fileConfig.govee ? { govee: fileConfig.govee } : {}),
+    ...(fileConfig.wiim ? { wiim: fileConfig.wiim } : {}),
     homeAssistant: {
       baseUrl: fileConfig.homeAssistant.baseUrl.replace(/\/+$/, ''),
       token: homeAssistantToken,
@@ -828,6 +905,9 @@ export function loadRuntimeConfig(
       switches: fileConfig.homeAssistant.switches,
       music: fileConfig.homeAssistant.music,
       environment: fileConfig.homeAssistant.environment,
+      ...(fileConfig.homeAssistant.printer === undefined
+        ? {}
+        : { printer: fileConfig.homeAssistant.printer }),
     },
     ...(mqtt === undefined ? {} : { mqtt }),
     ...(fileConfig.presenceControl === undefined

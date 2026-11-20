@@ -16,7 +16,7 @@ async function main(): Promise<void> {
         `Lights: ${Object.keys(config.homeAssistant.entities).length}`,
         `Buttons: ${Object.keys(config.homeAssistant.buttons).length}`,
         `Switches: ${Object.keys(config.homeAssistant.switches).length}`,
-        `Media targets: ${Object.keys(config.homeAssistant.music).length}`,
+        `Media targets: ${Object.keys(config.homeAssistant.music).length + Object.keys(config.wiim?.music ?? {}).length}`,
         `MQTT: ${config.mqtt ? 'enabled' : 'disabled'}`,
       ].join(' '),
     );

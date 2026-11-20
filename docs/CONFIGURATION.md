@@ -12,7 +12,9 @@ room control rather than configuration.
 Current configuration covers:
 
 - Home Assistant URL/token environment name;
-- semantic light, switch, button and media-player mappings;
+- semantic light, switch, button and media-player mappings (plus optional
+  direct LAN WiiM targets under `wiim.music`; see
+  [Direct WiiM transport](WIIM-DIRECT.md));
 - per-light `lightingControlModes` (`respect_manual` by default or opt-in
   `enforce` for continued retries; see [Lighting](LIGHTING.md#lighting-control-modes));
 - one Home Assistant home-presence `person.*` or `device_tracker.*` entity;
@@ -20,7 +22,9 @@ Current configuration covers:
 - MQTT connection, topic and freshness window for STL27L events;
 - optional computer observations through `mqtt.computers`, including opt-in
   presence-driven display sleep/wake per computer, with defaults here and live
-  settings in the control panel (see [Computer integration](COMPUTER.md));
+  settings in the control panel (see [Computer integration](COMPUTER.md)),
+  and the defaults for fast WiiM Optical switching (`opticalSwitch`, on by
+  default), also tunable in the panel;
 - prelight targets and duration;
 - scenes and optional Bed/Desk Hub roles, Cast receiver addresses and tokens.
 
@@ -90,6 +94,32 @@ engine; override `homeAssistant.bilresa.button1Entities` or
 `homeAssistant.bilresa.button2Entities` when Home Assistant uses different IDs.
 See [IKEA BILRESA](INTEGRATIONS.md#ikea-bilresa) for the gesture-to-room-action
 mapping.
+
+## 3D printer
+
+`homeAssistant.printer` is optional. It follows one printer from
+the Bambu Lab Home Assistant integration (`ha-bambulab`) and shows the print as
+a live activity on the Hubs (see [Hub dashboard](UI.md#current-hub-dashboard)).
+All entity IDs come from the device prefix, for example
+`sensor.<entityPrefix>_print_status`, `_print_progress`, `_remaining_time`,
+`_current_stage`, `_current_layer`, `_total_layer_count`, `_task_name`,
+`_printer_name`, `_printable_objects`, the nozzle and bed temperatures,
+`image.<entityPrefix>_cover_image` and `light.<entityPrefix>_chamber_light`.
+The only command Lugn sends is `light.turn_on` or `light.turn_off` for the
+chamber light, when someone taps the lamp button on a Hub; it never starts, pauses or
+stops a print.
+
+```json
+"printer": { "entityPrefix": "a1_0123456789abcde" }
+```
+
+- `name` overrides the printer's own name sensor on the Hub.
+- `resultVisibleMinutes` (default 20, 0–240) keeps a finished or failed print
+  on the Hubs for that long after the status changed.
+
+Lugn fetches the cover image through Home Assistant's image proxy with its own
+token and serves it to the Hubs under an opaque per-cover link. The browser never
+receives a Home Assistant URL or token.
 
 ## Persistence
 
