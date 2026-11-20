@@ -206,6 +206,10 @@ let contextItems = [];
 let musicMenuOpen = false;
 // Latest playback position sample for the ring around play/pause.
 let musicProgress = null;
+let lastShownTitle = null;
+// Colors drawn from the current artwork; the whole Hub takes them on while it plays.
+let artTheme = null;
+let lastPresenceValue = null;
 let volumeAuthorityNotice = false;
 let volumeCommandNotice = false;
 const interactionPointers = new Set();
@@ -349,6 +353,28 @@ function setText(element, value) {
   if (!element) return;
   const text = String(value);
   if (element.textContent !== text) element.textContent = text;
+}
+
+// Restart a one-shot CSS animation class, so a change is felt, not just seen.
+function pulse(element, name) {
+  if (
+    typeof element?.classList?.remove !== 'function' ||
+    typeof element.classList.add !== 'function'
+  )
+    return;
+  element.classList.remove(name);
+  void element.offsetWidth;
+  element.classList.add(name);
+}
+
+// A segmented control's sliding thumb follows its pressed button.
+function syncSegment(container) {
+  if (!container?.dataset || !container.children) return;
+  const buttons = [...container.children];
+  const index = buttons.findIndex(
+    (button) => button.getAttribute?.('aria-pressed') === 'true',
+  );
+  container.dataset.selected = index < 0 ? 'none' : String(index);
 }
 
 function roleName(role) {
@@ -720,8 +746,10 @@ function renderScenes(payload) {
               : 'selected';
     setText(button.querySelector('.scene-status'), status);
     button.querySelector('.scene-status').hidden = !status;
-    if (button.getAttribute('aria-pressed') !== String(selected))
+    if (button.getAttribute('aria-pressed') !== String(selected)) {
       button.setAttribute('aria-pressed', String(selected));
+      if (selected) pulse(button, 'lit');
+    }
     if (scene.id !== 'scene.all_off') ordered.push(button);
   }
   const orderKey = scenes.map((scene) => scene.id).join('\u0000');
@@ -1653,11 +1681,87 @@ function updateArtworkColor(image) {
     root.style.setProperty('--art-raised', shade(38, 0.15));
     root.style.setProperty('--art-night-ground', shade(7, 0.05));
     root.style.setProperty('--art-night-surface', shade(15, 0.07));
+    artTheme = artPalette(colors);
     root.dataset.artColor = 'true';
+    syncArtTheme();
   } catch {
     // Missing canvas support or inaccessible image: retain the neutral palette.
     root.dataset.artColor = 'false';
   }
+}
+
+// A light, saturated accent and dark, tinted grounds from one average color.
+function artPalette([r, g, b]) {
+  const [rr, gg, bb] = [r / 255, g / 255, b / 255];
+  const max = Math.max(rr, gg, bb);
+  const min = Math.min(rr, gg, bb);
+  const lightness = (max + min) / 2;
+  const delta = max - min;
+  let hue = 0;
+  if (delta) {
+    hue =
+      max === rr
+        ? ((gg - bb) / delta + 6) % 6
+        : max === gg
+          ? (bb - rr) / delta + 2
+          : (rr - gg) / delta + 4;
+    hue *= 60;
+  }
+  const saturation = delta ? delta / (1 - Math.abs(2 * lightness - 1)) : 0;
+  const hsl = (s, l, a = 1) => {
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const m = l - c / 2;
+    const [r1, g1, b1] =
+      hue < 60
+        ? [c, x, 0]
+        : hue < 120
+          ? [x, c, 0]
+          : hue < 180
+            ? [0, c, x]
+            : hue < 240
+              ? [0, x, c]
+              : hue < 300
+                ? [x, 0, c]
+                : [c, 0, x];
+    const channel = (value) => Math.round((value + m) * 255);
+    return `rgba(${channel(r1)}, ${channel(g1)}, ${channel(b1)}, ${a})`;
+  };
+  // Grey artwork keeps a quiet, nearly neutral theme instead of an invented hue.
+  const s =
+    saturation < 0.08 ? 0.04 : Math.min(0.72, Math.max(0.38, saturation));
+  return {
+    accent: hsl(s, 0.7),
+    deep: hsl(s * 0.55, 0.095),
+    panel: hsl(s * 0.5, 0.15),
+    glow: hsl(s, 0.5, 0.34),
+    glowSoft: hsl(s, 0.45, 0.16),
+    tint: hsl(s * 0.6, 0.85, 0.07),
+    tint2: hsl(s * 0.6, 0.85, 0.11),
+  };
+}
+
+// The artwork theme applies only while music plays with known artwork.
+function syncArtTheme() {
+  if (!root.style) return;
+  const names = {
+    accent: '--art-accent',
+    deep: '--art-deep',
+    panel: '--art-panel',
+    glow: '--art-glow',
+    glowSoft: '--art-glow-soft',
+    tint: '--art-tint',
+    tint2: '--art-tint-2',
+  };
+  const active =
+    !!artTheme &&
+    root.dataset.artColor === 'true' &&
+    root.dataset.musicPlaying === 'true';
+  for (const [key, property] of Object.entries(names)) {
+    if (active) root.style.setProperty(property, artTheme[key]);
+    else root.style.removeProperty?.(property);
+  }
+  root.dataset.themed = String(active);
 }
 
 function renderEnvironment(environment) {
@@ -1792,6 +1896,7 @@ function renderVolumeAuthority(payload, target) {
     button.setAttribute('aria-pressed', String(!unavailable && selected));
     button.setAttribute('aria-busy', String(busy));
   }
+  syncSegment(refs.musicVolumeAuto.parentElement);
   const reason = isUnavailable()
     ? 'Lugn svarar inte · försök när kontakten är tillbaka'
     : observationsUntrusted
@@ -2550,6 +2655,19 @@ function renderMusic(payload) {
       : 'ready';
   refs.musicPresetOptical.dataset.state = refs.musicPresetDj.dataset.state;
   const sourceName = String(observed.source ?? '').toLowerCase();
+  // The computer's routed input (for example "PC") is what Optical selects.
+  const computerInput =
+    sourceName.includes('optical') ||
+    !!payload?.computerNowPlaying?.[musicTarget];
+  const trustedSource =
+    canControl && musicObservationTrusted(payload, musicTarget);
+  root.dataset.musicSource = !trustedSource
+    ? 'none'
+    : sourceName.includes('spotify')
+      ? 'dj'
+      : computerInput
+        ? 'optical'
+        : 'none';
   refs.musicPresetDj.setAttribute(
     'aria-pressed',
     String(
@@ -2563,7 +2681,7 @@ function renderMusic(payload) {
     String(
       canControl &&
         musicObservationTrusted(payload, musicTarget) &&
-        sourceName.includes('optical'),
+        computerInput,
     ),
   );
   refs.musicPlayback.setAttribute(
@@ -2574,9 +2692,15 @@ function renderMusic(payload) {
         ? 'Spela och släpp manuell paus'
         : 'Starta musik',
   );
+  syncSegment(refs.musicPresets);
   refs.musicPlayback.setAttribute('aria-pressed', String(isPlaying));
-  refs.musicPlayback.dataset.icon =
-    playbackAction === 'paused' ? 'pause' : 'play';
+  const playIcon = playbackAction === 'paused' ? 'pause' : 'play';
+  if (
+    refs.musicPlayback.dataset.icon &&
+    refs.musicPlayback.dataset.icon !== playIcon
+  )
+    pulse(refs.musicPlayback, 'icon-swap');
+  refs.musicPlayback.dataset.icon = playIcon;
   setText(refs.musicPlaybackIcon, playbackAction === 'paused' ? 'Ⅱ' : '▶');
   setText(
     refs.musicPlaybackLabel,
@@ -2728,6 +2852,11 @@ function renderMusic(payload) {
     ? { ...sample, playing: isPlaying && !reportedOnly }
     : null;
   renderMusicProgress();
+  const shownTitle = refs.musicTitle.textContent;
+  if (lastShownTitle !== null && shownTitle !== lastShownTitle)
+    pulse(refs.musicTitle.parentElement, 'text-in');
+  lastShownTitle = shownTitle;
+  syncArtTheme();
 }
 
 function render(payload) {
@@ -2757,6 +2886,12 @@ function renderPresenceCorrection(payload) {
         ? String(count)
         : '?',
   );
+  if (
+    lastPresenceValue !== null &&
+    refs.presenceCountValue.textContent !== lastPresenceValue
+  )
+    pulse(refs.presenceCountOne, 'count-in');
+  lastPresenceValue = refs.presenceCountValue.textContent;
   refs.presenceCountOne.hidden = false;
   refs.presenceCountOne.disabled = busy || isUnavailable() || !available;
   refs.presenceCountOne.setAttribute('aria-busy', String(busy));
@@ -3557,6 +3692,7 @@ refs.musicArtworkImage.addEventListener('load', () => {
   if (refs.musicArtwork.dataset.state !== 'loading') return;
   refs.musicArtworkImage.hidden = false;
   refs.musicArtwork.dataset.state = 'available';
+  pulse(refs.musicArtwork, 'art-in');
   // The full image sits at the top in its own proportions over a blurred copy,
   // so square covers, video thumbnails and tall images all fit without cropping.
   const source =

@@ -4057,3 +4057,568 @@ body {
   justify-content: center;
   padding: 0 14px 0 9px;
 }
+
+/* ── Round 5, 2026-11-20: artwork theme, sliding segments, motion ──
+   While music plays with known artwork, the whole Hub takes on its colors:
+   ground, panels, glass, glow and the accent. Without artwork it rests on the
+   room's own palette. All theme colors are registered so they cross-fade. */
+@property --art-accent {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #e7bc78;
+}
+@property --art-deep {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #141c1b;
+}
+@property --art-panel {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #1c2523;
+}
+@property --art-glow {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --art-glow-soft {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+@property --art-tint {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(238, 241, 232, 0.055);
+}
+@property --art-tint-2 {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(238, 241, 232, 0.09);
+}
+#app-root {
+  --art-accent: #e7bc78;
+  --art-deep: #141c1b;
+  --art-panel: #1c2523;
+  --art-glow: rgba(231, 188, 120, 0.08);
+  --art-glow-soft: rgba(231, 188, 120, 0.06);
+  --art-tint: rgba(238, 241, 232, 0.055);
+  --art-tint-2: rgba(238, 241, 232, 0.09);
+  --accent: var(--art-accent);
+  --ground: var(--art-deep);
+  --panel: var(--art-panel);
+  --glass: var(--art-tint);
+  --glass-2: var(--art-tint-2);
+  --spring: cubic-bezier(0.3, 1.35, 0.45, 1);
+  background:
+    radial-gradient(70% 95% at 100% 0%, var(--art-glow), transparent 70%),
+    radial-gradient(75% 85% at 0% 105%, var(--art-glow-soft), transparent),
+    var(--art-deep);
+  transition:
+    --art-accent 1.4s ease,
+    --art-deep 1.4s ease,
+    --art-panel 1.4s ease,
+    --art-glow 1.4s ease,
+    --art-glow-soft 1.4s ease,
+    --art-tint 1.4s ease,
+    --art-tint-2 1.4s ease,
+    --progress 1s linear;
+}
+#app-root[data-role='desk'] {
+  --art-accent: #a4c7d2;
+  --art-glow: rgba(164, 199, 210, 0.07);
+  --art-glow-soft: rgba(164, 199, 210, 0.05);
+}
+#app-root[data-time='night'] {
+  --art-deep: #0f1514;
+  --art-panel: #161d1c;
+}
+#app-root[data-role='bed'][data-time='night'] {
+  --art-accent: #b8955e;
+  --art-deep: #0b0f0e;
+  --art-panel: #121817;
+}
+/* At night the artwork still colors the room, but only as a soft glow. */
+#app-root[data-time='night'][data-themed='true'] {
+  background:
+    radial-gradient(70% 95% at 100% 0%, var(--art-glow-soft), transparent 70%),
+    var(--art-deep);
+}
+#app-root .music-feature::after {
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 40%,
+    var(--art-panel) 82%
+  );
+  opacity: 0.94;
+}
+#app-root .music-section .music-feature,
+#app-root[data-feedback='true'] .music-section .music-feature {
+  background: var(--art-panel);
+}
+#app-root .music-section .music-artwork {
+  background: var(--art-panel);
+}
+
+/* Sliding thumbs: the pressed choice is a pill that moves, not a swap. */
+#app-root .volume-authority {
+  position: relative;
+}
+#app-root .volume-authority::before,
+#app-root .music-presets::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 27px;
+  background: var(--accent);
+  transform: translateX(0);
+  transition:
+    transform 0.45s var(--spring),
+    opacity 0.25s ease;
+  z-index: 0;
+}
+#app-root .music-presets::before {
+  border-radius: 18px;
+  background: rgba(238, 241, 232, 0.92);
+}
+#app-root .volume-authority[data-selected='1']::before,
+#app-root .music-presets[data-selected='1']::before {
+  transform: translateX(100%);
+}
+#app-root .volume-authority[data-selected='none']::before,
+#app-root .music-presets[data-selected='none']::before,
+#app-root .volume-authority:not([data-selected])::before,
+#app-root .music-presets:not([data-selected])::before {
+  opacity: 0;
+}
+#app-root .volume-authority button,
+#app-root .music-preset-button {
+  position: relative;
+  z-index: 1;
+  transition: color 0.3s ease;
+}
+#app-root .volume-authority button[aria-pressed='true'],
+#app-root .music-preset-button[aria-pressed='true'] {
+  background: transparent;
+}
+#app-root .music-presets {
+  width: 212px;
+}
+#app-root .music-presets .music-preset-button {
+  flex: 1 1 0;
+}
+#app-root[data-music-visible='false'] .music-presets::before,
+#app-root[data-camera-visible='true'][data-music-visible='false']
+  .music-presets::before {
+  display: none;
+}
+#app-root[data-music-visible='false']
+  .music-preset-button[aria-pressed='true'] {
+  background: var(--glass-2);
+}
+
+/* Scenes: color flows in, a tap springs back, a new scene lights up. */
+#app-root .scene-button,
+#app-root .scene-button[data-icon='true'] {
+  background-color: var(--glass);
+  background-image: none;
+  transition:
+    background-color 0.5s ease,
+    box-shadow 0.5s ease,
+    color 0.35s ease,
+    filter 0.5s ease,
+    transform 0.35s var(--spring);
+  animation: redesign-tile-in 0.55s var(--spring) both;
+}
+#app-root .scene-button:nth-child(2) {
+  animation-delay: 40ms;
+}
+#app-root .scene-button:nth-child(3) {
+  animation-delay: 80ms;
+}
+#app-root .scene-button:nth-child(4) {
+  animation-delay: 120ms;
+}
+#app-root .scene-button:nth-child(5) {
+  animation-delay: 160ms;
+}
+#app-root .scene-button[aria-pressed='true'] {
+  background-color: var(--scene-color);
+  background-image: radial-gradient(
+    120% 140% at 0% 0%,
+    rgba(255, 255, 255, 0.35),
+    transparent 55%
+  );
+}
+#app-root .scene-button:active:not(:disabled),
+#app-root .light-off:active:not(:disabled),
+#app-root .camera-choices button:active:not(:disabled),
+#app-root .presence-count-button:active:not(:disabled) {
+  transform: scale(0.96);
+  transition-duration: 0.12s;
+}
+#app-root .scene-button.lit {
+  animation: redesign-lit 0.75s var(--spring);
+}
+#app-root .scene-icon svg {
+  transition: transform 0.45s var(--spring);
+}
+#app-root .scene-button.lit .scene-icon svg {
+  animation: redesign-icon-pop 0.6s var(--spring);
+}
+@keyframes redesign-tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+}
+@keyframes redesign-lit {
+  0% {
+    filter: brightness(1.35);
+    transform: scale(0.97);
+  }
+  55% {
+    transform: scale(1.015);
+  }
+}
+@keyframes redesign-icon-pop {
+  40% {
+    transform: scale(1.25) rotate(-8deg);
+  }
+}
+#app-root .light-off {
+  transition:
+    left var(--move),
+    width var(--move),
+    background-color 0.4s ease,
+    box-shadow 0.4s ease,
+    transform 0.35s var(--spring);
+}
+#app-root .light-off .scene-icon,
+#app-root .light-off .scene-icon::before {
+  transition:
+    background 0.4s ease,
+    color 0.4s ease,
+    transform 0.45s var(--spring);
+}
+#app-root .light-off.lit .scene-icon {
+  animation: redesign-icon-pop 0.6s var(--spring);
+}
+#app-root .camera-choices button {
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease,
+    transform 0.35s var(--spring);
+}
+
+/* Music: the play icon swaps with a turn, a new title rises in, new artwork
+   develops from its blur. */
+#app-root .play-button {
+  transition:
+    left var(--move),
+    top var(--move),
+    transform 0.35s var(--spring);
+}
+#app-root .play-button:active:not(:disabled) {
+  transform: scale(0.92);
+}
+#app-root .play-button.icon-swap #music-playback-icon {
+  animation: redesign-icon-swap 0.45s var(--spring);
+}
+@keyframes redesign-icon-swap {
+  from {
+    opacity: 0;
+    transform: scale(0.45) rotate(-35deg);
+  }
+}
+#app-root .music-now-playing.text-in {
+  animation: redesign-text-in 0.6s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+@keyframes redesign-text-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+#app-root .music-artwork.art-in img {
+  animation: redesign-art-in 0.9s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+#app-root .music-artwork.art-in::before {
+  animation: redesign-fade-in 1.2s ease;
+}
+@keyframes redesign-art-in {
+  from {
+    opacity: 0;
+    filter: blur(14px);
+    transform: scale(1.05);
+  }
+}
+@keyframes redesign-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+#app-root .presence-count-button.count-in #presence-count-value {
+  animation: redesign-count-in 0.55s var(--spring);
+}
+#app-root .presence-count-button.count-in {
+  animation: redesign-lit 0.6s var(--spring);
+}
+@keyframes redesign-count-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.8);
+  }
+}
+#app-root .toast,
+#app-root .connection-notice {
+  animation: redesign-text-in 0.45s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+#app-root[data-music-visible='false'] .music-feature::before {
+  animation: redesign-fade-in 0.8s ease;
+}
+
+/* The source switch belongs to what is playing: a small segmented control
+   under the title, the same family as Automatisk/Manuell, off the artwork. */
+#app-root .music-section .music-now-playing {
+  bottom: 196px;
+}
+#app-root[data-volume-notice='true'] .music-section .music-now-playing {
+  bottom: 222px;
+}
+#app-root .music-presets {
+  left: calc(var(--rx) + 18px);
+  top: 394px;
+  width: 210px;
+  height: 36px;
+  padding: 3px;
+  border-radius: 18px;
+  background: rgba(0, 0, 0, 0.24);
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
+#app-root .music-presets::before {
+  border-radius: 15px;
+}
+#app-root .music-preset-button {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 15px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+#app-root #music-source[data-spotify='true'] {
+  display: none;
+}
+/* The people count sits with the time it describes, right after the clock. */
+#app-root .clock-top {
+  display: flex;
+  position: absolute;
+  left: 16px;
+  top: 52px;
+  align-items: center;
+  gap: 26px;
+}
+#app-root .clock-time,
+#app-root[data-feedback='true'] .clock-time {
+  position: static;
+}
+#app-root .presence-count-button,
+#app-root[data-lighting-expanded='true'] .presence-count-button {
+  position: static;
+  margin-top: 8px;
+}
+/* Role and night rules above set --accent directly; the theme owns it now. */
+#app-root[data-role='desk'],
+#app-root[data-role='bed'][data-time='night'] {
+  --accent: var(--art-accent);
+}
+
+/* Source switch, quiet edition: the current source needs no button. Only the
+   other source is offered, as a small chip at the end of the volume row,
+   under the controls and away from the artwork. */
+#app-root[data-music-visible='true'] .music-presets {
+  left: auto;
+  right: calc(var(--W) - var(--rx) - var(--rw) + 16px);
+  top: 536px;
+  width: auto;
+  height: 28px;
+  padding: 0;
+  gap: 4px;
+  background: none;
+  box-shadow: none;
+  transition: right var(--move);
+}
+#app-root[data-music-visible='true'] .music-presets::before {
+  display: none;
+}
+#app-root[data-music-visible='true'] .music-preset-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  min-height: 0;
+  padding: 0 11px 0 9px;
+  border-radius: 14px;
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  animation: redesign-fade-in 0.5s ease;
+}
+#app-root[data-music-visible='true'] .music-preset-button::before {
+  content: '';
+  width: 13px;
+  height: 13px;
+  background: currentColor;
+  -webkit-mask: center / contain no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8h13l-3.5-3.5M20 16H7l3.5 3.5'/%3E%3C/svg%3E");
+  mask: center / contain no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8h13l-3.5-3.5M20 16H7l3.5 3.5'/%3E%3C/svg%3E");
+}
+#app-root[data-music-visible='true'] .music-preset-button[aria-pressed='true'] {
+  display: none;
+}
+/* The volume bar leaves room for the chip; with no known source, both chips. */
+#app-root[data-music-visible='true'] .volume-control {
+  width: calc(var(--rw) - 48px - 128px);
+}
+#app-root[data-music-visible='true'][data-music-source='none'] .volume-control {
+  width: calc(var(--rw) - 48px - 196px);
+}
+#app-root[data-music-visible='true'] .music-section .music-now-playing {
+  bottom: 150px;
+}
+#app-root[data-music-visible='true'][data-volume-notice='true']
+  .music-section
+  .music-now-playing {
+  bottom: 176px;
+}
+/* With a camera open the compact card offers the other source the same way. */
+#app-root[data-camera-visible='true'][data-music-visible='true']
+  .music-presets {
+  right: auto;
+  left: calc(var(--rx) + 14px);
+  top: 522px;
+  height: 44px;
+  width: calc(var(--rw) - 28px);
+}
+#app-root[data-camera-visible='true'][data-music-visible='true']
+  .music-preset-button {
+  flex: 1;
+  justify-content: center;
+  height: 44px;
+  border-radius: 22px;
+  font-size: 14px;
+}
+#app-root[data-camera-visible='true'][data-music-visible='true']
+  .volume-control {
+  width: calc(var(--rw) - 48px);
+}
+#app-root[data-camera-visible='true'][data-music-visible='true']
+  .music-section
+  .music-now-playing {
+  top: 22px;
+  bottom: auto;
+}
+/* The chip and the artwork already say where the sound comes from. */
+#app-root[data-music-visible='true'] #music-source {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+/* ── Spacing pass, 2026-11-20 ──
+   The music sleeve keeps a 16 px inset; rows sit 12–16 px apart and the
+   bottom row (volume bar and source chip) has its own line under the island.
+   Full sleeve (y 20–580): title ends at 432, island 448–524, bottom row
+   536–564, 16 px to the edge. */
+#app-root .music-section .music-volume-policy {
+  top: 448px;
+}
+#app-root .play-button {
+  top: 455px;
+}
+#app-root[data-music-visible='true'] .music-section .music-now-playing {
+  bottom: 148px;
+}
+#app-root[data-music-visible='true'][data-volume-notice='true']
+  .music-section
+  .music-now-playing {
+  bottom: 172px;
+}
+#app-root[data-music-visible='true'] .music-presets {
+  top: 536px;
+  right: calc(var(--W) - var(--rx) - var(--rw) + 14px);
+}
+#app-root[data-music-visible='true'] .music-preset-button {
+  width: 104px;
+  justify-content: center;
+}
+#app-root .volume-control,
+#app-root[data-music-visible='false'] .volume-control,
+#app-root[data-music-visible='true'] .volume-control {
+  left: calc(var(--rx) + 22px);
+  top: 548px;
+  width: calc(var(--rw) - 22px - 14px - 104px - 14px);
+}
+#app-root[data-music-visible='true'][data-music-source='none'] .volume-control {
+  width: calc(var(--rw) - 22px - 14px - 214px - 14px);
+}
+/* Compact card under a camera (y 302–580): artwork 316–388, selector 403–463,
+   volume bar centered between selector and the source row 522–566. */
+#app-root[data-camera-visible='true'] .music-section .music-volume-policy {
+  top: 400px;
+}
+#app-root[data-camera-visible='true'] .play-button {
+  top: 323px;
+}
+#app-root[data-camera-visible='true'][data-music-visible='true']
+  .volume-control,
+#app-root[data-camera-visible='true'] .volume-control {
+  left: calc(var(--rx) + 22px);
+  top: 491px;
+  width: calc(var(--rw) - 44px);
+}
+#app-root[data-camera-visible='true'][data-music-visible='true']
+  .music-presets {
+  right: auto;
+  left: calc(var(--rx) + 14px);
+  top: 522px;
+  width: calc(var(--rw) - 28px);
+}
+#app-root[data-camera-visible='true'][data-music-visible='true']
+  .music-preset-button {
+  width: auto;
+}
+#app-root .clock-date {
+  top: 22px;
+}
+#app-root .clock-top {
+  top: 58px;
+}
+#app-root .clock-time,
+#app-root[data-feedback='true'] .clock-time {
+  line-height: 92px;
+}
+#app-root .camera-panel {
+  gap: 8px;
+  padding: 8px 8px 6px;
+}
+#app-root .camera-caption {
+  min-height: 48px;
+}
+/* One camera card height on both Hubs, so the music card always starts 12 px
+   below it; Desk's narrower column letterboxes a 16:9 image slightly. */
+#app-root .camera-frame {
+  aspect-ratio: auto;
+  height: 200px;
+}
