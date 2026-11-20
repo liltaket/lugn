@@ -20,10 +20,11 @@ music, the agent switches the WiiM to Optical itself:
    `level_db` and tolerates gaps up to 200 ms, so a notification blip never
    switches.
 2. The WiiM is read as soon as sound starts, so confirmation only has to send
-   the switch. Already on Optical: nothing. Playing or loading its own source:
-   nothing, re-read every two seconds while the computer keeps playing. Paused,
-   stopped or idle: the switch is sent and then confirmed by reading the input
-   back.
+   the switch over the already-open HTTP/1.1 keep-alive TLS connection (saving
+   a fresh TLS handshake). Already on Optical: nothing. Playing or loading its
+   own source: nothing, re-read every two seconds while the computer keeps
+   playing. Paused, stopped or idle: the switch is sent and then confirmed by
+   reading the input back.
 3. After a decision the agent waits for `release_ms` of silence before acting
    again, so a deliberate input choice is never fought. After three failed
    switches it gives up until the sound has stopped.

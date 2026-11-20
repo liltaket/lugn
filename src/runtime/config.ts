@@ -3,6 +3,7 @@ import {
   type CameraDashboardConfig,
 } from '../core/cameras.js';
 import { HomeAssistantMusicMappingsSchema } from '../adapters/home-assistant-music.js';
+import { WiimMusicMappingsSchema } from '../adapters/wiim-music.js';
 import { HomeAssistantEnvironmentMappingsSchema } from '../adapters/home-assistant-environment.js';
 import { HomeAssistantPrinterConfigSchema } from '../adapters/home-assistant-printer.js';
 import { HomeAssistantHomePresenceConfigSchema } from '../adapters/home-assistant-home-presence.js';
@@ -408,6 +409,12 @@ const PresenceFeedbackConfigSchema = z
   })
   .strict();
 
+const WiimConfigSchema = z
+  .object({
+    music: WiimMusicMappingsSchema.default({}),
+  })
+  .strict();
+
 const FileConfigSchema = z
   .object({
     http: z
@@ -429,6 +436,7 @@ const FileConfigSchema = z
       })
       .strict()
       .optional(),
+    wiim: WiimConfigSchema.optional(),
     homeAssistant: HomeAssistantConfigSchema,
     lightingControlModes: LightingControlModesSchema.default({}),
     windowLighting: WindowLightingSchema.optional(),
@@ -490,6 +498,32 @@ const FileConfigSchema = z
         context.addIssue({
           code: 'custom',
           path: ['homeAssistant', 'music', target, 'computerAudio', 'deviceId'],
+          message: 'Computer audio device must be configured in mqtt.computers',
+        });
+    }
+    for (const [target, mapping] of Object.entries(config.wiim?.music ?? {})) {
+      if (target in config.homeAssistant.music)
+        context.addIssue({
+          code: 'custom',
+          path: ['wiim', 'music', target],
+          message: `Music target ${target} cannot be configured in both homeAssistant.music and wiim.music`,
+        });
+      if (
+        mapping.computerAudio?.playbackControl &&
+        (!config.mqtt?.usernameEnv || !config.mqtt.passwordEnv)
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['wiim', 'music', target, 'computerAudio', 'playbackControl'],
+          message: 'Computer playback requires authenticated MQTT credentials',
+        });
+      if (
+        mapping.computerAudio &&
+        !configuredComputers.has(mapping.computerAudio.deviceId)
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['wiim', 'music', target, 'computerAudio', 'deviceId'],
           message: 'Computer audio device must be configured in mqtt.computers',
         });
     }
@@ -606,6 +640,9 @@ export function validateRuntimeFileConfig(value: unknown): void {
 
 export type RuntimeConfig = {
   govee?: { socketPath: string };
+  wiim?: {
+    music: z.output<typeof WiimMusicMappingsSchema>;
+  };
   windowLighting?: WindowLighting;
   presenceControl?: z.output<typeof PresenceControlConfigSchema>;
   presenceFeedback?: z.output<typeof PresenceFeedbackConfigSchema>;
@@ -799,6 +836,7 @@ export function loadRuntimeConfig(
       ...(clerk === undefined ? {} : { clerk }),
     },
     ...(fileConfig.govee ? { govee: fileConfig.govee } : {}),
+    ...(fileConfig.wiim ? { wiim: fileConfig.wiim } : {}),
     homeAssistant: {
       baseUrl: fileConfig.homeAssistant.baseUrl.replace(/\/+$/, ''),
       token: homeAssistantToken,

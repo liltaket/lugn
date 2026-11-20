@@ -12,7 +12,9 @@ room control rather than configuration.
 Current configuration covers:
 
 - Home Assistant URL/token environment name;
-- semantic light, switch, button and media-player mappings;
+- semantic light, switch, button and media-player mappings (plus optional
+  direct LAN WiiM targets under `wiim.music`; see
+  [Direct WiiM transport](WIIM-DIRECT.md));
 - per-light `lightingControlModes` (`respect_manual` by default or opt-in
   `enforce` for continued retries; see [Lighting](LIGHTING.md#lighting-control-modes));
 - one Home Assistant home-presence `person.*` or `device_tracker.*` entity;

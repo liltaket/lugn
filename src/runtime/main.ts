@@ -12,7 +12,14 @@ import { RoutineApi } from './routine-api.js';
 import { IntelligenceSettingsStore } from './intelligence-settings-store.js';
 import { IntelligenceApi } from './intelligence-api.js';
 import { createComputerIntelligenceRuntime } from './computer-intelligence-runtime.js';
+import { CompositeMusicAdapter } from '../adapters/composite-music.js';
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
+import {
+  WiimMusicAdapter,
+  createWiimHttpsTransport,
+  type WiimTransport,
+  type WiimUpnpSubscriber,
+} from '../adapters/wiim-music.js';
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
 import { HomeAssistantPrinterAdapter } from '../adapters/home-assistant-printer.js';
@@ -118,6 +125,8 @@ export type LugnRuntimeDependencies = {
   createHomeAssistantSocket?: HomeAssistantSocketFactory;
   createDashCastAdapter?: () => DashCastAdapter;
   createSensorSocket?: SensorSocketFactory;
+  wiimTransport?: WiimTransport;
+  wiimUpnpSubscriber?: WiimUpnpSubscriber;
 };
 
 /** Upper bound on the post-connect state query, beyond its own fetch timeout. */
@@ -206,6 +215,36 @@ export async function startRuntime(
           systemClock,
         )
       : undefined;
+  const wiimMusicMappings = config.wiim?.music ?? {};
+  const wiimMusic =
+    Object.keys(wiimMusicMappings).length > 0
+      ? new WiimMusicAdapter(
+          { targets: wiimMusicMappings },
+          dependencies.wiimTransport ?? createWiimHttpsTransport(),
+          systemClock,
+          dependencies.wiimUpnpSubscriber
+            ? { subscribeUpnp: dependencies.wiimUpnpSubscriber }
+            : {},
+        )
+      : undefined;
+  const allMusicMappings = {
+    ...config.homeAssistant.music,
+    ...wiimMusicMappings,
+  };
+  const allMusicTargetIds = Object.keys(allMusicMappings);
+  const musicAdapter =
+    homeAssistantMusic && wiimMusic
+      ? new CompositeMusicAdapter([
+          {
+            targets: Object.keys(config.homeAssistant.music),
+            adapter: homeAssistantMusic,
+          },
+          {
+            targets: Object.keys(wiimMusicMappings),
+            adapter: wiimMusic,
+          },
+        ])
+      : (wiimMusic ?? homeAssistantMusic);
   const homeAssistantEnvironment = new HomeAssistantEnvironmentAdapter(
     config.homeAssistant.environment,
     systemClock,
@@ -241,10 +280,10 @@ export async function startRuntime(
       ...scenes.map((scene) => scene.id),
       ...scenePresetStore.deletedSceneIds,
     ],
-    ...(Object.keys(config.homeAssistant.music).length === 0
+    ...(allMusicTargetIds.length === 0
       ? {}
       : {
-          expectedMusicTargetIds: Object.keys(config.homeAssistant.music),
+          expectedMusicTargetIds: allMusicTargetIds,
         }),
     onWarning: (message) => console.warn(`[lugn] ${message}`),
   });
@@ -279,7 +318,7 @@ export async function startRuntime(
   const opticalAdapters = new Map<string, ComputerOpticalMqttAdapter>();
   const powerSensors = new Map<string, HomeAssistantPowerSensorAdapter>();
   const controlRoutes = Object.fromEntries(
-    Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+    Object.entries(allMusicMappings).flatMap(([target, mapping]) =>
       mapping.computerAudio?.playbackControl
         ? [[target, mapping.computerAudio]]
         : [],
@@ -337,16 +376,17 @@ export async function startRuntime(
     ...(config.lightingControlModes === undefined
       ? {}
       : { lightingControlModes: config.lightingControlModes }),
-    ...(homeAssistantMusic === undefined
+    ...(musicAdapter === undefined
       ? {}
       : {
           music: {
             targets: Object.fromEntries(
-              Object.entries(config.homeAssistant.music).map(
-                ([target, mapping]) => [target, mapping.sources],
-              ),
+              Object.entries(allMusicMappings).map(([target, mapping]) => [
+                target,
+                mapping.sources,
+              ]),
             ),
-            adapter: homeAssistantMusic,
+            adapter: musicAdapter,
             observationTrusted: (target) => isMusicObservationTrusted(target),
           },
         }),
@@ -465,9 +505,9 @@ export async function startRuntime(
     `${lightingIntentPath}.routines.json`,
     createRoutineTemplates({
       lightTargets: deviceIds,
-      ...(Object.keys(config.homeAssistant.music)[0] === undefined
+      ...(allMusicTargetIds[0] === undefined
         ? {}
-        : { musicTarget: Object.keys(config.homeAssistant.music)[0]! }),
+        : { musicTarget: allMusicTargetIds[0] }),
     }),
     (message) => console.warn(`[lugn] ${message}`),
   );
@@ -485,9 +525,9 @@ export async function startRuntime(
       )
         .filter(([, values]) => values.power !== false)
         .map(([target]) => target),
-      ...(Object.keys(config.homeAssistant.music)[0] === undefined
+      ...(allMusicTargetIds[0] === undefined
         ? {}
-        : { musicTarget: Object.keys(config.homeAssistant.music)[0]! }),
+        : { musicTarget: allMusicTargetIds[0] }),
     },
   });
   const intelligenceStore = new IntelligenceSettingsStore(
@@ -504,7 +544,7 @@ export async function startRuntime(
       ({ deviceId }) => deviceId,
     ),
     computerAudio: Object.fromEntries(
-      Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+      Object.entries(allMusicMappings).flatMap(([target, mapping]) =>
         mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
       ),
     ),
@@ -564,8 +604,10 @@ export async function startRuntime(
   const trustedMusicTargets = new Set<string>();
   const reconciledMusicTargets = new Set<string>();
   isMusicObservationTrusted = (target) =>
-    homeAssistantConnection?.isCurrent() === true &&
-    trustedMusicTargets.has(target);
+    wiimMusic?.hasTarget(target)
+      ? wiimMusic.isTargetTrusted(target)
+      : homeAssistantConnection?.isCurrent() === true &&
+        trustedMusicTargets.has(target);
   // Only actual adapter emissions count; rejected old/invalid reports cannot
   // restore trust. Seeding emissions remain provisional until the query succeeds.
   homeAssistantMusic?.subscribe(({ target }) => {
@@ -576,15 +618,18 @@ export async function startRuntime(
     ).add(target);
     if (!syncingHomeAssistantStates) computerPlayback?.observe();
   });
+  wiimMusic?.subscribe(() => {
+    computerPlayback?.observe();
+  });
   const musicObservationTrust = (): Record<string, boolean> =>
     Object.fromEntries(
-      Object.keys(config.homeAssistant.music).map((target) => [
+      allMusicTargetIds.map((target) => [
         target,
         isMusicObservationTrusted(target),
       ]),
     );
   const computerAudioMappings = Object.fromEntries(
-    Object.entries(config.homeAssistant.music).flatMap(([target, mapping]) =>
+    Object.entries(allMusicMappings).flatMap(([target, mapping]) =>
       mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
     ),
   );
@@ -618,40 +663,40 @@ export async function startRuntime(
       for (const controller of displayControllers.values())
         controller.observe();
   });
-  const artwork = homeAssistantMusic
-    ? new HomeAssistantArtworkService(
-        {
-          baseUrl: config.homeAssistant.baseUrl,
-          token: config.homeAssistant.token,
-          entities: Object.fromEntries(
-            Object.entries(config.homeAssistant.music).map(
-              ([target, mapping]) => [target, mapping.entityId],
-            ),
-          ),
-          metadataProvider: (target) =>
-            homeAssistantMusic.artworkMetadata(target),
-          observationTrusted: (target) => isMusicObservationTrusted(target),
-          computer: {
-            selector: computerNowPlaying,
-            routes: Object.fromEntries(
-              Object.entries(computerAudioMappings).filter(
-                ([, mapping]) => mapping.artwork === true,
+  const artwork =
+    homeAssistantMusic || wiimMusic
+      ? new HomeAssistantArtworkService(
+          {
+            baseUrl: config.homeAssistant.baseUrl,
+            token: config.homeAssistant.token,
+            entities: Object.fromEntries(
+              Object.entries(config.homeAssistant.music).map(
+                ([target, mapping]) => [target, mapping.entityId],
               ),
             ),
-          },
-          excludedSources: Object.fromEntries(
-            Object.entries(config.homeAssistant.music).flatMap(
-              ([target, mapping]) =>
+            metadataProvider: (target) =>
+              homeAssistantMusic?.artworkMetadata(target) ?? null,
+            observationTrusted: (target) => isMusicObservationTrusted(target),
+            computer: {
+              selector: computerNowPlaying,
+              routes: Object.fromEntries(
+                Object.entries(computerAudioMappings).filter(
+                  ([, mapping]) => mapping.artwork === true,
+                ),
+              ),
+            },
+            excludedSources: Object.fromEntries(
+              Object.entries(allMusicMappings).flatMap(([target, mapping]) =>
                 mapping.computerAudio
                   ? [[target, [mapping.computerAudio.source]]]
                   : [],
+              ),
             ),
-          ),
-        },
-        homeAssistantFetch,
-        systemClock,
-      )
-    : undefined;
+          },
+          homeAssistantFetch,
+          systemClock,
+        )
+      : undefined;
   const cameraStore = config.cameraDashboard
     ? new CameraSettingsStore(
         `${lightingIntentPath}.cameras.json`,
@@ -1020,6 +1065,9 @@ export async function startRuntime(
       ...(goveeLighting
         ? { govee: goveeConnected ? 'connected' : 'disconnected' }
         : {}),
+      ...(wiimMusic
+        ? { wiim: wiimMusic.isConnected() ? 'connected' : 'disconnected' }
+        : {}),
       mqtt: mqttSubscriber?.status ?? 'not_configured',
     }),
   });
@@ -1047,7 +1095,8 @@ export async function startRuntime(
         scenesProvider: () => Array.from(engine.scenes.values()),
         stateProvider: () => engine.state,
         musicObservationConnectedProvider: () =>
-          homeAssistantSocket.status === 'connected',
+          homeAssistantSocket.status === 'connected' ||
+          (wiimMusic?.isConnected() ?? false),
         musicObservationTrustProvider: musicObservationTrust,
         stateStream: engine.stream,
         computerAudioMappings,
@@ -1134,6 +1183,7 @@ export async function startRuntime(
       },
     );
     if (mqttSubscriber) mqttSubscriber.start();
+    wiimMusic?.start();
     homeAssistantSocket.start();
     await http.start();
     await displayServer?.start();
@@ -1168,6 +1218,7 @@ export async function startRuntime(
     for (const adapter of computerAdapters) adapter.stop();
     unsubscribeMqttStatus?.();
     if (goveeRefreshTimer) clearInterval(goveeRefreshTimer);
+    await wiimMusic?.stop();
     homeAssistantSocket.stop();
     await lightingIntentStore.stop().catch(() => undefined);
     engine.dispose();
@@ -1211,6 +1262,7 @@ export async function startRuntime(
       for (const adapter of computerAdapters) adapter.stop();
       unsubscribeMqttStatus?.();
       if (goveeRefreshTimer) clearInterval(goveeRefreshTimer);
+      await wiimMusic?.stop();
       homeAssistantSocket.stop();
       try {
         await mqttSubscriber?.stop();
