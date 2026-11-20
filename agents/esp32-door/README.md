@@ -10,7 +10,7 @@ the room door. Design and rollout: [docs/DOOR-NODE.md](../../docs/DOOR-NODE.md).
 | `packages/base.yaml`     | Board, PSRAM, WiFi + fallback AP, API, OTA, safe mode, diagnostics           |
 | `packages/camera.yaml`   | OV2640/OV3660 camera, VGA JPEG, ≤2 fps, snapshot server on :8081             |
 | `packages/audio.yaml`    | PDM microphone, sound levels                                                 |
-| `packages/voice.yaml`    | micro_wake_word (`hey_jarvis` placeholder) + voice_assistant                 |
+| `packages/voice.yaml`    | micro_wake_word ("Okay Nabu") + voice_assistant                              |
 | `tools/probe.py`         | Prints device info and live states over the encrypted API                    |
 | `tools/capture.py`       | Records microphone audio to a WAV file through the `start_listening` action  |
 | `tools/listen.py`        | Starts one voice run without the wake word (push-to-talk) for the bridge     |

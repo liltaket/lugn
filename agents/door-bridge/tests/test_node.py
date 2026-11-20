@@ -101,7 +101,7 @@ async def test_connect_subscribes_and_tracks_sensors(tmp_path: Path) -> None:
 async def test_ambient_floor_ignores_wake_word_second(tmp_path: Path) -> None:
     node, client, clock = await connected_node(tmp_path)
     assert node.ambient_floor_dbfs() is None
-    for level in (-55.0, -54.0, -56.0, -38.0):  # the last second holds "Hej Jarvis"
+    for level in (-55.0, -54.0, -56.0, -38.0):  # the last second holds the wake word
         clock.t += 1
         client.on_state(SensorState(key=1, state=level))
     assert node.ambient_floor_dbfs() == -56.0

@@ -113,6 +113,7 @@ _WORD_VARIANTS = {
 
 # Prefix/suffix phrases that carry no command meaning.
 _LEADING_FILLERS = (
+    "okay nabu", "okej nabu", "ok nabu", "okej nabo", "okay nabo", "ok nabo", "nabu", "nabo",
     "hej jarvis", "hey jarvis", "hej jervis", "hej djarvis", "jarvis",
     "okej", "ok", "okay", "eh", "öh", "äh", "hmm", "snälla",
     "kan du", "kan ni", "skulle du kunna", "vill du", "var snäll och",
@@ -285,7 +286,7 @@ def parse(text: str) -> IntentResult:
 def _is_polite_request(normalized: str) -> bool:
     """'Kan du tända lampan?' is a request, not a question."""
     words = normalized.split()
-    while words and words[0] in {"hej", "hey", "jarvis", "snälla", "okej", "ok"}:
+    while words and words[0] in {"hej", "hey", "jarvis", "nabu", "nabo", "okay", "snälla", "okej", "ok"}:
         words = words[1:]
     lead = " ".join(words)
     return any(lead.startswith(p + " ") for p in _POLITE_QUESTION_OPENERS)

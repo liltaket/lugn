@@ -1,0 +1,3 @@
+# CUDA libraries for CTranslate2 (CUDA 12, cuDNN 9); filled from the build.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12<10

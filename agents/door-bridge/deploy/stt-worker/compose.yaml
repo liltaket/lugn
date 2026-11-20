@@ -1,0 +1,34 @@
+# STT worker on a LAN host with an NVIDIA GPU (nvidia-container-toolkit).
+# The token file is an env file with STT_TOKEN=<random>; the bridge sends
+# the same value. Publish on the LAN address only.
+name: lugn-stt
+services:
+  stt:
+    build:
+      context: ../..
+      dockerfile: deploy/stt-worker/Dockerfile
+    image: lugn-stt-worker:local
+    restart: unless-stopped
+    env_file: .env
+    command:
+      - --model
+      - ${STT_MODEL:-KBLab/kb-whisper-small}
+      - --device
+      - cuda
+      - --compute-type
+      - ${STT_COMPUTE_TYPE:-int8}
+      - --token-env
+      - STT_TOKEN
+    ports:
+      - '${STT_BIND:-127.0.0.1}:8790:8790'
+    volumes:
+      - models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+volumes:
+  models:

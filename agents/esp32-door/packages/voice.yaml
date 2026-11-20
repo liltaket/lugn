@@ -6,8 +6,9 @@
 # always ends a run with RUN_END. The node has no speaker; replies play on
 # BrunoCAM.
 #
-# Placeholder wake word: "Hey Jarvis" (said as "Hej Jarvis"). The real
-# wake word is not decided; a custom model replaces `hey_jarvis` below.
+# Wake word: "Okay Nabu", the pre-trained model that micro_wake_word is
+# developed and tuned around. No Swedish model exists; training one would need
+# recordings of the household's own voices, so a stock model is used.
 
 micro_wake_word:
   id: mww
@@ -18,8 +19,8 @@ micro_wake_word:
   # from music and TV.
   vad:
   models:
-    - model: hey_jarvis
-      id: wake_hey_jarvis
+    - model: okay_nabu
+      id: wake_okay_nabu
   on_wake_word_detected:
     - logger.log:
         level: INFO

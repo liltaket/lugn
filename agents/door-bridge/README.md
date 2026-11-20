@@ -130,7 +130,7 @@ Outcomes: `done`, `dry_run`, `no_speech`, `low_confidence`, `not_understood`,
 The whole normalized utterance must match one pattern; there is no keyword
 spotting. Normalization lowercases, strips punctuation, maps inflections
 (`tända`→`tänd`) and a few observed Whisper near-homophones, and turns Swedish
-number words into digits. Wake-word remnants and politeness (`hej jarvis`,
+number words into digits. Wake-word remnants and politeness (`okay nabu`, `hej jarvis`,
 `snälla`, `kan du`, `tack`) are ignored. A negation (`inte`, `sluta`...), a
 question (question word first, or `?` unless it is a `kan du ...?` request), two
 commands, or more than eight words means no action and the "not understood"

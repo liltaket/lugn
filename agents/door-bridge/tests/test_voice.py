@@ -33,7 +33,7 @@ def make(tmp_path: Path, *, stt: Any = None, lugn: FakeLugn | None = None, trans
 
 
 async def start(pipeline: VoicePipeline) -> VoiceRun:
-    port = await pipeline.handle_start("conv", 0, None, "hey_jarvis")
+    port = await pipeline.handle_start("conv", 0, None, "okay_nabu")
     assert port == 0
     run = pipeline.active
     assert run is not None

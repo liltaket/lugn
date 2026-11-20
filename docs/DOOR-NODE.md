@@ -109,12 +109,12 @@ direction of passage is visible and the window is not in view (backlight).
 
 ## Voice
 
-- **Wake word on the node.** micro_wake_word with its VAD model. The
-  placeholder is `hey_jarvis` (said as "Hej Jarvis"), because no Swedish
-  pre-trained model exists. The real wake word is not decided yet. A custom
-  "Hej …" model needs recordings of the household's own voices, because the
-  only Swedish synthetic voices are single-speaker. The `Wake word` switch
-  turns listening off.
+- **Wake word on the node.** micro_wake_word with its VAD model and the stock
+  "Okay Nabu" model, the one micro_wake_word is developed and tuned around.
+  No Swedish model exists. A custom "Hej …" model would need recordings of
+  the household's own voices, because the only Swedish synthetic voices are
+  single-speaker, so a stock model is the reliable choice. The `Wake word`
+  switch turns listening off.
 - **Bridge on BrunoCAM** (`agents/door-bridge/`). It owns the run. It decides
   where the utterance ends, sends audio to a speech-to-text worker, matches a
   deterministic Swedish grammar and calls Lugn's loopback capability API, the
