@@ -8,12 +8,17 @@ export const experienceRoutes = [
   'routines/preview',
   'intelligence/settings',
   'intelligence/suggestion',
+  'display/settings',
 ] as const;
 export type ExperienceRoute = (typeof experienceRoutes)[number];
 
 /** Transport boundary: implementations validate bodies before changing intent. */
 export interface ExperienceApi {
-  snapshot(): { routines?: unknown; intelligence?: unknown };
+  snapshot(): {
+    routines?: unknown;
+    intelligence?: unknown;
+    displayPower?: unknown;
+  };
   request(
     route: ExperienceRoute,
     body: unknown,

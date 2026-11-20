@@ -180,7 +180,12 @@ The relay does not need to be used for normal automation.
 
 Thresholds must be calibrated from real measurements and should account for transient behavior.
 
-Automatic monitor wake is not MVP-critical.
+Automatic display sleep and wake over the Linux agent, using the kernel's
+display state as feedback (an optional read-only power-metering plug is only for
+the open-loop fallback), is described in
+[Computer integration](COMPUTER.md#optional-display-sleep-and-wake). Automatic
+wake is conservative: once per confirmed return, only after Lugn itself put the
+display to sleep.
 
 Automatic monitor off must be conservative and must never rely only on a momentary LiDAR tracking loss.
 

@@ -64,6 +64,13 @@ remains a protected system action; the configured automation default can be
 edited but cannot be deleted. Nest Hubs keep their activation controls and
 receive updated presets, with no preset editor on their pages.
 
+The Datorer page also has a **Skärmstyrning** section for computers configured
+for display sleep and wake: the live status per computer and a settings form
+(master switch, waits, away, sleep after inactivity, ignored blockers, waking).
+Saving requires the same web session, same-origin request and CSRF token as other
+edits, is checked against the settings generation so stale edits are rejected,
+and applies at once. See [Computer integration](COMPUTER.md#settings-in-the-control-panel).
+
 ## Current Hub dashboard
 
 Lugn serves its own room dashboard for Nest Hubs. It is a custom Lugn page, not

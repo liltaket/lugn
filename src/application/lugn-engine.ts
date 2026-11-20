@@ -5,6 +5,10 @@ import {
   type ComputerObservation,
 } from '../core/computer.js';
 import {
+  DisplayPowerSnapshotSchema,
+  type DisplayPowerSnapshot,
+} from '../core/display-power.js';
+import {
   SimulatedMusicAdapter,
   type MusicAdapter,
   type MusicObservation,
@@ -1486,6 +1490,16 @@ export class LugnEngine {
     this.state.computer.devices[parsed.deviceId] = structuredClone(parsed);
     this.computerPlayback?.observe();
     this.musicAutomation.reconcileComputerPlayback();
+    this.publish(['computer']);
+  }
+
+  /** Records display power policy status; it never drives other automation. */
+  acceptComputerDisplay(snapshot: DisplayPowerSnapshot): void {
+    const parsed = DisplayPowerSnapshotSchema.parse(snapshot);
+    this.state.computer.displays = {
+      ...this.state.computer.displays,
+      [parsed.deviceId]: structuredClone(parsed),
+    };
     this.publish(['computer']);
   }
 

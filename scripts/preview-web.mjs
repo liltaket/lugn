@@ -138,6 +138,60 @@ export function webFixtureSnapshot() {
             observed: {},
           },
         },
+        displays: {
+          'computer.desk': {
+            deviceId: 'computer.desk',
+            enabled: true,
+            control: 'available',
+            desired: 'on',
+            inhibited: null,
+            lastRequest: {
+              action: 'off',
+              outcome: 'applied',
+              at: Date.now() - 12 * 60000,
+            },
+            observed: { power: 'on', inputIdle: true, changedAt: null },
+            idleSleep: {
+              inactiveSince: Date.now() - 2 * 60000,
+              dueAt: Date.now() + 28 * 60000,
+              heldBy: null,
+            },
+            problem: null,
+            nextAttemptAt: null,
+            evidence: null,
+          },
+        },
+      },
+    },
+    displayPower: {
+      version: 1,
+      generation: '11111111-1111-4111-8111-111111111111',
+      computers: {
+        'computer.desk': {
+          settings: {
+            enabled: true,
+            offAfterEmptyMs: 120000,
+            ensureOffWhenAway: true,
+            wakeOnEntry: true,
+            wakeInQuietHours: false,
+            inhibitOnActivity: true,
+            activeInhibitMaxMs: 1800000,
+            idleSleepAfterMs: 1800000,
+            ignoreIdleBlockers: ['T3 Code'],
+          },
+          defaults: {
+            enabled: true,
+            offAfterEmptyMs: 120000,
+            ensureOffWhenAway: true,
+            wakeOnEntry: true,
+            wakeInQuietHours: false,
+            inhibitOnActivity: true,
+            activeInhibitMaxMs: 1800000,
+            idleSleepAfterMs: 1800000,
+            ignoreIdleBlockers: ['T3 Code'],
+          },
+          customized: false,
+        },
       },
     },
     routines: {
@@ -248,6 +302,7 @@ export function createWebFixture() {
         '/ui/index.html': 'index.html',
         '/ui/styles.css': 'styles.css',
         '/ui/app.js': 'app.js',
+        '/ui/display-power.js': 'display-power.js',
         '/ui/fonts/familjen-grotesk.woff2': 'fonts/familjen-grotesk.woff2',
         '/ui/fonts/newsreader.woff2': 'fonts/newsreader.woff2',
         '/ui/manifest.webmanifest': 'manifest.webmanifest',
@@ -408,6 +463,21 @@ export function createWebFixture() {
       snapshot.intelligence.generation = `i${++revision}`;
       sendEvents();
       return json(snapshot.intelligence);
+    }
+    if (url.pathname === '/ui/api/display/settings') {
+      const display = snapshot.displayPower;
+      const entry = display.computers[body.deviceId];
+      if (!entry) return json({ error: 'display_computer_unknown' }, 404);
+      if (body.expectedGeneration !== display.generation)
+        return json({ error: 'display_settings_changed' }, 409);
+      entry.settings = body.settings ?? structuredClone(entry.defaults);
+      entry.customized =
+        JSON.stringify(entry.settings) !== JSON.stringify(entry.defaults);
+      display.generation = `${String(++revision).padStart(8, '0')}-1111-4111-8111-111111111111`;
+      snapshot.state.computer.displays[body.deviceId].enabled =
+        entry.settings.enabled;
+      sendEvents();
+      return json(display);
     }
     if (url.pathname === '/ui/api/intelligence/suggestion') {
       snapshot.intelligence.suggestions =

@@ -4,7 +4,9 @@ A standalone Rust observation publisher for Kubuntu KDE Plasma/Wayland. It sends
 computer telemetry over MQTT and does not depend on the Lugn runtime. Default
 operation is observation-only. Optional authenticated MQTT control supports exact
 MPRIS Pause and lease-bound Resume; it provides no shell commands, input injection,
-screen capture or window control. Lugn-side consumption belongs to a separate PR.
+screen capture or window control. A second opt-in, `display_control_enabled`,
+accepts display sleep/wake requests (see below). Lugn-side consumption belongs to a
+separate PR.
 
 ## Install as the desktop user
 
@@ -133,6 +135,28 @@ Uncertain command diagnostics log only the validated command UUID, fixed failure
 stage/reason, confirmation flags and elapsed time. They contain no command payload,
 media metadata or lease tokens. Use the command UUID to correlate the private
 user-service journal with the controller's result.
+
+## Optional display sleep and wake
+
+Disabled by default. Set `display_control_enabled = true` (it needs the same MQTT
+username/password as media control, and ACLs granting subscribe on the device's
+`display/command` and publish on `display/state` and `display/ack`). Lugn decides
+when the display should sleep or wake, for example from room presence; the agent
+only runs one fixed command: `kscreen-doctor --dpms off|on` on Plasma Wayland or
+`xset dpms force off|on` on X11 (`display_backend = "auto"|"kscreen"|"xset"`).
+`kscreen-doctor` must be installed for the Wayland path.
+
+The agent reads the kernel's per-connector DPMS state (`/sys/class/drm`) and
+publishes it as `power`, so a request is acknowledged `applied` only after that
+state followed the command; a command that exits 0 without effect is reported as
+`not_observed`. That is the GPU's view of the picture signal, not proof the panel
+is dark. It also publishes `input_idle` and `input_idle_since_ms` (keyboard/pointer
+idle, ignoring idle inhibitors, `display_input_idle_secs`, default 120) so a
+controller does not act while someone is working, and `idle_blockers` (what
+PowerDevil lists as holding the machine awake: for example "Playing video" or
+"Playing audio") so it can tell a film from music. Read the [DISPLAY v1 contract](protocol/DISPLAY.md) for
+topics, freshness rules and what each acknowledgment does and does not prove. No
+command text from configuration or MQTT ever reaches a process.
 
 ## Validate
 

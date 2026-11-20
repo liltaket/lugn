@@ -2,7 +2,7 @@
 //! QoS packets, so reconnect cannot replay an obsolete desktop observation.
 use crate::{
     config::Config,
-    control,
+    control, display,
     state::{Availability, ChangeNotification, Observations, Snapshot, classify},
 };
 use anyhow::{Result, ensure};
@@ -17,6 +17,8 @@ struct Broker {
     acknowledged: u64,
     command_topic: String,
     commands: Option<tokio::sync::mpsc::Sender<control::Delivery>>,
+    display_topic: String,
+    display_commands: Option<tokio::sync::mpsc::Sender<display::Delivery>>,
     control_clock: Option<(u64, std::time::Instant)>,
 }
 impl Broker {
@@ -56,6 +58,8 @@ impl Broker {
             acknowledged: 0,
             command_topic: config.topic("control/command"),
             commands: None,
+            display_topic: config.topic("display/command"),
+            display_commands: None,
             control_clock: None,
         })
     }
@@ -86,6 +90,17 @@ impl Broker {
                     // Bounded ingress; overload may drop delivery, never execute
                     // unbounded work. Controller retries use the SAME command ID.
                     let _ = commands.try_send(control::Delivery::new(command, message.retain));
+                }
+            }
+        }
+        if let Event::Incoming(Packet::Publish(message)) = &event {
+            if message.topic == self.display_topic && message.qos == QoS::AtLeastOnce {
+                if let (Some(commands), Some(command)) =
+                    (&self.display_commands, display::parse(&message.payload))
+                {
+                    // Same bounded ingress as media control; the retain flag is
+                    // kept so the actor can reject retained deliveries.
+                    let _ = commands.try_send(display::Delivery::new(command, message.retain));
                 }
             }
         }
@@ -172,6 +187,55 @@ async fn changed_control(states: &mut Option<watch::Receiver<Vec<control::Player
         None => std::future::pending().await,
     }
 }
+async fn changed_display(status: &mut Option<watch::Receiver<display::Status>>) -> Result<()> {
+    match status {
+        Some(status) => {
+            status.changed().await?;
+            Ok(())
+        }
+        None => std::future::pending().await,
+    }
+}
+async fn next_display_ack(runtime: &mut Option<display::Runtime>) -> Option<display::Ack> {
+    match runtime {
+        Some(runtime) => runtime.acks.recv().await,
+        None => std::future::pending().await,
+    }
+}
+async fn publish_display(
+    b: &mut Broker,
+    c: &Config,
+    context: &control::Context,
+    backend: Option<display::Backend>,
+    status: &mut watch::Receiver<display::Status>,
+    sequence: &mut u64,
+) -> Result<()> {
+    *sequence += 1;
+    ensure!(
+        *sequence <= 9_007_199_254_740_991,
+        "display sequence exhausted"
+    );
+    let current = status.borrow_and_update().clone();
+    let state = display::State {
+        schema_version: 1,
+        device_id: context.device_id.clone(),
+        session_id: context.session_id.clone(),
+        connection_id: context.connection_id.clone(),
+        sequence: *sequence,
+        timestamp_ms: control::now_ms(),
+        heartbeat_interval_ms: c.heartbeat_secs * 1000,
+        backend,
+        power: current.power,
+        outputs: current.outputs,
+        power_changed_at_ms: current.power_changed_at_ms,
+        input_idle: current.input_idle,
+        input_idle_since_ms: current.input_idle_since_ms,
+        idle_blockers: current.idle_blockers,
+        last_command: current.last_command,
+    };
+    b.publish(c.topic("display/state"), serde_json::to_vec(&state)?, true)
+        .await
+}
 async fn next_control_ack(runtime: &mut Option<control::Runtime>) -> Option<control::Ack> {
     match runtime {
         Some(runtime) => runtime.acks.recv().await,
@@ -209,6 +273,7 @@ async fn connected(
     c: &Config,
     session: &str,
     states: &mut watch::Receiver<Observations>,
+    feeds: &display::Feeds,
     sequence: &mut u64,
     connected_once: &mut bool,
 ) -> Result<()> {
@@ -241,6 +306,32 @@ async fn connected(
     if c.control_enabled && runtime.is_none() {
         eprintln!("Media control subscription denied; observations continue");
     }
+    // Display requests use the same connection nonce; it is advertised only
+    // after this broker accepted the command subscription.
+    let mut display = if c.display_control_enabled
+        && b.subscribe_control(c.topic("display/command")).await?
+    {
+        let backend = display::Backend::detect(c.display_backend);
+        if backend.is_none() {
+            eprintln!(
+                "Display control has no backend (no WAYLAND_DISPLAY or DISPLAY); requests will be rejected"
+            );
+        }
+        let runtime = display::spawn(context.clone(), backend, feeds.clone());
+        b.display_commands = Some(runtime.commands.clone());
+        if b.control_clock.is_none() {
+            b.control_clock = Some((control::now_ms(), std::time::Instant::now()));
+        }
+        Some(runtime)
+    } else {
+        None
+    };
+    if c.display_control_enabled && display.is_none() {
+        eprintln!("Display control subscription denied; observations continue");
+    }
+    let display_backend = display.as_ref().and_then(|r| r.backend);
+    let mut display_status = display.as_ref().map(|r| r.status.clone());
+    let mut display_sequence = 0;
     let mut control_states = runtime.as_ref().map(|r| r.states.clone());
     let mut control_sequence = 0;
     b.publish(
@@ -256,13 +347,27 @@ async fn connected(
     if let Some(states) = &mut control_states {
         publish_control(b, c, &context, states, &mut control_sequence).await?;
     }
+    if let Some(status) = &mut display_status {
+        publish_display(
+            b,
+            c,
+            &context,
+            display_backend,
+            status,
+            &mut display_sequence,
+        )
+        .await?;
+    }
     let interval = Duration::from_secs(c.heartbeat_secs);
     let mut deadline = tokio::time::Instant::now() + interval;
     let mut control_deadline = tokio::time::Instant::now() + interval;
+    let mut display_deadline = tokio::time::Instant::now() + interval;
     enum Work {
         Observation(&'static str),
         Control,
         Ack(Box<control::Ack>),
+        Display,
+        DisplayAck(Box<display::Ack>),
     }
     loop {
         let work = tokio::select! {
@@ -271,6 +376,9 @@ async fn connected(
             result = changed_control(&mut control_states) => { result?; Work::Control },
             _ = tokio::time::sleep_until(control_deadline), if runtime.is_some() => Work::Control,
             ack = next_control_ack(&mut runtime) => { match ack { Some(ack) => Work::Ack(Box::new(ack)), None => anyhow::bail!("control actor stopped") } },
+            result = changed_display(&mut display_status) => { result?; Work::Display },
+            _ = tokio::time::sleep_until(display_deadline), if display.is_some() => Work::Display,
+            ack = next_display_ack(&mut display) => { match ack { Some(ack) => Work::DisplayAck(Box::new(ack)), None => anyhow::bail!("display actor stopped") } },
             result = b.poll() => { result?; continue; }
         };
         match work {
@@ -279,6 +387,26 @@ async fn connected(
                     publish_control(b, c, &context, states, &mut control_sequence).await?;
                 }
                 control_deadline = tokio::time::Instant::now() + interval;
+            }
+            Work::Display => {
+                if let Some(status) = &mut display_status {
+                    publish_display(
+                        b,
+                        c,
+                        &context,
+                        display_backend,
+                        status,
+                        &mut display_sequence,
+                    )
+                    .await?;
+                }
+                display_deadline = tokio::time::Instant::now() + interval;
+            }
+            Work::DisplayAck(ack) => {
+                if ack.session_id == session && ack.connection_id == context.connection_id {
+                    b.publish(c.topic("display/ack"), serde_json::to_vec(&ack)?, false)
+                        .await?;
+                }
             }
             Work::Ack(ack) => {
                 if ack.session_id == session && ack.connection_id == context.connection_id {
@@ -314,7 +442,15 @@ async fn connected(
     // Runtime Drop aborts the dedicated actor, dropping every lease and cache
     // before a reconnect. A D-Bus method already sent cannot be retracted.
 }
-pub async fn run(c: Config, mut states: watch::Receiver<Observations>) -> Result<()> {
+#[cfg(test)]
+pub async fn run(c: Config, states: watch::Receiver<Observations>) -> Result<()> {
+    run_with(c, states, display::Feeds::none()).await
+}
+pub async fn run_with(
+    c: Config,
+    mut states: watch::Receiver<Observations>,
+    feeds: display::Feeds,
+) -> Result<()> {
     let session = uuid::Uuid::new_v4().to_string();
     let mut sequence = 0;
     let mut connected_once = false;
@@ -328,7 +464,7 @@ pub async fn run(c: Config, mut states: watch::Receiver<Observations>) -> Result
         let mut broker = Broker::new(&c, &session)?;
         let start = tokio::time::Instant::now();
         tokio::select! {
-            result = connected(&mut broker, &c, &session, &mut states, &mut sequence, &mut connected_once) => {
+            result = connected(&mut broker, &c, &session, &mut states, &feeds, &mut sequence, &mut connected_once) => {
                 // Avoid dumping options or credentials in errors.
                 if result.is_err() { eprintln!("MQTT connection lost/unavailable; retrying"); }
             }
@@ -495,6 +631,77 @@ mod control_wire_tests {
             assert!(
                 rx.try_recv().is_err(),
                 "unrelated topics must not enqueue commands"
+            );
+        })
+        .await
+        .unwrap();
+        let _ = done_tx.send(());
+        server.await.unwrap();
+    }
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires a loopback socket"]
+    async fn mqtt_control_wire_routes_display_commands_during_puback_wait() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let config: Config = toml::from_str(&format!(
+            "device_id='desktop'\nmqtt_host='127.0.0.1'\nmqtt_port={}",
+            address.port()
+        ))
+        .unwrap();
+        let topic = config.topic("display/command");
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (head, _) = frame(&mut stream).await;
+            assert_eq!(head >> 4, 1);
+            stream.write_all(&[0x20, 2, 0, 0]).await.unwrap();
+            let (head, body) = frame(&mut stream).await;
+            assert_eq!(head >> 4, 3);
+            let topic_length = usize::from(u16::from_be_bytes([body[0], body[1]]));
+            let pkid = [body[2 + topic_length], body[3 + topic_length]];
+            let payload = include_bytes!("../protocol/display-command-off.example.json");
+            // A media command payload on the display topic must not parse.
+            let media = include_bytes!("../protocol/control-pause.example.json");
+            stream
+                .write_all(&command_packet(&topic, media, 76, false))
+                .await
+                .unwrap();
+            stream
+                .write_all(&command_packet("unrelated/command", payload, 77, false))
+                .await
+                .unwrap();
+            stream
+                .write_all(&command_packet(&topic, payload, 78, true))
+                .await
+                .unwrap();
+            stream
+                .write_all(&[0x40, 2, pkid[0], pkid[1]])
+                .await
+                .unwrap();
+            let _ = done_rx.await;
+        });
+        let mut broker = Broker::new(&config, "123e4567-e89b-42d3-a456-426614174000").unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if matches!(
+                    broker.poll().await.unwrap(),
+                    Event::Incoming(Packet::ConnAck(_))
+                ) {
+                    break;
+                }
+            }
+            let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+            broker.display_commands = Some(tx);
+            broker
+                .publish(config.topic("state"), b"{}".to_vec(), true)
+                .await
+                .unwrap();
+            let delivered = rx.recv().await.unwrap();
+            assert!(delivered.retained, "retain flag must reach rejection guard");
+            assert_eq!(delivered.command.action, display::Action::Off);
+            assert!(
+                rx.try_recv().is_err(),
+                "foreign payloads and unrelated topics must not enqueue commands"
             );
         })
         .await

@@ -242,3 +242,197 @@ racing the final check cannot be excluded, and an already-sent D-Bus method cann
 be retracted by a local timeout. This is guarded best effort; ambiguous outcomes
 never establish ownership. No shell commands, seeking, volume control, computer
 power control or generic D-Bus invocation is exposed.
+
+## Optional display sleep and wake
+
+Lugn can put a computer's display to sleep when the room is empty and wake it
+again on return, as the old Windows bridge did. It is off by default and is
+configured per computer. It needs the Linux agent's `display_control_enabled`
+option (see `agents/linux/protocol/DISPLAY.md`) and authenticated MQTT, exactly like
+playback control. Lugn owns the policy; the agent runs one fixed
+`kscreen-doctor --dpms off|on` (or `xset`) request and reports what the GPU is
+doing.
+
+```json
+{
+  "mqtt": {
+    "usernameEnv": "LUGN_MQTT_USERNAME",
+    "passwordEnv": "LUGN_MQTT_PASSWORD",
+    "computers": [
+      {
+        "deviceId": "kuffe",
+        "display": {
+          "offAfterEmptyMs": 120000,
+          "ensureOffWhenAway": true,
+          "wakeOnEntry": true,
+          "wakeInQuietHours": false,
+          "inhibitOnActivity": true,
+          "activeInhibitMaxMs": 1800000,
+          "idleSleepAfterMs": 1800000,
+          "ignoreIdleBlockers": ["T3 Code"]
+        }
+      }
+    ]
+  }
+}
+```
+
+`"display": {}` enables everything with the defaults shown. `reassertOffMs` (default
+15 minutes) and `powerSensor` are only for the open-loop fallback below.
+
+### Feedback instead of guessing
+
+A monitor reports nothing about itself, but the kernel reports the picture signal
+per connector (`/sys/class/drm/card*-*/dpms`). The agent publishes it as
+`power` (`on`, `off`, `partial`, `none`, `unknown`) and acknowledges a request as
+`applied` only after that state followed. It is the GPU's view, not proof the panel
+is dark, but it removes the need for a power-metering plug on this hardware. It
+also catches what exit status misses: on the reference desktop two of the first
+four requests exited 0 and changed nothing, and were reported `not_observed`
+once verification existed.
+
+The agent also reports `input_idle`: no keyboard or pointer input for two minutes,
+**ignoring idle inhibitors**. The ordinary `idle` observation honors inhibitors, so a
+playing video or a busy tool keeps it `false` and it cannot tell a person from an
+inhibitor.
+
+### Policy with feedback
+
+- **Sleep.** Once presence is `confirmed_empty` (or Home Assistant says `away`) and
+  has stayed so for `offAfterEmptyMs`, Lugn requests `off`, but only while the
+  display is observed `on` (or `partial`). A display already dark, or a monitor not
+  on the bus, gets nothing. There are no blind repeats.
+- **Never while someone types.** Recent real input (`input_idle: false`) holds sleep
+  for as long as it lasts, however the presence sensor sees the room. A game or
+  video (`gaming`/`video` activity) holds it for at most `activeInhibitMaxMs`
+  after the room emptied, so a looping clip cannot keep an empty room lit forever.
+  `inhibitOnActivity: false` disables both.
+- **Few, spaced retries.** A request that changed nothing (`not_observed`) is
+  retried after 30 s and 1 min, then Lugn stops and reports `problem: off_failed`
+  until the room is occupied and empty again. After an applied sleep the next
+  request waits at least ten minutes, which also covers the agent's state lagging
+  its acknowledgment, and at most four applied sleeps are sent per empty period
+  (`problem: keeps_waking`). A display that wakes by itself (a bump, or a
+  presence miss) is therefore left alone for ten minutes rather than fought.
+- **Tracking loss is not absence.** `unknown` presence sends nothing, and it does
+  not restart the empty wait.
+- **Wake.** When presence is confirmed `occupied` again (or you are home again),
+  Lugn sends `on` **once** (at most three attempts if it changed nothing), but
+  only if it put the display to sleep _because the room emptied or you were away_.
+  A display that went dark for **inactivity** (or any other reason) is not woken
+  by Lugn, not even when you leave the room and come back; the keyboard or mouse
+  wakes it. It does not wake a display that is already on, is skipped in quiet
+  hours (23:00–06:00 Stockholm, like music) unless `wakeInQuietHours` is set, and
+  reports `problem: wake_unavailable` when no monitor is on the bus. After a
+  restart of Lugn nothing remembers why the display went dark: if the room is
+  empty then and the agent's last request was a sleep, it is taken to be the
+  presence rule (inactivity sleep only happens with someone in the room); with the
+  room occupied it is left alone.
+- **Waiting, not queueing.** A request is only sent while the computer observation
+  and the display state are live, fresh and from the same session.
+
+### When nobody is home
+
+Home Assistant reporting `away` counts as an empty room, with one difference:
+with `ensureOffWhenAway` (default on) Lugn keeps making sure the display is off
+for as long as you are away. A display that lights up again (a bump, the monitor
+re-announcing itself) is put back to sleep after an hour, with no cap on how many
+times, and a request that changed nothing backs off to an hourly try instead of
+giving up. Recent input at the computer still holds it (someone is there), and
+returning home wakes it as for any return. Switch it off to treat `away` exactly
+like an empty room, with the limits above.
+
+### Sleep after inactivity
+
+Independently of presence, Lugn puts the display to sleep after
+`idleSleepAfterMs` (default 30 minutes, `null` turns it off, minimum 5 minutes)
+without keyboard or pointer input, with the room occupied or not. Any input wakes
+the display as usual (KWin does that), and a fresh stretch of inactivity then
+starts. It needs the agent's display feedback; without it nothing is sent.
+
+It has to be certain that nobody is watching, so it asks for _positive_ evidence:
+
+- **Music never holds it.** Nothing about media players is used. A player that
+  claims to be "Playing" (a remote-controlled app, Spotify Connect to a receiver,
+  playback on another device) is irrelevant; only the signals below count.
+- **Video holds it**: a PowerDevil blocker whose reason mentions video (browsers
+  raise "Playing video" while a video plays), the computer's activity classified
+  as `video` or `gaming`, or a full-screen window with a player that is `Playing`
+  while sound runs _on this computer_ (all three are needed: browsers keep silent
+  running streams for their tabs, and a remote-controlled player says nothing
+  about this screen).
+- **Any other blocker holds it** unless its application is listed in
+  `ignoreIdleBlockers`, because a video player can be an idle blocker with another
+  reason. Blockers whose reason is "Playing audio" are music and never hold it.
+  Application names are matched case-insensitively.
+- **Unknown holds it**: unreadable blockers, a computer observation that is not
+  live and fresh, or the compositor reporting an inhibitor (`idle: false` while
+  input is idle) with nothing listed to explain it.
+- **A display that lights up by itself** in the same stretch (a bump without
+  input) is left alone for ten minutes, at most four times; a request that
+  changed nothing is retried at 30 s and 1 min, then given up for that stretch.
+
+Limits: a silent video that raises no blocker and is not full-screen, or a
+blocker raised only through a Wayland idle-inhibit protocol while another listed
+blocker is active, cannot be seen. Unknowns above are treated as "somebody may be
+watching". The reason sleep is held is visible in `idleSleep.heldBy`.
+
+### Open-loop fallback (no `power` reported)
+
+On a system where the kernel offers no readable state (`power: unknown`, for
+example some non-DRM setups) the policy does what it did before feedback existed:
+one sleep request after the wait, repeated every `reassertOffMs` while the room
+stays empty, with a capped hold for recent activity (`idle: false`) when the agent
+cannot report `input_idle`, and failures retried with backoff. A wake is sent once
+per return. In that mode only, an optional power-metering plug can serve as
+evidence:
+
+```json
+{
+  "powerSensor": {
+    "entityId": "sensor.monitor_plug_power",
+    "onAboveWatts": 15,
+    "standbyBelowWatts": 3,
+    "settleMs": 20000
+  }
+}
+```
+
+Lugn only **reads** the plug (a Home Assistant `sensor.*` in watts, also kW or mW)
+and never switches its relay. Draw after a sleep request shortens the repeat to
+about two minutes; standby backs it off to six hours and suppresses a first
+request; after a wake, standby means it did not take (retry, at most three) and
+draw means it did. A class change counts only after it held for `settleMs`.
+Thresholds are placeholders: measure the monitor in use and in standby. The plug
+is also reported in the status alongside the agent's reading, where it is the only
+way to see a monitor that sleeps by itself while the GPU still sends a picture.
+
+### Settings in the control panel
+
+The Datorer page has a **Skärmstyrning** section: the live status per computer
+(display on or off as reported, when it will sleep for inactivity or why it will
+not, the last command) and a form for the settings. The `display` entry in the
+runtime configuration decides that the feature exists for a computer and gives
+the defaults; what is saved in the panel overrides them, is applied at once
+without a restart and survives restarts (`<state path>.display-power.json`).
+The form edits the master switch (off: nothing is sent), the wait for an empty
+room, keeping the display off while away, sleep after inactivity and its time, whether
+to wait while the computer is in use or plays video or a game and for how long,
+which blockers to ignore, and waking on return (also at night). "Återställ
+grundinställning" returns a computer to the configured values. Saves are
+checked against the settings generation, so a change made elsewhere meanwhile is
+reported as a conflict instead of being overwritten. Settings the panel does not
+show (`reassertOffMs`, `powerSensor`) stay in the configuration.
+
+### State
+
+`state.computer.displays[deviceId]` (state, SSE and the `computer` stream patch)
+shows `enabled` (the master switch), `control` (`available` only while a request could be sent), `desired`
+(`off`/`on`/`null`), `inhibited` (`recent_input`, `recent_activity`,
+`video_or_game`), `observed` (`power`, `inputIdle`, `changedAt`), `lastRequest`
+(`applied`, `rejected`, `uncertain`, `failed`, with the agent's reason),
+`problem`, `idleSleep` (`inactiveSince`, `dueAt`, `heldBy`: `video`, `game`,
+`fullscreen_playback`, `other_blocker`, `unexplained_inhibitor`, `computer_unknown`,
+`blockers_unknown`, `no_feedback`, `keeps_waking`, `off_failed`), `nextAttemptAt`
+and any plug `evidence`. Status is not restored after a
+restart: a restart starts a fresh empty wait.

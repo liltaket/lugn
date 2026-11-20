@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lugn display power state v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "device_id",
+    "session_id",
+    "connection_id",
+    "sequence",
+    "timestamp_ms",
+    "heartbeat_interval_ms",
+    "backend",
+    "power",
+    "outputs",
+    "power_changed_at_ms",
+    "input_idle",
+    "input_idle_since_ms",
+    "idle_blockers",
+    "last_command"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "device_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+      "maxLength": 64
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "maxLength": 36
+    },
+    "connection_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "maxLength": 36
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "heartbeat_interval_ms": {
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 300000
+    },
+    "backend": {
+      "enum": ["kscreen", "xset", null]
+    },
+    "power": {
+      "enum": ["on", "off", "partial", "none", "unknown"]
+    },
+    "outputs": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["connector", "power"],
+        "properties": {
+          "connector": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "power": {
+            "enum": ["on", "off", "unknown"]
+          }
+        }
+      }
+    },
+    "power_changed_at_ms": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      ]
+    },
+    "input_idle": {
+      "type": ["boolean", "null"]
+    },
+    "input_idle_since_ms": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      ]
+    },
+    "idle_blockers": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["app", "reason"],
+            "properties": {
+              "app": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "last_command": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command_id",
+            "action",
+            "outcome",
+            "reason",
+            "timestamp_ms"
+          ],
+          "properties": {
+            "command_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "maxLength": 36
+            },
+            "action": {
+              "enum": ["off", "on"]
+            },
+            "outcome": {
+              "enum": ["applied", "rejected", "uncertain"]
+            },
+            "reason": {
+              "enum": [
+                "display_off",
+                "display_on",
+                "retained",
+                "expired",
+                "invalid_command",
+                "wrong_session",
+                "wrong_connection",
+                "id_conflict",
+                "busy",
+                "unavailable",
+                "timeout",
+                "failed",
+                "not_observed",
+                "no_output"
+              ]
+            },
+            "timestamp_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      ]
+    }
+  }
+}

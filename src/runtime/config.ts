@@ -27,6 +27,7 @@ import {
   type LightingValues,
 } from '../core/schemas.js';
 import { ComputerDeviceIdSchema } from '../core/computer.js';
+import { PowerSensorThresholdsSchema } from '../core/display-power.js';
 import {
   WindowLightingSchema,
   type WindowLighting,
@@ -66,6 +67,79 @@ const TrustedOriginSchema = z
       });
   });
 
+const DisplayPowerConfigSchema = z
+  .object({
+    /** Confirmed-empty time before Lugn asks the computer to sleep its display. */
+    offAfterEmptyMs: z
+      .number()
+      .int()
+      .min(10_000)
+      .max(86_400_000)
+      .default(120_000),
+    /** Open-loop fallback only (no display state from the agent): repeat interval. */
+    reassertOffMs: z
+      .number()
+      .int()
+      .min(60_000)
+      .max(86_400_000)
+      .default(900_000),
+    /** While nobody is home, keep ensuring the display is off. */
+    ensureOffWhenAway: z.boolean().default(true),
+    wakeOnEntry: z.boolean().default(true),
+    wakeInQuietHours: z.boolean().default(false),
+    inhibitOnActivity: z.boolean().default(true),
+    /**
+     * Put the display to sleep after this long without keyboard or pointer
+     * input, whatever the room reads, unless video, a game or an unknown idle
+     * blocker is active. `null` turns it off.
+     */
+    idleSleepAfterMs: z
+      .number()
+      .int()
+      .min(300_000)
+      .max(86_400_000)
+      .nullable()
+      .default(1_800_000),
+    /** Idle blockers (by application name) that never keep the display on. */
+    ignoreIdleBlockers: z.array(z.string().min(1).max(64)).max(16).default([]),
+    activeInhibitMaxMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(86_400_000)
+      .default(1_800_000),
+    /**
+     * Optional Home Assistant power sensor (a measuring smart plug on the
+     * monitor). Evidence only: Lugn never switches the plug.
+     */
+    powerSensor: z
+      .object({
+        entityId: z.string().regex(/^sensor\.[a-z0-9_]+$/),
+        onAboveWatts: z.number().finite().positive(),
+        standbyBelowWatts: z.number().finite().nonnegative(),
+        settleMs: z.number().int().min(0).max(600_000).default(20_000),
+      })
+      .strict()
+      .superRefine((sensor, context) => {
+        const parsed = PowerSensorThresholdsSchema.safeParse(sensor);
+        if (!parsed.success)
+          for (const issue of parsed.error.issues)
+            context.addIssue({
+              code: 'custom',
+              path: issue.path,
+              message: issue.message,
+            });
+      })
+      .optional(),
+  })
+  .strict()
+  .refine((display) => display.reassertOffMs >= display.offAfterEmptyMs / 2, {
+    path: ['reassertOffMs'],
+    message: 'reassertOffMs must not be much shorter than offAfterEmptyMs',
+  });
+
+export type DisplayPowerConfig = z.output<typeof DisplayPowerConfigSchema>;
+
 const ComputerMqttConfigSchema = z
   .object({
     deviceId: ComputerDeviceIdSchema,
@@ -88,6 +162,8 @@ const ComputerMqttConfigSchema = z
       .transform((value) => value.replace(/\/+$/, ''))
       .default('lugn/computers'),
     maxAgeMs: z.number().int().min(1_000).max(300_000).default(90_000),
+    /** Opt-in display sleep/wake over DISPLAY v1; requires MQTT credentials. */
+    display: DisplayPowerConfigSchema.optional(),
   })
   .strict();
 
@@ -380,6 +456,18 @@ const FileConfigSchema = z
           message: 'Computer audio device must be configured in mqtt.computers',
         });
     }
+    for (const [index, computer] of (config.mqtt?.computers ?? []).entries()) {
+      if (
+        computer.display &&
+        (!config.mqtt?.usernameEnv || !config.mqtt.passwordEnv)
+      )
+        context.addIssue({
+          code: 'custom',
+          path: ['mqtt', 'computers', index, 'display'],
+          message:
+            'Computer display control requires authenticated MQTT credentials',
+        });
+    }
     const configuredLights = new Set(
       Object.keys(config.homeAssistant.entities),
     );
@@ -525,6 +613,7 @@ export type RuntimeConfig = {
       deviceId: string;
       baseTopic: string;
       maxAgeMs: number;
+      display?: DisplayPowerConfig | undefined;
     }>;
   };
   display?: {

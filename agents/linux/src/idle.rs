@@ -3,10 +3,17 @@
 //! Unsupported compositors stay unknown. We keep their registry connection open
 //! so that a seat or idle notifier advertised later can become usable.
 //! The v1 protocol honors compositor idle inhibitors (for example video players).
+//!
+//! When display control is enabled a second, *input-only* notification is kept
+//! per seat (`ext_idle_notifier_v1` version 2). It ignores idle inhibitors, so a
+//! playing video or a busy agent does not look like someone typing, and it is
+//! published only on the display channel, never in the observation v1 state.
 
 use std::{collections::BTreeMap, thread, time::Duration};
 
-use tokio::sync::mpsc::Sender;
+use crate::control::now_ms;
+
+use tokio::sync::{mpsc::Sender, watch};
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle,
     protocol::{wl_registry, wl_seat},
@@ -18,19 +25,38 @@ use wayland_protocols::ext::idle_notify::v1::client::{
 
 use crate::state::Event;
 
+/// Input-only idle as published to the display state: whether there has been no
+/// keyboard or pointer input for the configured time, and since when (an
+/// estimate of the last input, from the idled event minus the timeout).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputIdle {
+    pub idle: Option<bool>,
+    pub since_ms: Option<u64>,
+}
+
 /// Start a dedicated blocking Wayland dispatch thread. No input events or
 /// periodic idle queries are needed; only connection failures trigger retries.
-pub fn spawn(tx: Sender<Event>, timeout_secs: u32) {
+pub fn spawn(tx: Sender<Event>, timeout_secs: u32, input: Option<(watch::Sender<InputIdle>, u32)>) {
     let failure_tx = tx.clone();
+    let (input_tx, input_secs) = match input {
+        Some((tx, secs)) => (Some(tx), Some(secs)),
+        None => (None, None),
+    };
     if let Err(error) = thread::Builder::new()
         .name("wayland-idle".into())
         .spawn(move || {
-            let mut output = Output { tx, last: None };
+            let mut output = Output {
+                tx,
+                last: None,
+                input_tx,
+            };
             let mut backoff = Duration::from_secs(1);
             output.send(None);
             while !output.tx.is_closed() {
-                if let Err(error) = run_session(&mut output, timeout_secs, &mut backoff) {
+                if let Err(error) = run_session(&mut output, timeout_secs, input_secs, &mut backoff)
+                {
                     output.send(None);
+                    output.send_input(InputIdle::default());
                     if output.tx.is_closed() {
                         break;
                     }
@@ -52,6 +78,7 @@ struct Output {
     tx: Sender<Event>,
     // The outer Option distinguishes no publication from published unknown.
     last: Option<Option<bool>>,
+    input_tx: Option<watch::Sender<InputIdle>>,
 }
 
 impl Output {
@@ -62,9 +89,22 @@ impl Output {
     }
 }
 
+impl Output {
+    fn send_input(&self, input: InputIdle) {
+        if let Some(tx) = &self.input_tx {
+            tx.send_if_modified(|current| {
+                let changed = *current != input;
+                *current = input;
+                changed
+            });
+        }
+    }
+}
+
 fn run_session(
     output: &mut Output,
     timeout_secs: u32,
+    input_secs: Option<u32>,
     backoff: &mut Duration,
 ) -> Result<(), String> {
     let connection = Connection::connect_to_env().map_err(|e| e.to_string())?;
@@ -73,6 +113,7 @@ fn run_session(
     let _registry = connection.display().get_registry(&qh, ());
     let mut state = IdleState {
         timeout_ms: timeout_secs.saturating_mul(1000),
+        input_timeout_ms: input_secs.map(|secs| secs.saturating_mul(1000)),
         notifier: None,
         seats: BTreeMap::new(),
     };
@@ -83,12 +124,14 @@ fn run_session(
     queue.roundtrip(&mut state).map_err(|e| e.to_string())?;
     *backoff = Duration::from_secs(1);
     output.send(state.idle());
+    output.send_input(state.input_idle());
 
     while !output.tx.is_closed() {
         queue
             .blocking_dispatch(&mut state)
             .map_err(|e| e.to_string())?;
         output.send(state.idle());
+        output.send_input(state.input_idle());
     }
     Ok(())
 }
@@ -97,23 +140,46 @@ struct Seat {
     proxy: wl_seat::WlSeat,
     notification: Option<ExtIdleNotificationV1>,
     idle: Option<bool>,
+    input_notification: Option<ExtIdleNotificationV1>,
+    input_idle: Option<bool>,
+    /// Estimated time of the last input, set when the seat went idle.
+    input_since_ms: Option<u64>,
 }
 
 struct IdleState {
     timeout_ms: u32,
-    notifier: Option<(u32, ExtIdleNotifierV1)>,
+    input_timeout_ms: Option<u32>,
+    /// Bound notifier global name and version.
+    notifier: Option<(u32, u32, ExtIdleNotifierV1)>,
     seats: BTreeMap<u32, Seat>,
 }
 
 impl IdleState {
     fn add_notifications(&mut self, qh: &QueueHandle<Self>) {
-        let Some((_, notifier)) = &self.notifier else {
+        let Some((_, version, notifier)) = &self.notifier else {
             return;
         };
         for (&name, seat) in &mut self.seats {
+            if seat.input_notification.is_none()
+                && *version >= 2
+                && let Some(timeout) = self.input_timeout_ms
+            {
+                seat.input_notification = Some(notifier.get_input_idle_notification(
+                    timeout,
+                    &seat.proxy,
+                    qh,
+                    (name, true),
+                ));
+                seat.input_idle = Some(false);
+                seat.input_since_ms = None;
+            }
             if seat.notification.is_none() {
-                seat.notification =
-                    Some(notifier.get_idle_notification(self.timeout_ms, &seat.proxy, qh, name));
+                seat.notification = Some(notifier.get_idle_notification(
+                    self.timeout_ms,
+                    &seat.proxy,
+                    qh,
+                    (name, false),
+                ));
                 // ext-idle-notify explicitly starts each notification not idle;
                 // its timer starts on creation, rather than reporting past input.
                 // This is protocol state, not an inferred last-input timestamp.
@@ -124,6 +190,25 @@ impl IdleState {
 
     fn idle(&self) -> Option<bool> {
         aggregate_idle(self.seats.values().map(|seat| seat.idle))
+    }
+
+    /// Unknown unless input idle was requested and the compositor supports it.
+    fn input_idle(&self) -> InputIdle {
+        let Some(timeout) = self.input_timeout_ms else {
+            return InputIdle::default();
+        };
+        let idle = aggregate_idle(self.seats.values().map(|seat| seat.input_idle));
+        // The most recent last-input across seats; only meaningful while idle.
+        let since_ms = if idle == Some(true) {
+            self.seats
+                .values()
+                .filter_map(|seat| seat.input_since_ms)
+                .max()
+                .or_else(|| Some(now_ms().saturating_sub(u64::from(timeout))))
+        } else {
+            None
+        };
+        InputIdle { idle, since_ms }
     }
 }
 
@@ -160,8 +245,14 @@ impl Dispatch<wl_registry::WlRegistry, ()> for IdleState {
             } if version > 0 => {
                 match interface.as_str() {
                     "ext_idle_notifier_v1" if state.notifier.is_none() => {
-                        // v1 is sufficient and works with older KWin versions.
-                        state.notifier = Some((name, registry.bind(name, 1, qh, ())));
+                        // v1 suffices for plain idle; v2 adds input-only idle.
+                        let wanted = if state.input_timeout_ms.is_some() {
+                            2
+                        } else {
+                            1
+                        };
+                        let bound = version.min(wanted);
+                        state.notifier = Some((name, bound, registry.bind(name, bound, qh, ())));
                     }
                     "wl_seat" => {
                         let proxy = registry.bind(name, version.min(5), qh, ());
@@ -171,6 +262,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for IdleState {
                                 proxy,
                                 notification: None,
                                 idle: None,
+                                input_notification: None,
+                                input_idle: None,
+                                input_since_ms: None,
                             },
                         );
                     }
@@ -179,19 +273,31 @@ impl Dispatch<wl_registry::WlRegistry, ()> for IdleState {
                 state.add_notifications(qh);
             }
             wl_registry::Event::GlobalRemove { name } => {
-                if state.notifier.as_ref().is_some_and(|(id, _)| *id == name) {
+                if state
+                    .notifier
+                    .as_ref()
+                    .is_some_and(|(id, _, _)| *id == name)
+                {
                     for seat in state.seats.values_mut() {
                         if let Some(notification) = seat.notification.take() {
                             notification.destroy();
                         }
+                        if let Some(notification) = seat.input_notification.take() {
+                            notification.destroy();
+                        }
                         seat.idle = None;
+                        seat.input_idle = None;
+                        seat.input_since_ms = None;
                     }
-                    if let Some((_, notifier)) = state.notifier.take() {
+                    if let Some((_, _, notifier)) = state.notifier.take() {
                         notifier.destroy();
                     }
                 }
                 if let Some(seat) = state.seats.remove(&name) {
                     if let Some(notification) = seat.notification {
+                        notification.destroy();
+                    }
+                    if let Some(notification) = seat.input_notification {
                         notification.destroy();
                     }
                     if seat.proxy.version() >= 5 {
@@ -204,25 +310,47 @@ impl Dispatch<wl_registry::WlRegistry, ()> for IdleState {
     }
 }
 
-impl Dispatch<ExtIdleNotificationV1, u32> for IdleState {
+/// User data: seat global name and whether this is the input-only notification.
+impl Dispatch<ExtIdleNotificationV1, (u32, bool)> for IdleState {
     fn event(
         state: &mut Self,
         notification: &ExtIdleNotificationV1,
         event: ext_idle_notification_v1::Event,
-        name: &u32,
+        (name, input): &(u32, bool),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        let timeout = u64::from(state.input_timeout_ms.unwrap_or(0));
         let Some(seat) = state.seats.get_mut(name) else {
             return;
         };
         // Discard queued events from notifications destroyed after global loss.
-        if seat.notification.as_ref().map(Proxy::id) != Some(notification.id()) {
+        let current = if *input {
+            seat.input_notification.as_ref()
+        } else {
+            seat.notification.as_ref()
+        };
+        if current.map(Proxy::id) != Some(notification.id()) {
             return;
         }
+        let slot = if *input {
+            &mut seat.input_idle
+        } else {
+            &mut seat.idle
+        };
         match event {
-            ext_idle_notification_v1::Event::Idled => seat.idle = Some(true),
-            ext_idle_notification_v1::Event::Resumed => seat.idle = Some(false),
+            ext_idle_notification_v1::Event::Idled => {
+                *slot = Some(true);
+                if *input {
+                    seat.input_since_ms = Some(now_ms().saturating_sub(timeout));
+                }
+            }
+            ext_idle_notification_v1::Event::Resumed => {
+                *slot = Some(false);
+                if *input {
+                    seat.input_since_ms = None;
+                }
+            }
             _ => {}
         }
     }
@@ -260,7 +388,11 @@ mod tests {
     #[test]
     fn transitions_publish_once_and_connection_loss_clears_known_state() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-        let mut output = Output { tx, last: None };
+        let mut output = Output {
+            tx,
+            last: None,
+            input_tx: None,
+        };
         for value in [None, None, Some(false), Some(false), Some(true), None, None] {
             output.send(value);
         }
