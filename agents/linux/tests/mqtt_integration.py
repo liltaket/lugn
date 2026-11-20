@@ -80,13 +80,17 @@ def check_schema(value, schema, path="payload"):
         require(value >= schema["minimum"], f"{path}: below minimum")
     if "maximum" in schema:
         require(value <= schema["maximum"], f"{path}: above maximum")
-    for keyword in ("maxLength", "maxItems"):
-        if keyword in schema:
-            require(len(value) <= schema[keyword], f"{path}: exceeds {keyword}")
-    if "minLength" in schema:
-        require(len(value) >= schema["minLength"], f"{path}: shorter than minLength")
-    if "pattern" in schema:
-        require(re.search(schema["pattern"], value), f"{path}: pattern mismatch")
+    # As in JSON Schema, size and pattern keywords only constrain their own
+    # type, so a ["string", "null"] field may be null.
+    if isinstance(value, str):
+        if "maxLength" in schema:
+            require(len(value) <= schema["maxLength"], f"{path}: exceeds maxLength")
+        if "minLength" in schema:
+            require(len(value) >= schema["minLength"], f"{path}: shorter than minLength")
+        if "pattern" in schema:
+            require(re.search(schema["pattern"], value), f"{path}: pattern mismatch")
+    if isinstance(value, list) and "maxItems" in schema:
+        require(len(value) <= schema["maxItems"], f"{path}: exceeds maxItems")
     if "format" in schema:
         require(schema["format"] == "uuid", f"{path}: unsupported format")
         try:
