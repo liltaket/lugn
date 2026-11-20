@@ -102,7 +102,7 @@ All entity IDs come from the device prefix, for example
 `_printer_name`, `_printable_objects`, the nozzle and bed temperatures,
 `image.<entityPrefix>_cover_image` and `light.<entityPrefix>_chamber_light`.
 The only command Lugn sends is `light.turn_on` or `light.turn_off` for the
-chamber light, when someone taps Lampa on a Hub; it never starts, pauses or
+chamber light, when someone taps the lamp button on a Hub; it never starts, pauses or
 stops a print.
 
 ```json

@@ -75,7 +75,7 @@ function snapshot(scenario) {
     if (scenario === 'art-error')
       data.artwork['music.room'].url = '/missing-art.svg';
     const printing = (overrides = {}) => ({
-      name: 'A1',
+      name: 'Bertil',
       status: 'printing',
       stage: 'printing',
       progress: 45,

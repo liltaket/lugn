@@ -4805,8 +4805,11 @@ body {
 /* ── 3D print live activity, 2026-11-20 ──
    The print takes the top card of the right column (y 20–288), the music card
    stays under it (y 302–580). A camera borrows the top card: the print then
-   shares the lower card with music, and a chip on the camera swaps them. The
-   model sits on a pale plate so a black filament render still reads. */
+   shares the lower card with music, and a chip on the camera swaps them.
+   Card rows: plate + name/title (14–118), percent · time · lamp (136–184),
+   progress (206–216), layer line (230–248). The model sits on a small
+   textured build plate so a black filament render still reads; the plate
+   warms up while the chamber light is on. */
 #app-root .print-activity {
   position: absolute;
   left: var(--rx);
@@ -4819,16 +4822,22 @@ body {
   color: var(--ink);
   background:
     radial-gradient(
-      120% 90% at 0% 0%,
-      rgba(132, 201, 141, 0.2),
-      transparent 62%
+      110% 80% at 0% 0%,
+      rgba(132, 201, 141, 0.18),
+      transparent 60%
+    ),
+    radial-gradient(
+      80% 60% at 100% 100%,
+      rgba(132, 201, 141, 0.07),
+      transparent 70%
     ),
     var(--panel);
   box-shadow:
-    inset 0 0 0 1px rgba(150, 214, 158, 0.16),
+    inset 0 0 0 1px rgba(150, 214, 158, 0.14),
     0 10px 30px rgba(0, 0, 0, 0.18);
   --print-ink: #9fdca6;
-  --print-fill: linear-gradient(90deg, #5fbf74, #a8e6a0);
+  --print-glow: rgba(159, 220, 166, 0.45);
+  --print-fill: linear-gradient(90deg, #4fae66, #9fdca6);
   animation: redesign-cam-in 0.5s cubic-bezier(0.2, 0.9, 0.25, 1);
 }
 #app-root .print-activity[hidden] {
@@ -4837,56 +4846,73 @@ body {
 #app-root[data-print-slot='lower'] .print-activity {
   top: 302px;
   height: 278px;
-  box-shadow: inset 0 0 0 1px rgba(150, 214, 158, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(150, 214, 158, 0.14);
 }
 #app-root .print-activity[data-status='paused'] {
   --print-ink: #e7bc78;
-  --print-fill: linear-gradient(90deg, #c99a52, #e7bc78);
+  --print-glow: rgba(231, 188, 120, 0.45);
+  --print-fill: linear-gradient(90deg, #b8893f, #e7bc78);
 }
 #app-root .print-activity[data-status='failed'] {
   --print-ink: #ee9a86;
-  --print-fill: linear-gradient(90deg, #c4644f, #ee9a86);
+  --print-glow: rgba(238, 154, 134, 0.45);
+  --print-fill: linear-gradient(90deg, #b9583f, #ee9a86);
 }
+
+/* The build plate: pale, finely textured like a PEI sheet, with a soft
+   shadow under the model. */
 #app-root .print-plate {
   position: absolute;
   left: 14px;
   top: 14px;
   width: 104px;
   height: 104px;
-  border-radius: 22px;
+  border-radius: 24px;
   overflow: hidden;
   display: grid;
   place-items: center;
-  color: rgba(24, 32, 31, 0.5);
-  background: radial-gradient(
-    85% 85% at 50% 40%,
-    #eef3ea,
-    #c9d8c6 70%,
-    #b4c6b1
-  );
+  color: rgba(24, 32, 31, 0.45);
+  background:
+    radial-gradient(circle, rgba(40, 52, 49, 0.09) 0.8px, transparent 1.2px) 0
+      0 / 6px 6px,
+    radial-gradient(50% 18% at 50% 82%, rgba(24, 32, 31, 0.2), transparent),
+    radial-gradient(90% 90% at 50% 30%, #f2f5ee, #cfdccb 72%, #b9cab5);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.45),
+    inset 0 -6px 12px rgba(24, 32, 31, 0.08);
+  transition:
+    box-shadow 0.4s ease,
+    filter 0.4s ease;
+}
+#app-root .print-activity[data-lamp='on'] .print-plate {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 244, 214, 0.7),
+    inset 0 18px 26px rgba(255, 226, 160, 0.42),
+    0 0 22px rgba(241, 220, 166, 0.22);
 }
 #app-root[data-time='night'] .print-plate {
   filter: brightness(0.72);
 }
 #app-root .print-plate img {
   position: absolute;
-  inset: 4px;
-  width: calc(100% - 8px);
-  height: calc(100% - 8px);
+  inset: 6px;
+  width: calc(100% - 12px);
+  height: calc(100% - 12px);
   object-fit: contain;
-  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.22));
+  filter: drop-shadow(0 4px 4px rgba(0, 0, 0, 0.22));
 }
 #app-root .print-activity[data-image='ready'] .print-fallback {
   display: none;
 }
+
 #app-root .print-copy {
   position: absolute;
   left: 134px;
-  right: 16px;
-  top: 20px;
+  right: 18px;
+  top: 22px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 #app-root .print-kicker {
   display: flex;
@@ -4905,7 +4931,7 @@ body {
   height: 8px;
   border-radius: 50%;
   background: var(--print-ink);
-  box-shadow: 0 0 0 4px rgba(159, 220, 166, 0.14);
+  box-shadow: 0 0 0 4px rgba(159, 220, 166, 0.12);
 }
 #app-root .print-activity[data-status='printing'] .print-kicker::before {
   animation: print-pulse 2.4s ease-in-out infinite;
@@ -4916,8 +4942,9 @@ body {
   }
 }
 #app-root #print-name {
-  font-weight: 650;
+  font-weight: 700;
   color: var(--ink);
+  letter-spacing: 0.01em;
 }
 #app-root #print-state::before {
   content: '·';
@@ -4939,87 +4966,116 @@ body {
   font-weight: 650;
   overflow-wrap: anywhere;
 }
+
+/* Percent, time left and the lamp share one row, well clear of the bar. */
 #app-root .print-figures {
   position: absolute;
   left: 20px;
-  right: 18px;
+  right: 76px;
   top: 136px;
+  height: 48px;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 #app-root #print-percent {
+  flex: none;
   font-size: 44px;
   line-height: 48px;
   font-weight: 650;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
-#app-root #print-time {
+#app-root .print-when {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+#app-root #print-time,
+#app-root #print-eta {
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+#app-root #print-time {
   font-size: 15px;
-  color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--ink);
+}
+#app-root #print-eta {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-3);
 }
 #app-root .print-progress {
   position: absolute;
   left: 20px;
   right: 20px;
-  top: 198px;
-  height: 12px;
-  border-radius: 6px;
-  overflow: hidden;
-  background: rgba(238, 241, 232, 0.09);
+  top: 206px;
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(238, 241, 232, 0.08);
 }
 #app-root .print-progress::before {
   content: '';
   position: absolute;
   inset: 0 auto 0 0;
   width: var(--print-progress, 0%);
-  min-width: 12px;
+  min-width: 10px;
   border-radius: inherit;
   background: var(--print-fill);
+  box-shadow: 0 0 12px var(--print-glow);
   transition: width 1.2s ease;
 }
 #app-root .print-detail {
   position: absolute;
   left: 20px;
   right: 20px;
-  top: 224px;
-  font-size: 13.5px;
-  line-height: 20px;
+  top: 230px;
+  font-size: 13px;
+  line-height: 18px;
   color: var(--ink-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
+#app-root[data-print-slot='lower'] .print-figures {
+  top: 140px;
+}
+#app-root[data-print-slot='lower'] .print-light {
+  top: 142px;
+}
+#app-root[data-print-slot='lower'] .print-progress {
+  top: 212px;
+}
 #app-root[data-print-slot='lower'] .print-detail {
-  top: 230px;
+  top: 238px;
 }
 
-/* Chamber light: a small capsule at the card's lower right. The tapped state
-   shows at once; a soft pulse says Home Assistant has not confirmed it yet. */
+/* Chamber light: a round icon button at the end of the percent row. Lit, it
+   glows warm and the plate warms with it; a soft pulse says Home Assistant
+   has not confirmed the tap yet. */
 #app-root .print-light {
   position: absolute;
-  right: 14px;
-  top: 212px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+  right: 16px;
+  top: 138px;
+  width: 44px;
   height: 44px;
-  min-height: 0;
   min-width: 0;
-  padding: 0 16px 0 13px;
+  min-height: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
   border: 0;
-  border-radius: 22px;
+  border-radius: 50%;
   color: var(--ink-2);
-  font-size: 14px;
-  font-weight: 600;
   background: var(--glass-2);
   box-shadow: inset 0 0 0 1px var(--hair);
   transition:
@@ -5030,21 +5086,26 @@ body {
 #app-root .print-light[hidden] {
   display: none;
 }
+#app-root .print-light svg {
+  width: 22px;
+  height: 22px;
+}
 #app-root .print-light[aria-pressed='true'] {
-  color: #2a2414;
-  background: #f1dca6;
+  color: #3a2f12;
+  background: radial-gradient(circle at 50% 40%, #fbecc3, #efd291);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.4),
-    0 0 18px rgba(241, 220, 166, 0.35);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 0 0 5px rgba(241, 220, 166, 0.12),
+    0 0 22px rgba(241, 220, 166, 0.4);
+}
+#app-root .print-light[aria-pressed='true'] svg path {
+  fill: rgba(58, 47, 18, 0.16);
 }
 #app-root .print-light[data-pending='true'] {
   animation: print-pulse 1.2s ease-in-out infinite;
 }
-#app-root[data-print-slot='lower'] .print-light {
-  top: 220px;
-}
-#app-root .print-activity[data-light='true'] .print-detail {
-  right: 128px;
+#app-root .print-activity[data-lamp='unknown'] .print-figures {
+  right: 18px;
 }
 
 /* The print in the lower card hides the music card it shares that place with. */

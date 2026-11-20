@@ -124,9 +124,11 @@ the task name, the percentage, time left with the estimated finish, a green
 progress bar, and the layer count (nozzle and bed temperatures while it heats).
 The task name fits two lines: one name keeps up to 60 characters, and several
 parts read `Stand + Box + 5 till`, with the names shortened first so the count
-always shows. `Lampa` at the lower right switches the printer's chamber light;
-it appears only while Home Assistant reports the light on or off, shows the
-tapped state at once and pulses until Home Assistant confirms it.
+always shows. A round lamp button at the end of the percentage row switches
+the printer's chamber light; it appears only while Home Assistant reports the
+light on or off, shows the tapped state at once and pulses until Home
+Assistant confirms it. While the light is on, the button and the plate glow
+warm.
 A paused print turns amber and a failed one red. A camera has priority and
 borrows the top card; the print and the music then share the lower card. Music
 keeps it while it plays, unless the print is paused, finished or failed; a chip

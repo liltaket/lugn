@@ -75,6 +75,7 @@ const refs = {
   printProgress: document.querySelector('#print-progress'),
   printPercent: document.querySelector('#print-percent'),
   printTime: document.querySelector('#print-time'),
+  printEta: document.querySelector('#print-eta'),
   printDetail: document.querySelector('#print-detail'),
   printLight: document.querySelector('#print-light'),
   activitySwap: document.querySelector('#activity-swap'),
@@ -3294,27 +3295,31 @@ function printDurationText(minutes) {
 function renderPrintTime() {
   const activity = printActivity;
   if (!activity || !refs.printTime) return;
+  // Two short lines: how long is left, then when it is done.
   let text = '';
+  let eta = '';
   if (activity.status === 'finished') {
-    text = Number.isFinite(activity.statusSince)
-      ? `Klar ${timeFormat.format(new Date(activity.statusSince))}`
-      : 'Klar';
+    text = 'Klar';
+    if (Number.isFinite(activity.statusSince))
+      eta = `kl. ${timeFormat.format(new Date(activity.statusSince))}`;
   } else if (activity.status === 'failed') {
     text = 'Kolla skrivaren';
   } else if (activity.status === 'paused') {
-    text = Number.isFinite(activity.remainingMinutes)
-      ? `${printDurationText(activity.remainingMinutes)} kvar`
-      : '';
+    if (Number.isFinite(activity.remainingMinutes))
+      text = `${printDurationText(activity.remainingMinutes)} kvar`;
+    eta = 'väntar på dig';
   } else if (Number.isFinite(activity.endsAt)) {
     const minutes = Math.max(
       0,
       Math.round((activity.endsAt - estimatedServerNow()) / 60000),
     );
-    text = `${printDurationText(minutes)} kvar · ${timeFormat.format(new Date(activity.endsAt))}`;
+    text = `${printDurationText(minutes)} kvar`;
+    eta = `klar ${timeFormat.format(new Date(activity.endsAt))}`;
   } else if (Number.isFinite(activity.remainingMinutes)) {
     text = `${printDurationText(activity.remainingMinutes)} kvar`;
   }
   setText(refs.printTime, text);
+  setText(refs.printEta, eta);
 }
 
 function renderPrinter(payload) {
@@ -3393,10 +3398,11 @@ function renderPrintLight() {
   )
     printLightRequest = null;
   button.hidden = reported === null;
-  if (refs.printActivity)
-    refs.printActivity.dataset.light = String(reported !== null);
   const on = printLightRequest ? printLightRequest.on : reported === true;
   button.setAttribute('aria-pressed', String(on));
+  if (refs.printActivity)
+    refs.printActivity.dataset.lamp =
+      reported === null ? 'unknown' : on ? 'on' : 'off';
   button.dataset.pending = String(!!printLightRequest);
   button.disabled = isUnavailable() || printLightRequest?.sending === true;
 }
