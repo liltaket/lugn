@@ -341,8 +341,10 @@ It has to be certain that nobody is watching, so it asks for _positive_ evidence
   playback on another device) is irrelevant; only the signals below count.
 - **Video holds it**: a PowerDevil blocker whose reason mentions video (browsers
   raise "Playing video" while a video plays), the computer's activity classified
-  as `video` or `gaming`, or a full-screen window while sound is played _on this
-  computer_.
+  as `video` or `gaming`, or a full-screen window with a player that is `Playing`
+  while sound runs _on this computer_ (all three are needed: browsers keep silent
+  running streams for their tabs, and a remote-controlled player says nothing
+  about this screen).
 - **Any other blocker holds it** unless its application is listed in
   `ignoreIdleBlockers`, because a video player can be an idle blocker with another
   reason. Blockers whose reason is "Playing audio" are music and never hold it.
@@ -397,7 +399,7 @@ shows `control` (`available` only while a request could be sent), `desired`
 `video_or_game`), `observed` (`power`, `inputIdle`, `changedAt`), `lastRequest`
 (`applied`, `rejected`, `uncertain`, `failed`, with the agent's reason),
 `problem`, `idleSleep` (`inactiveSince`, `dueAt`, `heldBy`: `video`, `game`,
-`fullscreen_audio`, `other_blocker`, `unexplained_inhibitor`, `computer_unknown`,
+`fullscreen_playback`, `other_blocker`, `unexplained_inhibitor`, `computer_unknown`,
 `blockers_unknown`, `no_feedback`, `keeps_waking`, `off_failed`), `nextAttemptAt`
 and any plug `evidence`. Status is not restored after a
 restart: a restart starts a fresh empty wait.

@@ -68,7 +68,7 @@ export const DisplayPowerSnapshotSchema = z.object({
         .enum([
           'video',
           'game',
-          'fullscreen_audio',
+          'fullscreen_playback',
           'other_blocker',
           'unexplained_inhibitor',
           'computer_unknown',

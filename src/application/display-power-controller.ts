@@ -393,14 +393,17 @@ export class DisplayPowerController {
       return 'computer_unknown';
     if (computer.activity.classification === 'gaming') return 'game';
     if (computer.activity.classification === 'video') return 'video';
-    // A full-screen window with local sound is a film or a game even when no
-    // blocker is listed. Sound that is not played on this computer (a receiver
-    // or another device) never shows up here.
+    // A full-screen window with a player that is playing and sound running on
+    // this computer is a film even when no blocker is listed (a native player).
+    // Running streams alone prove little, since browsers keep silent ones for
+    // their tabs, and a player that claims to be playing alone proves nothing
+    // about this screen, so all three are needed.
     if (
       computer.observed.fullscreen === true &&
-      computer.observed.audio?.playing === true
+      computer.observed.audio?.playing === true &&
+      computer.observed.media?.some((player) => player.playback === 'playing')
     )
-      return 'fullscreen_audio';
+      return 'fullscreen_playback';
     const blockers = observation.idle_blockers;
     if (blockers === null) return 'blockers_unknown';
     const ignored = new Set(

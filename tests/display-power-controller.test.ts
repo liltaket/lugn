@@ -27,6 +27,7 @@ type Scene = {
   idle: boolean | null;
   fullscreen: boolean | null;
   audioPlaying: boolean | null;
+  playerPlaying: boolean;
   activity: 'desktop' | 'gaming' | 'video' | 'idle' | 'unknown';
   online: boolean;
   session: string;
@@ -43,6 +44,7 @@ function harness(
     idle: true,
     fullscreen: null,
     audioPlaying: null,
+    playerPlaying: false,
     activity: 'desktop',
     online: true,
     session: SESSION,
@@ -130,6 +132,7 @@ function harness(
                 scene.audioPlaying === null
                   ? null
                   : { playing: scene.audioPlaying },
+              media: [{ playback: scene.playerPlaying ? 'playing' : 'paused' }],
             },
             activity: { classification: scene.activity },
           },
@@ -745,6 +748,22 @@ describe('DisplayPowerController', () => {
       expect(h.transport.sent).toEqual(['off']);
     });
 
+    it('is not held by a full-screen browser whose tabs keep silent audio streams', async () => {
+      // The real Kuffe situation: Zen full screen, Firefox/Zen streams "running",
+      // every media player paused or stopped.
+      await idleAtDesk(
+        { ignoreIdleBlockers: ['T3 Code'] },
+        { blockers: [{ app: 'T3 Code', reason: 'Agents are working' }] },
+      );
+      await h.set({
+        fullscreen: true,
+        audioPlaying: true,
+        playerPlaying: false,
+      });
+      await h.advance(28 * MINUTE);
+      expect(h.transport.sent).toEqual(['off']);
+    });
+
     it('is held by video until it stops, and then sleeps', async () => {
       await idleAtDesk(
         { ignoreIdleBlockers: ['t3 code'] },
@@ -779,11 +798,14 @@ describe('DisplayPowerController', () => {
       });
     });
 
-    it('is held by a game, a classified video, or a full-screen window with local sound', async () => {
+    it('is held by a game, a classified video, or a full-screen player that is playing with local sound', async () => {
       for (const [scene, heldBy] of [
         [{ activity: 'gaming' as const }, 'game'],
         [{ activity: 'video' as const }, 'video'],
-        [{ fullscreen: true, audioPlaying: true }, 'fullscreen_audio'],
+        [
+          { fullscreen: true, audioPlaying: true, playerPlaying: true },
+          'fullscreen_playback',
+        ],
       ] as const) {
         await idleAtDesk();
         await h.set(scene);
