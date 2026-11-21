@@ -9,6 +9,10 @@ import { HomeAssistantPrinterConfigSchema } from '../adapters/home-assistant-pri
 import { HomeAssistantHomePresenceConfigSchema } from '../adapters/home-assistant-home-presence.js';
 import { HomeAssistantButtonMappingsSchema } from '../adapters/home-assistant-button.js';
 import { HomeAssistantBilresaConfigSchema } from '../adapters/home-assistant-bilresa.js';
+import {
+  AssistantEntitiesConfigSchema,
+  type ResolvedAssistantEntitiesConfig,
+} from '../adapters/assistant-entities-mqtt.js';
 import { WledCctMappingsSchema } from '../adapters/wled-cct.js';
 import { PresenceControlConfigSchema } from '../adapters/stl27l-presence-control.js';
 import { lstatSync, readFileSync } from 'node:fs';
@@ -285,6 +289,8 @@ const MqttConfigSchema = z
     clientId: z.string().min(1).max(128).optional(),
     baseTopic: z.string().min(1).default('bruno/doorway'),
     maxAgeMs: z.number().int().positive().max(60_000).default(7_000),
+    /** Home Assistant entities for voice assistants; see docs/INTEGRATIONS.md. */
+    assistantEntities: AssistantEntitiesConfigSchema.optional(),
     computers: z
       .array(ComputerMqttConfigSchema)
       .default([])
@@ -729,6 +735,7 @@ export type RuntimeConfig = {
     clientId?: string;
     baseTopic: string;
     maxAgeMs: number;
+    assistantEntities?: ResolvedAssistantEntitiesConfig;
     computers?: Array<{
       deviceId: string;
       baseTopic: string;
@@ -876,6 +883,9 @@ export function loadRuntimeConfig(
       baseTopic: fileConfig.mqtt.baseTopic,
       maxAgeMs: fileConfig.mqtt.maxAgeMs,
       computers: fileConfig.mqtt.computers,
+      ...(fileConfig.mqtt.assistantEntities === undefined
+        ? {}
+        : { assistantEntities: fileConfig.mqtt.assistantEntities }),
       ...(username === undefined ? {} : { username }),
       ...(password === undefined ? {} : { password }),
       ...(fileConfig.mqtt.clientId === undefined
