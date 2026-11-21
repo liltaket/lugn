@@ -84,7 +84,12 @@ for 2.5 s, on the compositor's `Deactivated` signal, and on exit. With
 the page gets `leave` and the pointer goes back where it left the screen. A
 page that has not answered a `ping` for 2.5 s is treated as gone even when
 nothing is captured: the agent closes its socket and disarms the barrier, and
-the page reconnects as after any disconnect. Barriers are only armed while a
+the page reconnects as after any disconnect. A disarmed agent also removes
+its barrier from the compositor, because KDE keeps a disabled session's barrier
+and would still capture the pointer on a push against the bottom edge without
+announcing it; should that happen anyway (a `start emulating` that no
+`Activated` follows within 250 ms), the agent enables the barrier again, which
+ends that capture and hands the pointer back. Barriers are only armed while a
 page is connected and has sent `hello`, and while the focused window is not a
 game, so the desktop pointer is never captured with nothing to show it or in
 the middle of a game.

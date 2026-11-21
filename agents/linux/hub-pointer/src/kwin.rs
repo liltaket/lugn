@@ -32,6 +32,11 @@ const LOAD_RETRIES: u32 = 8;
 const LOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
 /// How often a running script is checked for and reloaded if KWin dropped it.
 const WATCH_EVERY: Duration = Duration::from_secs(1);
+/// While something keeps stopping the script (OpenDeck's kdotool does so
+/// every second), it is checked this often, so it is dead only briefly.
+const WATCH_EVERY_CHURN: Duration = Duration::from_millis(100);
+/// Checks stay this fast until the script has survived this long.
+const CHURN_CALM_AFTER: Duration = Duration::from_secs(30);
 /// The approach area reaches this far past the entry corner to the right...
 const APPROACH_EXTRA_X: i32 = 24;
 /// ...and this far up from the monitor's bottom edge.
@@ -239,24 +244,38 @@ impl ScriptTask {
     async fn run(self, mut rx: mpsc::UnboundedReceiver<ScriptCmd>) {
         // The approach area of the script that should be running, if any.
         let mut wanted: Option<Approach> = None;
-        let mut watch = tokio::time::interval(WATCH_EVERY);
-        watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Reloads since the script was last left alone for CHURN_CALM_AFTER,
+        // and when it was last reloaded.
+        let mut churn = 0u32;
+        let mut last_reload = tokio::time::Instant::now();
+        let mut next_watch = tokio::time::Instant::now() + WATCH_EVERY;
         loop {
             let cmd = tokio::select! {
                 cmd = rx.recv() => match cmd {
                     Some(cmd) => cmd,
                     None => return,
                 },
-                _ = watch.tick(), if wanted.is_some() => {
-                    // KWin sometimes drops scripts loaded at runtime (a
-                    // reconfigure reloads only the configured ones). Put ours
-                    // back; meanwhile the agent falls back to an always-armed
-                    // barrier.
+                _ = tokio::time::sleep_until(next_watch), if wanted.is_some() => {
+                    if churn > 0 && last_reload.elapsed() >= CHURN_CALM_AFTER {
+                        log!("kwin: observer script left alone again after {churn} reloads");
+                        churn = 0;
+                    }
+                    next_watch = tokio::time::Instant::now()
+                        + if churn > 0 { WATCH_EVERY_CHURN } else { WATCH_EVERY };
+                    // KWin drops scripts loaded at runtime (a reconfigure
+                    // reloads only the configured ones), and some tools stop
+                    // whichever script owns the D-Bus id they were given (see
+                    // `load`). Put ours back. A new script reports the window
+                    // and the cursor at once, so the agent keeps what it
+                    // knew meanwhile instead of falling back.
                     match self.loaded().await {
                         Ok(true) | Err(_) => continue,
                         Ok(false) => {
-                            log!("kwin: observer script vanished; reloading it");
-                            let _ = self.events.send(KwinEvent::ScriptLost).await;
+                            if churn == 0 {
+                                log!("kwin: observer script vanished; reloading it (checking every {WATCH_EVERY_CHURN:?} while that keeps happening)");
+                            }
+                            churn += 1;
+                            last_reload = tokio::time::Instant::now();
                             ScriptCmd::Load(wanted.expect("checked"))
                         }
                     }
@@ -266,6 +285,10 @@ impl ScriptTask {
                 ScriptCmd::Load(approach) => {
                     wanted = Some(approach);
                     match self.load(approach).await {
+                        // Quiet while something keeps stopping it (logged once).
+                        Ok(id) if churn > 0 => {
+                            let _ = id;
+                        }
                         Ok(id) => log!(
                             "kwin: observer script {id} running (approach x <= {} y >= {})",
                             approach.max_x,
