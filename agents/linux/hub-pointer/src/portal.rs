@@ -221,6 +221,11 @@ impl Portal {
         Ok(())
     }
 
+    /// The compositor dropped the barrier itself (the zones changed).
+    pub fn forget_barrier(&self) {
+        self.barrier_set.set(false);
+    }
+
     /// Best effort: if the compositor refuses, the stray-capture check in the
     /// main loop still gives the pointer back.
     async fn clear_barrier(&self, zone_set: u32) {

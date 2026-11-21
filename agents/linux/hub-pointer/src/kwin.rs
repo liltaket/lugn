@@ -276,6 +276,7 @@ impl ScriptTask {
                             }
                             churn += 1;
                             last_reload = tokio::time::Instant::now();
+                            next_watch = last_reload + WATCH_EVERY_CHURN;
                             ScriptCmd::Load(wanted.expect("checked"))
                         }
                     }

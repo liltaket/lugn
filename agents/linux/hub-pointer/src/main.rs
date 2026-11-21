@@ -883,7 +883,9 @@ impl<'p> App<'p> {
         );
         self.pointer.set_zone(Some(zone));
         self.armed = true;
-        self.rearm_at = Some(Instant::now() + STRAY_SETTLE);
+        // A pause that was already running is not shortened.
+        let settled = Instant::now() + STRAY_SETTLE;
+        self.rearm_at = Some(self.rearm_at.map_or(settled, |at| at.max(settled)));
         if let Err(e) = self.portal.arm(self.zones.id, zone).await {
             log!("portal: arming failed: {e:#}; retrying in {REARM_AFTER_FAILURE:?}");
             self.disarm().await?;
@@ -906,7 +908,8 @@ impl<'p> App<'p> {
             // Barriers are only armed with a page, but never keep a pointer
             // nobody can see.
             log!("capture: activated without a page; releasing");
-            return self.release(hand_back).await;
+            self.release(hand_back).await?;
+            return self.disarm().await;
         }
         if let Some(why) = &self.gated {
             // The barrier was still up while a game took focus.
@@ -982,6 +985,10 @@ impl<'p> App<'p> {
 
     async fn on_zones_changed(&mut self) -> Result<()> {
         self.end_capture("zones changed").await?;
+        // The old zone set is invalid now and KDE has already dropped its
+        // barriers; clearing them against it would be refused, and the portal
+        // closes a session whose call it has to refuse.
+        self.portal.forget_barrier();
         self.disarm().await?;
         self.zones = self.portal.zones().await?;
         log!("portal: zones {:?}", self.zones);
