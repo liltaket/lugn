@@ -1358,9 +1358,22 @@
                 jag kommer tillbaka (efter att Lugn släckt den)</label
               >
               <label class="settings-toggle"
-                ><input id="display-wake-quiet" type="checkbox" /> Tänd även
+                ><input id="display-wake-quiet" type="checkbox" /> Tänd alltid
                 mellan 23 och 06</label
               >
+              <label
+                >Tänd mellan 23 och 06 om jag var borta högst (minuter)<input
+                  id="display-wake-quiet-max"
+                  type="number"
+                  min="0"
+                  max="1440"
+                  step="any"
+                  required
+              /></label>
+              <p class="field-help">
+                Gäller bara när Lugn släckte skärmen för att rummet blev tomt. 0
+                betyder aldrig på natten. Tänd alltid går före.
+              </p>
               <div class="editor-actions">
                 <button
                   id="display-save"

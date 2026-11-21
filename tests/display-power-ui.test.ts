@@ -55,6 +55,7 @@ const settings = {
   ensureOffWhenAway: true,
   wakeOnEntry: true,
   wakeInQuietHours: false,
+  quietWakeMaxAbsenceMs: 1_200_000,
   inhibitOnActivity: true,
   activeInhibitMaxMs: 1_800_000,
   idleSleepAfterMs: 1_800_000,
@@ -220,6 +221,7 @@ describe('display power panel', () => {
     expect(ui.get('display-ignore').value).toBe('T3 Code');
     expect(ui.get('display-wake').checked).toBe(true);
     expect(ui.get('display-wake-quiet').checked).toBe(false);
+    expect(ui.get('display-wake-quiet-max').value).toBe('20');
     expect(ui.get('display-save').disabled).toBe(true);
     expect(ui.get('display-reset').disabled).toBe(true);
   });

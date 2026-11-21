@@ -10,6 +10,7 @@ export function settingsFromConfig(display: {
   ensureOffWhenAway: boolean;
   wakeOnEntry: boolean;
   wakeInQuietHours: boolean;
+  quietWakeMaxAbsenceMs: number;
   inhibitOnActivity: boolean;
   activeInhibitMaxMs: number;
   idleSleepAfterMs: number | null;
@@ -21,6 +22,7 @@ export function settingsFromConfig(display: {
     ensureOffWhenAway: display.ensureOffWhenAway,
     wakeOnEntry: display.wakeOnEntry,
     wakeInQuietHours: display.wakeInQuietHours,
+    quietWakeMaxAbsenceMs: display.quietWakeMaxAbsenceMs,
     inhibitOnActivity: display.inhibitOnActivity,
     activeInhibitMaxMs: display.activeInhibitMaxMs,
     idleSleepAfterMs: display.idleSleepAfterMs,

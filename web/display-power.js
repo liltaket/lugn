@@ -189,6 +189,9 @@ function fill(entry) {
   el('display-ignore').value = settings.ignoreIdleBlockers.join(', ');
   el('display-wake').checked = settings.wakeOnEntry;
   el('display-wake-quiet').checked = settings.wakeInQuietHours;
+  el('display-wake-quiet-max').value = String(
+    minutes(settings.quietWakeMaxAbsenceMs),
+  );
 }
 
 /** The settings the form describes, or an error message in Swedish. */
@@ -197,12 +200,15 @@ function readForm() {
   const offAfter = number('display-off-after');
   const idle = number('display-idle-minutes');
   const inhibitMax = number('display-inhibit-max');
+  const quietMax = number('display-wake-quiet-max');
   if (!(offAfter >= 1 && offAfter <= 1440))
     return { error: 'Tomt rum måste vara 1–1440 minuter.' };
   if (el('display-idle-enabled').checked && !(idle >= 5 && idle <= 1440))
     return { error: 'Inaktivitet måste vara 5–1440 minuter.' };
   if (!(inhibitMax >= 0 && inhibitMax <= 1440))
     return { error: 'Väntetiden för film och spel måste vara 0–1440 minuter.' };
+  if (!(quietMax >= 0 && quietMax <= 1440))
+    return { error: 'Tiden för nattens tändning måste vara 0–1440 minuter.' };
   const ignore = [
     ...new Set(
       el('display-ignore')
@@ -220,6 +226,7 @@ function readForm() {
       ensureOffWhenAway: el('display-away').checked,
       wakeOnEntry: el('display-wake').checked,
       wakeInQuietHours: el('display-wake-quiet').checked,
+      quietWakeMaxAbsenceMs: Math.round(quietMax * MINUTE),
       inhibitOnActivity: el('display-inhibit').checked,
       activeInhibitMaxMs: Math.round(inhibitMax * MINUTE),
       idleSleepAfterMs: el('display-idle-enabled').checked

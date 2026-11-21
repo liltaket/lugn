@@ -1000,6 +1000,9 @@ export async function startRuntime(
               wakeOnEntry: saved?.wakeOnEntry ?? displayConfig.wakeOnEntry,
               wakeInQuietHours:
                 saved?.wakeInQuietHours ?? displayConfig.wakeInQuietHours,
+              quietWakeMaxAbsenceMs:
+                saved?.quietWakeMaxAbsenceMs ??
+                displayConfig.quietWakeMaxAbsenceMs,
               inhibitOnActivity:
                 saved?.inhibitOnActivity ?? displayConfig.inhibitOnActivity,
               activeInhibitMaxMs:

@@ -223,6 +223,7 @@ describe('runtime configuration cross references', () => {
       ensureOffWhenAway: true,
       wakeOnEntry: true,
       wakeInQuietHours: false,
+      quietWakeMaxAbsenceMs: 1_200_000,
       inhibitOnActivity: true,
       idleSleepAfterMs: 1_800_000,
       ignoreIdleBlockers: [],

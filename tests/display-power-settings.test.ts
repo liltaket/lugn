@@ -23,6 +23,7 @@ const defaults: DisplayPowerSettings = settingsFromConfig({
   ensureOffWhenAway: true,
   wakeOnEntry: true,
   wakeInQuietHours: false,
+  quietWakeMaxAbsenceMs: 1_200_000,
   inhibitOnActivity: true,
   activeInhibitMaxMs: 1_800_000,
   idleSleepAfterMs: 1_800_000,
