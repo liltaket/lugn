@@ -277,7 +277,8 @@ export class DisplayPowerController {
         (!feedback && evidence?.state === 'on') ||
         (!policy.wakeInQuietHours &&
           this.options.isQuietHours() &&
-          this.lastAbsenceMs > policy.quietWakeMaxAbsenceMs)
+          (policy.quietWakeMaxAbsenceMs <= 0 ||
+            this.lastAbsenceMs > policy.quietWakeMaxAbsenceMs))
       )
         this.wakeNeeded = false;
       else if (power === 'none') {
