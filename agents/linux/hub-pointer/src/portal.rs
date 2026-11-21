@@ -80,6 +80,8 @@ pub struct Portal {
     /// Index into [`barrier_lines`] of the line the compositor accepted last,
     /// tried first from then on.
     accepted_line: Cell<Option<usize>>,
+    /// Whether the compositor holds a barrier of ours.
+    barrier_set: Cell<bool>,
 }
 
 impl Portal {
@@ -124,6 +126,7 @@ impl Portal {
                 session,
                 session_path,
                 accepted_line: Cell::new(None),
+                barrier_set: Cell::new(false),
             },
             fd,
         ))
@@ -187,6 +190,7 @@ impl Portal {
                     log!("portal: SetPointerBarriers {line:?} zone_set {zone_set} accepted");
                 }
                 accepted = Some(line);
+                self.barrier_set.set(true);
                 break;
             }
             log!("portal: SetPointerBarriers {line:?} zone_set {zone_set} rejected ({failed:?})");
@@ -205,12 +209,49 @@ impl Portal {
         Ok(())
     }
 
-    pub async fn disarm(&self) -> Result<()> {
+    /// Disables capture and takes the barrier away. KWin keeps a disabled
+    /// session's barrier and still captures the pointer when it is pushed
+    /// against it, without telling anyone, so the barrier must go as well.
+    pub async fn disarm(&self, zone_set: u32) -> Result<()> {
         let call = self.ic.disable(&self.session, DisableOptions::default());
         if guarded("Disable", call).await? {
             log!("portal: Disable ok, barrier disarmed");
         }
+        self.clear_barrier(zone_set).await;
         Ok(())
+    }
+
+    /// The compositor dropped the barrier itself (the zones changed).
+    pub fn forget_barrier(&self) {
+        self.barrier_set.set(false);
+    }
+
+    /// Best effort: if the compositor refuses, the stray-capture check in the
+    /// main loop still gives the pointer back.
+    async fn clear_barrier(&self, zone_set: u32) {
+        if !self.barrier_set.get() {
+            return;
+        }
+        let cleared = bounded(
+            "SetPointerBarriers (clear)",
+            RELEASE_TIMEOUT,
+            self.ic.set_pointer_barriers(
+                &self.session,
+                &[],
+                zone_set,
+                SetPointerBarriersOptions::default(),
+            ),
+        )
+        .await
+        .and_then(|request| {
+            request
+                .response()
+                .context("SetPointerBarriers (clear) response")
+        });
+        match cleared {
+            Ok(_) => self.barrier_set.set(false),
+            Err(e) => log!("portal: could not remove the barrier: {e:#}"),
+        }
     }
 
     pub async fn release(

@@ -37,7 +37,15 @@ It is a separate binary next to `lugn-linux-agent`:
   the bottom edge and rests the barrier for 800 ms, so a hand still in motion
   is not captured again straight away. The exact
   line KDE accepts is tried from four candidates on the first arm and
-  remembered.
+  remembered. Disarming removes the barrier as well as disabling capture,
+  because KDE keeps a disabled session's barrier and would capture a push
+  against the bottom edge without announcing it; if that happens anyway, the
+  agent enables the barrier again, which ends that capture.
+- The observer script survives tools that stop other KWin scripts (for
+  example OpenDeck's kdotool, which stops whichever script owns the D-Bus id
+  it was given). While something keeps stopping it, the agent checks every
+  100 ms and reloads it; a new script reports the cursor and window at once,
+  so the agent keeps its last state in between.
 - **libei** (through the `reis` crate) delivers relative motion, buttons and
   scroll while captured.
 - A **WebSocket** server pushes the cursor position to the Hub page, at most

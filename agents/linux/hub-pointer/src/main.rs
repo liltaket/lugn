@@ -34,6 +34,7 @@ mod portal;
 mod protocol;
 mod server;
 mod stats;
+mod stray;
 
 use capture::{Abort, Ended, EntryRule, Exit, Pointer, ReleaseTo, in_entry_zone, leftmost_zone};
 use coalesce::MoveCoalescer;
@@ -43,6 +44,7 @@ use portal::{Portal, ZoneSet};
 use protocol::{AgentMsg, PageMsg, Perf};
 use server::{Auth, NewPage, PageConn, PageEvent};
 use stats::{Pings, Rtt};
+use stray::Stray;
 
 const PING_SLOW: Duration = Duration::from_secs(1);
 /// While warm: keeps the Hub's Wi-Fi out of power save and its loop busy.
@@ -61,6 +63,9 @@ const REARM_AFTER_ABORT: Duration = Duration::from_millis(400);
 const REARM_AFTER_EXIT: Duration = Duration::from_millis(800);
 const REARM_AFTER_DISABLED: Duration = Duration::from_secs(1);
 const REARM_AFTER_FAILURE: Duration = Duration::from_secs(5);
+/// After re-enabling to end a stray capture: long enough for the pointer, if
+/// it is still against the edge, to be reported as a normal activation.
+const STRAY_SETTLE: Duration = Duration::from_millis(400);
 const EI_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const KWIN_SETUP_TIMEOUT: Duration = Duration::from_secs(5);
 const KWIN_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -241,6 +246,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
         let move_due = app.coalescer.deadline();
         let cool_at = app.warm.cool_at;
         let entry_due = app.pointer.pending_deadline();
+        let stray_due = app.stray.deadline();
         let next_ping = app.next_ping;
         let step = tokio::select! {
             _ = sigterm.recv() => break Ok(()),
@@ -259,6 +265,9 @@ async fn run(config_path: PathBuf) -> Result<()> {
             }
             _ = sleep_until(entry_due.unwrap_or(far)), if entry_due.is_some() => {
                 app.on_entry_due().await
+            }
+            _ = sleep_until(stray_due.unwrap_or(far)), if stray_due.is_some() => {
+                app.on_stray_due().await
             }
             Some(event) = event_rx.recv() => app.on_page_event(event).await,
             signal = activated.next() => match signal {
@@ -417,6 +426,8 @@ struct App<'p> {
     /// True from the moment barriers may be enabled until a Disable succeeded.
     armed: bool,
     rearm_at: Option<Instant>,
+    /// Captures the compositor started without announcing them.
+    stray: Stray,
     pointer: Pointer,
     coalescer: MoveCoalescer,
     page: Option<Page>,
@@ -460,6 +471,7 @@ impl<'p> App<'p> {
             zones,
             armed: false,
             rearm_at: None,
+            stray: Stray::default(),
             coalescer: MoveCoalescer::default(),
             page: None,
             next_page_id: 0,
@@ -660,7 +672,7 @@ impl<'p> App<'p> {
     async fn disarm(&mut self) -> Result<()> {
         self.rearm_at = None;
         if self.armed {
-            self.portal.disarm().await?;
+            self.portal.disarm(self.zones.id).await?;
             self.armed = false;
         }
         Ok(())
@@ -851,11 +863,43 @@ impl<'p> App<'p> {
         self.send(&AgentMsg::Warm { on: false });
     }
 
+    /// The compositor captured the pointer and the portal never said so (see
+    /// [`stray`]). Enabling again ends that capture; if the pointer is still
+    /// against the edge the compositor then announces it properly, with its
+    /// position, and the usual hand-back or entry takes over. Whatever is
+    /// armed afterwards is disarmed again by `sync_arm` once the pause is over.
+    async fn on_stray_due(&mut self) -> Result<()> {
+        let Some(sequence) = self.stray.take_due(Instant::now()) else {
+            return Ok(());
+        };
+        if self.pointer.is_capturing() {
+            return Ok(());
+        }
+        let Some(zone) = leftmost_zone(&self.zones.zones) else {
+            return Ok(());
+        };
+        log!(
+            "capture: stray capture {sequence} with no activation; enabling to get the pointer back"
+        );
+        self.pointer.set_zone(Some(zone));
+        self.armed = true;
+        // A pause that was already running is not shortened.
+        let settled = Instant::now() + STRAY_SETTLE;
+        self.rearm_at = Some(self.rearm_at.map_or(settled, |at| at.max(settled)));
+        if let Err(e) = self.portal.arm(self.zones.id, zone).await {
+            log!("portal: arming failed: {e:#}; retrying in {REARM_AFTER_FAILURE:?}");
+            self.disarm().await?;
+            self.rearm_at = Some(Instant::now() + REARM_AFTER_FAILURE);
+        }
+        Ok(())
+    }
+
     async fn on_activated(
         &mut self,
         activation_id: Option<u32>,
         cursor: Option<(f64, f64)>,
     ) -> Result<()> {
+        self.stray.activated(activation_id);
         let hand_back = ReleaseTo {
             activation_id,
             cursor: leftmost_zone(&self.zones.zones).and_then(|z| z.hand_back_point(cursor)),
@@ -864,7 +908,8 @@ impl<'p> App<'p> {
             // Barriers are only armed with a page, but never keep a pointer
             // nobody can see.
             log!("capture: activated without a page; releasing");
-            return self.release(hand_back).await;
+            self.release(hand_back).await?;
+            return self.disarm().await;
         }
         if let Some(why) = &self.gated {
             // The barrier was still up while a game took focus.
@@ -940,6 +985,10 @@ impl<'p> App<'p> {
 
     async fn on_zones_changed(&mut self) -> Result<()> {
         self.end_capture("zones changed").await?;
+        // The old zone set is invalid now and KDE has already dropped its
+        // barriers; clearing them against it would be refused, and the portal
+        // closes a session whose call it has to refuse.
+        self.portal.forget_barrier();
         self.disarm().await?;
         self.zones = self.portal.zones().await?;
         log!("portal: zones {:?}", self.zones);
@@ -996,9 +1045,14 @@ impl<'p> App<'p> {
             EiEvent::DevicePaused(d) => log!("ei: device {:?} paused", d.device.name()),
             EiEvent::DeviceResumed(d) => log!("ei: device {:?} resumed", d.device.name()),
             EiEvent::DeviceStartEmulating(e) => {
-                log!("ei: start emulating (sequence {})", e.sequence)
+                log!("ei: start emulating (sequence {})", e.sequence);
+                self.stray
+                    .started(e.sequence, self.pointer.is_capturing(), Instant::now());
             }
-            EiEvent::DeviceStopEmulating(_) => log!("ei: stop emulating"),
+            EiEvent::DeviceStopEmulating(_) => {
+                log!("ei: stop emulating");
+                self.stray.stopped();
+            }
             EiEvent::Disconnected(d) => {
                 bail!("EIS disconnected: {:?} {:?}", d.reason, d.explanation)
             }
