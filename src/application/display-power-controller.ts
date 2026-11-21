@@ -27,6 +27,11 @@ export type DisplayPowerPolicy = {
   wakeOnEntry: boolean;
   /** Automatic wake is skipped from 23:00 to 06:00 unless this is set. */
   wakeInQuietHours: boolean;
+  /**
+   * In quiet hours the display is still woken after a short absence: when the
+   * room was empty (or you were away) at most this long. 0 never wakes then.
+   */
+  quietWakeMaxAbsenceMs: number;
   /** Hold sleep while the computer reports recent input or a game/video. */
   inhibitOnActivity: boolean;
   /** Game/video (and idle-less activity) can postpone sleep for at most this long. */
@@ -47,6 +52,7 @@ export const defaultDisplayPowerPolicy: DisplayPowerPolicy = {
   ensureOffWhenAway: true,
   wakeOnEntry: true,
   wakeInQuietHours: false,
+  quietWakeMaxAbsenceMs: 1_200_000,
   inhibitOnActivity: true,
   activeInhibitMaxMs: 1_800_000,
   idleSleepAfterMs: 1_800_000,
@@ -118,6 +124,12 @@ type Options = {
  */
 export class DisplayPowerController {
   private emptySince: number | null = null;
+  /**
+   * How long the room was empty before the last return; Infinity when that is
+   * not known (Lugn restarted while the room was already empty).
+   */
+  private lastAbsenceMs = 0;
+  private absenceKnown = true;
   private epoch = 0;
   /** A sleep request applied (or possibly applied) in this empty period. */
   private offRequested = false;
@@ -226,7 +238,7 @@ export class DisplayPowerController {
         this.wakeNeeded = true;
         this.wakeAttempts = 0;
       }
-      this.leaveEmpty();
+      this.leaveEmpty(now);
     }
     if (!this.startupChecked && observation) {
       // After a restart of Lugn nothing remembers why the display went dark.
@@ -234,8 +246,11 @@ export class DisplayPowerController {
       // was almost certainly the presence rule (inactivity sleep only happens
       // with someone in the room), so it still earns a wake on return.
       this.startupChecked = true;
-      if (empty && power === 'off' && lastCommandWasOurSleep(observation))
+      if (empty && power === 'off' && lastCommandWasOurSleep(observation)) {
         this.offRequested = true;
+        // When the room really emptied is unknown; Lugn only saw it just now.
+        this.absenceKnown = false;
+      }
     }
 
     const ready = this.ready(state, snapshot, observation);
@@ -260,7 +275,10 @@ export class DisplayPowerController {
         // Already lit, by the agent's account or the plug's.
         power === 'on' ||
         (!feedback && evidence?.state === 'on') ||
-        (!policy.wakeInQuietHours && this.options.isQuietHours())
+        (!policy.wakeInQuietHours &&
+          this.options.isQuietHours() &&
+          (policy.quietWakeMaxAbsenceMs <= 0 ||
+            this.lastAbsenceMs > policy.quietWakeMaxAbsenceMs))
       )
         this.wakeNeeded = false;
       else if (power === 'none') {
@@ -645,7 +663,12 @@ export class DisplayPowerController {
     this.observe();
   }
 
-  private leaveEmpty(): void {
+  private leaveEmpty(now: number): void {
+    this.lastAbsenceMs =
+      this.emptySince !== null && this.absenceKnown
+        ? now - this.emptySince
+        : Number.POSITIVE_INFINITY;
+    this.absenceKnown = true;
     this.emptySince = null;
     this.offRequested = false;
     this.offAppliedAt = null;

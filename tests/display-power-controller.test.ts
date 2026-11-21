@@ -278,14 +278,14 @@ describe('DisplayPowerController', () => {
 
     h = harness();
     await h.set({ presence: 'confirmed_empty' });
-    await h.advance(2 * MINUTE);
+    await h.advance(30 * MINUTE);
     h.setQuiet(true);
     await h.set({ presence: 'occupied' });
     expect(h.transport.sent).toEqual(['off']);
 
     h = harness({ wakeInQuietHours: true });
     await h.set({ presence: 'confirmed_empty' });
-    await h.advance(2 * MINUTE);
+    await h.advance(30 * MINUTE);
     h.setQuiet(true);
     await h.set({ presence: 'occupied' });
     expect(h.transport.sent).toEqual(['off', 'on']);
@@ -715,12 +715,104 @@ describe('DisplayPowerController', () => {
       expect(h.transport.sent).toEqual(['off', 'on']);
     });
 
-    it('never wakes in quiet hours', async () => {
-      await h.set({ presence: 'confirmed_empty' });
-      await h.advance(2 * MINUTE);
-      h.setQuiet(true);
-      await h.set({ presence: 'occupied' });
-      expect(h.transport.sent).toEqual(['off']);
+    describe('in quiet hours', () => {
+      it('does not wake after a long absence', async () => {
+        await h.set({ presence: 'confirmed_empty' });
+        await h.advance(21 * MINUTE);
+        h.setQuiet(true);
+        await h.set({ presence: 'occupied' });
+        await h.advance(10 * MINUTE);
+        expect(h.transport.sent).toEqual(['off']);
+      });
+
+      it('wakes after a short absence', async () => {
+        await h.set({ presence: 'confirmed_empty' });
+        await h.advance(2 * MINUTE);
+        h.setQuiet(true);
+        await h.set({ presence: 'occupied' });
+        expect(h.transport.sent).toEqual(['off', 'on']);
+      });
+
+      it('wakes at exactly the limit and not a minute later', async () => {
+        await h.set({ presence: 'confirmed_empty' });
+        await h.advance(20 * MINUTE);
+        h.setQuiet(true);
+        await h.set({ presence: 'occupied' });
+        expect(h.transport.sent).toEqual(['off', 'on']);
+
+        h = harness();
+        h.transport.power = 'on';
+        h.transport.inputIdle = true;
+        await h.set({ presence: 'confirmed_empty' });
+        await h.advance(21 * MINUTE);
+        h.setQuiet(true);
+        await h.set({ presence: 'occupied' });
+        expect(h.transport.sent).toEqual(['off']);
+      });
+
+      it('measures the absence, not the clock at the time of the retry', async () => {
+        await h.set({ presence: 'confirmed_empty' });
+        await h.advance(2 * MINUTE);
+        h.setQuiet(true);
+        h.transport.outcome = 'uncertain';
+        h.transport.reason = 'not_observed';
+        await h.set({ presence: 'occupied' });
+        for (let i = 0; i < 12; i++) await h.advance(MINUTE);
+        expect(h.transport.sent.filter((a) => a === 'on')).toHaveLength(3);
+      });
+
+      it('counts a stay away from home as the absence', async () => {
+        await h.set({ home: 'away' });
+        await h.advance(5 * MINUTE);
+        h.setQuiet(true);
+        await h.set({ home: 'home', presence: 'occupied' });
+        expect(h.transport.sent).toEqual(['off', 'on']);
+
+        h = harness();
+        h.transport.power = 'on';
+        h.transport.inputIdle = true;
+        await h.set({ home: 'away' });
+        await h.advance(3 * 60 * MINUTE);
+        h.setQuiet(true);
+        await h.set({ home: 'home', presence: 'occupied' });
+        expect(h.transport.sent).toEqual(['off']);
+      });
+
+      it('never wakes when the limit is 0, and wakeInQuietHours still wakes always', async () => {
+        h = harness({ quietWakeMaxAbsenceMs: 0 });
+        h.transport.power = 'on';
+        h.transport.inputIdle = true;
+        await h.set({ presence: 'confirmed_empty' });
+        await h.advance(2 * MINUTE);
+        h.setQuiet(true);
+        await h.set({ presence: 'occupied' });
+        expect(h.transport.sent).toEqual(['off']);
+
+        h = harness({ quietWakeMaxAbsenceMs: 0, wakeInQuietHours: true });
+        h.transport.power = 'on';
+        h.transport.inputIdle = true;
+        await h.set({ presence: 'confirmed_empty' });
+        await h.advance(2 * MINUTE);
+        h.setQuiet(true);
+        await h.set({ presence: 'occupied' });
+        expect(h.transport.sent).toEqual(['off', 'on']);
+      });
+
+      it('does not guess after a restart of Lugn that found the room already empty', async () => {
+        h.transport.power = 'off';
+        h.transport.lastCommand = {
+          command_id: '77777777-7777-4777-8777-777777777777',
+          action: 'off',
+          outcome: 'applied',
+          reason: 'display_off',
+          timestamp_ms: 0,
+        };
+        await h.set({ presence: 'confirmed_empty' });
+        await h.advance(2 * MINUTE);
+        h.setQuiet(true);
+        await h.set({ presence: 'occupied' });
+        expect(h.transport.sent).toEqual([]);
+      });
     });
   });
 

@@ -98,6 +98,13 @@ const DisplayPowerConfigSchema = z
     ensureOffWhenAway: z.boolean().default(true),
     wakeOnEntry: z.boolean().default(true),
     wakeInQuietHours: z.boolean().default(false),
+    /** In quiet hours, still wake after an absence of at most this long. */
+    quietWakeMaxAbsenceMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(86_400_000)
+      .default(1_200_000),
     inhibitOnActivity: z.boolean().default(true),
     /**
      * Put the display to sleep after this long without keyboard or pointer

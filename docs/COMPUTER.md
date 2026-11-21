@@ -312,6 +312,7 @@ doing.
           "ensureOffWhenAway": true,
           "wakeOnEntry": true,
           "wakeInQuietHours": false,
+          "quietWakeMaxAbsenceMs": 1200000,
           "inhibitOnActivity": true,
           "activeInhibitMaxMs": 1800000,
           "idleSleepAfterMs": 1800000,
@@ -368,7 +369,9 @@ inhibitor.
   A display that went dark for **inactivity** (or any other reason) is not woken
   by Lugn, not even when you leave the room and come back; the keyboard or mouse
   wakes it. It does not wake a display that is already on, is skipped in quiet
-  hours (23:00–06:00 Stockholm, like music) unless `wakeInQuietHours` is set, and
+  hours (23:00–06:00 Stockholm, like music) unless `wakeInQuietHours` is set or
+  the absence was short (the room was empty, or you were away, at most
+  `quietWakeMaxAbsenceMs`, 20 minutes by default; 0 turns this off), and
   reports `problem: wake_unavailable` when no monitor is on the bus. After a
   restart of Lugn nothing remembers why the display went dark: if the room is
   empty then and the agent's last request was a sleep, it is taken to be the

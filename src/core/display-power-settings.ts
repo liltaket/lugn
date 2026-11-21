@@ -17,6 +17,16 @@ export const DisplayPowerSettingsSchema = z
     ensureOffWhenAway: z.boolean(),
     wakeOnEntry: z.boolean(),
     wakeInQuietHours: z.boolean(),
+    /**
+     * In quiet hours, still wake after an absence of at most this long. The
+     * default keeps settings saved before this existed readable.
+     */
+    quietWakeMaxAbsenceMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(86_400_000)
+      .default(1_200_000),
     /** Hold sleep while the computer is in use or plays video or a game. */
     inhibitOnActivity: z.boolean(),
     activeInhibitMaxMs: z.number().int().min(0).max(86_400_000),

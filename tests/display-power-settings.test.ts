@@ -23,6 +23,7 @@ const defaults: DisplayPowerSettings = settingsFromConfig({
   ensureOffWhenAway: true,
   wakeOnEntry: true,
   wakeInQuietHours: false,
+  quietWakeMaxAbsenceMs: 1_200_000,
   inhibitOnActivity: true,
   activeInhibitMaxMs: 1_800_000,
   idleSleepAfterMs: 1_800_000,
@@ -62,6 +63,27 @@ describe('display power settings', () => {
         generation: saved.generation,
         computers: { kuffe: changed },
       });
+    });
+
+    it('reads a file saved before the night wake limit existed', async () => {
+      const legacy: Record<string, unknown> = { ...changed };
+      delete legacy['quietWakeMaxAbsenceMs'];
+      await writeFile(
+        file,
+        JSON.stringify({
+          version: 1,
+          generation: '11111111-1111-4111-8111-111111111111',
+          computers: { kuffe: legacy },
+        }),
+      );
+      const store = new DisplayPowerSettingsStore(file);
+      const loaded = await store.load();
+      expect(loaded.computers['kuffe']).toEqual({
+        ...legacy,
+        quietWakeMaxAbsenceMs: 1_200_000,
+      });
+      const saved = await store.save('kuffe', changed, loaded.generation);
+      expect(saved.generation).not.toBe(loaded.generation);
     });
 
     it('refuses a save based on an old generation', async () => {
