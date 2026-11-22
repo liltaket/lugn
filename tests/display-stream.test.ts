@@ -121,6 +121,71 @@ async function setup(streaming = true, music = false, computerAudio = false) {
 }
 
 describe('secret-path Hub state stream', () => {
+  it('does not send a publish that only moves counters, but sends real changes and the heartbeat', async () => {
+    const { open, engine } = await setup(true, false, false);
+    const stream = await open();
+    const first = await stream.next();
+    const quiet = (ms: number) =>
+      new Promise<'quiet'>((resolve) => setTimeout(() => resolve('quiet'), ms));
+    const publish = () => {
+      engine.state.revision += 1;
+      engine.state.updatedAt += 1;
+      engine.stream.publish({
+        revision: engine.state.revision,
+        at: engine.state.updatedAt,
+        domains: ['computer'],
+        patch: {},
+      });
+    };
+    publish();
+    const pending = stream.next();
+    expect(await Promise.race([pending, quiet(150)])).toBe('quiet');
+    // A change the page shows goes out at once, with the newer revision.
+    engine.state.presence.personCount = 4;
+    publish();
+    const changed = await pending;
+    expect(changed.state.revision).toBeGreaterThan(first.state.revision);
+    expect(
+      (changed.state as { presence: { personCount: number } }).presence
+        .personCount,
+    ).toBe(4);
+  });
+  it('sends the heartbeat with the latest revision after a suppressed publish', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { open, engine } = await setup(true, false, false);
+      const stream = await open();
+      const first = await stream.next();
+      engine.state.revision += 5;
+      engine.state.updatedAt += 5;
+      engine.stream.publish({
+        revision: engine.state.revision,
+        at: engine.state.updatedAt,
+        domains: ['computer'],
+        patch: {},
+      });
+      const pending = stream.next();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      vi.advanceTimersByTime(5_000);
+      const beat = await pending;
+      expect(beat.state.revision).toBe(first.state.revision + 5);
+      expect(beat.deliveryRevision).toBeGreaterThan(first.deliveryRevision);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('sends no diagnostics or timing logs to a Hub', async () => {
+    const { open, engine } = await setup();
+    engine.state.diagnostics.push({
+      at: 1,
+      source: 'test',
+      level: 'info',
+      message: 'x',
+    } as never);
+    const frame = await (await open()).next();
+    expect('diagnostics' in frame.state).toBe(false);
+    expect('timings' in frame.state).toBe(false);
+  });
   it('keeps an idle snapshot identical except for its delivery counters and timestamp', async () => {
     const { base } = await setup(true, true, true);
     const read = async () =>

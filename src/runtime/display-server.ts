@@ -23,6 +23,7 @@ import {
 } from '../application/capabilities.js';
 import type { LightingScene, RoomState } from '../core/schemas.js';
 import { lightingFeedbackBrowserScript } from './lighting-feedback-script.js';
+import { displayPayloadKey, displayState } from './display-state.js';
 import {
   MusicRequestSchema,
   SemanticMusicIdSchema,
@@ -697,7 +698,7 @@ export class LugnDisplayServer {
   private snapshot(hub: LugnDisplayHub) {
     const state = this.options.stateProvider();
     return {
-      state,
+      state: displayState(state),
       ...(this.options.cameraMedia
         ? { cameraDashboard: this.cameraSnapshot(hub) }
         : {}),
@@ -752,7 +753,10 @@ export class LugnDisplayServer {
       'x-accel-buffering': 'no',
     });
     this.eventStreams.set(response, hub.id);
-    const send = (): void => {
+    // A publish that changes nothing the page shows (only counters and
+    // evaluation clocks) is not sent; the heartbeat always is.
+    let lastKey: string | undefined;
+    const send = (heartbeat = false): void => {
       if (response.destroyed) return;
       // A slow kiosk reconnects to a fresh snapshot instead of buffering history.
       if (response.writableNeedDrain) {
@@ -768,9 +772,11 @@ export class LugnDisplayServer {
         this.lastHubPollAt.set(hub.id, Date.now());
       try {
         const payload = this.snapshot(hub);
-        response.write(
-          `id: ${payload.state.revision}\ndata: ${JSON.stringify(payload)}\n\n`,
-        );
+        const json = JSON.stringify(payload);
+        const key = displayPayloadKey(json);
+        if (!heartbeat && key === lastKey) return;
+        lastKey = key;
+        response.write(`id: ${payload.state.revision}\ndata: ${json}\n\n`);
       } catch {
         response.destroy();
       }
@@ -790,7 +796,7 @@ export class LugnDisplayServer {
       this.options.experience?.subscribe(scheduleSend);
     const unsubscribeCamera = this.options.cameraMedia?.subscribe(scheduleSend);
     const unsubscribePrinter = this.options.printer?.subscribe(scheduleSend);
-    const heartbeat = setInterval(send, 5_000);
+    const heartbeat = setInterval(() => send(true), 5_000);
     response.once('close', () => {
       unsubscribe();
       unsubscribeArtwork?.();
