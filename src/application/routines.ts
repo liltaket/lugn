@@ -922,6 +922,7 @@ export class RoutineService {
           (newer) =>
             newer.target === command.target &&
             newer.requested.property !== 'volume' &&
+            newer.requested.property !== 'track' &&
             newer.provenance.requestId !== work.run.id,
         )
     );

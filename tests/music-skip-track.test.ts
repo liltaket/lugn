@@ -1,87 +1,166 @@
-import { describe, expect, it } from 'vitest';
-import { SimulatedMusicAdapter } from '../src/adapters/simulated-music.js';
-import { CapabilityRegistry } from '../src/application/capabilities.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  SimulatedMusicAdapter,
+  type MusicObservation,
+} from '../src/adapters/simulated-music.js';
+import {
+  CapabilityInputError,
+  CapabilityRegistry,
+} from '../src/application/capabilities.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { FakeClock } from '../src/core/clock.js';
 
-const provenance = {
+const target = 'music.room';
+const human = {
   actor: { type: 'user' as const },
-  source: 'operator',
+  source: 'dashboard',
   requestId: 'skip-1',
 };
+const start = Date.parse('2026-10-04T12:00:00+02:00');
 
-function setup() {
-  const clock = new FakeClock();
-  const adapter = new SimulatedMusicAdapter(clock);
+async function flush() {
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+}
+
+/** A player with a status read, so recovery verifies as it does with HA. */
+function setup({
+  source = 'Spotify',
+  computerAudioInputs = {},
+}: {
+  source?: string;
+  computerAudioInputs?: Record<string, { source: string }>;
+} = {}) {
+  const clock = new FakeClock(start);
+  let title = 'First song';
+  let playback: 'playing' | 'paused' = 'playing';
+  class Adapter extends SimulatedMusicAdapter {
+    readStatus = vi.fn(async (): Promise<MusicObservation> => ({
+      target,
+      observedAt: clock.now(),
+      available: true,
+      values: { volume: 0.3, playback, source, title },
+    }));
+  }
+  const adapter = new Adapter(clock);
   const engine = new LugnEngine(clock, {
     deviceIds: [],
     scenes: [],
     music: {
-      targets: { 'music.room': ['Spotify'] },
+      targets: { [target]: ['Spotify', 'Optical'] },
       adapter,
-      feedbackTimeoutMs: 100,
+      feedbackTimeoutMs: 1_000,
     },
+    musicAutomaticFades: false,
+    computerAudioInputs,
   });
-  adapter.observe('music.room', {
-    playback: 'playing',
-    volume: 0.3,
-    source: 'Spotify',
-    title: 'First song',
-  });
-  return { clock, adapter, engine, registry: new CapabilityRegistry(engine) };
+  const observe = () =>
+    adapter.observe(target, { volume: 0.3, playback, source, title });
+  observe();
+  const advance = async (ms: number) => {
+    for (let elapsed = 0; elapsed < ms; elapsed += 250) {
+      clock.advanceBy(250);
+      await flush();
+    }
+  };
+  return {
+    clock,
+    adapter,
+    engine,
+    registry: new CapabilityRegistry(engine),
+    advance,
+    setTitle(next: string) {
+      title = next;
+      observe();
+    },
+    setPlayback(next: 'playing' | 'paused') {
+      playback = next;
+    },
+    record: (id: string) =>
+      engine.state.music.commands.find((command) => command.id === id)!,
+    tracks: () =>
+      adapter.dispatched.filter(
+        (command) => command.requested.property === 'track',
+      ),
+  };
 }
 
 describe('music.skipTrack', () => {
-  it('sends one track step, never confirms it from playback and never repeats it', async () => {
-    const { clock, adapter, engine, registry } = setup();
-    const result = (await registry.invoke(
+  it('sends one step, verifies without confirming it, and never sends it again', async () => {
+    const s = setup();
+    const result = (await s.registry.invoke(
       'music.skipTrack',
-      { target: 'music.room', step: 'next' },
-      provenance,
-    )) as { accepted: true; commandId: string; status: string };
-    expect(result.accepted).toBe(true);
-    expect(adapter.dispatched.map((command) => command.requested)).toEqual([
+      { target, step: 'next' },
+      human,
+    )) as { accepted: true; commandId: string };
+    expect(s.tracks().map((command) => command.requested)).toEqual([
       { property: 'track', value: 'next' },
     ]);
-    // The new song plays: there is still nothing that says "next" happened.
-    adapter.observe('music.room', {
-      playback: 'playing',
+    s.setTitle('Second song');
+    await s.advance(30_000);
+    const command = s.record(result.commandId);
+    expect(command.status).not.toBe('confirmed');
+    // The status read ran, and the step stopped as one that is not retried.
+    expect(s.adapter.readStatus).toHaveBeenCalled();
+    expect(command.recovery?.stopReason).toBe('non_retryable');
+    expect(s.tracks()).toHaveLength(1);
+    // Nothing is left requested, and playback intent is untouched.
+    expect(s.engine.state.music.devices[target]?.requested).toEqual({});
+  });
+
+  it('leaves a pending Play and its recovery alone', async () => {
+    const s = setup();
+    s.setPlayback('paused');
+    s.adapter.observe(target, {
       volume: 0.3,
+      playback: 'paused',
       source: 'Spotify',
-      title: 'Second song',
+      title: 'First song',
     });
-    for (let i = 0; i < 20; i += 1) {
-      clock.advanceBy(1_000);
-      await Promise.resolve();
-    }
-    const command = engine.state.music.commands.find(
-      (candidate) => candidate.id === result.commandId,
+    const play = await s.engine.requestMusic(
+      target,
+      { property: 'playback', value: 'playing' },
+      { ...human, requestId: 'play-1' },
     );
-    expect(command).toBeDefined();
-    expect(command?.status).not.toBe('confirmed');
-    expect(
-      adapter.dispatched.filter((c) => c.requested.property === 'track'),
-    ).toHaveLength(1);
-    // Playback is left as it was.
-    expect(engine.state.music.devices['music.room']?.requested.playback).toBe(
-      undefined,
+    await s.registry.invoke(
+      'music.skipTrack',
+      { target, step: 'next' },
+      { ...human, requestId: 'skip-2' },
+    );
+    const record = s.record(play.id);
+    expect(record.status).toBe('pending');
+    expect(record.recovery?.stopReason ?? null).not.toBe('superseded');
+    expect(s.engine.state.music.devices[target]?.requested.playback).toBe(
+      'playing',
     );
   });
 
+  it('refuses a player on a computer input before sending or noting anything', async () => {
+    const s = setup({
+      source: 'Optical',
+      computerAudioInputs: { [target]: { source: 'Optical' } },
+    });
+    const before = structuredClone(s.engine.state.music.devices[target]);
+    const error = await s.registry
+      .invoke('music.skipTrack', { target, step: 'next' }, human)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CapabilityInputError);
+    expect((error as CapabilityInputError).code).toBe(
+      'music_track_unavailable',
+    );
+    expect(s.tracks()).toHaveLength(0);
+    expect(s.engine.state.music.devices[target]).toEqual(before);
+  });
+
   it('rejects an unknown step or target', async () => {
-    const { registry } = setup();
+    const s = setup();
     await expect(
-      registry.invoke(
-        'music.skipTrack',
-        { target: 'music.room', step: 'random' },
-        provenance,
-      ),
+      s.registry.invoke('music.skipTrack', { target, step: 'random' }, human),
     ).rejects.toThrow();
     await expect(
-      registry.invoke(
+      s.registry.invoke(
         'music.skipTrack',
         { target: 'music.other', step: 'next' },
-        provenance,
+        human,
       ),
     ).rejects.toThrow();
   });

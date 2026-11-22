@@ -18,6 +18,7 @@ import {
   MusicTrackUnavailableError,
   type MusicOptions,
 } from './music-controller.js';
+import { canStepTrack } from './music-track-control.js';
 import type { ComputerPlaybackControl } from './computer-playback-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
@@ -129,6 +130,9 @@ export type EngineOptions = {
   switchFeedbackTimeoutMs?: number;
   music?: MusicOptions;
   computerPlayback?: ComputerPlaybackControl;
+  /** Players' computer-audio inputs (all of them, with or without playback
+   * control): a player on one of these does not take track steps. */
+  computerAudioInputs?: Readonly<Record<string, { source: string }>>;
   stateHistoryLimit?: number;
   prelight?: {
     targets: Record<string, LightingValues>;
@@ -579,6 +583,9 @@ export class LugnEngine {
   private readonly musicController: MusicController;
   private readonly musicAutomation: MusicAutomation;
   private readonly computerPlayback: ComputerPlaybackControl | undefined;
+  private readonly computerAudioInputs: Readonly<
+    Record<string, { source: string }>
+  >;
   private readonly roomSessions: RoomSessions;
   private lastNonOffSceneId: string | null = null;
   private bilresaPriorVolumeAutomation: boolean | null = null;
@@ -1033,6 +1040,7 @@ export class LugnEngine {
       };
     }
     this.computerPlayback = options.computerPlayback;
+    this.computerAudioInputs = options.computerAudioInputs ?? {};
     const musicAdapter: MusicAdapter =
       options.music?.adapter ?? new SimulatedMusicAdapter(clock);
     const guardedMusicAdapter: MusicAdapter = {
@@ -1805,9 +1813,27 @@ export class LugnEngine {
     requested = MusicRequestSchema.parse(requested);
     provenance = ProvenanceSchema.parse(provenance);
     this.musicController.getState(target);
-    if (isHumanActor(provenance.actor) && !isCurrent)
+    // A track step is refused before anything else happens, and it is not a
+    // playback or volume intent: it notes no intervention and has its own
+    // execution guard.
+    if (
+      requested.property === 'track' &&
+      !canStepTrack(this.state, target, this.computerAudioInputs)
+    )
+      throw new MusicTrackUnavailableError(target);
+    if (
+      isHumanActor(provenance.actor) &&
+      !isCurrent &&
+      requested.property !== 'track'
+    )
       this.noteIntervention({ domain: 'music', target });
-    const key = `${target}:${requested.property === 'volume' ? 'volume' : 'playback'}`;
+    const key = `${target}:${
+      requested.property === 'volume'
+        ? 'volume'
+        : requested.property === 'track'
+          ? 'track'
+          : 'playback'
+    }`;
     if (isCurrent)
       this.musicExecutionGuards.set(key, {
         requestId: provenance.requestId,
@@ -1873,13 +1899,6 @@ export class LugnEngine {
     }
     if (requested.property === 'source' || requested.property === 'preset')
       this.computerPlayback?.invalidate(target);
-    // A computer's audio through the player's input is not skipped by the
-    // player; there is no computer track control (yet).
-    if (
-      requested.property === 'track' &&
-      this.computerPlayback?.handles(target)
-    )
-      throw new MusicTrackUnavailableError(target);
     return this.musicController.request(target, requested, provenance);
   }
 

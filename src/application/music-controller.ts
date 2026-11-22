@@ -583,7 +583,10 @@ export class MusicController {
       !device.allowedSources.includes(requested.value)
     )
       throw new Error(`Source is not allowed for ${target}`);
-    if (recover) this.bumpIntent(target, this.intentDomain(requested));
+    // A track step is a one-off: it supersedes no Play, Pause, source or
+    // preset recovery (only an earlier pending track step, below).
+    if (recover && requested.property !== 'track')
+      this.bumpIntent(target, this.intentDomain(requested));
     const supersededIds = new Set<string>();
     for (const prior of this.state.commands) {
       if (
@@ -627,13 +630,15 @@ export class MusicController {
     this.issuedSequence.set(command.id, this.observedSequence.get(target) ?? 0);
     if (recover) {
       const domain = this.intentDomain(requested);
-      const generation = this.intentGenerations.get(target)![domain];
+      // A track step bumps nothing, so it may be the first command a
+      // target has seen.
+      const generation = this.intentGenerations.get(target)?.[domain] ?? 0;
       const authorization =
         this.recoveryPolicyGuard?.(command) ??
         (this.recoveryPolicyGuard ? null : 'controller');
       const valid = (): MusicRecoveryStopReason | null => {
         if (this.disposed) return 'disposed';
-        if (this.intentGenerations.get(target)?.[domain] !== generation)
+        if ((this.intentGenerations.get(target)?.[domain] ?? 0) !== generation)
           return 'superseded';
         if (
           authorization === null ||

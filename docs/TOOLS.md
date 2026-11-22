@@ -87,9 +87,13 @@ All reject unconfigured semantic targets and extra arguments.
 or previous track (Home Assistant `media_next_track` / `media_previous_track`,
 or WiiM `setPlayerCmd:next` / `prev`). It is a one-off action: nothing in the
 player's state says that it happened, so the command is never confirmed from
-an observation and never retried (a retry could skip twice). A player playing
-a computer's audio through its input is not skipped and the request is
-rejected with `music_track_unavailable`. The Hub shows Nästa låt only when the
+an observation and never retried (a retry could skip twice), and it is not a
+playback intent: it supersedes no pending Play, Pause, source or preset, and
+does not count as a music intervention. On many players `previous` early in
+a track restarts the current one. A player that is unavailable or playing a
+computer's audio through its input (any configured `computerAudio` route;
+an unknown source counts as the computer) is not skipped: the request is
+rejected with `music_track_unavailable` before anything else happens. The Hub shows Nästa låt only when the
 display payload's `musicTrackControl[target]` is true (available, not on a
 computer input). Volume uses HA's
 0..1 scale; source must appear in that target's configured allowlist.
