@@ -917,7 +917,14 @@ describe('Hub page markup', () => {
     const pages = [
       ...html.matchAll(/class="hub-page" data-page="([a-z]+)"/g),
     ].map((match) => match[1]);
-    expect(pages).toEqual(['home', 'music', 'kameror', 'clock', 'info']);
+    expect(pages).toEqual([
+      'home',
+      'music',
+      'kameror',
+      'clock',
+      'foto',
+      'info',
+    ]);
     const dots = /<div class="hub-dots"[^>]*>(.*?)<\/div>/.exec(html)?.[1];
     expect(dots?.match(/<i><\/i>/g)).toHaveLength(pages.length);
   });

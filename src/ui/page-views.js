@@ -144,8 +144,10 @@
     // Pending shows at once; the confirmation follows the next state.
     window.setTimeout(() => drawDock(page), 0);
   }
-  for (const page of ['clock', 'music'])
+  for (const page of ['clock', 'music', 'foto'])
     view(page, 'dock')?.addEventListener('click', onDockClick);
+  // Foto draws its menu's dock only while the menu is open.
+  globalThis.lugnSceneDock = { draw: drawDock };
 
   // ── Notices: Hem's toast and connection notice on every page ──
   //

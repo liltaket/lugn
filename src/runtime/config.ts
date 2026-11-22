@@ -1,3 +1,4 @@
+import { parseAlbumToken } from './icloud-shared-album.js';
 import {
   CameraDashboardConfigSchema,
   type CameraDashboardConfig,
@@ -503,6 +504,26 @@ const FileConfigSchema = z
     presenceFeedback: PresenceFeedbackConfigSchema.optional(),
     display: DisplayConfigSchema.optional(),
     cameraDashboard: CameraDashboardConfigSchema.optional(),
+    /** A public iCloud shared album shown on the Hubs' photo page. */
+    photoFrame: z
+      .object({
+        albumUrl: z.string().refine(
+          (link) => {
+            try {
+              parseAlbumToken(link);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          { message: 'must be a photos.icloud.com/shared/album/… link' },
+        ),
+        refreshMinutes: z.number().int().min(5).max(1440).default(30),
+        maxPhotos: z.number().int().min(1).max(500).default(150),
+        cacheDir: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     prelight: z
       .object({
         targets: z
@@ -764,6 +785,12 @@ export type RuntimeConfig = {
     }>;
   };
   cameraDashboard?: CameraDashboardConfig;
+  photoFrame?: {
+    albumUrl: string;
+    refreshMinutes: number;
+    maxPhotos: number;
+    cacheDir?: string | undefined;
+  };
   prelight: {
     targets: Record<string, LightingValues>;
     maxDurationMs: number;
@@ -937,6 +964,9 @@ export function loadRuntimeConfig(
     ...(fileConfig.cameraDashboard === undefined
       ? {}
       : { cameraDashboard: fileConfig.cameraDashboard }),
+    ...(fileConfig.photoFrame === undefined
+      ? {}
+      : { photoFrame: fileConfig.photoFrame }),
     prelight: fileConfig.prelight,
     lightingControlModes: fileConfig.lightingControlModes,
     ...(fileConfig.windowLighting === undefined

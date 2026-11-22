@@ -303,7 +303,7 @@ const server = createServer(async (request, response) => {
           'cache-control': 'no-store',
         });
         return response.end(
-          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"><rect width="640" height="360" fill="${camera.color}"/><rect y="250" width="640" height="110" fill="rgba(0,0,0,0.25)"/><circle cx="${100 + (Date.now() / 40) % 440}" cy="190" r="22" fill="#e7e1cf"/><text x="24" y="52" font-size="34" fill="#fff" font-family="sans-serif">${camera.name}</text><text x="24" y="340" font-size="30" fill="#fff" font-family="sans-serif">${time}</text></svg>`,
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"><rect width="640" height="360" fill="${camera.color}"/><rect y="250" width="640" height="110" fill="rgba(0,0,0,0.25)"/><circle cx="${100 + ((Date.now() / 40) % 440)}" cy="190" r="22" fill="#e7e1cf"/><text x="24" y="52" font-size="34" fill="#fff" font-family="sans-serif">${camera.name}</text><text x="24" y="340" font-size="30" fill="#fff" font-family="sans-serif">${time}</text></svg>`,
         );
       }
       const fixtureImage =
@@ -313,6 +313,32 @@ const server = createServer(async (request, response) => {
           : route.startsWith('display-api/cameras/fixture-view/')
             ? new URL('tests/fixtures/hub/camera.svg', root)
             : null;
+      // A cached album copy (the server's photo-frame directory), if given.
+      if (process.env.LUGN_PREVIEW_PHOTOS) {
+        const dir = process.env.LUGN_PREVIEW_PHOTOS;
+        if (route === 'display-api/photos') {
+          const index = JSON.parse(await readFile(`${dir}/index.json`, 'utf8'));
+          return sendJson(response, 200, {
+            revision: 'preview',
+            photos: index.photos.map((photo) => ({
+              ...photo,
+              source: undefined,
+            })),
+          });
+        }
+        const photo =
+          /^display-api\/photos\/([A-Za-z0-9_-]{24})(\/backdrop)?$/.exec(route);
+        if (photo) {
+          const body = await readFile(
+            `${dir}/${photo[1]}${photo[2] ? '.bg' : ''}.jpg`,
+          );
+          response.writeHead(200, {
+            'content-type': 'image/jpeg',
+            'cache-control': 'no-store',
+          });
+          return response.end(body);
+        }
+      }
       if (fixtureImage) {
         const body = await readFile(fixtureImage);
         response.writeHead(200, {
@@ -493,6 +519,10 @@ const server = createServer(async (request, response) => {
                 'page-views.js',
                 'cameras-page.css',
                 'cameras-page.js',
+                'quick-menu.css',
+                'quick-menu.js',
+                'photos-page.css',
+                'photos-page.js',
                 'hub-probe.js',
               ].includes(route)
             ? `src/ui/${route}`

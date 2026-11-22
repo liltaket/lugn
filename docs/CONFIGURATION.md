@@ -121,6 +121,32 @@ Lugn fetches the cover image through Home Assistant's image proxy with its own
 token and serves it to the Hubs under an opaque per-cover link. The browser never
 receives a Home Assistant URL or token.
 
+## Photo frame
+
+The Hubs' **Foto** page shows pictures from one public iCloud shared album
+(Photos → the album → people → Public Website; use the `photos.icloud.com/shared/album/…`
+link of an album upgraded in iOS 27). The link is a secret in practice: anyone
+holding it can see the album, so it belongs in `config.json` only.
+
+```json
+"photoFrame": {
+  "albumUrl": "https://photos.icloud.com/shared/album/…",
+  "refreshMinutes": 30,
+  "maxPhotos": 150,
+  "cacheDir": "/optional/path"
+}
+```
+
+Only `albumUrl` is required. The server reads the album anonymously (no Apple
+account, nothing is signed in), downloads each new picture once, scales it to
+at most 1024 px wide (landscape) or 640 px high (portrait) and keeps the copy,
+with a tiny blurred backdrop, in `cacheDir` (default: `photo-frame` next to the
+state file). Videos are skipped. The Hubs only ever fetch these local copies;
+the album link and Apple's addresses never reach a browser. Places come from
+`data/places.tsv` (GeoNames, CC BY 4.0), matched offline: no coordinates leave
+the machine. Apple documents none of this; if it stops working, the cache keeps
+showing what it has and `photo frame refresh failed` is logged.
+
 ## Persistence
 
 The runtime stores versioned lighting and music intent in

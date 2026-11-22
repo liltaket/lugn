@@ -228,7 +228,23 @@ progress with elapsed and total time, play/pause and the reported volume; the
 Spotify DJ and Optical choices when nothing plays), **Klocka** (large clock,
 indoor air and presence) and **Info** (connection, stream, revisions, memory,
 screen, browser, and an opt-in swipe probe). Tapping the cover on Hem opens
-Musik; the controls on and around it keep their own actions.
+Musik; the controls on and around it keep their own actions. **Foto** (between
+Klocka and Info) is a picture frame over a public iCloud shared album (see
+CONFIGURATION.md): one to three pictures at a time in changing layouts (a
+landscape full screen, two portraits, a portrait with a landscape, three
+portraits, a landscape with two portraits, three landscapes, two panoramas; a
+portrait never stands alone with black around it unless nothing else is left).
+Pictures taken within a few hours of each other and in the same area are played
+near each other, but the groups are shuffled and some pictures wander, so no
+group is fixed. Newly added pictures play next, each with a
+quiet caption of the place and date the picture was taken. A tap opens a quick menu: Hem's scenes (the dock of the other pages), pause
+and the playing title (Hem's own play button, shown while music is on), a
+camera button (it goes to Hem and opens its camera menu) and a button for the
+next picture, so the lights and the music can be changed without leaving the
+frame. The picture stays while the menu is open; it closes after a few seconds,
+on a tap beside it or when the page is left. A slide is built off screen, every picture is decoded before it is
+shown and only the slide's opacity animates; nothing changes while the pager is
+moving, and the page releases its pictures when it is two pages away.
 
 **Kameror** (after Musik) shows every camera at once in a grid; a tap shows
 one large, and tapping the small camera view on Hem opens the page on that

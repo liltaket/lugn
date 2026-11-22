@@ -1,0 +1,283 @@
+/* Foto (photos-page.js). A slide is one layer; only its opacity changes. No
+   filters, shadows with blur or masks: the Hub pays for each of them. */
+.photos-page {
+  padding: 0;
+  overflow: hidden;
+  background: #0b0d0d;
+}
+.ph-stage {
+  position: absolute;
+  inset: 0;
+}
+.ph-slide {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  contain: strict;
+}
+.ph-slide.in {
+  opacity: 1;
+}
+.ph-slide.lift {
+  will-change: opacity;
+  transition: opacity 1400ms ease-in-out;
+}
+.ph-slide img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  -webkit-user-drag: none;
+}
+.ph-cell {
+  position: absolute;
+  overflow: hidden;
+}
+.ph-slide .ph-cap {
+  position: absolute;
+  left: 40px;
+  bottom: 34px;
+  max-width: 60%;
+  color: #f4f1ec;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+.ph-cap b {
+  display: block;
+  font:
+    300 34px/1.1 system-ui,
+    sans-serif;
+  letter-spacing: -0.01em;
+}
+.ph-cap span {
+  display: block;
+  margin-top: 5px;
+  font:
+    400 19px system-ui,
+    sans-serif;
+  opacity: 0.75;
+}
+
+/* A readable floor under the caption on full-bleed pictures. */
+.ph-slide::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 180px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.62));
+  pointer-events: none;
+}
+.ph-single.ph-portrait::after {
+  display: none;
+}
+
+/* single, landscape: the picture fills the screen. */
+.ph-full {
+  inset: 0;
+}
+/* single, portrait: the picture at the left edge over its own tiny, already
+   blurred copy scaled up; the caption sits right of it. */
+.ph-backdrop {
+  position: absolute;
+  inset: 0;
+  opacity: 0.7;
+}
+.ph-portrait {
+  top: 0;
+  bottom: 0;
+  left: 70px;
+  width: 450px;
+}
+.ph-single.ph-portrait .ph-cap {
+  max-width: calc(var(--W) - 620px);
+}
+
+/* duo: two portraits side by side. */
+.ph-half {
+  top: 0;
+  bottom: 0;
+  width: calc(50% - 3px);
+}
+.ph-half:nth-child(1) {
+  left: 0;
+}
+.ph-half:nth-child(2) {
+  right: 0;
+}
+/* pair: a portrait and a landscape side by side. */
+.ph-pair-p {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 400px;
+}
+.ph-pair-l {
+  top: 0;
+  bottom: 0;
+  left: 406px;
+  right: 0;
+}
+
+/* trio: three portraits in full height. */
+.ph-col {
+  top: 0;
+  bottom: 0;
+  width: calc((100% - 12px) / 3);
+}
+.ph-col:nth-child(1) {
+  left: 0;
+}
+.ph-col:nth-child(2) {
+  left: calc((100% - 12px) / 3 + 6px);
+}
+.ph-col:nth-child(3) {
+  right: 0;
+}
+
+/* mixed: a landscape and two portraits. */
+.ph-mixed .ph-cell:nth-child(1) {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 612px;
+}
+.ph-mixed .ph-cell:nth-child(2) {
+  top: 0;
+  bottom: 0;
+  right: 306px;
+  width: 300px;
+}
+.ph-mixed .ph-cell:nth-child(3) {
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 300px;
+}
+
+/* stack3: two small landscapes over each other and one large. */
+.ph-stack3 .ph-cell {
+  left: 0;
+  width: 400px;
+}
+.ph-stack3 .ph-cell:nth-child(2) {
+  top: 0;
+  height: 297px;
+}
+.ph-stack3 .ph-cell:nth-child(3) {
+  bottom: 0;
+  height: 297px;
+}
+.ph-stack3 .ph-big {
+  top: 0;
+  bottom: 0;
+  left: 406px;
+  right: 0;
+  width: auto;
+  height: auto;
+}
+
+/* wide2: two panoramas stacked. */
+.ph-wide2 .ph-cell {
+  left: 0;
+  right: 0;
+  height: 297px;
+}
+.ph-wide2 .ph-cell:nth-child(1) {
+  top: 0;
+}
+.ph-wide2 .ph-cell:nth-child(2) {
+  bottom: 0;
+}
+
+.ph-notice {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8c958f;
+  font:
+    300 26px system-ui,
+    sans-serif;
+  text-align: center;
+}
+.ph-notice[hidden] {
+  display: none;
+}
+
+/* The music widget: there whenever something plays, at the lower left, and
+   lifted over the quick menu while that is open. It sits outside the menu, so
+   it stays when the menu goes. */
+.ph-now {
+  position: absolute;
+  left: 36px;
+  bottom: 28px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: 560px;
+  transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ph-now[hidden] {
+  display: none;
+}
+.photos-page.menu-open .ph-now {
+  transform: translateY(-84px);
+}
+.ph-now .qm-round {
+  visibility: visible;
+  pointer-events: auto;
+  background: rgba(20, 24, 23, 0.55);
+}
+.ph-now-text {
+  min-width: 0;
+  color: #eef1e8;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+.ph-now-text b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font:
+    600 18px/1.25 system-ui,
+    sans-serif;
+}
+.ph-now-text span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font:
+    400 16px/1.25 system-ui,
+    sans-serif;
+  opacity: 0.8;
+}
+
+/* The soft veil along the bottom of each picture, drawn from the picture; it
+   shows with the menu. */
+.ph-veil {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: min(55%, 300px);
+  opacity: 0;
+  transition: opacity 240ms ease-out;
+}
+.photos-page.menu-open .ph-veil {
+  opacity: 1;
+}
+
+/* The caption sits at the lower right so the widget has the left. */
+.photos-page .ph-slide .ph-cap {
+  left: auto;
+  right: 40px;
+  text-align: right;
+  transition: opacity 180ms ease-out;
+}
+.photos-page.menu-open .ph-slide .ph-cap {
+  opacity: 0;
+}
