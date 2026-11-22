@@ -265,10 +265,31 @@
     index = target;
     announcements.push({ page: pages[index].id, previous: previous.id });
     syncDots();
-    callHook(previous, 'leave');
     setState(pages[index], 'active');
-    callHook(pages[index], 'enter');
     return previous;
+  }
+
+  // The pages' own enter and leave run once the motion has ended, so a page
+  // starting its timers and drawing its live state never lands in the
+  // frames of the motion. A run of swipes leaves only the first page and
+  // enters only the last.
+  let entered = null;
+  function enterCurrent() {
+    const page = pages[index];
+    // Focus left on a control of a page now out of view (neighbours are not
+    // inert) is let go, so a key or a bridged Escape cannot act on it.
+    const focused = document.activeElement;
+    if (
+      focused &&
+      focused !== document.body &&
+      pager.contains(focused) &&
+      !page.el.contains(focused)
+    )
+      focused.blur?.();
+    if (entered === page) return;
+    if (entered) callHook(entered, 'leave');
+    entered = page;
+    callHook(page, 'enter');
   }
 
   // Each change reaches every listener before the next one does, in order,
@@ -304,6 +325,7 @@
   // else) may measure the page again now.
   function motionEnded() {
     setPaging(false);
+    enterCurrent();
     window.dispatchEvent?.(new Event('lugn:pages-settled'));
     settled();
   }
@@ -378,7 +400,12 @@
     page.state = state;
     page.el.dataset.state = state;
     page.el.setAttribute('aria-hidden', state === 'active' ? 'false' : 'true');
-    if ('inert' in page.el) page.el.inert = state !== 'active';
+    // Only pages out of reach are inert. Toggling inert restyles a page's
+    // whole subtree, and a page turns active in the middle of its motion:
+    // measured on a Hub, that cost about 100 ms of style and layout in the
+    // swipe's frames. Neighbours stay out of view (and aria-hidden) instead.
+    const inert = state === 'off';
+    if ('inert' in page.el && page.el.inert !== inert) page.el.inert = inert;
     if (state === 'near' && was !== 'active') callHook(page, 'prepare');
     if (state === 'off') callHook(page, 'sleep');
   }
@@ -775,6 +802,14 @@
   window.addEventListener('click', onClick, true);
   pager.addEventListener('wheel', onWheel, { capture: true, passive: false });
   window.addEventListener('keydown', onKey);
+  // Neighbours are not inert, so focus could land on one out of view; it is
+  // sent back, and the pager never scrolls to show it.
+  pager.addEventListener('focusin', (event) => {
+    const page = event.target.closest?.('.hub-page');
+    if (!page || page === pages[index].el) return;
+    event.target.blur?.();
+    if (pager.scrollLeft) pager.scrollLeft = 0;
+  });
   window.addEventListener('resize', onResize);
 
   write(0);
@@ -795,7 +830,10 @@
       if (!page) return;
       page.hooks = hooks || {};
       if (page.state === 'near') callHook(page, 'prepare');
-      if (page.state === 'active') callHook(page, 'enter');
+      if (page.state === 'active') {
+        entered = page;
+        callHook(page, 'enter');
+      }
     },
     onChange(fn) {
       listeners.add(fn);

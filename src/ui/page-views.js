@@ -1016,14 +1016,6 @@
       musicShown = true;
       barKey = '';
       musicTick();
-      // Arriving on the page: the cover and the words settle in.
-      reveal(view('music', 'cover'), 14, 0, 420);
-      reveal(
-        document.querySelector("[data-page='music'] .music-page-info"),
-        14,
-        70,
-        420,
-      );
       musicTimer = window.setInterval(musicTick, 1000);
     },
     leave() {
