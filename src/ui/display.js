@@ -641,7 +641,7 @@ function setClock(afterRender = false) {
   }
   refs.clockDate.dateTime = `${dateValue.year}-${dateValue.month}-${dateValue.day}`;
   // render() has just drawn all of these from the same payload.
-  if (latestPayload && !afterRender) {
+  if (latestPayload && !afterRender && !pagerMoving()) {
     renderEnvironment(latestPayload.environment);
     renderContext(latestPayload);
     renderScenes(latestPayload);
@@ -3134,8 +3134,43 @@ function renderMusic(payload) {
   syncArtTheme();
 }
 
-function render(payload) {
+// The pager (src/ui/pages.js) marks `paging` from the first move of a swipe to
+// the end of its settle. Drawing a state message then would restyle the page in
+// the middle of the motion, so the message is kept and drawn once, right after.
+const PAGING_DRAW_LIMIT_MS = 1500;
+let drawDeferred = false;
+let drawDeferTimer;
+function pagerMoving() {
+  return !!document
+    .getElementById?.('hub-pager')
+    ?.classList?.contains('paging');
+}
+function drawAfterPaging() {
+  window.clearTimeout(drawDeferTimer);
+  drawDeferTimer = undefined;
+  if (!drawDeferred) return;
+  drawDeferred = false;
+  if (latestPayload) render(latestPayload, true);
+}
+window.addEventListener('lugn:pages-settled', drawAfterPaging);
+
+function render(payload, force = false) {
   drawnStreamKey = '';
+  if (!force && pagerMoving()) {
+    latestPayload = payload;
+    payloadReceivedAt = monotonicNow();
+    drawDeferred = true;
+    // Never for long: a pager that does not report its end must not freeze
+    // the page.
+    if (drawDeferTimer === undefined)
+      drawDeferTimer = window.setTimeout(() => {
+        drawDeferTimer = undefined;
+        if (!drawDeferred) return;
+        drawDeferred = false;
+        if (latestPayload) render(latestPayload, true);
+      }, PAGING_DRAW_LIMIT_MS);
+    return;
+  }
   latestPayload = payload;
   payloadReceivedAt = monotonicNow();
   setRole(payload?.role);
