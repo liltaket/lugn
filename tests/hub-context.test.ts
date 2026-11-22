@@ -280,6 +280,28 @@ afterEach(() => {
 });
 
 describe('Hub optional Lugn 2 presentation', () => {
+  it('restarts pulse animations only while the dashboard is the page on screen', () => {
+    const frames: Array<() => void> = [];
+    (ui.context as { requestAnimationFrame?: unknown }).requestAnimationFrame =
+      (fn: () => void) => frames.push(fn);
+    const home = ui.get('#app-root');
+    const run = () =>
+      runInContext("pulse(document.querySelector('#x'), 'lit')", ui.context);
+    ui.get('#x');
+    (home as unknown as { closest: unknown }).closest = () => ({
+      dataset: { state: 'near' },
+    });
+    run();
+    // Off screen: the class is simply there, nothing is queued for a flush.
+    expect(frames).toHaveLength(0);
+    expect(ui.get('#x').classList.contains('lit')).toBe(true);
+    (home as unknown as { closest: unknown }).closest = () => ({
+      dataset: { state: 'active' },
+    });
+    run();
+    expect(frames).toHaveLength(1);
+  });
+
   it('never starts routines or accepts suggestions on load; missing projections retain manual controls', () => {
     expect(ui.calls).toEqual([]);
     const legacy = ui.payload();
@@ -836,7 +858,8 @@ describe('Hub lighting pictograms', () => {
   it('uses distinct built-in icons with learnable name captions and keeps unknown presets readable', () => {
     const data = ui.payload();
     data.scenes.push(
-      { id: 'scene.party', name: 'Party' },
+      { id: 'scene.music', name: 'Musik' },
+      { id: 'scene.dynamic', name: 'Dynamisk' },
       { id: 'scene.custom_evening', name: 'Min sena kväll' },
     );
     delete data.routines;
@@ -848,7 +871,8 @@ describe('Hub lighting pictograms', () => {
       'scene.everyday_light': 'sun',
       'scene.focus_light': 'desk-lamp',
       'scene.movie_light': 'film',
-      'scene.party': 'disco-ball',
+      'scene.music': 'music',
+      'scene.dynamic': 'sparkles',
     };
     for (const button of ui.get('#scene-grid').children) {
       const scene = data.scenes.find(
@@ -873,7 +897,7 @@ describe('Hub lighting pictograms', () => {
         expect(symbol?.innerHTML).toContain('<svg viewBox="0 0 24 24"');
       }
     }
-    expect(new Set(Object.values(expected)).size).toBe(6);
+    expect(new Set(Object.values(expected)).size).toBe(7);
     expect(ui.calls).toEqual([]);
   });
 

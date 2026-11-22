@@ -15,6 +15,7 @@ import {
   type ResolvedAssistantEntitiesConfig,
 } from '../adapters/assistant-entities-mqtt.js';
 import { WledCctMappingsSchema } from '../adapters/wled-cct.js';
+import { DynamicLightingConfigSchema } from '../core/dynamic-lighting.js';
 import { PresenceControlConfigSchema } from '../adapters/stl27l-presence-control.js';
 import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -499,6 +500,7 @@ const FileConfigSchema = z
     homeAssistant: HomeAssistantConfigSchema,
     lightingControlModes: LightingControlModesSchema.default({}),
     windowLighting: WindowLightingSchema.optional(),
+    dynamicLighting: DynamicLightingConfigSchema.optional(),
     mqtt: MqttConfigSchema.optional(),
     presenceControl: PresenceControlConfigSchema.optional(),
     presenceFeedback: PresenceFeedbackConfigSchema.optional(),
@@ -684,6 +686,28 @@ const FileConfigSchema = z
         message: `Lighting control target ${target} is not mapped in homeAssistant.entities`,
       });
     }
+    for (const target of Object.keys(config.dynamicLighting?.targets ?? {})) {
+      if (configuredLights.has(target)) continue;
+      context.addIssue({
+        code: 'custom',
+        path: ['dynamicLighting', 'targets', target],
+        message: `Dynamic lighting target ${target} is not mapped in homeAssistant.entities`,
+      });
+    }
+    const dynamicComputer = config.dynamicLighting?.computerDeviceId;
+    if (
+      dynamicComputer !== undefined &&
+      !(config.mqtt?.computers ?? []).some(
+        (computer) => computer.deviceId === dynamicComputer,
+      )
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['dynamicLighting', 'computerDeviceId'],
+        message:
+          'Dynamic lighting computer must be configured in mqtt.computers',
+      });
+    }
     if (
       config.windowLighting &&
       !configuredLights.has(config.windowLighting.target)
@@ -723,6 +747,7 @@ export type RuntimeConfig = {
     music: z.output<typeof WiimMusicMappingsSchema>;
   };
   windowLighting?: WindowLighting;
+  dynamicLighting?: z.output<typeof DynamicLightingConfigSchema>;
   presenceControl?: z.output<typeof PresenceControlConfigSchema>;
   presenceFeedback?: z.output<typeof PresenceFeedbackConfigSchema>;
   lightingControlModes?: LightingControlModes;
@@ -972,6 +997,9 @@ export function loadRuntimeConfig(
     ...(fileConfig.windowLighting === undefined
       ? {}
       : { windowLighting: fileConfig.windowLighting }),
+    ...(fileConfig.dynamicLighting === undefined
+      ? {}
+      : { dynamicLighting: fileConfig.dynamicLighting }),
     ...(fileConfig.scenes === undefined ? {} : { scenes: fileConfig.scenes }),
     ...(fileConfig.defaultSceneId === undefined
       ? {}

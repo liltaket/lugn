@@ -417,7 +417,7 @@ are available in the web Intelligence section. New installations start disabled.
 
 The Hub lighting scenes use centered SVG pictograms with small name captions: power for
 all off, crescent for cozy lighting, sun for everyday lighting, desk lamp for
-focus and screen/play for movie lighting. A configured Party scene uses a disco-ball
+focus and screen/play for movie lighting. Musik uses a note and Dynamisk a sparkle
 pictogram. Touch areas and actions are unchanged.
 Accessible names and native tooltips retain scene names and live confirmation
 state. Small 13–14px names beneath the icons help users learn their meaning. User-created presets keep their text labels, since their meaning cannot

@@ -1912,8 +1912,11 @@ h2 {
 .screen .scene-button[data-scene='scene.movie_light'] {
   --scene-color: #bcafd2;
 }
-.screen .scene-button[data-scene='scene.party'] {
+.screen .scene-button[data-scene='scene.music'] {
   --scene-color: #d9a6bd;
+}
+.screen .scene-button[data-scene='scene.dynamic'] {
+  --scene-color: #a9c9b6;
 }
 .screen .scene-button[data-scene='scene.sleep'] {
   --scene-color: #b3c4ad;

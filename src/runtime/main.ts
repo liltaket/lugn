@@ -13,6 +13,8 @@ import { RoutineApi } from './routine-api.js';
 import { IntelligenceSettingsStore } from './intelligence-settings-store.js';
 import { IntelligenceApi } from './intelligence-api.js';
 import { createComputerIntelligenceRuntime } from './computer-intelligence-runtime.js';
+import { ArtworkPaletteService } from './artwork-palette-service.js';
+import { DynamicLightingController } from '../application/dynamic-lighting.js';
 import { CompositeMusicAdapter } from '../adapters/composite-music.js';
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
 import {
@@ -706,6 +708,23 @@ export async function startRuntime(
           systemClock,
         )
       : undefined;
+  // Music and adaptive scenes follow the same artwork the dashboards show.
+  const artworkPalette = config.dynamicLighting
+    ? new ArtworkPaletteService({
+        artwork,
+        observationTrusted: (target) => isMusicObservationTrusted(target),
+      })
+    : undefined;
+  const dynamicLighting =
+    config.dynamicLighting && artworkPalette
+      ? new DynamicLightingController({
+          clock: systemClock,
+          engine,
+          config: config.dynamicLighting,
+          palette: artworkPalette,
+          onDecision: (message) => console.info(`[lugn] ${message}`),
+        })
+      : undefined;
   const cameraStore = config.cameraDashboard
     ? new CameraSettingsStore(
         `${lightingIntentPath}.cameras.json`,
@@ -1282,6 +1301,8 @@ export async function startRuntime(
     routines.dispose();
     computerIntelligence.dispose();
     photoLibrary?.dispose();
+    dynamicLighting?.dispose();
+    artworkPalette?.dispose();
     cameraMedia?.dispose();
     cameraService?.dispose();
     artwork?.dispose();
@@ -1328,6 +1349,8 @@ export async function startRuntime(
       routines.dispose();
       computerIntelligence.dispose();
       photoLibrary?.dispose();
+      dynamicLighting?.dispose();
+      artworkPalette?.dispose();
       cameraMedia?.dispose();
       cameraService?.dispose();
       artwork?.dispose();

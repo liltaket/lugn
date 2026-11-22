@@ -70,3 +70,16 @@ it('does not turn an RGB-only preset into white on save/load normalization', () 
   };
   expect(synchronizeSceneColorTemperature(scene, 2700)).toEqual(scene);
 });
+
+it('offers Musik and Dynamisk as dynamic room presets, and no Party', () => {
+  const scenes = withRoomPresets([], ['lighting.ceiling', 'lighting.strip']);
+  expect(scenes.find((scene) => scene.id === 'scene.music')).toMatchObject({
+    name: 'Musik',
+    dynamic: 'music',
+  });
+  expect(scenes.find((scene) => scene.id === 'scene.dynamic')).toMatchObject({
+    name: 'Dynamisk',
+    dynamic: 'adaptive',
+  });
+  expect(scenes.some((scene) => scene.id === 'scene.party')).toBe(false);
+});

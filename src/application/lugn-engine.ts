@@ -2172,6 +2172,71 @@ export class LugnEngine {
     return this.activateScene(sceneId, actor, source, requestId, isCurrent);
   }
 
+  /**
+   * Returns lamps that an automation steered to the active scene's own values,
+   * and touches nothing else. A lamp with any property a person set, a lamp
+   * under external control, the window light and lamps the scene does not
+   * include are skipped, so a hand adjustment is never overwritten or delayed.
+   */
+  async releaseAutomaticLighting(
+    targets: readonly string[],
+    source: string,
+  ): Promise<string[]> {
+    const sceneId = this.state.lighting.currentScene;
+    const scene = sceneId ? this.scenes.get(sceneId) : undefined;
+    if (!scene) return [];
+    const revision = this.state.lighting.sceneRevision;
+    const released = new Set<string>();
+    for (const target of targets) {
+      const device = this.state.lighting.devices[target];
+      const owners = device ? Object.values(device.ownership) : [];
+      if (
+        !device ||
+        device.externalControl ||
+        target === this.windowLighting?.target ||
+        scene.lighting[target] === undefined ||
+        owners.some(
+          (owner) => owner.kind === 'override' && isHumanActor(owner.actor),
+        ) ||
+        !owners.some((owner) => owner.kind === 'override')
+      )
+        continue;
+      this.invalidateLightingTarget(target);
+      device.effectiveDesired = { ...device.baselineDesired };
+      device.ownership = {};
+      for (const property of LightingProperties) {
+        if (device.baselineDesired[property] !== undefined)
+          device.ownership[property] = { kind: 'scene', revision };
+      }
+      this.setGoveeIntent(target, scene.govee?.[target]);
+      if (
+        !scene.govee?.[target] &&
+        scene.lighting[target]?.power === true &&
+        this.adapter.goveeCapabilities?.[target]?.staticColor
+      )
+        this.goveeTransitionTargets.add(target);
+      this.lightingExecutionGuards.delete(target);
+      this.ledger.supersedePending(
+        `Released by ${source}: back to the scene`,
+        target,
+      );
+      this.startConvergenceAttempt(revision, target);
+      released.add(target);
+    }
+    if (released.size === 0) return [];
+    this.addDiagnostic(
+      'lighting.released',
+      `Automatic lighting released for ${released.size} lamp(s)`,
+      { source, targets: [...released] },
+    );
+    this.publish(['lighting', 'commands', 'diagnostics']);
+    await this.reconcileScene(revision, undefined, new Set(), {
+      onlyTargets: released,
+      allowInFlight: true,
+    });
+    return [...released];
+  }
+
   /** Internal run-scoped authority, issued only after RoutineService consumes a confirmed owned plan.
    * No capability input or actor identity can request this grant. It only supersedes lighting OFF holds.
    */
