@@ -380,13 +380,36 @@ describe('Hub pager', () => {
     expect(track.animations).toHaveLength(0);
   });
 
-  it('swallows the click of a diagonal bridge drag that locked vertically', () => {
-    const { api, pages, pointer, click } = setup();
-    pointer('pointerdown', pages[0]!.button, 260, 550, 'mouse');
-    pointer('pointermove', pages[0]!.button, 260, 558, 'mouse');
-    pointer('pointerup', pages[0]!.button, 200, 558, 'mouse');
-    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
-    expect(api.current()).toBe('home');
+  it('swallows the click of a diagonal bridge drag', () => {
+    // 8 px down is within a tap's wobble; the release 60 px left at once is
+    // a fast swipe: the click is swallowed (the page may turn).
+    const quick = setup();
+    quick.pointer('pointerdown', quick.pages[0]!.button, 260, 550, 'mouse');
+    quick.pointer('pointermove', quick.pages[0]!.button, 260, 558, 'mouse');
+    quick.pointer('pointerup', quick.pages[0]!.button, 200, 558, 'mouse');
+    expect(quick.click(quick.pages[0]!.button).defaultPrevented).toBe(true);
+
+    // 12 px down locks the press as vertical: no turn, and no click either.
+    const vertical = setup();
+    vertical.pointer(
+      'pointerdown',
+      vertical.pages[0]!.button,
+      260,
+      540,
+      'mouse',
+    );
+    vertical.pointer(
+      'pointermove',
+      vertical.pages[0]!.button,
+      260,
+      552,
+      'mouse',
+    );
+    vertical.pointer('pointerup', vertical.pages[0]!.button, 200, 552, 'mouse');
+    expect(vertical.click(vertical.pages[0]!.button).defaultPrevented).toBe(
+      true,
+    );
+    expect(vertical.api.current()).toBe('home');
   });
 
   it('still clicks a press that wobbles less than a tap allows', () => {
@@ -395,6 +418,36 @@ describe('Hub pager', () => {
     pointer('pointermove', pages[0]!.button, 262, 558, 'mouse');
     pointer('pointerup', pages[0]!.button, 263, 558, 'mouse');
     expect(click(pages[0]!.button).defaultPrevented).toBe(false);
+  });
+
+  it('still clicks a press that wobbles 8 px sideways', () => {
+    const { pages, pointer, click, track } = setup();
+    pointer('pointerdown', pages[0]!.button, 260, 550, 'mouse');
+    pointer('pointermove', pages[0]!.button, 268, 550, 'mouse');
+    pointer('pointerup', pages[0]!.button, 268, 550, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(false);
+    expect(track.animations).toHaveLength(0);
+  });
+
+  it('flicks with a real move that arrives only with the release after a pause', () => {
+    const { api, pages, pointer, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 800, 350, 'mouse');
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 760, 350, 'mouse');
+    advance(75);
+    pointer('pointerup', pages[0]!.button, 660, 350, 'mouse');
+    expect(api.current()).toBe('clock');
+  });
+
+  it('lets a horizontal wheel page while a press is held vertically', () => {
+    const { api, pages, pointer, wheel, advance, click } = setup();
+    pointer('pointerdown', pages[0]!.button, 500, 300, 'mouse');
+    pointer('pointermove', pages[0]!.button, 500, 330, 'mouse');
+    wheel(pages[0]!.button, 250);
+    advance(200);
+    expect(api.current()).toBe('clock');
+    pointer('pointerup', pages[0]!.button, 500, 330, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
   });
 
   it('does not revive a flick with a last pixel after a pause', () => {

@@ -27,8 +27,8 @@
 
   // ── Tuning ──
   const TOUCH_SLOP = 10; // px before a touch is a swipe
-  const MOUSE_SLOP = 6;
   const TAP_SLOP = 10; // px a press may wander and still click
+  const MOUSE_SLOP = TAP_SLOP; // so a wobble that still clicks never drags
   const LOCK_RATIO = 1.2; // |dx| must beat |dy| by this much
   const VELOCITY_WINDOW_MS = 90;
   const STILL_MS = 60; // pointer held still this long before release: no fling
@@ -512,9 +512,8 @@
     const now = event.timeStamp || clock();
     // Held still before the release: judged before the release's own
     // position is added, so a last pixel cannot revive an earlier flick.
-    const held =
-      now - (g.samples[g.samples.length - 1] ?? g.press)[0] >
-      stillAfter(g.samples);
+    const before = g.samples[g.samples.length - 1] ?? g.press;
+    const held = now - before[0] > stillAfter(g.samples);
     if (
       event.type === 'pointerup' &&
       Number.isFinite(event.clientX) &&
@@ -529,10 +528,15 @@
       return;
     }
     swallowSwipeClick();
-    const velocity =
-      event.type === 'pointercancel' || held
-        ? 0
-        : releaseVelocity(g.samples, now, g.press);
+    let velocity = 0;
+    if (event.type !== 'pointercancel') {
+      if (!held) velocity = releaseVelocity(g.samples, now, g.press);
+      else if (Math.abs(offset - before[1]) > TAP_SLOP)
+        // After a pause, a real move that arrives only with the release (the
+        // bridge sends it at once) is a new flick of its own; a last pixel
+        // or two is not.
+        velocity = releaseVelocity([before, [now, offset]], now);
+    }
     finish(velocity);
   }
 
@@ -618,7 +622,9 @@
   }
 
   function wheelDrag(event, dx) {
-    if (gesture) return;
+    // A held press that is not moving the pages (vertical, or held through a
+    // resize) leaves paging to the wheel; it still swallows its own click.
+    if (gesture && !gesture.vertical && !gesture.cancelled) return;
     const now = event.timeStamp || clock();
     if (!wheel) {
       stopAnimation(true);
