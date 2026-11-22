@@ -778,12 +778,13 @@
 
   // Real swipes through the pager's own code (synthetic touch pointer events,
   // like a finger), with Lugn's answers faked so nothing a swipe might touch
-  // leaves the Hub. Variants of when the track becomes a layer: when the pager
-  // decides (as shipped), at the press, or well before it.
-  async function pagerSwipes() {
+  // leaves the Hub. `mode` says what is prepared before the swipe: nothing, the
+  // track lifted to a layer, the neighbour page lifted to a layer, or both.
+  async function swipeRun(mode, label) {
     const api = globalThis.lugnPages;
     const pager = document.getElementById('hub-pager');
-    if (!api || !pager || typeof PointerEvent !== 'function') return [];
+    if (!api || !pager || typeof PointerEvent !== 'function')
+      return { variant: label, skipped: 'no pager' };
     // A point that is no control, near the middle of the screen.
     let target;
     let from;
@@ -801,7 +802,7 @@
         break;
       }
     }
-    if (!target) return [{ variant: 'pager', skipped: 'no free spot' }];
+    if (!target) return { variant: label, skipped: 'no free spot' };
     const stub = (input, init) =>
       String(init?.method ?? 'GET').toUpperCase() === 'POST'
         ? Promise.resolve(
@@ -813,8 +814,7 @@
         : realFetch(input, init);
     window.fetch = stub;
     if (window.fetch !== stub)
-      return [{ variant: 'pager', skipped: 'fetch locked' }];
-    const out = [];
+      return { variant: label, skipped: 'fetch locked' };
     const send = (type, x, y, buttons) =>
       target.dispatchEvent(
         new PointerEvent(type, {
@@ -828,60 +828,50 @@
           cancelable: true,
         }),
       );
-    send.step = 0;
-    const home = async () => {
+    const neighbours = [
+      ...document.querySelectorAll('.hub-page[data-state="near"]'),
+    ];
+    let down = false;
+    let up = false;
+    let moved = 0;
+    try {
+      if (mode === 'track' || mode === 'both') pager.classList.add('moving');
+      if (mode === 'near' || mode === 'both')
+        for (const page of neighbours) page.style.willChange = 'transform';
+      if (mode !== 'asis') await sleep(1300);
+      drain();
+      const sample = await sampleFrames(1800, (elapsed) => {
+        const t = elapsed - 300;
+        if (t >= 0 && !down) {
+          down = true;
+          send('pointerdown', from[0], from[1], 1);
+        }
+        if (down && !up) {
+          const step = Math.min(10, Math.floor((t - 20) / 16));
+          if (step > moved) {
+            moved = step;
+            send('pointermove', from[0] - step * 45, from[1], 1);
+          }
+          if (step >= 10) {
+            up = true;
+            send('pointerup', from[0] - 450, from[1], 0);
+          }
+        }
+      });
+      return {
+        variant: label,
+        page: String(api.current?.()),
+        ...(await summarise(sample)),
+      };
+    } finally {
+      window.fetch = realFetch;
+      pager.classList.remove('moving');
+      for (const page of neighbours) page.style.willChange = '';
+      await sleep(1200);
       if (api.current?.() !== 'home') api.go?.('home');
       await sleep(1500);
       drain();
-    };
-    try {
-      for (const [variant, mode] of [
-        ['pager-asis', 'none'],
-        ['pager-lift-at-press', 'press'],
-        ['pager-lift-early', 'early'],
-        ['pager-asis', 'none'],
-      ]) {
-        if (aborted) break;
-        await home();
-        if (mode === 'early') {
-          pager.classList.add('moving');
-          await sleep(1300);
-        }
-        const sample = await sampleFrames(1800, (elapsed) => {
-          const t = elapsed - 300;
-          if (t >= 0 && !send.down) {
-            send.down = true;
-            if (mode === 'press') pager.classList.add('moving');
-            send('pointerdown', from[0], from[1], 1);
-          }
-          if (send.down && !send.up) {
-            const step = Math.min(10, Math.floor((t - 20) / 16));
-            if (step > send.step) {
-              send.step = step;
-              send('pointermove', from[0] - step * 45, from[1], 1);
-            }
-            if (step >= 10) {
-              send.up = true;
-              send('pointerup', from[0] - 450, from[1], 0);
-            }
-          }
-        });
-        send.down = send.up = false;
-        send.step = 0;
-        out.push({
-          variant,
-          ...(await summarise(sample)),
-          page: String(api.current?.()),
-        });
-        pager.classList.remove('moving');
-      }
-    } finally {
-      window.fetch = realFetch;
-      send.down = send.up = false;
-      pager.classList.remove('moving');
-      await home();
     }
-    return out;
   }
 
   async function bare() {
@@ -1000,7 +990,23 @@
       ['hover (som bryggan)', 'dot', () => hoverDot('hover-real')],
       ['hover (cachad)', 'dot', () => hoverDot('hover-cached')],
       ['utan timers och ström', 'dot', () => hoverDot('quiet')],
-      ['sidsvep (riktig pager)', 'dot', pagerSwipes],
+      ['sidsvep-kall-asis', 'dot', () => swipeRun('asis', 'swipe-cold-asis')],
+      [
+        'sidsvep-kall-track',
+        'dot',
+        () => swipeRun('track', 'swipe-cold-track'),
+      ],
+      ['sidsvep-kall-near', 'dot', () => swipeRun('near', 'swipe-cold-near')],
+      ['sidsvep-kall-both', 'dot', () => swipeRun('both', 'swipe-cold-both')],
+      [
+        'sidsvep-varm',
+        'dot',
+        async () => [
+          await swipeRun('asis', 'swipe-warm-asis'),
+          await swipeRun('asis', 'swipe-warm-asis-2'),
+          await swipeRun('both', 'swipe-warm-both'),
+        ],
+      ],
       ['temabyte', 'dot', themeSwap],
       ['temats delar', 'dot', themeParts],
       ['rotattribut', 'dot', rootAttrs],
