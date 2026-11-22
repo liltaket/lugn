@@ -50,6 +50,8 @@ export type DynamicLightingOptions = {
 
 const actor: Actor = { type: 'automation', id: 'lugn.dynamic' };
 const releaseRetryMs = 10_000;
+/** Artwork or playback that vanishes for less than this keeps the colours. */
+const paletteGraceMs = 8_000;
 
 /**
  * Drives lamps for scenes marked `dynamic`. The engine stays authoritative:
@@ -66,6 +68,11 @@ export class DynamicLightingController {
     since: number;
   } | null = null;
   private idleSince: number | null = null;
+  private lastMusic: {
+    playing: boolean;
+    palette: readonly Rgb[];
+    at: number;
+  } | null = null;
   private sceneRevision = -1;
   /** Lamps that may still hold a value this controller put there. */
   private readonly driven = new Set<string>();
@@ -138,11 +145,15 @@ export class DynamicLightingController {
       this.driven.clear();
       this.committed = null;
       this.candidate = null;
+      this.lastMusic = null;
       this.sceneRevision = state.lighting.sceneRevision;
     }
 
     this.syncDriven(state);
-    const music = this.options.palette.current(state);
+    const music = this.musicWithGrace(
+      this.options.palette.current(state),
+      clock.monotonicNow(),
+    );
     const inputs: DynamicInputs = {
       roomOccupied:
         state.presence.state === 'occupied' &&
@@ -198,6 +209,28 @@ export class DynamicLightingController {
     };
     this.log(kind, plan);
     await this.apply(plan, sceneId!, state.lighting.sceneRevision);
+  }
+
+  /**
+   * Metadata from players and Home Assistant disagrees for a moment at track
+   * changes and while a player refreshes. Colours that disappear for a few
+   * seconds are kept, so the lamps do not fall back to the scene and recolour.
+   */
+  private musicWithGrace(
+    music: { playing: boolean; palette: readonly Rgb[] },
+    now: number,
+  ): { playing: boolean; palette: readonly Rgb[] } {
+    if (music.playing && music.palette.length > 0) {
+      this.lastMusic = { ...music, at: now };
+      return music;
+    }
+    const last = this.lastMusic;
+    if (last && now - last.at < paletteGraceMs) {
+      this.armWake(paletteGraceMs - (now - last.at) + 50);
+      return { playing: last.playing, palette: last.palette };
+    }
+    this.lastMusic = null;
+    return music;
   }
 
   private async apply(
@@ -404,6 +437,7 @@ export class DynamicLightingController {
     this.lastSentAt.clear();
     this.committed = null;
     this.candidate = null;
+    this.lastMusic = null;
     this.idleSince = null;
     this.sceneRevision = -1;
     this.lastLogged = '';
@@ -417,7 +451,7 @@ export class DynamicLightingController {
   }
 
   private log(kind: string, plan: DynamicPlan): void {
-    const line = `dynamic lighting (${kind}): ${plan.situation} — ${plan.reason}`;
+    const line = `dynamic lighting (${kind}): ${plan.situation} — ${plan.reason} (${plan.evidence.join('; ')})`;
     if (line === this.lastLogged) return;
     this.lastLogged = line;
     this.options.onDecision?.(line);

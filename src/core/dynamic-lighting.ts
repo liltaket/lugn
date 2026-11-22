@@ -129,7 +129,15 @@ export function classifySituation(
     return {
       situation: 'desk',
       reason: 'media_in_window',
-      evidence: [`${computer.activity} is playing`],
+      evidence: [
+        `${computer.activity} is playing, the active window is ${
+          computer.fullscreen === null
+            ? 'of unknown full-screen state'
+            : computer.fullscreen
+              ? 'full screen but the computer is locked'
+              : 'not full screen'
+        }`,
+      ],
     };
   if (computer.idle === true && (computer.idleForMs ?? 0) >= config.idleAfterMs)
     return {
