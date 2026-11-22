@@ -225,8 +225,10 @@ clock, indoor air and presence) and **Info** (connection, stream, revisions,
 memory, screen, browser, and an opt-in swipe probe). A swipe with a finger or
 the desk Hub's bridged mouse, a horizontal wheel or trackpad, a vertical wheel
 notch outside scrollable areas and the arrow keys turn the page; small dots at
-the bottom show where you are. A swipe turns at most one page; a click that ends
-a swipe is swallowed, and taps and vertical moves stay with the page.
+the bottom show where you are. A swipe turns at most one page. Taps and
+vertical moves stay with the page, but a press that moved more than 10 px in
+any direction is not a tap: the click that may follow it (the browser's after a
+mouse drag, or the pointer bridge's) is swallowed.
 
 The pager follows the responsiveness rules above:
 

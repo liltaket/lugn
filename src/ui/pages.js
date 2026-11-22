@@ -28,6 +28,7 @@
   // ── Tuning ──
   const TOUCH_SLOP = 10; // px before a touch is a swipe
   const MOUSE_SLOP = 6;
+  const TAP_SLOP = 10; // px a press may wander and still click
   const LOCK_RATIO = 1.2; // |dx| must beat |dy| by this much
   const VELOCITY_WINDOW_MS = 90;
   const STILL_MS = 60; // pointer held still this long before release: no fling
@@ -396,6 +397,9 @@
       type: event.pointerType || 'mouse',
       x0: event.clientX,
       y0: event.clientY,
+      downX: event.clientX,
+      downY: event.clientY,
+      moved: false,
       startOffset: unrubber(offset),
       dragging: catching,
       press: [event.timeStamp || clock(), offset],
@@ -427,22 +431,23 @@
   // the bridge sends held moves once per frame but a release at once, so a
   // fast swipe may reach the release with few or no moves.
   function follow(event) {
+    // A press that went further than a tap's wobble, in any direction, is
+    // not a tap: its click is swallowed whatever the pages did (the bridge
+    // would otherwise click a control a diagonal drag ended on).
+    if (
+      Math.abs(event.clientX - gesture.downX) > TAP_SLOP ||
+      Math.abs(event.clientY - gesture.downY) > TAP_SLOP
+    )
+      gesture.moved = true;
+    // A vertical move belongs to the page, and after a resize a held pointer
+    // no longer moves the pages; both are tracked to the release.
+    if (gesture.vertical || gesture.cancelled) return false;
     const dx = event.clientX - gesture.x0;
-    // After a resize a held pointer no longer moves the pages but is tracked
-    // to its release: if it moved past the slop in any direction it was not
-    // a tap, and its click is swallowed.
-    if (gesture.cancelled) {
-      const dy = event.clientY - gesture.y0;
-      const slop = gesture.type === 'touch' ? TOUCH_SLOP : MOUSE_SLOP;
-      if (Math.abs(dx) > slop || Math.abs(dy) > slop) gesture.dragging = true;
-      return gesture.dragging;
-    }
     if (!gesture.dragging) {
       const dy = event.clientY - gesture.y0;
       const slop = gesture.type === 'touch' ? TOUCH_SLOP : MOUSE_SLOP;
       if (Math.abs(dy) > slop && Math.abs(dy) >= Math.abs(dx)) {
-        gesture = null; // a vertical move belongs to the page
-        settled();
+        gesture.vertical = true;
         return false;
       }
       if (Math.abs(dx) <= slop || Math.abs(dx) < Math.abs(dy) * LOCK_RATIO)
@@ -472,17 +477,20 @@
   // main thread spaces moves out and delays the release, so "held still"
   // means a pause clearly longer than the spacing between actual moves (the
   // wait from the press to the first move does not count).
+  function stillAfter(samples) {
+    const n = samples.length;
+    if (n < 2) return STILL_MS;
+    const intervals = Math.min(3, n - 1);
+    const spacing =
+      (samples[n - 1][0] - samples[n - 1 - intervals][0]) / intervals;
+    return Math.max(STILL_MS, spacing * 2.5);
+  }
+
   function releaseVelocity(samples, now, press) {
     const n = samples.length;
     const last = samples[n - 1];
     if (!last) return 0;
-    let still = STILL_MS;
-    if (n >= 2) {
-      const intervals = Math.min(3, n - 1);
-      const spacing = (last[0] - samples[n - 1 - intervals][0]) / intervals;
-      still = Math.max(STILL_MS, spacing * 2.5);
-    }
-    if (now - last[0] > still) return 0;
+    if (now - last[0] > stillAfter(samples)) return 0;
     // The press counts towards the speed while it is within the window.
     const points = press ? [press, ...samples] : samples;
     let first = points[points.length - 2];
@@ -500,28 +508,31 @@
 
   function onPointerUp(event) {
     if (!gesture || event.pointerId !== gesture.id) return;
+    const g = gesture;
+    const now = event.timeStamp || clock();
+    // Held still before the release: judged before the release's own
+    // position is added, so a last pixel cannot revive an earlier flick.
+    const held =
+      now - (g.samples[g.samples.length - 1] ?? g.press)[0] >
+      stillAfter(g.samples);
     if (
       event.type === 'pointerup' &&
       Number.isFinite(event.clientX) &&
       Number.isFinite(event.clientY)
     )
       follow(event);
-    const g = gesture;
     gesture = null;
-    if (!g?.dragging) {
+    if (!g.dragging || g.cancelled || g.vertical) {
+      // Not a swipe of the pages (or a resize already put them at rest).
+      if (g.dragging || g.moved) swallowSwipeClick();
       settled();
       return;
     }
     swallowSwipeClick();
-    if (g.cancelled) {
-      // A resize already put the pages at rest; tidy up after the hold.
-      settled();
-      return;
-    }
     const velocity =
-      event.type === 'pointercancel'
+      event.type === 'pointercancel' || held
         ? 0
-        : releaseVelocity(g.samples, event.timeStamp || clock(), g.press);
+        : releaseVelocity(g.samples, now, g.press);
     finish(velocity);
   }
 

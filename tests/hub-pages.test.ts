@@ -369,13 +369,42 @@ describe('Hub pager', () => {
     pointer('pointerdown', pages[0]!.button, 500);
     pointer('pointerup', pages[0]!.button, 503);
     expect(click(pages[0]!.button).defaultPrevented).toBe(false);
+    // A vertical move scrolls the page (not prevented) and turns nothing;
+    // having moved past a tap's wobble, it is not a tap either.
     pointer('pointerdown', pages[0]!.button, 500, 300);
     const move = pointer('pointermove', pages[0]!.button, 508, 340);
     pointer('pointerup', pages[0]!.button, 508, 340);
     expect(move.defaultPrevented).toBe(false);
-    expect(click(pages[0]!.button).defaultPrevented).toBe(false);
+    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
     expect(api.current()).toBe('home');
     expect(track.animations).toHaveLength(0);
+  });
+
+  it('swallows the click of a diagonal bridge drag that locked vertically', () => {
+    const { api, pages, pointer, click } = setup();
+    pointer('pointerdown', pages[0]!.button, 260, 550, 'mouse');
+    pointer('pointermove', pages[0]!.button, 260, 558, 'mouse');
+    pointer('pointerup', pages[0]!.button, 200, 558, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
+    expect(api.current()).toBe('home');
+  });
+
+  it('still clicks a press that wobbles less than a tap allows', () => {
+    const { pages, pointer, click } = setup();
+    pointer('pointerdown', pages[0]!.button, 260, 550, 'mouse');
+    pointer('pointermove', pages[0]!.button, 262, 558, 'mouse');
+    pointer('pointerup', pages[0]!.button, 263, 558, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(false);
+  });
+
+  it('does not revive a flick with a last pixel after a pause', () => {
+    const { api, pages, pointer, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 640, 300, 'mouse');
+    advance(70);
+    pointer('pointerup', pages[0]!.button, 639, 300, 'mouse');
+    expect(api.current()).toBe('home');
   });
 
   it('follows the bridge mouse, whose pointers cannot be captured', () => {
