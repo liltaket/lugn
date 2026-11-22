@@ -113,8 +113,6 @@
     const x = drawn;
     drawn = NaN;
     write(x);
-    // The bridge (and anything else) may measure the page again now.
-    window.dispatchEvent?.(new Event('lugn:pages-settled'));
   }
 
   function requestDraw() {
@@ -177,7 +175,7 @@
     if (Math.abs(from - to) < 0.5) {
       offset = to;
       write(to);
-      settled();
+      motionEnded();
       announce(previous);
       return;
     }
@@ -186,7 +184,7 @@
     offset = to;
     if (typeof track.animate !== 'function') {
       write(to);
-      settled();
+      motionEnded();
       announce(previous);
       return;
     }
@@ -206,7 +204,7 @@
       if (animation !== own) return;
       animation = null;
       animSamples = null;
-      settled();
+      motionEnded();
     };
     if (probe.enabled) probeStart();
     announce(previous);
@@ -274,6 +272,13 @@
 
   // After a settle the other pages are made near or off, a little later, so
   // the end of the motion is not where their paint lands.
+  // The pages have stopped where they are going: the bridge (and anything
+  // else) may measure the page again now.
+  function motionEnded() {
+    window.dispatchEvent?.(new Event('lugn:pages-settled'));
+    settled();
+  }
+
   function settled() {
     window.clearTimeout(nearTimer);
     nearTimer = window.setTimeout(syncStates, NEAR_DELAY_MS);
