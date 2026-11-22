@@ -149,6 +149,7 @@ function setup(count = 3) {
     dispatchEvent: (event: FakeEvent) => {
       if (event.type === 'lugn:pages-settled') settled += 1;
       if (event.type === 'lugn:page') pageEvents.push(event['detail']);
+      window.fire(event);
       return true;
     },
     setTimeout: (fn: () => void, ms: number) => {
@@ -261,6 +262,7 @@ function setup(count = 3) {
     wheel,
     resize,
     settledEvents: () => settled,
+    window,
     pageEvents,
     pages,
     track,
@@ -367,13 +369,95 @@ describe('Hub pager', () => {
     pointer('pointerdown', pages[0]!.button, 500);
     pointer('pointerup', pages[0]!.button, 503);
     expect(click(pages[0]!.button).defaultPrevented).toBe(false);
+    // A vertical move scrolls the page (not prevented) and turns nothing;
+    // having moved past a tap's wobble, it is not a tap either.
     pointer('pointerdown', pages[0]!.button, 500, 300);
     const move = pointer('pointermove', pages[0]!.button, 508, 340);
     pointer('pointerup', pages[0]!.button, 508, 340);
     expect(move.defaultPrevented).toBe(false);
-    expect(click(pages[0]!.button).defaultPrevented).toBe(false);
+    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
     expect(api.current()).toBe('home');
     expect(track.animations).toHaveLength(0);
+  });
+
+  it('swallows the click of a diagonal bridge drag', () => {
+    // 8 px down is within a tap's wobble; the release 60 px left at once is
+    // a fast swipe: the click is swallowed (the page may turn).
+    const quick = setup();
+    quick.pointer('pointerdown', quick.pages[0]!.button, 260, 550, 'mouse');
+    quick.pointer('pointermove', quick.pages[0]!.button, 260, 558, 'mouse');
+    quick.pointer('pointerup', quick.pages[0]!.button, 200, 558, 'mouse');
+    expect(quick.click(quick.pages[0]!.button).defaultPrevented).toBe(true);
+
+    // 12 px down locks the press as vertical: no turn, and no click either.
+    const vertical = setup();
+    vertical.pointer(
+      'pointerdown',
+      vertical.pages[0]!.button,
+      260,
+      540,
+      'mouse',
+    );
+    vertical.pointer(
+      'pointermove',
+      vertical.pages[0]!.button,
+      260,
+      552,
+      'mouse',
+    );
+    vertical.pointer('pointerup', vertical.pages[0]!.button, 200, 552, 'mouse');
+    expect(vertical.click(vertical.pages[0]!.button).defaultPrevented).toBe(
+      true,
+    );
+    expect(vertical.api.current()).toBe('home');
+  });
+
+  it('still clicks a press that wobbles less than a tap allows', () => {
+    const { pages, pointer, click } = setup();
+    pointer('pointerdown', pages[0]!.button, 260, 550, 'mouse');
+    pointer('pointermove', pages[0]!.button, 262, 558, 'mouse');
+    pointer('pointerup', pages[0]!.button, 263, 558, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(false);
+  });
+
+  it('still clicks a press that wobbles 8 px sideways', () => {
+    const { pages, pointer, click, track } = setup();
+    pointer('pointerdown', pages[0]!.button, 260, 550, 'mouse');
+    pointer('pointermove', pages[0]!.button, 268, 550, 'mouse');
+    pointer('pointerup', pages[0]!.button, 268, 550, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(false);
+    expect(track.animations).toHaveLength(0);
+  });
+
+  it('flicks with a real move that arrives only with the release after a pause', () => {
+    const { api, pages, pointer, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 800, 350, 'mouse');
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 760, 350, 'mouse');
+    advance(75);
+    pointer('pointerup', pages[0]!.button, 660, 350, 'mouse');
+    expect(api.current()).toBe('clock');
+  });
+
+  it('lets a horizontal wheel page while a press is held vertically', () => {
+    const { api, pages, pointer, wheel, advance, click } = setup();
+    pointer('pointerdown', pages[0]!.button, 500, 300, 'mouse');
+    pointer('pointermove', pages[0]!.button, 500, 330, 'mouse');
+    wheel(pages[0]!.button, 250);
+    advance(200);
+    expect(api.current()).toBe('clock');
+    pointer('pointerup', pages[0]!.button, 500, 330, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
+  });
+
+  it('does not revive a flick with a last pixel after a pause', () => {
+    const { api, pages, pointer, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 640, 300, 'mouse');
+    advance(70);
+    pointer('pointerup', pages[0]!.button, 639, 300, 'mouse');
+    expect(api.current()).toBe('home');
   });
 
   it('follows the bridge mouse, whose pointers cannot be captured', () => {
@@ -456,7 +540,8 @@ describe('Hub pager', () => {
     const { api, pages, drag, resize, advance, pager, track } = setup();
     drag(pages[0]!.button, 800, 200);
     resize(800);
-    advance(1000);
+    advance(100);
+    advance(500);
     expect(api.current()).toBe('clock');
     expect(pages.map(({ page }) => page.dataset['state'])).toEqual([
       'near',
@@ -491,6 +576,140 @@ describe('Hub pager', () => {
     pointer('pointerdown', pages[0]!.button, 500);
     pointer('pointerup', pages[0]!.button, 500);
     expect(api.go('clock')).toBe(true);
+  });
+
+  it('still swallows the click of a swipe held through a resize', () => {
+    const { api, pages, pointer, click, resize, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 640, 300, 'mouse');
+    resize(1000 - 24);
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 300, 300, 'mouse');
+    pointer('pointerup', pages[0]!.button, 300, 300, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
+    expect(api.current()).toBe('home');
+  });
+
+  it('tells a swipe from a tap after a resize before the first move', () => {
+    const swipe = setup();
+    swipe.pointer('pointerdown', swipe.pages[0]!.button, 700, 300, 'mouse');
+    swipe.resize(976);
+    swipe.pointer('pointerup', swipe.pages[0]!.button, 640, 300, 'mouse');
+    expect(swipe.click(swipe.pages[0]!.button).defaultPrevented).toBe(true);
+    expect(swipe.api.current()).toBe('home');
+
+    const tap = setup();
+    tap.pointer('pointerdown', tap.pages[0]!.button, 700, 300, 'mouse');
+    tap.resize(976);
+    tap.pointer('pointerup', tap.pages[0]!.button, 702, 300, 'mouse');
+    expect(tap.click(tap.pages[0]!.button).defaultPrevented).toBe(false);
+  });
+
+  it('swallows the click of a swipe that moved vertically first after a resize', () => {
+    const { api, pages, pointer, click, resize } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    resize(952);
+    pointer('pointermove', pages[0]!.button, 700, 308, 'mouse');
+    pointer('pointerup', pages[0]!.button, 640, 308, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
+    expect(api.current()).toBe('home');
+  });
+
+  it('turns on a quick flick that adds a pixel on release', () => {
+    const { api, pages, pointer, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    advance(25);
+    pointer('pointermove', pages[0]!.button, 640, 300, 'mouse');
+    advance(16);
+    pointer('pointerup', pages[0]!.button, 639, 300, 'mouse');
+    expect(api.current()).toBe('clock');
+  });
+
+  it('keeps hover hidden while a change listener starts another motion', () => {
+    const { api, pager, wheel, pages, advance } = setup();
+    api.onChange((page) => {
+      if (page === 'clock') api.go('info');
+    });
+    wheel(pages[0]!.button, 1000);
+    advance(200);
+    expect(api.current()).toBe('info');
+    expect(pager.classes.has('paging')).toBe(true);
+  });
+
+  it('lowers the layer after a swipe held through a resize is released', () => {
+    const { pages, pager, pointer, resize, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 600, 300, 'mouse');
+    resize(976);
+    advance(100);
+    advance(550);
+    pointer('pointerup', pages[0]!.button, 600, 300, 'mouse');
+    advance(100);
+    advance(500);
+    expect(pager.classes.has('moving')).toBe(false);
+  });
+
+  it('does not fling one move after a long press and a hold', () => {
+    const { api, pages, pointer, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    advance(400);
+    pointer('pointermove', pages[0]!.button, 536, 300, 'mouse');
+    advance(300);
+    pointer('pointerup', pages[0]!.button, 536, 300, 'mouse');
+    expect(api.current()).toBe('home');
+  });
+
+  it('tells changes in order when a settled listener goes on', () => {
+    const { api, window: win, wheel, pages, advance } = setup();
+    const seen: string[] = [];
+    api.onChange((page, previous) => seen.push(`${previous}>${page}`));
+    win.addEventListener('lugn:pages-settled', () => {
+      if (api.current() === 'clock') api.go('info');
+    });
+    // Exactly one page of wheel: the turn needs no animation.
+    wheel(pages[0]!.button, 1000);
+    advance(200);
+    expect(seen).toEqual(['home>clock', 'clock>info']);
+  });
+
+  it('turns no page when a dialog opens during a wheel gesture', () => {
+    const { api, pages, pager, wheel, advance } = setup();
+    wheel(pages[0]!.button, 400);
+    pager.modal = new FakeElement();
+    advance(200);
+    expect(api.current()).toBe('home');
+  });
+
+  it('does not fling a release after the pointer was held still', () => {
+    const { api, pages, pointer, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700);
+    for (let x = 680; x >= 450; x -= 23) {
+      advance(16);
+      pointer('pointermove', pages[0]!.button, x);
+    }
+    advance(65);
+    pointer('pointerup', pages[0]!.button, 450);
+    expect(api.current()).toBe('home');
+  });
+
+  it('swallows only a click in the same task as the swipe release', () => {
+    const { pages, drag, click, advance } = setup();
+    drag(pages[0]!.button, 800, 200);
+    advance(0);
+    expect(click(pages[1]!.button).defaultPrevented).toBe(false);
+  });
+
+  it('tells every listener about each change in order when one goes on', () => {
+    const { api } = setup();
+    const seen: string[] = [];
+    api.onChange((page) => {
+      if (page === 'clock') api.go('info');
+    });
+    api.onChange((page, previous) => seen.push(`${previous}>${page}`));
+    api.go('clock');
+    expect(seen).toEqual(['home>clock', 'clock>info']);
   });
 
   it('goes to a page by id, and refuses unknown ones', () => {

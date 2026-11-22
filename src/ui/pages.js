@@ -27,7 +27,8 @@
 
   // ── Tuning ──
   const TOUCH_SLOP = 10; // px before a touch is a swipe
-  const MOUSE_SLOP = 6;
+  const TAP_SLOP = 10; // px a press may wander and still click
+  const MOUSE_SLOP = TAP_SLOP; // so a wobble that still clicks never drags
   const LOCK_RATIO = 1.2; // |dx| must beat |dy| by this much
   const VELOCITY_WINDOW_MS = 90;
   const STILL_MS = 60; // pointer held still this long before release: no fling
@@ -42,7 +43,6 @@
   const WHEEL_IDLE_MS = 140;
   const WHEEL_STEP = 40; // vertical wheel px for one page
   const WHEEL_COOLDOWN_MS = 450;
-  const CLICK_SWALLOW_MS = 500;
   const NEAR_DELAY_MS = 80; // after a settle, before neighbours are prepared
   const LOWER_DELAY_MS = 400; // then the track stops being its own layer
 
@@ -70,7 +70,8 @@
   let animSamples = null;
   let animStart = 0;
   let gesture = null;
-  let swallowClickUntil = 0;
+  let swallowClick = false;
+  let swallowTimer = 0;
   let nearTimer = 0;
   let wheel = null;
   let wheelStepUntil = 0;
@@ -96,9 +97,18 @@
   // after). At rest it is painted with the page, exactly as without pages;
   // as a layer it would draw text with different anti-aliasing.
   let lifted = false;
+  let paging = false;
   let lowerTimer = 0;
+  // Hover (the bridge's plate) is hidden from the first move to the end of
+  // the motion; the layer lives a little longer.
+  function setPaging(on) {
+    if (paging === on) return;
+    paging = on;
+    pager.classList.toggle('paging', on);
+  }
   function lift() {
     window.clearTimeout(lowerTimer);
+    setPaging(true);
     if (lifted) return;
     lifted = true;
     pager.classList.add('moving');
@@ -171,12 +181,14 @@
     stopAnimation(false);
     const to = base(target);
     const from = offset;
-    const previous = setIndex(target);
+    setIndex(target);
     if (Math.abs(from - to) < 0.5) {
       offset = to;
       write(to);
+      // The snap is complete before anyone hears of the change (changes are
+      // queued in order), so a listener that goes on starts a fresh motion.
       motionEnded();
-      announce(previous);
+      announce();
       return;
     }
     const samples = springSamples(from, to, velocity);
@@ -184,8 +196,10 @@
     offset = to;
     if (typeof track.animate !== 'function') {
       write(to);
+      // The snap is complete before anyone hears of the change (changes are
+      // queued in order), so a listener that goes on starts a fresh motion.
       motionEnded();
-      announce(previous);
+      announce();
       return;
     }
     lift();
@@ -207,7 +221,7 @@
       motionEnded();
     };
     if (probe.enabled) probeStart();
-    announce(previous);
+    announce();
   }
 
   // Where the running settle shows the track now, from the samples.
@@ -240,12 +254,14 @@
 
   // ── Page states ──
 
-  // Returns the page left, if any; `announce` tells the others once the
-  // transition is in place, so a listener may call `go` again safely.
+  // Queues the change at once, so changes are told in the order they
+  // happened; `announce` tells the others once the transition is in place,
+  // so a listener may call `go` again safely.
   function setIndex(target) {
     if (target === index) return null;
     const previous = pages[index];
     index = target;
+    announcements.push({ page: pages[index].id, previous: previous.id });
     syncDots();
     callHook(previous, 'leave');
     setState(pages[index], 'active');
@@ -253,20 +269,30 @@
     return previous;
   }
 
-  function announce(previous) {
-    if (!previous) return;
-    if (typeof CustomEvent === 'function')
-      window.dispatchEvent(
-        new CustomEvent('lugn:page', {
-          detail: { page: pages[index].id, previous: previous.id },
-        }),
-      );
-    for (const fn of listeners) {
-      try {
-        fn(pages[index].id, previous.id);
-      } catch (error) {
-        console.warn('[pages] listener failed', error);
+  // Each change reaches every listener before the next one does, in order,
+  // even when a listener goes on to another page.
+  const announcements = [];
+  let announcing = false;
+  function announce() {
+    if (announcing || !announcements.length) return;
+    announcing = true;
+    try {
+      while (announcements.length) {
+        const change = announcements.shift();
+        if (typeof CustomEvent === 'function')
+          window.dispatchEvent(
+            new CustomEvent('lugn:page', { detail: change }),
+          );
+        for (const fn of [...listeners]) {
+          try {
+            fn(change.page, change.previous);
+          } catch (error) {
+            console.warn('[pages] listener failed', error);
+          }
+        }
       }
+    } finally {
+      announcing = false;
     }
   }
 
@@ -275,6 +301,7 @@
   // The pages have stopped where they are going: the bridge (and anything
   // else) may measure the page again now.
   function motionEnded() {
+    setPaging(false);
     window.dispatchEvent?.(new Event('lugn:pages-settled'));
     settled();
   }
@@ -353,7 +380,7 @@
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     // A new press ends any click swallowing left from the last swipe (a touch
     // swipe, or a bridge swipe released over another control, has no click).
-    swallowClickUntil = 0;
+    swallowClick = false;
     if (gesture || !pager.contains(event.target)) return;
     if (ignoredTarget(event.target) || modalOpen()) return;
     const catching = Boolean(animation || wheel);
@@ -370,9 +397,13 @@
       type: event.pointerType || 'mouse',
       x0: event.clientX,
       y0: event.clientY,
+      downX: event.clientX,
+      downY: event.clientY,
+      moved: false,
       startOffset: unrubber(offset),
       dragging: catching,
-      samples: [[event.timeStamp || clock(), offset]],
+      press: [event.timeStamp || clock(), offset],
+      samples: [],
     };
     if (catching) beginDrag(event);
   }
@@ -400,13 +431,23 @@
   // the bridge sends held moves once per frame but a release at once, so a
   // fast swipe may reach the release with few or no moves.
   function follow(event) {
+    // A press that went further than a tap's wobble, in any direction, is
+    // not a tap: its click is swallowed whatever the pages did (the bridge
+    // would otherwise click a control a diagonal drag ended on).
+    if (
+      Math.abs(event.clientX - gesture.downX) > TAP_SLOP ||
+      Math.abs(event.clientY - gesture.downY) > TAP_SLOP
+    )
+      gesture.moved = true;
+    // A vertical move belongs to the page, and after a resize a held pointer
+    // no longer moves the pages; both are tracked to the release.
+    if (gesture.vertical || gesture.cancelled) return false;
     const dx = event.clientX - gesture.x0;
     if (!gesture.dragging) {
       const dy = event.clientY - gesture.y0;
       const slop = gesture.type === 'touch' ? TOUCH_SLOP : MOUSE_SLOP;
       if (Math.abs(dy) > slop && Math.abs(dy) >= Math.abs(dx)) {
-        gesture = null; // a vertical move belongs to the page
-        settled();
+        gesture.vertical = true;
         return false;
       }
       if (Math.abs(dx) <= slop || Math.abs(dx) < Math.abs(dy) * LOCK_RATIO)
@@ -418,8 +459,12 @@
     }
     offset = rubber(gesture.startOffset + (event.clientX - gesture.x0));
     const samples = gesture.samples;
-    samples.push([event.timeStamp || clock(), offset]);
-    if (samples.length > 8) samples.shift();
+    // Only a change of position counts as motion: a release (or move) where
+    // the pointer already was must not look like a fresh, fast sample.
+    if ((samples[samples.length - 1] ?? gesture.press)[1] !== offset) {
+      samples.push([event.timeStamp || clock(), offset]);
+      if (samples.length > 8) samples.shift();
+    }
     // Real pointermoves come once per frame, just before animation frames,
     // and the bridge sends its one move from inside a frame: writing here
     // shows the move in this frame rather than the next.
@@ -427,21 +472,33 @@
     return true;
   }
 
-  // The speed over the last ~90 ms of the drag (at least two moves). A slow
+  // The speed over the last ~90 ms of the drag. `samples` are the moves that
+  // changed the position; `press` (optional) is where the drag began. A slow
   // main thread spaces moves out and delays the release, so "held still"
-  // means a pause clearly longer than the moves' own spacing.
-  function releaseVelocity(samples, now) {
+  // means a pause clearly longer than the spacing between actual moves (the
+  // wait from the press to the first move does not count).
+  function stillAfter(samples) {
+    const n = samples.length;
+    if (n < 2) return STILL_MS;
+    const intervals = Math.min(3, n - 1);
+    const spacing =
+      (samples[n - 1][0] - samples[n - 1 - intervals][0]) / intervals;
+    return Math.max(STILL_MS, spacing * 2.5);
+  }
+
+  function releaseVelocity(samples, now, press) {
     const n = samples.length;
     const last = samples[n - 1];
-    if (!last || n < 2) return 0;
-    let first = samples[n - 2];
-    for (let i = n - 3; i >= 0; i -= 1) {
-      if (last[0] - samples[i][0] > VELOCITY_WINDOW_MS) break;
-      first = samples[i];
+    if (!last) return 0;
+    if (now - last[0] > stillAfter(samples)) return 0;
+    // The press counts towards the speed while it is within the window.
+    const points = press ? [press, ...samples] : samples;
+    let first = points[points.length - 2];
+    if (!first) return 0;
+    for (let i = points.length - 3; i >= 0; i -= 1) {
+      if (last[0] - points[i][0] > VELOCITY_WINDOW_MS) break;
+      first = points[i];
     }
-    const spacing =
-      (last[0] - samples[Math.max(0, n - 4)][0]) / Math.min(3, n - 1);
-    if (now - last[0] > Math.max(STILL_MS, spacing * 2.5)) return 0;
     // A move and a release in the same instant (the bridge, a stalled
     // thread) count as one frame; and no release throws the pages wildly.
     const dt = Math.max(last[0] - first[0], MIN_VELOCITY_DT_MS);
@@ -451,23 +508,35 @@
 
   function onPointerUp(event) {
     if (!gesture || event.pointerId !== gesture.id) return;
+    const g = gesture;
+    const now = event.timeStamp || clock();
+    // Held still before the release: judged before the release's own
+    // position is added, so a last pixel cannot revive an earlier flick.
+    const before = g.samples[g.samples.length - 1] ?? g.press;
+    const held = now - before[0] > stillAfter(g.samples);
     if (
       event.type === 'pointerup' &&
       Number.isFinite(event.clientX) &&
       Number.isFinite(event.clientY)
     )
       follow(event);
-    const g = gesture;
     gesture = null;
-    if (!g?.dragging) {
+    if (!g.dragging || g.cancelled || g.vertical) {
+      // Not a swipe of the pages (or a resize already put them at rest).
+      if (g.dragging || g.moved) swallowSwipeClick();
       settled();
       return;
     }
-    swallowClickUntil = clock() + CLICK_SWALLOW_MS;
-    const velocity =
-      event.type === 'pointercancel'
-        ? 0
-        : releaseVelocity(g.samples, event.timeStamp || clock());
+    swallowSwipeClick();
+    let velocity = 0;
+    if (event.type !== 'pointercancel') {
+      if (!held) velocity = releaseVelocity(g.samples, now, g.press);
+      else if (Math.abs(offset - before[1]) > TAP_SLOP)
+        // After a pause, a real move that arrives only with the release (the
+        // bridge sends it at once) is a new flick of its own; a last pixel
+        // or two is not.
+        velocity = releaseVelocity([before, [now, offset]], now);
+    }
     finish(velocity);
   }
 
@@ -475,6 +544,11 @@
   // would carry, at most one page away, and a flick always turns the page.
   function finish(velocity, turnAt = 0.5) {
     const from = index;
+    // A dialog opened during the gesture keeps its page on screen.
+    if (modalOpen()) {
+      settle(from, 0);
+      return;
+    }
     const moved = offset - base(from); // < 0: towards the next page
     let target = from;
     const projected = moved + velocity * PROJECTION_MS;
@@ -488,10 +562,22 @@
     settle(target, atEdge ? velocity * 0.3 : velocity);
   }
 
+  // A swipe's release may be followed by a click on the control it ended
+  // over: the browser's for a mouse, the bridge's own after its mouseup. Both
+  // come in the same task as the release, so only a click before the next
+  // task is swallowed; a touch swipe has no click, and nothing later is
+  // touched.
+  function swallowSwipeClick() {
+    swallowClick = true;
+    window.clearTimeout(swallowTimer);
+    swallowTimer = window.setTimeout(() => {
+      swallowClick = false;
+    }, 0);
+  }
+
   function onClick(event) {
-    if (!swallowClickUntil || clock() > swallowClickUntil) return;
-    if (!pager.contains(event.target)) return;
-    swallowClickUntil = 0;
+    if (!swallowClick || !pager.contains(event.target)) return;
+    swallowClick = false;
     event.preventDefault();
     event.stopImmediatePropagation();
   }
@@ -536,7 +622,9 @@
   }
 
   function wheelDrag(event, dx) {
-    if (gesture) return;
+    // A held press that is not moving the pages (vertical, or held through a
+    // resize) leaves paging to the wheel; it still swallows its own click.
+    if (gesture && !gesture.vertical && !gesture.cancelled) return;
     const now = event.timeStamp || clock();
     if (!wheel) {
       stopAnimation(true);
@@ -600,12 +688,14 @@
     stopAnimation(false);
     if (wheel) window.clearTimeout(wheel.timer);
     wheel = null;
-    gesture = null;
+    // A held pointer stays tracked until its release, so a swipe's click is
+    // still swallowed, but it no longer moves the pages.
+    if (gesture) gesture.cancelled = true;
     width = next;
     offset = base(index);
     write(offset);
     window.clearTimeout(nearTimer);
-    syncStates();
+    motionEnded();
   }
 
   // ── Optional frame probe (Info page): rAF gaps during gestures only ──
