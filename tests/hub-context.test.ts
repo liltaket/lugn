@@ -148,6 +148,7 @@ function dashboard(hash = '', themed = false) {
   const calls: { url: string; body: Record<string, unknown> }[] = [];
   const streams: Stream[] = [];
   const scripts: Array<Element & { src?: string }> = [];
+  const pager = new Element();
   class Stream {
     onmessage?: (event: { data: string; lastEventId?: string }) => void;
     onerror?: () => void;
@@ -165,6 +166,7 @@ function dashboard(hash = '', themed = false) {
   const context = createContext({
     location: { pathname: '/k/mock-only/', hash },
     document: {
+      getElementById: (id: string) => (id === 'hub-pager' ? pager : undefined),
       head: {
         append: (element: Element & { src?: string }) => scripts.push(element),
       },
@@ -229,6 +231,8 @@ function dashboard(hash = '', themed = false) {
     calls,
     streams,
     scripts,
+    pager,
+    windowListeners,
     themeValues: (selector: string) =>
       (get(selector) as unknown as { style: { values: Map<string, string> } })
         .style.values,
@@ -656,6 +660,52 @@ describe('Hub optional Lugn 2 presentation', () => {
     );
     expect(layers()[0]!.className).toContain('fading');
     themed.dispose();
+  });
+  it('keeps a state message while the pager moves and draws it right after', () => {
+    vi.useFakeTimers();
+    try {
+      const page = dashboard();
+      const draws = () =>
+        runInContext('globalThis.__draws', page.context) as number;
+      runInContext(
+        'globalThis.__draws = 0; { const drawn = renderMusic; renderMusic = (payload) => { globalThis.__draws += 1; return drawn(payload); }; }',
+        page.context,
+      );
+      const stream = page.streams[0]!;
+      const data = page.payload();
+      stream.emit({ ...data, deliveryRevision: 1 }, '1');
+      const drawn = draws();
+      expect(drawn).toBeGreaterThan(0);
+      // A swipe is on: the next change is kept, not drawn.
+      page.pager.classList.add('paging');
+      const changed = structuredClone(data);
+      changed.state.revision += 1;
+      changed.state.music.devices['music.room'].observed.title = 'Moving';
+      stream.emit({ ...changed, deliveryRevision: 2 }, '2');
+      expect(draws()).toBe(drawn);
+      // The page already holds the newest state for everything that reads it.
+      expect(runInContext('latestPayload.state.revision', page.context)).toBe(
+        changed.state.revision,
+      );
+      // The pager settles: it is drawn, once.
+      page.pager.classList.remove('paging');
+      page.windowListeners.get('lugn:pages-settled')?.();
+      const afterSettle = draws();
+      expect(afterSettle).toBeGreaterThan(drawn);
+      page.windowListeners.get('lugn:pages-settled')?.();
+      expect(draws()).toBe(afterSettle);
+      // A pager that never reports its end cannot freeze the page.
+      page.pager.classList.add('paging');
+      const later = structuredClone(changed);
+      later.state.revision += 1;
+      stream.emit({ ...later, deliveryRevision: 3 }, '3');
+      expect(draws()).toBe(afterSettle);
+      vi.advanceTimersByTime(1600);
+      expect(draws()).toBeGreaterThan(afterSettle);
+      page.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it('loads the on-device profile only for a Hub opened with #probe', () => {
     expect(ui.scripts).toEqual([]);
