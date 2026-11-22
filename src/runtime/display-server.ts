@@ -57,14 +57,53 @@ const CameraActionSchema = z.discriminatedUnion('action', [
 ]);
 const MAX_REQUEST_BYTES = 8 * 1024;
 /** One phase of the on-device profile (src/ui/hub-probe.js), logged as is. */
+const PROBE_PHASES = [
+  'info',
+  'cpu',
+  'idle',
+  'bare',
+  'dot',
+  'dot-nofilter',
+  'dot-noshadow',
+  'dot-noanim',
+  'dot-nolayers',
+  'press',
+  'done',
+  'error',
+] as const;
+/** Small, shallow JSON: a phase is a few dozen numbers and short strings. */
+function isSmallJson(value: unknown, depth = 0): boolean {
+  if (value === null) return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'boolean') return true;
+  if (typeof value === 'string') return value.length <= 300;
+  if (depth >= 3) return false;
+  if (Array.isArray(value))
+    return (
+      value.length <= 12 && value.every((item) => isSmallJson(item, depth + 1))
+    );
+  if (typeof value === 'object')
+    return (
+      Object.keys(value).length <= 40 &&
+      Object.entries(value).every(
+        ([key, item]) => key.length <= 40 && isSmallJson(item, depth + 1),
+      )
+    );
+  return false;
+}
 const DisplayProbeSchema = z
   .object({
-    run: z.string().max(40),
-    phase: z.string().max(40),
-    data: z.record(z.string().max(60), z.unknown()),
+    run: z.string().regex(/^[a-z0-9]{1,12}$/),
+    phase: z.enum(PROBE_PHASES),
+    data: z
+      .record(z.string().max(40), z.unknown())
+      .refine(
+        (data) => isSmallJson(data) && JSON.stringify(data).length <= 3000,
+        'probe data too large',
+      ),
   })
   .strict();
-const PROBE_REPORTS_PER_MINUTE = 40;
+const PROBE_REPORTS_PER_MINUTE = 30;
 const DisplaySceneRequestSchema = z
   .object({ sceneId: z.string().min(1).max(128) })
   .strict();
@@ -621,11 +660,12 @@ export class LugnDisplayServer {
           });
           return;
         }
-        const report = DisplayProbeSchema.parse(await readJsonBody(request));
+        // The quota is spent before the body is read or parsed.
         if (!this.allowProbe(hubRequest.hub.id)) {
           sendJson(response, 429, { error: 'probe_rate_limited' });
           return;
         }
+        const report = DisplayProbeSchema.parse(await readJsonBody(request));
         // Read from the journal: the Hub has no other way to report.
         console.info(
           `[lugn] hub probe hub=${hubRequest.hub.id} ${JSON.stringify(report)}`,

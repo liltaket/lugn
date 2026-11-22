@@ -39,15 +39,22 @@
     label.textContent = text;
   }
 
+  let undelivered = 0;
   async function post(phase, data) {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 5000);
     try {
-      await fetch(PROBE_URL, {
+      const response = await fetch(PROBE_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ run, phase, data }),
+        signal: abort.signal,
       });
+      if (!response.ok) undelivered += 1;
     } catch {
-      // The report is lost; the next phase still runs.
+      undelivered += 1;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -60,12 +67,15 @@
   };
   const longTasks = [];
   const loafs = [];
+  const observers = [];
   function observe(type, sink, flag) {
     try {
+      if (!PerformanceObserver.supportedEntryTypes?.includes(type)) return;
       const observer = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) sink.push(entry);
       });
       observer.observe({ type, buffered: false });
+      observers.push({ observer, sink });
       support[flag] = true;
     } catch {
       // Not supported by this Chromium.
@@ -73,6 +83,20 @@
   }
   observe('longtask', longTasks, 'longtask');
   observe('long-animation-frame', loafs, 'loaf');
+  // Entries are delivered a little late; a phase asks for the rest first.
+  function drain() {
+    for (const { observer, sink } of observers)
+      for (const entry of observer.takeRecords()) sink.push(entry);
+  }
+
+  let aborted = false;
+  const abortRun = () => {
+    aborted = true;
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') abortRun();
+  });
+  window.addEventListener('pagehide', abortRun);
 
   function percentile(sorted, fraction) {
     if (!sorted.length) return 0;
@@ -83,30 +107,42 @@
 
   // Frames seen by rAF for `ms` while `drive` (optional) runs every frame.
   function sampleFrames(ms, drive) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const gaps = [];
       const startedAt = performance.now();
-      const longStart = longTasks.length;
-      const loafStart = loafs.length;
       let last = startedAt;
       const frame = (time) => {
-        gaps.push(time - last);
-        last = time;
-        if (drive) drive(time - startedAt);
-        if (time - startedAt < ms) requestAnimationFrame(frame);
-        else resolve({ gaps, longStart, loafStart, span: time - startedAt });
+        try {
+          if (aborted) {
+            resolve({ gaps, startedAt, endedAt: time, aborted: true });
+            return;
+          }
+          gaps.push(time - last);
+          last = time;
+          if (drive) drive(time - startedAt);
+          if (time - startedAt < ms) requestAnimationFrame(frame);
+          else resolve({ gaps, startedAt, endedAt: time, aborted: false });
+        } catch (error) {
+          reject(error);
+        }
       };
       requestAnimationFrame(frame);
     });
   }
 
-  function summarise({ gaps, longStart, loafStart, span }) {
+  async function summarise({ gaps, startedAt, endedAt, aborted: stopped }) {
+    // The frame that ends the window finishes, then late entries arrive.
+    await sleep(250);
+    drain();
+    const inWindow = (entry) =>
+      entry.startTime >= startedAt && entry.startTime <= endedAt;
     const sorted = gaps.slice(1).sort((a, b) => a - b);
-    const mine = longTasks.slice(longStart);
-    const frames = loafs.slice(loafStart);
+    const covered = gaps.slice(1).reduce((sum, gap) => sum + gap, 0);
+    const mine = longTasks.filter(inWindow);
+    const frames = loafs.filter(inWindow);
     const result = {
       frames: sorted.length,
-      fps: round((sorted.length * 1000) / span),
+      fps: covered ? round((sorted.length * 1000) / covered) : 0,
       gapP50: round(percentile(sorted, 0.5)),
       gapP95: round(percentile(sorted, 0.95)),
       gapMax: round(sorted[sorted.length - 1] ?? 0),
@@ -117,6 +153,7 @@
       longTaskMs: round(mine.reduce((sum, entry) => sum + entry.duration, 0)),
       longTaskMax: round(Math.max(0, ...mine.map((entry) => entry.duration))),
     };
+    if (stopped) result.aborted = true;
     if (support.loaf) {
       result.loaf = frames.length;
       result.loafMs = round(
@@ -190,11 +227,13 @@
   async function measureDot(css, ms = 3500) {
     const undo = css ? style(css) : () => {};
     const dot = makeDot();
-    await sleep(600);
-    const sample = await sampleFrames(ms, moveDot(dot));
-    dot.remove();
-    undo();
-    return summarise(sample);
+    try {
+      await sleep(600);
+      return await summarise(await sampleFrames(ms, moveDot(dot)));
+    } finally {
+      dot.remove();
+      undo();
+    }
   }
 
   // ── Phases ──
@@ -270,84 +309,143 @@
         !all.some((other) => other !== element && other.contains(element)),
     );
     const previous = hidden.map((element) => element.style.visibility);
-    for (const element of hidden) element.style.visibility = 'hidden';
-    const result = await measureDot('', 3500);
-    hidden.forEach((element, index) => {
-      element.style.visibility = previous[index];
-    });
-    return result;
+    try {
+      for (const element of hidden) element.style.visibility = 'hidden';
+      return await measureDot('', 3500);
+    } finally {
+      hidden.forEach((element, index) => {
+        element.style.visibility = previous[index];
+      });
+    }
+  }
+
+  // A tile the person could press right now: enabled, shown, on the page in
+  // view, and not Släck.
+  function visibleSceneTile() {
+    return [...document.querySelectorAll('button[data-scene]')].find(
+      (button) => {
+        if (
+          button.disabled ||
+          button.hidden ||
+          button.dataset.scene === 'scene.all_off'
+        )
+          return false;
+        if (button.closest('[inert], [hidden]')) return false;
+        const box = button.getBoundingClientRect();
+        return (
+          box.width > 0 &&
+          box.height > 0 &&
+          box.right > 0 &&
+          box.left < window.innerWidth &&
+          box.bottom > 0 &&
+          box.top < window.innerHeight
+        );
+      },
+    );
   }
 
   async function press() {
-    const tile = document.querySelector('button[data-scene]');
-    if (!tile) return { skipped: 'no scene tile' };
+    const tile = visibleSceneTile();
+    if (!tile) return { skipped: 'no visible scene tile' };
+    const hadLit = tile.classList.contains('lit');
+    const hadPressed = tile.hasAttribute('data-pointer-pressed');
     const dot = makeDot();
-    const sample = await sampleFrames(2600, (elapsed) => {
-      moveDot(dot)(elapsed);
-      // Visual press only: the attribute the bridge sets, and the lit pulse.
-      if (elapsed > 500 && !press.down) {
-        press.down = true;
-        tile.setAttribute('data-pointer-pressed', '');
-      }
-      if (elapsed > 700 && press.down && !press.up) {
-        press.up = true;
-        tile.removeAttribute('data-pointer-pressed');
-        if (typeof pulse === 'function') pulse(tile, 'lit');
-      }
-    });
-    press.down = press.up = false;
-    dot.remove();
-    tile.classList.remove('lit');
-    return summarise(sample);
+    let down = false;
+    let up = false;
+    try {
+      const sample = await sampleFrames(2600, (elapsed) => {
+        moveDot(dot)(elapsed);
+        // Visual press only: the attribute the bridge sets, and the lit pulse.
+        if (elapsed > 500 && !down) {
+          down = true;
+          tile.setAttribute('data-pointer-pressed', '');
+        }
+        if (elapsed > 700 && down && !up) {
+          up = true;
+          tile.removeAttribute('data-pointer-pressed');
+          if (typeof pulse === 'function') pulse(tile, 'lit');
+        }
+      });
+      return await summarise(sample);
+    } finally {
+      dot.remove();
+      if (!hadPressed) tile.removeAttribute('data-pointer-pressed');
+      if (!hadLit) tile.classList.remove('lit');
+    }
   }
 
   async function runAll() {
-    say('Profil: startar …');
-    await sleep(3000);
-    await post('info', info());
-    say('Profil: processor …');
-    await post('cpu', cpu());
-    // Long-frame entries arrive a little late; let the work above finish.
-    await sleep(900);
-    say('Profil: stilla sida …');
-    await post('idle', summarise(await sampleFrames(4000)));
-    say('Profil: tom sida …');
-    await post('bare', await bare());
-    say('Profil: markör …');
-    await post('dot', await measureDot(''));
-    say('Profil: utan filter …');
-    await post(
-      'dot-nofilter',
-      await measureDot('*, *::before, *::after { filter: none !important; }'),
-    );
-    say('Profil: utan skuggor …');
-    await post(
-      'dot-noshadow',
-      await measureDot(
-        '*, *::before, *::after { box-shadow: none !important; text-shadow: none !important; }',
-      ),
-    );
-    say('Profil: utan animationer …');
-    await post(
-      'dot-noanim',
-      await measureDot(
-        '*, *::before, *::after { animation: none !important; transition: none !important; }',
-      ),
-    );
-    say('Profil: utan lager …');
-    await post(
-      'dot-nolayers',
-      await measureDot(
-        '*, *::before, *::after { will-change: auto !important; }',
-      ),
-    );
-    say('Profil: tryck …');
-    await sleep(900);
-    await post('press', await press());
-    await post('done', { run });
-    say('Profil klar');
-    await sleep(2500);
-    label?.remove();
+    const phases = [
+      ['processor', 'cpu', async () => cpu()],
+      ['stilla sida', 'idle', async () => summarise(await sampleFrames(4000))],
+      ['tom sida', 'bare', bare],
+      ['markör', 'dot', () => measureDot('')],
+      [
+        'utan filter',
+        'dot-nofilter',
+        () => measureDot('*, *::before, *::after { filter: none !important; }'),
+      ],
+      [
+        'utan skuggor',
+        'dot-noshadow',
+        () =>
+          measureDot(
+            '*, *::before, *::after { box-shadow: none !important; text-shadow: none !important; }',
+          ),
+      ],
+      [
+        'utan animationer',
+        'dot-noanim',
+        () =>
+          measureDot(
+            '*, *::before, *::after { animation: none !important; transition: none !important; }',
+          ),
+      ],
+      [
+        'utan lager',
+        'dot-nolayers',
+        () =>
+          measureDot(
+            '*, *::before, *::after { will-change: auto !important; }',
+          ),
+      ],
+      ['tryck', 'press', press],
+    ];
+    try {
+      say('Profil: startar …');
+      await sleep(3000);
+      await post('info', info());
+      for (const [text, name, work] of phases) {
+        if (aborted) break;
+        say(`Profil: ${text} …`);
+        // Late entries of the work before must not land in this phase.
+        await sleep(900);
+        drain();
+        await post(name, await work());
+      }
+      await post(
+        aborted ? 'error' : 'done',
+        aborted
+          ? { message: 'page hidden during the run' }
+          : { run, undelivered },
+      );
+      say(
+        aborted
+          ? 'Profil avbruten'
+          : undelivered
+            ? 'Profil klar (rapport förlorad)'
+            : 'Profil klar',
+      );
+    } catch (error) {
+      await post('error', {
+        message: String(error?.message ?? error).slice(0, 200),
+      });
+      say('Profil misslyckades');
+    } finally {
+      for (const { observer } of observers) observer.disconnect();
+      await sleep(2500);
+      label?.remove();
+    }
   }
 
   window.HubProbe = { run: runAll };

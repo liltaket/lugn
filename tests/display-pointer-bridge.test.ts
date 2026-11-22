@@ -169,6 +169,19 @@ describe('display pointer bridge', () => {
         body: JSON.stringify(body),
       });
     const report = { run: 'abc123', phase: 'idle', data: { fps: 31.5 } };
+    // Another origin is refused.
+    expect(
+      (
+        await fetch(`${bed}/display-api/probe`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            origin: 'http://evil.example',
+          },
+          body: JSON.stringify(report),
+        })
+      ).status,
+    ).toBe(403);
     expect((await post(report)).status).toBe(202);
     expect(log).toHaveBeenCalledWith(
       `[lugn] hub probe hub=bed ${JSON.stringify(report)}`,
@@ -177,11 +190,22 @@ describe('display pointer bridge', () => {
     log.mockClear();
     expect((await post({ ...report, extra: 1 })).status).toBe(400);
     expect((await post({ run: 'x', phase: 'y' })).status).toBe(400);
+    expect((await post({ ...report, phase: 'unknown' })).status).toBe(400);
+    expect(
+      (await post({ ...report, data: { text: 'x'.repeat(400) } })).status,
+    ).toBe(400);
+    expect((await post({ ...report, data: { deep: [[[[1]]]] } })).status).toBe(
+      400,
+    );
+    expect(
+      (await post({ ...report, data: { a: 'x'.repeat(100) } })).status,
+    ).toBe(202);
     expect(
       (await post(report, `${origin}/k/${'x'.repeat(32)}/display-api/probe`))
         .status,
     ).toBe(404);
-    expect(log).not.toHaveBeenCalled();
+    // Only the one valid report in between was logged.
+    expect(log).toHaveBeenCalledTimes(1);
     // A Hub that floods it is cut off.
     let limited = 0;
     for (let index = 0; index < 60; index += 1)
