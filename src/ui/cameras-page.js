@@ -18,57 +18,101 @@
 
   // Pace. A picture is ~25 KB and takes the server about half a second; the
   // Hub decodes and paints each one, so the grid is kept to a calm rate.
-  const GRID_INTERVAL_MS = 1500; // per camera, grid
-  const FOCUS_INTERVAL_MS = 800; // per camera, one large
+  const GRID_INTERVAL_MS = 1000; // per camera, grid (about 1 Hz)
+  // One camera large: back to back, as fast as the camera answers (about a
+  // third of a second per picture, so 2–3 Hz). The server shares one fetch
+  // per camera, so a second request for it would only get the same picture.
+  const FOCUS_INTERVAL_MS = 150;
   const GRID_WORKERS = 3; // pictures in flight at once
   const FETCH_TIMEOUT_MS = 8000;
   const STALE_MS = 8000; // no new picture for this long: shown as stale
   const LEASE_RENEW_MS = 20_000; // the server's lease lasts 45 s
   const FOCUS_REQUEST_MS = 4000; // a tap on Hem's view stays valid this long
   const RATIO = 16 / 9;
-  const GAP = 12;
+  const GAP = 8;
 
   // ── Layout (pure) ──
 
+  // A tile may be a little taller than 16:9: its picture then fills it and is
+  // cropped at the sides (object-fit: cover), by at most 1 - 1 / STRETCH
+  // (15 %). That is what lets a grid use the whole screen.
+  const STRETCH = 1.18;
+
+  /** Row sizes for `count` tiles in `rows` rows, nearly equal. With tiles all
+   * alike the short row comes last (as in any grid); when rows share the
+   * width, the row with the fewest (and so the biggest) tiles comes first, so
+   * the first cameras (the ones that matter most) get the biggest tiles. */
+  function rowCounts(count, rows, alike) {
+    const base = Math.floor(count / rows);
+    const extra = count % rows;
+    return Array.from({ length: rows }, (_, i) =>
+      (alike ? i < extra : i >= rows - extra) ? base + 1 : base,
+    );
+  }
+
   /**
-   * Places `count` equal 16:9 tiles in a `width` × `height` area: the number
-   * of columns that gives the biggest tiles, rows centred, a short last row
-   * centred. Returns [{x, y, w, h}] in reading order.
+   * Places `count` 16:9-ish tiles in a `width` × `height` area, using as much
+   * of it as it can. Candidates: every number of rows (up to four), tiles all
+   * alike or rows sharing the width evenly (rows with fewer tiles get bigger
+   * ones). Each is scaled to fit the height, stretched up to STRETCH to fill
+   * it; the candidate whose smallest tile is biggest wins (ties: the one
+   * covering more). Rows and the whole grid are centred.
    */
   function layout(count, width, height, gap = GAP, ratio = RATIO) {
     if (!(count > 0) || !(width > 0) || !(height > 0)) return [];
     let best = null;
-    for (let cols = 1; cols <= Math.min(count, 4); cols += 1) {
-      const rows = Math.ceil(count / cols);
-      const w = Math.min(
-        (width - (cols - 1) * gap) / cols,
-        ((height - (rows - 1) * gap) / rows) * ratio,
-      );
-      if (!best || w > best.w + 0.5) best = { cols, rows, w };
-    }
-    const w = Math.floor(best.w);
-    const h = Math.floor(w / ratio);
-    const top = (height - (best.rows * h + (best.rows - 1) * gap)) / 2;
-    const rects = [];
-    for (let row = 0; row < best.rows; row += 1) {
-      const inRow =
-        row === best.rows - 1 ? count - best.cols * (best.rows - 1) : best.cols;
-      const left = (width - (inRow * w + (inRow - 1) * gap)) / 2;
-      for (let col = 0; col < inRow; col += 1)
-        rects.push({
-          x: Math.round(left + col * (w + gap)),
-          y: Math.round(top + row * (h + gap)),
-          w,
-          h,
+    for (let rows = 1; rows <= Math.min(count, 4); rows += 1) {
+      const avail = height - (rows - 1) * gap;
+      for (const alike of [true, false]) {
+        const counts = rowCounts(count, rows, alike);
+        const cols = Math.max(...counts);
+        const colWidth = (width - (cols - 1) * gap) / cols;
+        // Tile widths per row: all alike, or each row filling the width.
+        const widths = counts.map((k) =>
+          alike ? colWidth : (width - (k - 1) * gap) / k,
+        );
+        const ideal = widths.map((w) => w / ratio);
+        const sum = ideal.reduce((a, b) => a + b, 0);
+        const fit = avail / sum;
+        // Too tall: every tile shrinks (staying 16:9). Room to spare: taller
+        // tiles, up to STRETCH.
+        const scale = Math.min(fit, STRETCH);
+        const tiles = counts.map((k, i) => {
+          const w = fit < 1 ? widths[i] * fit : widths[i];
+          const h = fit < 1 ? ideal[i] * fit : ideal[i] * scale;
+          return { k, w: Math.floor(w), h: Math.floor(h) };
         });
+        const smallest = Math.min(...tiles.map((t) => t.w * t.h));
+        const covered = tiles.reduce((a, t) => a + t.k * t.w * t.h, 0);
+        const better =
+          !best ||
+          smallest > best.smallest * 1.03 ||
+          (smallest > best.smallest * 0.97 && covered > best.covered);
+        if (better) best = { tiles, smallest, covered };
+      }
+    }
+    const used = best.tiles.reduce((a, t) => a + t.h, 0);
+    const top = (height - (used + (best.tiles.length - 1) * gap)) / 2;
+    const rects = [];
+    let y = top;
+    for (const row of best.tiles) {
+      const left = (width - (row.k * row.w + (row.k - 1) * gap)) / 2;
+      for (let col = 0; col < row.k; col += 1)
+        rects.push({
+          x: Math.round(left + col * (row.w + gap)),
+          y: Math.round(y),
+          w: row.w,
+          h: row.h,
+        });
+      y += row.h + gap;
     }
     return rects;
   }
 
-  /** One tile as large as the area allows, centred. */
+  /** One tile as large as the area allows (stretched like the others), centred. */
   function single(width, height, ratio = RATIO) {
-    const w = Math.floor(Math.min(width, height * ratio));
-    const h = Math.floor(w / ratio);
+    const h = Math.floor(Math.min(height, (width / ratio) * STRETCH));
+    const w = Math.floor(Math.min(width, h * ratio * STRETCH));
     return {
       x: Math.round((width - w) / 2),
       y: Math.round((height - h) / 2),
@@ -86,7 +130,6 @@
   if (!root) return;
   const stage = root.querySelector("[data-view='stage']");
   const notice = root.querySelector("[data-view='notice']");
-  const sub = root.querySelector("[data-view='sub']");
   const back = root.querySelector("[data-view='back']");
   const pager = document.getElementById('hub-pager');
   const calm =
@@ -120,16 +163,9 @@
     if (text && notice.textContent !== text) notice.textContent = text;
   }
 
-  function setSub() {
-    if (!sub) return;
-    const text =
-      mode === 'focus'
-        ? cams.find((c) => c.id === focusId)?.name || ''
-        : cams.length
-          ? `${cams.length} ${cams.length === 1 ? 'kamera' : 'kameror'} · tryck för att förstora`
-          : '';
-    if (sub.textContent !== text) sub.textContent = text;
-    if (back) back.hidden = mode !== 'focus';
+  function setBack() {
+    if (back && back.hidden !== (mode !== 'focus'))
+      back.hidden = mode !== 'focus';
   }
 
   // ── Server lease ──
@@ -238,19 +274,22 @@
     img.decoding = 'async';
     img.draggable = false;
     img.hidden = true;
+    // The name as a small pill with a dot for the picture's state (as Hem's
+    // camera view has).
     const name = document.createElement('span');
     name.className = 'cams-name';
-    name.textContent = item.name;
-    const state = document.createElement('span');
-    state.className = 'cams-state';
-    tile.append(img, name, state);
+    const dot = document.createElement('i');
+    dot.className = 'cams-dot';
+    const label = document.createElement('span');
+    label.textContent = item.name;
+    name.append(dot, label);
+    tile.append(img, name);
     return {
       id: item.id,
       name: item.name,
       imageUrl: item.imageUrl,
       tile,
       img,
-      state,
       objectUrl: '',
       lastStart: 0,
       lastOk: 0,
@@ -280,7 +319,7 @@
   // Tiles keep their size; only the grid they stand in changes (rarely).
   function stageSize() {
     const wide = Number.parseFloat(root.style.getPropertyValue('--W')) || 1024;
-    return { width: Math.max(300, wide - 72), height: 600 - 76 - 40 };
+    return { width: Math.max(300, wide - 24), height: 600 - 12 - 28 };
   }
 
   function applyLayout() {
@@ -316,7 +355,7 @@
       }
     }
     root.dataset.mode = mode;
-    setSub();
+    setBack();
   }
 
   function setMode(next, id = '') {

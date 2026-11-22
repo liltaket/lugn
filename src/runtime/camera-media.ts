@@ -14,9 +14,10 @@ const SINGLE_FETCHES = 2;
 const GRID_FETCHES = 6;
 /** How long a camera's frame is reused for the screens looking at it. */
 const SINGLE_CACHE_MS = 750;
-/** Shorter than the page's 0.8 s focus interval, or every other frame it asks
- * for would be the one it already has. */
-const GRID_CACHE_MS = 600;
+/** Shorter than a picture takes to come back, so the large view (which asks
+ * back to back) always gets a new frame; screens that ask at the same moment
+ * still share one fetch (the in-flight request is shared too). */
+const GRID_CACHE_MS = 250;
 
 export type CameraImage = {
   body: Uint8Array;
