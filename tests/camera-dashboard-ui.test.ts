@@ -513,19 +513,28 @@ it('hub fetches no camera frames while another page is shown and resumes on Hem 
   const onPage = window.addEventListener.mock.calls.find(
     ([type]) => type === 'lugn:page',
   )?.[1] as (event: { detail: { page: string } }) => void;
+  // A request in flight when Hem is left is aborted; its frame is not shown.
+  let signal: AbortSignal | undefined;
+  ui.fetch.mockImplementationOnce(async (_url, init) => {
+    signal = init?.signal ?? undefined;
+    return new Promise<Response>(() => {});
+  });
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(ui.fetch).toHaveBeenCalledTimes(2);
   onPage({ detail: { page: 'clock' } });
+  expect(signal?.aborted).toBe(true);
   await vi.advanceTimersByTimeAsync(5000);
   ui.render();
   await vi.advanceTimersByTimeAsync(5000);
-  expect(ui.fetch).toHaveBeenCalledTimes(1);
+  expect(ui.fetch).toHaveBeenCalledTimes(2);
   expect(ui.image.src).toBe('blob:frame-1');
   expect(ui.image.hidden).toBe(false);
   onPage({ detail: { page: 'home' } });
-  await vi.waitFor(() => expect(ui.fetch).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(ui.fetch).toHaveBeenCalledTimes(3));
   await ui.decode();
   expect(ui.image.src).toBe('blob:frame-2');
   await vi.advanceTimersByTimeAsync(1000);
-  expect(ui.fetch).toHaveBeenCalledTimes(3);
+  expect(ui.fetch).toHaveBeenCalledTimes(4);
 });
 
 it('preserves a dirty camera preference draft and original generation across live updates; persists only explicit saves', async () => {
