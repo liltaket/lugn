@@ -5,8 +5,9 @@ its left edge roughly level with the monitor's left edge. When the desktop
 pointer is pushed down out of the monitor's bottom edge near the bottom-left
 corner, the compositor hands the pointer to the agent (xdg-desktop-portal
 InputCapture plus libei). Once the push has carried on far enough downward,
-the agent drives a virtual cursor on one Nest Hub dashboard page. Moving out
-of the Hub's top, left or right edge gives the pointer back.
+the agent drives a virtual cursor on one Nest Hub dashboard page. A deliberate
+push up out of the Hub's top edge gives the pointer back; the other edges are
+walls (see the README).
 
 The Hub page connects directly to the desktop over the LAN:
 
