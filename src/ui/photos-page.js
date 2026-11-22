@@ -259,6 +259,19 @@
   let generation = 0;
 
   const paging = () => Boolean(pager && pager.classList.contains('paging'));
+  // Runs `fn` now, or once the pager has stopped moving: nothing of this page
+  // writes to the DOM or draws while a swipe is under way.
+  function whenStill(fn) {
+    if (!paging()) {
+      fn();
+      return;
+    }
+    const once = () => {
+      window.removeEventListener('lugn:pages-settled', once);
+      fn();
+    };
+    window.addEventListener('lugn:pages-settled', once);
+  }
 
   function setNotice(text) {
     if (!notice) return;
@@ -479,10 +492,12 @@
 
   // Prepares the next slide off screen. Resolves to null when stale or when a
   // picture failed (its photo is dropped from the queue).
+  // One consumer gets a built slide: a second caller while one is being built
+  // gets `false` (busy, not a failure), so the same slide is never shown twice.
   async function prepareNext() {
-    if (building) return building;
+    if (building) return false;
     const token = generation;
-    building = (async () => {
+    const mine = (async () => {
       try {
         if (library.length === 0) await loadList();
         refill();
@@ -491,16 +506,18 @@
         queue = chosen.rest;
         const made = await build(chosen);
         if (!(await decodeAll(made.images, token))) {
-          made.slide.remove();
+          drop(made.slide);
           return null;
         }
+        if (paging()) await new Promise((resolve) => whenStill(resolve));
         for (const veil of made.veils) drawVeil(veil.canvas, veil.image);
         return { ...made, layout: chosen.layout };
       } finally {
-        building = null;
+        if (building === mine) building = null;
       }
     })();
-    return building;
+    building = mine;
+    return mine;
   }
 
   // ── Showing ──
@@ -519,6 +536,8 @@
   let fading = false;
   const LIFT_MS = 120;
   function show(next) {
+    // The same slide is never shown against itself.
+    if (current && next.slide === current.el) return;
     const old = current;
     previousLayout = next.layout;
     current = { el: next.slide, layout: next.layout };
@@ -543,32 +562,59 @@
       fading = false;
     };
     const onEnd = (event) => {
-      if (event.target === next.slide) finish();
+      if (event.target === next.slide) whenStill(finish);
     };
-    const fallback = window.setTimeout(finish, LIFT_MS + FADE_MS + 400);
+    const fallback = window.setTimeout(
+      () => whenStill(finish),
+      LIFT_MS + FADE_MS + 400,
+    );
     next.slide.addEventListener('transitionend', onEnd);
     window.setTimeout(() => {
-      if (!finished) next.slide.classList.add('in');
+      if (!finished) whenStill(() => next.slide.classList.add('in'));
     }, LIFT_MS);
   }
 
+  // Failed builds (a missing picture, a server that is down) are tried again
+  // with a growing pause.
+  let failures = 0;
+  const retryDelay = () => Math.min(5000 * 2 ** failures, 5 * 60_000);
+
   async function advance(manual) {
-    if (!active || fading || (menuOpen && !manual)) return;
+    // A timer that has fired is gone; a tap leaves a pending one alone until
+    // a slide is shown.
+    if (!manual) showTimer = 0;
+    if (!active) return;
+    if (menuOpen && !manual) return; // closing the menu schedules the next
+    if (fading || building) {
+      if (!manual) scheduleShow(1000);
+      return;
+    }
     if (paging()) {
       pendingAdvance = true;
       return;
     }
     pendingAdvance = false;
+    const token = generation;
     const next = await prepareNext();
-    if (!next) {
-      // A failed picture is skipped; try again soon, not in a tight loop.
-      if (active) scheduleShow(5000);
+    if (token !== generation) {
+      if (next) drop(next.slide);
       return;
     }
+    if (next === false) {
+      if (active && !manual) scheduleShow(1000);
+      return;
+    }
+    if (!next) {
+      failures += 1;
+      if (active) scheduleShow(retryDelay());
+      return;
+    }
+    failures = 0;
     if (!active || paging()) {
       // Not shown after all: keep what was prepared for the next try.
       drop(next.slide);
       pendingAdvance = active;
+      if (active && !menuOpen) scheduleShow(SHOW_MS);
       return;
     }
     show(next);
@@ -594,7 +640,12 @@
     const token = generation;
     await loadList();
     const next = await prepareNext();
-    if (!next) return;
+    if (next === false) return;
+    if (!next) {
+      failures += 1;
+      return;
+    }
+    failures = 0;
     if (current || token !== generation) {
       drop(next.slide);
       return;
@@ -619,6 +670,7 @@
     if (held) drop(held.slide);
     held = null;
     lastFillAt = 0;
+    failures = 0;
     building = null;
     pendingAdvance = false;
   }
@@ -663,7 +715,7 @@
   // is shown.
   function drawNow() {
     const r = hem();
-    if (!r || !nowBox) return;
+    if (!r || !nowBox || paging()) return;
     const shown =
       document.getElementById('app-root')?.dataset.musicVisible === 'true';
     if (nowBox.hidden === shown) nowBox.hidden = !shown;
@@ -730,7 +782,8 @@
       if (!nowTimer) nowTimer = window.setInterval(drawNow, 2000);
       void fillFirst(true).then(() => {
         // A first slide that failed to build is tried again soon.
-        if (active && !showTimer) scheduleShow(current ? SHOW_MS : 3000);
+        if (active && !showTimer)
+          scheduleShow(current ? SHOW_MS : retryDelay());
       });
       if (!listTimer)
         listTimer = window.setInterval(() => void loadList(), LIST_MS);

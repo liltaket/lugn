@@ -430,6 +430,7 @@
           // 150 ms; the bridged mouse sends no pointermove while no button is
           // held.
           if (
+            !pressTarget &&
             now - lastMoveEvent > 150 &&
             Math.abs(shownX - lastEventX) + Math.abs(shownY - lastEventY) >=
               2 &&

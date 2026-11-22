@@ -60,7 +60,9 @@
       menu.classList.add('open');
       root.classList.add('menu-open');
       window.clearInterval(dockTimer);
-      dockTimer = window.setInterval(drawDock, 1000);
+      dockTimer = window.setInterval(() => {
+        if (!paging()) drawDock();
+      }, 1000);
       arm(ms);
       for (const fn of listeners.open) fn();
     }
@@ -89,8 +91,12 @@
     root.addEventListener('pointermove', (event) => {
       if (event.pointerType === 'mouse') moved(event);
     });
+    // Told from the bridge's dot frame: the work is done a moment later, not
+    // inside it.
     window.addEventListener('lugn:pointer-move', () => {
-      if (isActive()) moved(null);
+      window.setTimeout(() => {
+        if (isActive()) moved(null);
+      }, 0);
     });
 
     // A tap opens it, or closes it when it lands beside the menu.
@@ -131,9 +137,10 @@
       else show(TAP_MS);
     });
 
-    // Leaving the page closes it.
-    window.addEventListener('lugn:page', (event) => {
-      if (event.detail?.previous === id || event.detail?.page !== id) close();
+    // Leaving the page closes it, once the pages have stopped moving (not in the
+    // first frame of the swipe).
+    window.addEventListener('lugn:pages-settled', () => {
+      if (open && !isActive()) close();
     });
 
     return {
@@ -156,5 +163,13 @@
     id: 'music',
     root: musicRoot,
     menu: musicRoot?.querySelector("[data-view='menu']"),
+    // A press on a control (play, next, presets, volume, the cover) is that
+    // control's own; only the bare page opens or closes the menu.
+    handleTap: (event) =>
+      Boolean(
+        event.target.closest?.(
+          "button, a, input, [data-view='presets'], [data-view='volume'], [data-view='cover']",
+        ),
+      ),
   });
 })();

@@ -536,6 +536,42 @@ describe('Hub pointer bridge page script', () => {
     expect(moves()).toBe(settled);
   });
 
+  it('tells nothing while a button is held (a swipe, not a hover)', async () => {
+    const page = await connected();
+    const moves = () =>
+      page.windowEvents.filter((type) => type === 'lugn:pointer-move').length;
+    page.document.hit = page.document.element('button');
+    page.socket.receive({ t: 'enter', x: 100, y: 100 });
+    page.runFrames();
+    page.advance(500);
+    const before = moves();
+    page.socket.receive({
+      t: 'button',
+      button: 'left',
+      down: true,
+      x: 100,
+      y: 100,
+    });
+    for (let x = 140; x <= 500; x += 40) {
+      page.socket.receive({ t: 'move', x, y: 100 });
+      page.advance(200);
+      page.runFrames();
+    }
+    expect(moves()).toBe(before);
+    page.socket.receive({
+      t: 'button',
+      button: 'left',
+      down: false,
+      x: 500,
+      y: 100,
+    });
+    page.advance(500);
+    page.socket.receive({ t: 'move', x: 600, y: 100 });
+    page.advance(16);
+    page.runFrames();
+    expect(moves()).toBeGreaterThan(before);
+  });
+
   it('follows moves smoothly across frames and snaps after a pause or a jump', async () => {
     const page = await connected();
     page.socket.receive({ t: 'enter', x: 100, y: 100 });
