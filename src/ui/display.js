@@ -276,12 +276,14 @@ let receiverMediaDisplay = null;
 let instanceGeneration = 0;
 const retiredInstances = new Set();
 
-// A stream message that only differs in its delivery counters and timestamp
-// (the heartbeat, every few seconds) has nothing new to draw. Its text is
+// A stream message that only differs in counters and clocks (delivery
+// counters, state revision, update and evaluation times: the heartbeat, and a
+// publish of nothing the page shows) has nothing new to draw. Its text is
 // compared with the one last drawn from the stream, and only the clock
 // reference is moved, so a Hub does not parse and render a whole dashboard
 // for nothing in the middle of a click or a pointer move.
-const UNSTABLE_FIELDS = /"(?:deliveryRevision|generatedAt)":\d+/g;
+const UNSTABLE_FIELDS =
+  /"(?:deliveryRevision|generatedAt|revision|updatedAt|evaluatedAt)":\d+/g;
 let drawnStreamKey = '';
 
 function acceptPayload(payload, streamKey = '') {

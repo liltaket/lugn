@@ -471,6 +471,11 @@ describe('Hub optional Lugn 2 presentation', () => {
     expect(draws()).toBe(1);
     stream.emit({ ...data, deliveryRevision: 6, generatedAt: 6000 });
     expect(draws()).toBe(1);
+    // A moved state revision alone draws nothing either.
+    const moved = structuredClone(data);
+    moved.state.revision += 1;
+    stream.emit({ ...moved, deliveryRevision: 6, generatedAt: 6000 });
+    expect(draws()).toBe(1);
     // The clock reference moved even though nothing was drawn.
     expect(runInContext('latestPayload.generatedAt', ui.context)).toBe(6000);
     // An older delivery is still refused, and a real change still draws.
