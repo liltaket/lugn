@@ -15,8 +15,8 @@ over, and sideways motion neither adds nor resets, so a swipe that brushes the
 top stays on the Hub. While the left button is held (a swipe or a drag on the
 Hub) the top is a wall too, unless a mostly-upward push goes on for 400 px (the
 way out if a release were ever missed); pressing or releasing it starts the
-push over. The Hub's left, right and bottom edges are
-walls, so a sideways swipe never leaves the Hub.
+push over. The Hub's left, right and bottom edges are walls, so a sideways
+swipe never leaves the Hub.
 The keyboard always stays on the desktop, and typing on it ends the capture:
 the pointer comes back where it left the screen.
 

@@ -1229,6 +1229,60 @@ mod tests {
     }
 
     #[test]
+    fn any_move_down_starts_the_push_over() {
+        let mut p = hub();
+        enter(&mut p, Some(11), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        p.motion(0.0, -20.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, 0.5);
+        p.frame(now);
+        // 20 + 20 would have left; after the move down it is 20 + 12.
+        p.motion(0.0, -20.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -12.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -1.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+    }
+
+    #[test]
+    fn the_push_is_counted_in_hub_px_past_the_top() {
+        // Gain 2: 17 desktop px is 34 Hub px.
+        let mut p = hub_with_gain(2.0);
+        enter(&mut p, Some(12), 280.0);
+        let now = Instant::now();
+        // Up to the top: 64 Hub px from the entry inset, nothing past it.
+        p.motion(0.0, -32.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -17.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+        // From 10 Hub px below the top, a 30 Hub px move up passes it by 20
+        // only; 12 more leave.
+        let mut p = hub();
+        enter(&mut p, Some(13), 280.0);
+        p.motion(0.0, -54.0);
+        p.frame(now);
+        p.motion(0.0, -30.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -11.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -1.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+    }
+
+    #[test]
     fn bottom_is_a_wall() {
         let mut p = hub();
         enter(&mut p, Some(1), 0.0);
