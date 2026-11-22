@@ -232,6 +232,9 @@ let lastPresenceValue = null;
 let volumeAuthorityNotice = false;
 let volumeCommandNotice = false;
 const interactionPointers = new Set();
+// Set whenever a render left something unchanged because a press or focus held
+// the page still, so releasing only redraws when there is something to catch up.
+let presentationDeferred = false;
 let heldPlaybackAction;
 let presentationTimer;
 let presenceAcknowledgedKey = null;
@@ -273,7 +276,15 @@ let receiverMediaDisplay = null;
 let instanceGeneration = 0;
 const retiredInstances = new Set();
 
-function acceptPayload(payload) {
+// A stream message that only differs in its delivery counters and timestamp
+// (the heartbeat, every few seconds) has nothing new to draw. Its text is
+// compared with the one last drawn from the stream, and only the clock
+// reference is moved, so a Hub does not parse and render a whole dashboard
+// for nothing in the middle of a click or a pointer move.
+const UNSTABLE_FIELDS = /"(?:deliveryRevision|generatedAt)":\d+/g;
+let drawnStreamKey = '';
+
+function acceptPayload(payload, streamKey = '') {
   if (
     !payload ||
     typeof payload !== 'object' ||
@@ -309,11 +320,31 @@ function acceptPayload(payload) {
   lastFreshAt = Date.now();
   setConnection('connected', 'Lugn ansluten');
   render(payload);
+  drawnStreamKey = streamKey;
+  return true;
+}
+
+function acceptUnchangedHeartbeat(data, key) {
+  if (!key || key !== drawnStreamKey || !latestPayload) return false;
+  // Anything but a settled connection takes the full path that restores it.
+  if (refs.connection.dataset.state !== 'connected') return false;
+  const generatedAt = /"generatedAt":(\d+)/.exec(data)?.[1];
+  const delivery = /"deliveryRevision":(\d+)/.exec(data)?.[1];
+  if (generatedAt === undefined) return false;
+  if (delivery !== undefined && Number(delivery) < latestDeliveryRevision)
+    return false;
+  if (delivery !== undefined) latestDeliveryRevision = Number(delivery);
+  latestPayload.generatedAt = Number(generatedAt);
+  payloadReceivedAt = monotonicNow();
+  lastFreshAt = Date.now();
   return true;
 }
 
 function disconnectStream() {
   streamHealthy = false;
+  // Whatever arrives next is drawn in full: the page may have changed while
+  // the stream was away (camera media stops when the page is hidden).
+  drawnStreamKey = '';
   eventSource?.close();
   eventSource = undefined;
   window.clearTimeout(streamWatchdog);
@@ -349,7 +380,12 @@ function connectStream() {
   source.onmessage = (event) => {
     if (source !== eventSource || stopped) return;
     try {
-      if (!acceptPayload(JSON.parse(event.data))) return;
+      const key = event.data.replace(UNSTABLE_FIELDS, '');
+      if (
+        !acceptUnchangedHeartbeat(event.data, key) &&
+        !acceptPayload(JSON.parse(event.data), key)
+      )
+        return;
       const wasHealthy = streamHealthy;
       streamHealthy = true;
       reconnectDelay = 1000;
@@ -375,15 +411,42 @@ function setText(element, value) {
 }
 
 // Restart a one-shot CSS animation class, so a change is felt, not just seen.
+// The restart needs one style flush between removing and re-adding the class.
+// Doing that inside the render that just dirtied the page forces the whole
+// style/layout pass early, once per pulse, in the middle of the click. Pulses
+// are collected and restarted together at the start of the next frame, which
+// is before that frame paints, so the animation still begins on the same
+// frame as the change and the page is flushed once.
+const pendingPulses = new Map();
+let pulseFrame = 0;
+function flushPulses() {
+  pulseFrame = 0;
+  const batch = [...pendingPulses];
+  pendingPulses.clear();
+  for (const [element, names] of batch)
+    for (const name of names) element.classList.remove(name);
+  // Read from the dashboard, not a batched element: a detached one would not
+  // flush style and layout.
+  if (batch.length) void (root?.offsetWidth ?? batch[0][0].offsetWidth);
+  for (const [element, names] of batch)
+    for (const name of names) element.classList.add(name);
+}
 function pulse(element, name) {
   if (
     typeof element?.classList?.remove !== 'function' ||
     typeof element.classList.add !== 'function'
   )
     return;
-  element.classList.remove(name);
-  void element.offsetWidth;
-  element.classList.add(name);
+  if (typeof globalThis.requestAnimationFrame !== 'function') {
+    element.classList.remove(name);
+    void element.offsetWidth;
+    element.classList.add(name);
+    return;
+  }
+  let names = pendingPulses.get(element);
+  if (!names) pendingPulses.set(element, (names = new Set()));
+  names.add(name);
+  if (!pulseFrame) pulseFrame = globalThis.requestAnimationFrame(flushPulses);
 }
 
 // A segmented control's sliding thumb follows its pressed button.
@@ -470,8 +533,53 @@ function renderMusicProgress() {
       Math.min(1, (sample.position + elapsed) / sample.duration),
     );
   }
+  setRingTimings(fraction);
   refs.musicPlayback.style?.setProperty?.('--progress', fraction.toFixed(4));
   root.dataset.progress = String(!!sample);
+}
+
+// The ring is two half rings that each rotate for their own part of the arc.
+// A move across the halfway point (a seek) is shared out over the one second
+// in the order the arc travels, so the lit arc stays one continuous piece, as
+// it was when the progress value itself was transitioned. A new target starts
+// from where the ring is shown at that moment, as a retargeted transition
+// does, so a tick or a second update during a seek never splits the arc.
+const ring = { from: 0, to: 0, start: 0 };
+
+function ringTimings(from, to) {
+  const low = Math.min(from, to);
+  const high = Math.max(from, to);
+  const total = high - low;
+  const first = Math.max(0, Math.min(high, 0.5) - Math.min(low, 0.5));
+  const second = Math.max(0, Math.max(high, 0.5) - Math.max(low, 0.5));
+  const share = (part) => (total > 1e-6 ? part / total : 0);
+  const forward = to >= from;
+  return {
+    firstTime: share(first),
+    firstDelay: forward ? 0 : share(second),
+    secondTime: share(second),
+    secondDelay: forward ? share(first) : 0,
+  };
+}
+
+function setRingTimings(to) {
+  const style = refs.musicPlayback.style;
+  if (!style?.setProperty) return;
+  // The same target again (a second draw in one turn, or a paused track)
+  // changes nothing and must not disturb a move in progress.
+  if (Math.abs(to - ring.to) < 1e-4) return;
+  const now = monotonicNow();
+  const done = Math.min(1, Math.max(0, (now - ring.start) / 1000));
+  const from = ring.from + (ring.to - ring.from) * done;
+  const timings = ringTimings(from, to);
+  ring.from = from;
+  ring.to = to;
+  ring.start = now;
+  const seconds = (value) => `${value.toFixed(3)}s`;
+  style.setProperty('--ring-first-time', seconds(timings.firstTime));
+  style.setProperty('--ring-first-delay', seconds(timings.firstDelay));
+  style.setProperty('--ring-second-time', seconds(timings.secondTime));
+  style.setProperty('--ring-second-delay', seconds(timings.secondDelay));
 }
 
 function progressSample(values) {
@@ -491,7 +599,7 @@ function progressSample(values) {
     : null;
 }
 
-function setClock() {
+function setClock(afterRender = false) {
   renderMusicProgress();
   updateCameraCountdown();
   renderPrintTime();
@@ -515,7 +623,8 @@ function setClock() {
     }
   }
   refs.clockDate.dateTime = `${dateValue.year}-${dateValue.month}-${dateValue.day}`;
-  if (latestPayload) {
+  // render() has just drawn all of these from the same payload.
+  if (latestPayload && !afterRender) {
     renderEnvironment(latestPayload.environment);
     renderContext(latestPayload);
     renderScenes(latestPayload);
@@ -658,7 +767,8 @@ function renderScenes(payload) {
   const pages = Math.max(1, Math.ceil(presets.length / pageSize));
   scenePage = Math.min(scenePage, pages - 1);
   // Grid and pagination resize together, and never under a finger.
-  if (!interactionPointers.size) {
+  if (interactionPointers.size) presentationDeferred = true;
+  else {
     refs.scenePagination.hidden =
       pages <= 1 || contextDetailsOpen || musicDetailsOpen;
     refs.sceneGrid.dataset.paged = String(pages > 1);
@@ -1190,10 +1300,11 @@ function routineActions(definition, run, occurrence) {
 // Structural changes wait until the current gesture or keyboard focus leaves.
 // Sensor truth and camera permission/media revocation still update immediately.
 function presentationHeld(container) {
-  return (
+  const held =
     interactionPointers.size > 0 ||
-    (document.activeElement && container?.contains?.(document.activeElement))
-  );
+    (document.activeElement && container?.contains?.(document.activeElement));
+  if (held) presentationDeferred = true;
+  return held;
 }
 
 function setContextDetailsOpen(open) {
@@ -1336,11 +1447,11 @@ function renderContext(payload) {
     contextRenderKey = key;
   }
   refs.contextStrip.hidden = contextDetailsOpen || !title;
-  syncContextButtons(refs.contextActions);
+  syncContextButtons(refs.contextActions, data);
   renderBedtime(payload);
   const listKey = JSON.stringify([data, bedtimeProjection, isUnavailable()]);
   if (listKey === contextListKey) {
-    syncContextButtons(refs.contextList);
+    syncContextButtons(refs.contextList, data);
     return;
   }
   const items = [];
@@ -1556,14 +1667,14 @@ function renderContext(payload) {
         );
       }
     }
-    syncContextButtons(refs.contextList);
+    syncContextButtons(refs.contextList, data);
     return;
   }
   contextListKey = listKey;
   contextItems = items;
   refs.contextList.replaceChildren(...items);
   renderContextPage();
-  syncContextButtons(refs.contextList);
+  syncContextButtons(refs.contextList, data);
 }
 
 function syncContextButtons(container, data = contextData(latestPayload)) {
@@ -2884,6 +2995,7 @@ function renderMusic(payload) {
 }
 
 function render(payload) {
+  drawnStreamKey = '';
   latestPayload = payload;
   payloadReceivedAt = monotonicNow();
   setRole(payload?.role);
@@ -2895,7 +3007,7 @@ function render(payload) {
   renderMusic(payload);
   renderCamera(payload);
   renderPrinter(payload);
-  setClock();
+  setClock(true);
 }
 
 function renderPresenceCorrection(payload) {
@@ -3089,10 +3201,7 @@ async function runCommand(key, body) {
   refs.toast.hidden = true;
   syncFeedback();
   pending.add(key);
-  renderPresenceCorrection(latestPayload);
-  renderContext(latestPayload);
-  renderScenes(latestPayload);
-  renderMusic(latestPayload);
+  renderPendingCommand(key);
   try {
     const url = key.startsWith('routine:')
       ? ROUTINE_URL
@@ -3150,11 +3259,18 @@ async function runCommand(key, body) {
     }
   } finally {
     pending.delete(key);
-    renderPresenceCorrection(latestPayload);
-    renderContext(latestPayload);
-    renderScenes(latestPayload);
-    renderMusic(latestPayload);
+    renderPendingCommand(key);
   }
+}
+
+// A command's pending flag is only read by the controls of its own kind, so
+// only that part of the page is drawn when it starts and ends.
+function renderPendingCommand(key) {
+  if (key === 'presence:one') renderPresenceCorrection(latestPayload);
+  else if (key.startsWith('routine:') || key.startsWith('suggestion:'))
+    renderContext(latestPayload);
+  else if (key.startsWith('scene:')) renderScenes(latestPayload);
+  else renderMusic(latestPayload);
 }
 
 refs.scenePrevious.addEventListener('click', () => {
@@ -3167,7 +3283,10 @@ refs.sceneNext.addEventListener('click', () => {
 });
 
 function syncMusicPresentation() {
-  if (interactionPointers.size) return;
+  if (interactionPointers.size) {
+    presentationDeferred = true;
+    return;
+  }
   const visible =
     musicMenuOpen ||
     musicDetailsOpen ||
@@ -3200,7 +3319,10 @@ function syncMusicPresentation() {
 // the print) and the music card under it. With a camera, music and a print at
 // once, the camera keeps the top and the print and music share the lower card.
 function syncExpandedLighting() {
-  if (interactionPointers.size) return;
+  if (interactionPointers.size) {
+    presentationDeferred = true;
+    return;
+  }
   const camera = root.dataset.cameraVisible === 'true';
   const music = root.dataset.musicVisible === 'true';
   const print = !!printActivity;
@@ -3459,8 +3581,13 @@ refs.cameraNext.addEventListener('click', () => {
 
 function flushPresentation() {
   if (interactionPointers.size) return;
+  const caughtUp =
+    !presentationDeferred &&
+    heldPlaybackAction === undefined &&
+    !cameraControlsDeferred;
+  presentationDeferred = false;
   heldPlaybackAction = undefined;
-  if (!latestPayload) return;
+  if (caughtUp || !latestPayload) return;
   renderContext(latestPayload);
   renderScenes(latestPayload);
   renderMusic(latestPayload);
@@ -3884,6 +4011,7 @@ async function cameraAction(action, cameraId) {
     }
     if (result.cameraDashboard && latestPayload) {
       latestPayload.cameraDashboard = result.cameraDashboard;
+      drawnStreamKey = '';
     }
     renderCamera(latestPayload);
   } catch {

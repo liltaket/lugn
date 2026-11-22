@@ -458,6 +458,97 @@ describe('Hub optional Lugn 2 presentation', () => {
     ).toBe(true);
     expect(ui.calls).toEqual([]);
   });
+  it('does not redraw for a stream message that only moves its counters', async () => {
+    const data = ui.payload();
+    const draws = () =>
+      runInContext('globalThis.__draws', ui.context) as number;
+    runInContext(
+      'globalThis.__draws = 0; { const drawn = render; render = (payload) => { globalThis.__draws += 1; drawn(payload); }; }',
+      ui.context,
+    );
+    const stream = ui.streams[0]!;
+    stream.emit({ ...data, deliveryRevision: 5, generatedAt: 1000 });
+    expect(draws()).toBe(1);
+    stream.emit({ ...data, deliveryRevision: 6, generatedAt: 6000 });
+    expect(draws()).toBe(1);
+    // The clock reference moved even though nothing was drawn.
+    expect(runInContext('latestPayload.generatedAt', ui.context)).toBe(6000);
+    // An older delivery is still refused, and a real change still draws.
+    stream.emit({ ...data, deliveryRevision: 4, generatedAt: 7000 });
+    expect(draws()).toBe(1);
+    expect(runInContext('latestPayload.generatedAt', ui.context)).toBe(6000);
+    // After the stream drops, the next identical message is drawn in full.
+    ui.streams[0]!.onerror?.();
+    await vi.advanceTimersByTimeAsync(1000);
+    ui.streams
+      .at(-1)!
+      .emit({ ...data, deliveryRevision: 9, generatedAt: 7500 });
+    expect(draws()).toBe(2);
+    const changed = structuredClone(data);
+    changed.state.music.devices['music.room'].observed.title = 'Another';
+    ui.streams.at(-1)!.emit({
+      ...changed,
+      deliveryRevision: 10,
+      generatedAt: 8000,
+    });
+    expect(draws()).toBe(3);
+    // A poll resets the comparison, so the next identical message draws.
+    ui.render(changed);
+    expect(draws()).toBe(4);
+    ui.streams.at(-1)!.emit({
+      ...changed,
+      deliveryRevision: 11,
+      generatedAt: 9000,
+    });
+    expect(draws()).toBe(5);
+  });
+  it('shares a seek over the half rings in the order the arc travels', () => {
+    const timings = (from: number, to: number) =>
+      JSON.parse(
+        JSON.stringify(runInContext(`ringTimings(${from}, ${to})`, ui.context)),
+      ) as Record<string, number>;
+    const near = (value: number, expected: number) =>
+      expect(value).toBeCloseTo(expected, 5);
+    // Forward over the halfway point: the first half finishes, then the second.
+    const forward = timings(0.25, 0.75);
+    near(forward['firstTime']!, 0.5);
+    near(forward['firstDelay']!, 0);
+    near(forward['secondTime']!, 0.5);
+    near(forward['secondDelay']!, 0.5);
+    // Backward: the second half unwinds first.
+    const backward = timings(0.8, 0.2);
+    near(backward['secondTime']!, 0.5);
+    near(backward['secondDelay']!, 0);
+    near(backward['firstTime']!, 0.5);
+    near(backward['firstDelay']!, 0.5);
+    // Within one half the moving half takes the whole second.
+    const inside = timings(0.1, 0.3);
+    near(inside['firstTime']!, 1);
+    near(inside['firstDelay']!, 0);
+    const late = timings(0.6, 0.9);
+    near(late['secondTime']!, 1);
+    near(late['secondDelay']!, 0);
+    // No movement at all never delays anything.
+    const still = timings(0.4, 0.4);
+    near(still['firstDelay']!, 0);
+    near(still['secondDelay']!, 0);
+  });
+  it('draws only the controls of a command while it is pending', async () => {
+    const release = ui.holdPost();
+    const count = (name: string) =>
+      runInContext(`globalThis.__${name}`, ui.context) as number;
+    runInContext(
+      "for (const name of ['renderScenes', 'renderMusic', 'renderContext']) { globalThis['__' + name] = 0; const original = globalThis[name]; globalThis[name] = (...args) => { globalThis['__' + name] += 1; return original(...args); }; }",
+      ui.context,
+    );
+    ui.get('#scene-off').click();
+    await settle();
+    expect(count('renderScenes')).toBeGreaterThan(0);
+    expect(count('renderMusic')).toBe(0);
+    expect(count('renderContext')).toBe(0);
+    release();
+    await settle();
+  });
   it('retains manual all-off, Optical, volume and presence requests with no client-supplied provenance', async () => {
     ui.get('#scene-off').click();
     await settle();
