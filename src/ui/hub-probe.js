@@ -780,7 +780,7 @@
   // like a finger), with Lugn's answers faked so nothing a swipe might touch
   // leaves the Hub. `mode` says what is prepared before the swipe: nothing, the
   // track lifted to a layer, the neighbour page lifted to a layer, or both.
-  async function swipeRun(mode, label) {
+  async function swipeRun(mode, label, css = '') {
     const api = globalThis.lugnPages;
     const pager = document.getElementById('hub-pager');
     if (!api || !pager || typeof PointerEvent !== 'function')
@@ -834,6 +834,7 @@
     let down = false;
     let up = false;
     let moved = 0;
+    const undo = css ? style(css) : () => {};
     try {
       if (mode === 'track' || mode === 'both') pager.classList.add('moving');
       if (mode === 'near' || mode === 'both')
@@ -845,7 +846,7 @@
         await sleep(80);
         send('pointerup', from[0], from[1], 0);
       }
-      if (mode !== 'asis') await sleep(mode === 'tap' ? 1500 : 1300);
+      if (mode !== 'asis' || css) await sleep(mode === 'tap' ? 1500 : 1300);
       drain();
       const sample = await sampleFrames(1800, (elapsed) => {
         const t = elapsed - 300;
@@ -872,6 +873,7 @@
       };
     } finally {
       window.fetch = realFetch;
+      undo();
       pager.classList.remove('moving');
       for (const page of neighbours) page.style.willChange = '';
       await sleep(1200);
@@ -1006,6 +1008,26 @@
       ['sidsvep-kall-near', 'dot', () => swipeRun('near', 'swipe-cold-near')],
       ['sidsvep-kall-both', 'dot', () => swipeRun('both', 'swipe-cold-both')],
       ['sidsvep-kall-tap', 'dot', () => swipeRun('tap', 'swipe-cold-tap')],
+      [
+        'sidsvep-kall-cv',
+        'dot',
+        () =>
+          swipeRun(
+            'asis',
+            'swipe-cold-cv',
+            ".hub-page[data-state='off'], .hub-page { content-visibility: visible !important; visibility: visible !important; }",
+          ),
+      ],
+      [
+        'sidsvep-kall-nocontain',
+        'dot',
+        () =>
+          swipeRun(
+            'asis',
+            'swipe-cold-nocontain',
+            '.hub-page { contain: none !important; }',
+          ),
+      ],
       [
         'sidsvep-varm',
         'dot',
