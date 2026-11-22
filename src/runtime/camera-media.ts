@@ -14,7 +14,9 @@ const SINGLE_FETCHES = 2;
 const GRID_FETCHES = 6;
 /** How long a camera's frame is reused for the screens looking at it. */
 const SINGLE_CACHE_MS = 750;
-const GRID_CACHE_MS = 900;
+/** Shorter than the page's 0.8 s focus interval, or every other frame it asks
+ * for would be the one it already has. */
+const GRID_CACHE_MS = 600;
 
 export type CameraImage = {
   body: Uint8Array;
@@ -58,22 +60,7 @@ export class CameraMediaProvider {
         camera.entityId,
       ]),
     );
-    this.unsubscribe = service.subscribe(() => {
-      const active = new Set(
-        (['bed', 'desk', 'web'] as const)
-          .map((viewer) => service.snapshot(viewer).active?.cameraId)
-          .filter(Boolean),
-      );
-      // Cameras of an open grid are wanted too.
-      for (const cameraId of service.gridCameraIds()) active.add(cameraId);
-      for (const [cameraId, controller] of this.controllers)
-        if (!active.has(cameraId)) controller.abort();
-      for (const cameraId of this.cache.keys())
-        if (!active.has(cameraId)) {
-          this.cache.delete(cameraId);
-          this.cachedAt.delete(cameraId);
-        }
-    });
+    this.unsubscribe = service.subscribe(() => this.prune());
   }
   snapshot(viewer: CameraViewer, prefix: string): CameraDashboardSnapshot {
     if (!/^\/(?!\/)[A-Za-z0-9_/-]+\/$/.test(prefix))
@@ -109,6 +96,24 @@ export class CameraMediaProvider {
   }
   closeGrid(viewer: CameraViewer): void {
     this.service.closeGrid(viewer);
+    this.prune();
+  }
+  /** Drops what no active view or open grid wants any more. */
+  private prune(): void {
+    const active = new Set(
+      (['bed', 'desk', 'web'] as const)
+        .map((viewer) => this.service.snapshot(viewer).active?.cameraId)
+        .filter(Boolean),
+    );
+    // Cameras of an open grid are wanted too.
+    for (const cameraId of this.service.gridCameraIds()) active.add(cameraId);
+    for (const [cameraId, controller] of this.controllers)
+      if (!active.has(cameraId)) controller.abort();
+    for (const cameraId of this.cache.keys())
+      if (!active.has(cameraId)) {
+        this.cache.delete(cameraId);
+        this.cachedAt.delete(cameraId);
+      }
   }
   /** The next frame of one camera of an open grid. */
   async readGrid(viewer: CameraViewer, cameraId: string): Promise<CameraImage> {

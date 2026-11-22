@@ -134,14 +134,19 @@
 
   // ── Server lease ──
 
-  let leasing = null;
+  let leasing = null; // { token, promise }
   function openLease() {
-    // One request at a time: a camera whose picture says "gone" must not
-    // start one each.
-    leasing ??= requestLease().finally(() => {
-      leasing = null;
-    });
-    return leasing;
+    // One request at a time per visit: a camera whose picture says "gone"
+    // must not start one each. A request from an earlier visit is not shared
+    // (it answers for a page that has stopped).
+    if (leasing?.token !== generation) {
+      const entry = { token: generation, promise: null };
+      entry.promise = requestLease().finally(() => {
+        if (leasing === entry) leasing = null;
+      });
+      leasing = entry;
+    }
+    return leasing.promise;
   }
 
   async function requestLease() {
@@ -158,20 +163,31 @@
       return true;
     } catch (error) {
       if (token !== generation) return false;
-      setNotice(
-        error?.status === 409
-          ? 'Kameravisning är avstängd. Slå på den under Intelligence i kontrollpanelen.'
-          : 'Kamerorna går inte att nå just nu.',
-      );
+      if (error?.status === 409) {
+        // Previews are off or this screen is not allowed: no picture stays on
+        // screen (Hem hides its view at once too).
+        adopt([]);
+        setNotice(
+          'Kameravisning är avstängd. Slå på den under Intelligence i kontrollpanelen.',
+        );
+      } else setNotice('Kamerorna går inte att nå just nu.');
       return false;
     }
   }
 
-  function closeLease() {
-    // Best effort: the lease also lapses by itself.
-    void postJson(`${base()}display-api/camera`, {
-      action: 'grid-close',
-    }).catch(() => {});
+  // Ends the server's lease once an earlier request for it has been answered
+  // (so a late "open" cannot land after the "close"), unless the page has been
+  // entered again meanwhile: that visit's lease replaces it.
+  function closeLease(pending) {
+    void Promise.resolve(pending)
+      .catch(() => {})
+      .then(() => {
+        if (active) return;
+        return postJson(`${base()}display-api/camera`, {
+          action: 'grid-close',
+        });
+      })
+      .catch(() => {});
   }
 
   // The cameras the server offers; existing tiles are kept (and their last
@@ -283,6 +299,13 @@
         const rect = shown.includes(cam) ? rects[index] : null;
         if (rect) index += 1;
         cam.tile.hidden = !rect;
+        // What a tap does follows the mode.
+        const label =
+          mode === 'focus'
+            ? `${cam.name}, tillbaka till alla kameror`
+            : `${cam.name}, visa stor`;
+        if (cam.tile.getAttribute('aria-label') !== label)
+          cam.tile.setAttribute('aria-label', label);
         if (rect) {
           const s = cam.tile.style;
           s.left = `${rect.x}px`;
@@ -356,6 +379,7 @@
       // Decoded off screen first, so the visible picture is never replaced by
       // one that is not ready.
       if (typeof probe.decode === 'function') await probe.decode();
+      probe.removeAttribute('src');
       if (token !== generation) {
         URL.revokeObjectURL(url);
         return;
@@ -492,7 +516,7 @@
   }
 
   function stop() {
-    if (active) closeLease();
+    if (active) closeLease(leasing?.promise);
     active = false;
     generation += 1;
     window.clearTimeout(wakeTimer);
@@ -503,6 +527,13 @@
     for (const item of held.splice(0)) URL.revokeObjectURL(item.url);
     for (const cam of cams) cam.busy = false;
   }
+
+  // A resized screen (the pages' canvas follows it) is laid out again.
+  window.addEventListener('resize', () => {
+    if (!active) return;
+    layoutKey = '';
+    applyLayout();
+  });
 
   // Pictures held back while the pages moved appear when they stop.
   window.addEventListener('lugn:pages-settled', () => {
@@ -536,7 +567,7 @@
       const id = payload()?.cameraDashboard?.active?.cameraId;
       if (!id) return;
       focusRequest = { id, at: Date.now() };
-      pagesApi.go('kameror');
+      if (!pagesApi.go('kameror')) focusRequest = null;
     };
     panel.addEventListener('click', (event) => {
       if (event.target.closest?.('button, a, input')) return;
@@ -563,7 +594,13 @@
     },
     sleep() {
       stop();
-      for (const cam of cams) release(cam);
+      for (const cam of cams) {
+        release(cam);
+        setTileState(cam, 'waiting');
+        cam.lastOk = 0;
+        cam.lastStart = 0;
+        cam.fails = 0;
+      }
     },
   });
 })();

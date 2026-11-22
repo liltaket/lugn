@@ -73,18 +73,19 @@ camera switched on and available) and a same-origin image path per camera,
 `display-api/camera-grid/<camera>/image`. The lease lapses by itself after 45
 seconds without renewal, and ends at once when settings change or Home
 Assistant disconnects, exactly like a single view. A camera that is switched
-off cannot be read through a grid either, and a screen's lease gives access
-only to that screen's cameras.
+off cannot be read through a grid either. Like an active view, a lease belongs
+to the screen's role (`bed`, `desk`): two screens with the same role share it,
+and one of them closing it ends it for both until the other renews.
 
 Pace: the page asks for one picture per camera about every 1.5 seconds (every
 0.8 s for the one shown large), at most three at a time, and only while it is
 the shown page. The server shares one fetch per camera between the screens
-looking at it (a frame is reused for 0.9 s), and allows up to six upstream
-fetches at once for grids on top of the two for single views, which a grid
-cannot crowd out. Measured against Home Assistant from the Lugn host with the
-five Reolink "låg klarhet" cameras (25 KB pictures): one camera answers in
-about 0.3 s and five at once in about 0.5 s each, about nine pictures per
-second in total, so Home Assistant is not what limits the page.
+looking at it (a frame is reused for 0.6 s, shorter than the 0.8 s the page
+asks at in the large view), and allows up to six upstream fetches at once for
+grids on top of the two for single views, which a grid cannot crowd out. Home
+Assistant answers several cameras requested at once about as fast as one, so
+it is the Hub's own decoding and painting that sets how often the page can
+refresh (`GRID_INTERVAL_MS` and `GRID_WORKERS` in `cameras-page.js`).
 
 A camera is added to the grid by adding it to `cameraDashboard.cameras` (up to
 eight) and switching it on under Intelligence → camera settings; as for single
