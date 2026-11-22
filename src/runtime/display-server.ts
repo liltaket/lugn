@@ -56,6 +56,54 @@ const CameraActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('hide') }).strict(),
 ]);
 const MAX_REQUEST_BYTES = 8 * 1024;
+/** One phase of the on-device profile (src/ui/hub-probe.js), logged as is. */
+const PROBE_PHASES = [
+  'info',
+  'cpu',
+  'idle',
+  'bare',
+  'dot',
+  'dot-nofilter',
+  'dot-noshadow',
+  'dot-noanim',
+  'dot-nolayers',
+  'press',
+  'done',
+  'error',
+] as const;
+/** Small, shallow JSON: a phase is a few dozen numbers and short strings. */
+function isSmallJson(value: unknown, depth = 0): boolean {
+  if (value === null) return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'boolean') return true;
+  if (typeof value === 'string') return value.length <= 300;
+  if (depth >= 3) return false;
+  if (Array.isArray(value))
+    return (
+      value.length <= 12 && value.every((item) => isSmallJson(item, depth + 1))
+    );
+  if (typeof value === 'object')
+    return (
+      Object.keys(value).length <= 40 &&
+      Object.entries(value).every(
+        ([key, item]) => key.length <= 40 && isSmallJson(item, depth + 1),
+      )
+    );
+  return false;
+}
+const DisplayProbeSchema = z
+  .object({
+    run: z.string().regex(/^[a-z0-9]{1,12}$/),
+    phase: z.enum(PROBE_PHASES),
+    data: z
+      .record(z.string().max(40), z.unknown())
+      .refine(
+        (data) => isSmallJson(data) && JSON.stringify(data).length <= 3000,
+        'probe data too large',
+      ),
+  })
+  .strict();
+const PROBE_REPORTS_PER_MINUTE = 30;
 const DisplaySceneRequestSchema = z
   .object({ sceneId: z.string().min(1).max(128) })
   .strict();
@@ -172,6 +220,7 @@ function displayResourceCategory(
     case '/pages.css':
     case '/pages.js':
     case '/page-views.js':
+    case '/hub-probe.js':
       return 'pages';
     default:
       return undefined;
@@ -603,6 +652,29 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'POST' &&
+        hubRequest.route === '/display-api/probe'
+      ) {
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        // The quota is spent before the body is read or parsed.
+        if (!this.allowProbe(hubRequest.hub.id)) {
+          sendJson(response, 429, { error: 'probe_rate_limited' });
+          return;
+        }
+        const report = DisplayProbeSchema.parse(await readJsonBody(request));
+        // Read from the journal: the Hub has no other way to report.
+        console.info(
+          `[lugn] hub probe hub=${hubRequest.hub.id} ${JSON.stringify(report)}`,
+        );
+        sendJson(response, 202, { accepted: true });
+        return;
+      }
+      if (
+        request.method === 'POST' &&
         hubRequest.route === '/display-api/presence-count-one'
       ) {
         if (!isJsonRequest(request)) {
@@ -702,6 +774,22 @@ export class LugnDisplayServer {
       hub.role,
       `${this.pathForHub(hub.id)}display-api/cameras/`,
     );
+  }
+
+  private readonly probeWindows = new Map<
+    string,
+    { startedAt: number; count: number }
+  >();
+
+  private allowProbe(hubId: string): boolean {
+    const now = Date.now();
+    const current = this.probeWindows.get(hubId);
+    if (!current || now - current.startedAt >= 60_000) {
+      this.probeWindows.set(hubId, { startedAt: now, count: 1 });
+      return true;
+    }
+    current.count += 1;
+    return current.count <= PROBE_REPORTS_PER_MINUTE;
   }
 
   private snapshot(hub: LugnDisplayHub) {
@@ -1277,7 +1365,8 @@ type UiAssetName =
   | 'pointer-bridge.js'
   | 'pages.css'
   | 'pages.js'
-  | 'page-views.js';
+  | 'page-views.js'
+  | 'hub-probe.js';
 
 /** The Hub pager and its pages (src/ui/pages*.{css,js}, page-views.js). */
 const PAGE_ASSETS: ReadonlyMap<
@@ -1289,6 +1378,11 @@ const PAGE_ASSETS: ReadonlyMap<
   [
     '/page-views.js',
     { file: 'page-views.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  // The on-device profile, loaded only by a Hub opened with #probe.
+  [
+    '/hub-probe.js',
+    { file: 'hub-probe.js', type: 'text/javascript; charset=utf-8' },
   ],
 ]);
 

@@ -92,7 +92,7 @@ const initial = JSON.parse(
 async function settle() {
   for (let i = 0; i < 40; i++) await Promise.resolve();
 }
-function dashboard() {
+function dashboard(hash = '') {
   let payload = structuredClone(initial);
   let offline = false;
   let postGate: Promise<void> | undefined;
@@ -111,6 +111,7 @@ function dashboard() {
   const windowListeners = new Map<string, Listener>();
   const calls: { url: string; body: Record<string, unknown> }[] = [];
   const streams: Stream[] = [];
+  const scripts: Array<Element & { src?: string }> = [];
   class Stream {
     onmessage?: (event: { data: string; lastEventId?: string }) => void;
     onerror?: () => void;
@@ -126,8 +127,11 @@ function dashboard() {
     }
   }
   const context = createContext({
-    location: { pathname: '/k/mock-only/' },
+    location: { pathname: '/k/mock-only/', hash },
     document: {
+      head: {
+        append: (element: Element & { src?: string }) => scripts.push(element),
+      },
       visibilityState: 'visible',
       querySelector: get,
       createElement: () => new Element(),
@@ -188,6 +192,7 @@ function dashboard() {
     context,
     calls,
     streams,
+    scripts,
     documentListeners,
     payload: () => payload,
     render: (value = payload) => {
@@ -558,6 +563,15 @@ describe('Hub optional Lugn 2 presentation', () => {
       ),
     ).toBe(false);
     expect(runInContext('latestPayload.generatedAt', ui.context)).toBe(6000);
+  });
+  it('loads the on-device profile only for a Hub opened with #probe', () => {
+    expect(ui.scripts).toEqual([]);
+    const probed = dashboard('#probe');
+    expect(probed.scripts.map((script) => script.src)).toEqual([
+      './hub-probe.js',
+    ]);
+    expect(dashboard('#other').scripts).toEqual([]);
+    probed.dispose();
   });
   it('draws only the controls of a command while it is pending', async () => {
     const release = ui.holdPost();
