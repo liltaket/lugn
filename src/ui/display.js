@@ -460,6 +460,14 @@ function pulse(element, name) {
     element.classList.add(name);
     return;
   }
+  // A dashboard that is not the page on screen (the pager's other pages) plays
+  // nothing anyone sees; restarting its animations would force a style and
+  // layout flush for the whole document, for nobody.
+  const page = root?.closest?.('.hub-page');
+  if (page && page.dataset?.state !== 'active') {
+    element.classList.add(name);
+    return;
+  }
   let names = pendingPulses.get(element);
   if (!names) pendingPulses.set(element, (names = new Set()));
   names.add(name);
