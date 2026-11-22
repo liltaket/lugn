@@ -124,6 +124,8 @@ describe('display pointer bridge', () => {
       ['pages.css', 'text/css; charset=utf-8'],
       ['pages.js', 'text/javascript; charset=utf-8'],
       ['page-views.js', 'text/javascript; charset=utf-8'],
+      ['cameras-page.css', 'text/css; charset=utf-8'],
+      ['cameras-page.js', 'text/javascript; charset=utf-8'],
     ] as const) {
       const response = await fetch(`${bed}/${file}`);
       expect(response.status).toBe(200);
@@ -143,6 +145,9 @@ describe('display pointer bridge', () => {
     expect(bridge).toBeGreaterThan(html.indexOf('<script src="./display.js"'));
     expect(pages).toBeGreaterThan(bridge);
     expect(views).toBeGreaterThan(pages);
+    expect(
+      html.indexOf('<script src="./cameras-page.js" defer></script>'),
+    ).toBeGreaterThan(views);
     expect(html).toContain('<link rel="stylesheet" href="./pages.css" />');
     expect(html.indexOf('id="hub-track"')).toBeLessThan(
       html.indexOf('id="app-root"'),

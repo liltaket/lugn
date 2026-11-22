@@ -230,6 +230,11 @@ indoor air and presence) and **Info** (connection, stream, revisions, memory,
 screen, browser, and an opt-in swipe probe). Tapping the cover on Hem opens
 Musik; the controls on and around it keep their own actions.
 
+**Kameror** (after Musik) shows every camera at once in a grid; a tap shows
+one large, and tapping the small camera view on Hem opens the page on that
+camera. It asks the server for pictures only while it is the shown page; see
+[Event camera previews](CAMERAS.md#the-camera-grid-page).
+
 Musik and Klocka end in a **scene dock**: Hem's scenes (not the custom ones),
 at most six, with Släck last. Its buttons send what Hem's scene buttons send and
 show the state Hem's buttons show (selected, pending, waiting for lamps). Musik

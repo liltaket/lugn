@@ -3,10 +3,20 @@ import {
   CameraError,
   CameraDashboardConfigSchema,
   type CameraDashboardConfig,
+  type CameraGridLease,
   type CameraDashboardSnapshot,
   type CameraViewer,
 } from '../core/cameras.js';
 import { systemClock, type Clock } from '../core/clock.js';
+
+/** Upstream fetches at once: for single views, and for an open grid. */
+const SINGLE_FETCHES = 2;
+const GRID_FETCHES = 6;
+/** How long a camera's frame is reused for the screens looking at it. */
+const SINGLE_CACHE_MS = 750;
+/** Shorter than the page's 0.8 s focus interval, or every other frame it asks
+ * for would be the one it already has. */
+const GRID_CACHE_MS = 600;
 
 export type CameraImage = {
   body: Uint8Array;
@@ -20,6 +30,8 @@ export class CameraMediaProvider {
   private readonly cache = new Map<string, CameraImage>();
   private readonly cachedAt = new Map<string, number>();
   private readonly inFlight = new Map<string, Promise<CameraImage>>();
+  /** Who started each fetch, so a grid cannot crowd out a single view. */
+  private readonly inFlightGrid = new Set<string>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly failedUntil = new Map<string, number>();
   private readonly unsubscribe: () => void;
@@ -48,20 +60,7 @@ export class CameraMediaProvider {
         camera.entityId,
       ]),
     );
-    this.unsubscribe = service.subscribe(() => {
-      const active = new Set(
-        (['bed', 'desk', 'web'] as const)
-          .map((viewer) => service.snapshot(viewer).active?.cameraId)
-          .filter(Boolean),
-      );
-      for (const [cameraId, controller] of this.controllers)
-        if (!active.has(cameraId)) controller.abort();
-      for (const cameraId of this.cache.keys())
-        if (!active.has(cameraId)) {
-          this.cache.delete(cameraId);
-          this.cachedAt.delete(cameraId);
-        }
-    });
+    this.unsubscribe = service.subscribe(() => this.prune());
   }
   snapshot(viewer: CameraViewer, prefix: string): CameraDashboardSnapshot {
     if (!/^\/(?!\/)[A-Za-z0-9_/-]+\/$/.test(prefix))
@@ -80,31 +79,93 @@ export class CameraMediaProvider {
     cameraId: string,
   ): Promise<CameraImage> {
     this.assertView(viewer, viewId, cameraId);
+    return this.frame(viewer, viewId, cameraId, false);
+  }
+  /** Opens or renews a screen's camera grid; see CameraDashboardService.openGrid. */
+  openGrid(viewer: CameraViewer, prefix: string): CameraGridLease {
+    if (!/^\/(?!\/)[A-Za-z0-9_/-]+\/$/.test(prefix))
+      throw new Error('Invalid camera route');
+    const lease = this.service.openGrid(viewer);
+    return {
+      expiresAt: lease.expiresAt,
+      cameras: lease.cameras.map((camera) => ({
+        ...camera,
+        imageUrl: `${prefix}${camera.id}/image`,
+      })),
+    };
+  }
+  closeGrid(viewer: CameraViewer): void {
+    this.service.closeGrid(viewer);
+    this.prune();
+  }
+  /** Drops what no active view or open grid wants any more. */
+  private prune(): void {
+    const active = new Set(
+      (['bed', 'desk', 'web'] as const)
+        .map((viewer) => this.service.snapshot(viewer).active?.cameraId)
+        .filter(Boolean),
+    );
+    // Cameras of an open grid are wanted too.
+    for (const cameraId of this.service.gridCameraIds()) active.add(cameraId);
+    for (const [cameraId, controller] of this.controllers)
+      if (!active.has(cameraId)) controller.abort();
+    for (const cameraId of this.cache.keys())
+      if (!active.has(cameraId)) {
+        this.cache.delete(cameraId);
+        this.cachedAt.delete(cameraId);
+      }
+  }
+  /** The next frame of one camera of an open grid. */
+  async readGrid(viewer: CameraViewer, cameraId: string): Promise<CameraImage> {
+    if (
+      !this.entities.has(cameraId) ||
+      !this.service.gridAllows(viewer, cameraId)
+    )
+      throw new CameraError(404, 'camera_view_unavailable');
+    return this.frame(viewer, undefined, cameraId, true);
+  }
+  private async frame(
+    viewer: CameraViewer,
+    viewId: string | undefined,
+    cameraId: string,
+    grid: boolean,
+  ): Promise<CameraImage> {
     const cached = this.cache.get(cameraId);
     if (
       cached &&
       this.clock.monotonicNow() - (this.cachedAt.get(cameraId) ?? -Infinity) <
-        750
+        (grid ? GRID_CACHE_MS : SINGLE_CACHE_MS)
     )
       return { ...cached, body: new Uint8Array(cached.body) };
     if ((this.failedUntil.get(cameraId) ?? 0) > this.clock.monotonicNow())
       throw new CameraError(503, 'camera_image_unavailable');
     let pending = this.inFlight.get(cameraId);
     if (!pending) {
-      // At most two fixed camera transports; never queue a backlog behind controls.
-      if (this.inFlight.size >= 2)
+      // A few fixed camera transports; never queue a backlog behind controls.
+      // A single view keeps to two; an open grid asks for several cameras at
+      // once, one fetch each.
+      const running = grid
+        ? this.inFlightGrid.size
+        : this.inFlight.size - this.inFlightGrid.size;
+      if (running >= (grid ? GRID_FETCHES : SINGLE_FETCHES))
         throw new CameraError(503, 'camera_image_busy');
+      if (grid) this.inFlightGrid.add(cameraId);
       pending = this.load(cameraId);
       this.inFlight.set(cameraId, pending);
       void pending
         .finally(() => {
-          if (this.inFlight.get(cameraId) === pending)
+          if (this.inFlight.get(cameraId) === pending) {
             this.inFlight.delete(cameraId);
+            this.inFlightGrid.delete(cameraId);
+          }
         })
         .catch(() => {});
     }
     const image = await pending;
-    this.assertView(viewer, viewId, cameraId);
+    if (grid) {
+      if (!this.service.gridAllows(viewer, cameraId))
+        throw new CameraError(404, 'camera_view_unavailable');
+    } else this.assertView(viewer, viewId!, cameraId);
     return { ...image, body: new Uint8Array(image.body) };
   }
   dispose(): void {
