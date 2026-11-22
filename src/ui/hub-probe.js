@@ -812,15 +812,35 @@
     try {
       await sleep(2500);
       drain();
+      const heap = () =>
+        performance.memory
+          ? round(performance.memory.usedJSHeapSize / 1048576)
+          : null;
+      const heapBefore = heap();
+      const requestsBefore = performance.getEntriesByType('resource').length;
       const sample = await sampleFrames(ms, (elapsed) => {
         if (elapsed >= 300 && !went) {
           went = true;
           api.go(target);
         }
       });
+      // What the page fetched meanwhile: how many requests, how long each took.
+      const fetched = performance
+        .getEntriesByType('resource')
+        .slice(requestsBefore);
+      const durations = fetched
+        .map((entry) => entry.duration)
+        .sort((x, y) => x - y);
       return {
         variant: label,
         page: String(api.current?.()),
+        heapBeforeMB: heapBefore,
+        heapAfterMB: heap(),
+        requests: fetched.length,
+        requestMedianMs: durations.length
+          ? round(durations[Math.floor(durations.length / 2)])
+          : null,
+        requestMaxMs: durations.length ? round(durations.at(-1)) : null,
         ...(await summarise(sample)),
       };
     } finally {
@@ -1099,6 +1119,8 @@
             '.hub-page > * { display: none !important; }',
           ),
       ],
+      ['kameror-ankomst', 'dot', () => goRun('kameror', 3000, 'go-kameror')],
+      ['kameror-30s', 'dot', () => goRun('kameror', 30000, 'go-kameror-30s')],
       ['foto-ankomst', 'dot', () => goRun('foto', 3000, 'go-foto')],
       ['foto-byte', 'dot', () => goRun('foto', 30000, 'go-foto-long')],
       [
