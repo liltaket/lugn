@@ -280,6 +280,28 @@ afterEach(() => {
 });
 
 describe('Hub optional Lugn 2 presentation', () => {
+  it('restarts pulse animations only while the dashboard is the page on screen', () => {
+    const frames: Array<() => void> = [];
+    (ui.context as { requestAnimationFrame?: unknown }).requestAnimationFrame =
+      (fn: () => void) => frames.push(fn);
+    const home = ui.get('#app-root');
+    const run = () =>
+      runInContext("pulse(document.querySelector('#x'), 'lit')", ui.context);
+    ui.get('#x');
+    (home as unknown as { closest: unknown }).closest = () => ({
+      dataset: { state: 'near' },
+    });
+    run();
+    // Off screen: the class is simply there, nothing is queued for a flush.
+    expect(frames).toHaveLength(0);
+    expect(ui.get('#x').classList.contains('lit')).toBe(true);
+    (home as unknown as { closest: unknown }).closest = () => ({
+      dataset: { state: 'active' },
+    });
+    run();
+    expect(frames).toHaveLength(1);
+  });
+
   it('never starts routines or accepts suggestions on load; missing projections retain manual controls', () => {
     expect(ui.calls).toEqual([]);
     const legacy = ui.payload();
