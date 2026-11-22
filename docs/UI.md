@@ -256,7 +256,10 @@ The pager follows the responsiveness rules above:
   by the press that starts a swipe); every other page is `off`
   (`content-visibility: hidden`). Page timers run only while their page is
   active (Klocka's minute also while it is a neighbour). Pages other than the
-  current one are `inert`.
+  current one are `aria-hidden`; only `off` pages are also `inert`, because
+  toggling `inert` restyles a page's whole subtree and a page turns active in
+  the middle of its motion (on a Hub that cost about 100 ms of style and
+  layout in the swipe's frames).
 - Page modules register `prepare`, `enter`, `leave` and `sleep` hooks with
   `lugnPages.define(id, hooks)`; `lugnPages.go(id)` and `lugnPages.onChange`
   are the entry points for later context switching. New pages read dashboard

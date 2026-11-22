@@ -378,7 +378,12 @@
     page.state = state;
     page.el.dataset.state = state;
     page.el.setAttribute('aria-hidden', state === 'active' ? 'false' : 'true');
-    if ('inert' in page.el) page.el.inert = state !== 'active';
+    // Only pages out of reach are inert. Toggling inert restyles a page's
+    // whole subtree, and a page turns active in the middle of its motion:
+    // measured on a Hub, that cost about 100 ms of style and layout in the
+    // swipe's frames. Neighbours stay out of view (and aria-hidden) instead.
+    const inert = state === 'off';
+    if ('inert' in page.el && page.el.inert !== inert) page.el.inert = inert;
     if (state === 'near' && was !== 'active') callHook(page, 'prepare');
     if (state === 'off') callHook(page, 'sleep');
   }
@@ -775,6 +780,13 @@
   window.addEventListener('click', onClick, true);
   pager.addEventListener('wheel', onWheel, { capture: true, passive: false });
   window.addEventListener('keydown', onKey);
+  // Neighbours are not inert, so focus could land on one out of view; it is
+  // sent back, and the pager never scrolls to show it.
+  pager.addEventListener('focusin', (event) => {
+    const page = event.target.closest?.('.hub-page');
+    if (page && page !== pages[index].el) event.target.blur?.();
+    if (pager.scrollLeft) pager.scrollLeft = 0;
+  });
   window.addEventListener('resize', onResize);
 
   write(0);

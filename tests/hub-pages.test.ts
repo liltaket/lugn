@@ -296,7 +296,9 @@ describe('Hub pager', () => {
       'near',
       'off',
     ]);
-    expect(pages[1]?.page.inert).toBe(true);
+    // Only pages out of reach are inert; a neighbour is only aria-hidden.
+    expect(pages.map(({ page }) => page.inert)).toEqual([false, false, true]);
+    expect(pages[1]?.page.attributes.get('aria-hidden')).toBe('true');
     expect(dots.children[0]?.classes.has('current')).toBe(true);
   });
 
@@ -560,7 +562,8 @@ describe('Hub pager', () => {
       'active',
       'near',
     ]);
-    expect(pages[0]!.page.inert).toBe(true);
+    expect(pages[0]!.page.inert).toBe(false);
+    expect(pages[0]!.page.attributes.get('aria-hidden')).toBe('true');
     expect(pager.classes.has('moving')).toBe(false);
     expect(track.style['transform']).toBe('translate(-800px, 0)');
   });
