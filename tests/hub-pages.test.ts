@@ -134,8 +134,13 @@ function setup(count = 3) {
   const timers: Array<{ at: number; fn: () => void; id: number }> = [];
   let timerId = 0;
   const frames: Array<(t: number) => void> = [];
+  let settled = 0;
   Object.assign(window, {
     innerWidth: 1000,
+    dispatchEvent: (event: FakeEvent) => {
+      if (event.type === 'lugn:pages-settled') settled += 1;
+      return true;
+    },
     setTimeout: (fn: () => void, ms: number) => {
       timers.push({ at: now + ms, fn, id: ++timerId });
       return timerId;
@@ -153,6 +158,7 @@ function setup(count = 3) {
     requestAnimationFrame: (fn: (t: number) => void) => frames.push(fn),
     getComputedStyle: () => ({ overflowY: 'visible' }),
     console,
+    Event: FakeEvent,
   });
   context['globalThis'] = context;
   Object.assign(context, window);
@@ -224,6 +230,8 @@ function setup(count = 3) {
   };
   return {
     api,
+    pager,
+    settledEvents: () => settled,
     pages,
     track,
     dots,
@@ -249,7 +257,16 @@ describe('Hub pager', () => {
   });
 
   it('turns the page on a long swipe and settles with a spring animation', () => {
-    const { api, track, pages, drag, advance, finishAnimations } = setup();
+    const {
+      api,
+      pager,
+      track,
+      pages,
+      drag,
+      advance,
+      finishAnimations,
+      settledEvents,
+    } = setup();
     drag(pages[0]!.button, 800, 200);
     expect(api.current()).toBe('clock');
     const settle = track.animations.at(-1)!;
@@ -257,7 +274,7 @@ describe('Hub pager', () => {
       'translate3d(-1000px, 0, 0)',
     );
     expect(track.style['transform']).toBe('translate3d(-1000px, 0, 0)');
-    expect(track.classes.has('moving')).toBe(true);
+    expect(pager.classes.has('moving')).toBe(true);
     finishAnimations();
     advance(100);
     expect(pages.map(({ page }) => page.dataset['state'])).toEqual([
@@ -267,7 +284,8 @@ describe('Hub pager', () => {
     ]);
     // At rest the track is painted with the page again, not as its own layer.
     advance(400);
-    expect(track.classes.has('moving')).toBe(false);
+    expect(pager.classes.has('moving')).toBe(false);
+    expect(settledEvents()).toBe(1);
     expect(track.style['transform']).toBe('translate(-1000px, 0)');
   });
 

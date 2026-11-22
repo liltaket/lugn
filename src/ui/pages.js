@@ -99,7 +99,7 @@
     window.clearTimeout(lowerTimer);
     if (lifted) return;
     lifted = true;
-    track.classList.add('moving');
+    pager.classList.add('moving');
     const x = drawn;
     drawn = NaN;
     write(x);
@@ -107,10 +107,12 @@
   function lower() {
     if (!lifted || animation || gesture || wheel) return;
     lifted = false;
-    track.classList.remove('moving');
+    pager.classList.remove('moving');
     const x = drawn;
     drawn = NaN;
     write(x);
+    // The bridge (and anything else) may measure the page again now.
+    window.dispatchEvent?.(new Event('lugn:pages-settled'));
   }
 
   function requestDraw() {

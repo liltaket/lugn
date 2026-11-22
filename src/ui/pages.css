@@ -13,8 +13,13 @@
   position: absolute;
   inset: 0;
 }
-.hub-track.moving {
+.hub-pager.moving .hub-track {
   will-change: transform;
+}
+/* The desk Hub's hover plate (pointer-bridge.js) is measured against a still
+   page: it is hidden while the pages move. */
+.hub-pager.moving ~ [data-hub-pointer='plate'] {
+  opacity: 0 !important;
 }
 .hub-page {
   position: absolute;
@@ -26,6 +31,8 @@
   background: #141c1b;
 }
 .hub-page[data-state='off'] {
+  /* visibility also skips painting where content-visibility is unknown. */
+  visibility: hidden;
   content-visibility: hidden;
 }
 
