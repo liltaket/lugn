@@ -131,6 +131,7 @@ export class DynamicLightingController {
       this.sceneRevision = state.lighting.sceneRevision;
     }
 
+    this.syncDriven(state);
     const music = this.options.palette.current(state);
     const inputs: DynamicInputs = {
       roomOccupied:
@@ -212,7 +213,8 @@ export class DynamicLightingController {
       if (await this.releaseToScene()) {
         this.applied.clear();
         this.lastSentAt.clear();
-        this.driven.clear();
+        // Lamps the engine had to skip (an external effect) stay on the list.
+        this.syncDriven(engine.state);
         this.status.heldByUser = [];
       } else {
         // The engine refused (for example an OFF hold); keep trying.
@@ -266,6 +268,28 @@ export class DynamicLightingController {
       }
     }
     this.status.heldByUser = held;
+  }
+
+  /**
+   * The engine's own record says which lamps still carry a value this
+   * controller put there, so a restart or an external effect never loses track.
+   */
+  private syncDriven(state: RoomState): void {
+    for (const target of Object.keys(this.options.config.targets)) {
+      const owners = Object.values(
+        state.lighting.devices[target]?.ownership ?? {},
+      );
+      if (
+        owners.some(
+          (owner) =>
+            owner.kind === 'override' &&
+            owner.actor.type === actor.type &&
+            owner.actor.id === actor.id,
+        )
+      )
+        this.driven.add(target);
+      else this.driven.delete(target);
+    }
   }
 
   /**

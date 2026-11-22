@@ -266,6 +266,32 @@ describe('dynamic lighting controller', () => {
       expect(f.desired('lighting.strip').brightness).toBe(10);
     });
 
+    it('returns lamps to the scene after a restart that lost the controller state', async () => {
+      const f = await fixture();
+      await f.engine.activateScene('scene.music', user);
+      f.palette.set(true, [[255, 40, 0]]);
+      await f.advance(100);
+      f.controller.dispose();
+      f.palette.set(false);
+      const restarted = new DynamicLightingController({
+        clock: f.clock,
+        engine: f.engine,
+        palette: f.palette,
+        config: DynamicLightingConfigSchema.parse({
+          targets: {
+            'lighting.ceiling': 'main',
+            'lighting.desk': 'desk',
+            'lighting.strip': 'accent',
+            'lighting.monitor': 'backlight',
+          },
+          minChangeIntervalMs: 1000,
+        }),
+      });
+      cleanups.push(() => restarted.dispose());
+      await f.advance(200);
+      expect(f.desired('lighting.strip').rgb).toBeUndefined();
+    });
+
     it('retries the return to the scene when the engine refuses it first', async () => {
       const f = await fixture();
       await f.engine.activateScene('scene.music', user);
