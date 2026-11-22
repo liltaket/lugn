@@ -48,6 +48,147 @@
     timeZone: 'Europe/Stockholm',
   });
 
+  // ── Scene dock: Hem's scenes on the other pages ──
+  //
+  // The buttons send exactly what Hem's scene buttons send (runCommand) and
+  // take their state from the same payload Hem's buttons do: selected is
+  // the current scene, busy while its command is pending, waiting while the
+  // lamps have not reported the current scene revision, and disabled while
+  // Lugn is unavailable or the command is pending.
+
+  const hem = () => (typeof refs === 'object' ? refs : null);
+
+  function dockScenes() {
+    if (typeof getSceneList !== 'function') return [];
+    const scenes = getSceneList(payload()).filter(
+      (scene) => !scene.id.startsWith('scene.custom_'),
+    );
+    // Släck last, as the way out, and at most six in a row.
+    const off = scenes.filter((scene) => scene.id === 'scene.all_off');
+    const rest = scenes.filter((scene) => scene.id !== 'scene.all_off');
+    return [...rest.slice(0, 6 - off.length), ...off];
+  }
+
+  function dockButton(scene) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.scene = scene.id;
+    const icon =
+      typeof sceneIconFor === 'function' ? sceneIconFor(scene.id) : null;
+    if (icon) {
+      // The same fixed pictograms as Hem; scene names stay text.
+      button.insertAdjacentHTML(
+        'beforeend',
+        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${icon.paths}</svg>`,
+      );
+    }
+    const name = document.createElement('span');
+    name.textContent = scene.id === 'scene.all_off' ? 'Släck' : scene.name;
+    button.append(name);
+    button.title = scene.name;
+    return button;
+  }
+
+  const dockKeys = new Map();
+  function drawDock(page) {
+    const dock = view(page, 'dock');
+    if (!dock) return;
+    const scenes = dockScenes();
+    const listKey = scenes
+      .map((scene) => `${scene.id}\u0000${scene.name}`)
+      .join('\u0001');
+    if (dockKeys.get(page) !== listKey) {
+      dockKeys.set(page, listKey);
+      dock.replaceChildren(...scenes.map(dockButton));
+    }
+    const offline = typeof isUnavailable === 'function' && isUnavailable();
+    const state = payload()?.state;
+    const current = state?.lighting?.currentScene;
+    const awaiting = Boolean(
+      state?.commands?.some(
+        (command) =>
+          command.revision === state.lighting?.sceneRevision &&
+          command.status === 'pending',
+      ),
+    );
+    for (const button of dock.children) {
+      const id = button.dataset.scene;
+      const busy = typeof pending === 'object' && pending.has(`scene:${id}`);
+      const selected = id === current;
+      const look = busy
+        ? 'pending'
+        : !selected
+          ? 'idle'
+          : awaiting
+            ? 'awaiting'
+            : 'selected';
+      setAttr(button, 'aria-pressed', String(selected));
+      setAttr(button, 'aria-busy', String(busy));
+      if (button.dataset.state !== look) button.dataset.state = look;
+      if (button.disabled !== (offline || busy))
+        button.disabled = offline || busy;
+    }
+  }
+
+  function setAttr(element, name, value) {
+    if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+  }
+
+  function onDockClick(event) {
+    const button = event.target.closest?.('button[data-scene]');
+    if (!button || button.disabled || typeof runCommand !== 'function') return;
+    const sceneId = button.dataset.scene;
+    if (!dockScenes().some((scene) => scene.id === sceneId)) return;
+    void runCommand(`scene:${sceneId}`, { sceneId });
+    const page = button.closest('.hub-page')?.dataset.page;
+    // Pending shows at once; the confirmation follows the next state.
+    window.setTimeout(() => drawDock(page), 0);
+  }
+  for (const page of ['clock', 'music'])
+    view(page, 'dock')?.addEventListener('click', onDockClick);
+
+  // ── Notices: Hem's toast and connection notice on every page ──
+  //
+  // Commands sent from any page report through Hem's toast; while another
+  // page is shown, the same words show here (a live region), and a lost
+  // connection stays shown until Hem's notice goes.
+
+  const notice = document.getElementById('pages-notice');
+  const hemToast = document.getElementById('toast');
+  const hemConnection = document.getElementById('connection-notice');
+  function syncNotice() {
+    if (!notice) return;
+    let text = '';
+    let look = '';
+    if (pagesApi.current() !== 'home') {
+      if (hemConnection && !hemConnection.hidden) {
+        text =
+          document.getElementById('connection-message')?.textContent?.trim() ||
+          '';
+        look = 'error';
+      } else if (hemToast && !hemToast.hidden) {
+        text = hemToast.textContent.trim();
+        look = hemToast.dataset.state || '';
+      }
+    }
+    setText(notice, text);
+    if (notice.dataset.state !== look) notice.dataset.state = look;
+    if (notice.hidden !== !text) notice.hidden = !text;
+  }
+  if (notice && typeof MutationObserver === 'function') {
+    const observer = new MutationObserver(syncNotice);
+    for (const element of [hemToast, hemConnection])
+      if (element)
+        observer.observe(element, {
+          attributes: true,
+          attributeFilter: ['hidden', 'data-state'],
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+  }
+  pagesApi.onChange(syncNotice);
+
   // ── Klocka: big time, indoor air, presence ──
 
   const AIR = [
@@ -78,6 +219,7 @@
   }
 
   function drawAir() {
+    drawDock('clock');
     const data = payload();
     const environment = data?.environment ?? {};
     const parts = [];
@@ -145,7 +287,7 @@
       startClock();
       drawAir();
       window.clearInterval(airTimer);
-      airTimer = window.setInterval(drawAir, 5000);
+      airTimer = window.setInterval(drawAir, 2000);
     },
     leave() {
       window.clearInterval(airTimer);
@@ -329,6 +471,328 @@
     leave() {
       window.clearInterval(infoTimer);
       infoTimer = 0;
+    },
+  });
+
+  // ── Musik: Hem's music, full screen ──
+  //
+  // Title, artist, source and cover are read from Hem's music card, so the
+  // same rules (pause grace, computer media, retained artwork) apply here.
+
+  const PLAY_PATH = 'M8 5.5v13l11-6.5Z';
+  const PAUSE_PATH = 'M7 5h4v14H7zM13 5h4v14h-4z';
+  let musicTimer = 0;
+  let musicKey = '';
+  let barKey = '';
+  let barAnimation = null;
+  let musicShown = false;
+  // The action the play button shows; a press sends exactly this.
+  let shownPlayAction = 'playing';
+
+  function clockText(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  function musicState() {
+    const r = hem();
+    const data = payload();
+    const target = typeof musicTarget === 'string' ? musicTarget : '';
+    const device = target ? data?.state?.music?.devices?.[target] : undefined;
+    const active =
+      document.getElementById('app-root')?.dataset.musicVisible === 'true';
+    const artReady =
+      r?.musicArtwork?.dataset.state === 'available' &&
+      r?.musicArtworkImage &&
+      !r.musicArtworkImage.hidden;
+    const volume = device?.observed?.volume;
+    return {
+      active,
+      title: r?.musicTitle?.textContent?.trim() || 'Ingen musik spelar',
+      artist:
+        r?.musicArtist && !r.musicArtist.hidden
+          ? r.musicArtist.textContent.trim()
+          : '',
+      source: active ? r?.musicSource?.textContent?.trim() || '' : '',
+      art: artReady ? r.musicArtworkImage.getAttribute('src') || '' : '',
+      // Hem's own play button label says what a press does there (Pausa
+      // only when a press pauses; a manual pause on a player that still
+      // reports playing reads Spela).
+      playing: r?.musicPlaybackLabel?.textContent?.trim() === 'Pausa',
+      canPlay: Boolean(device) && r?.musicPlayback?.disabled === false,
+      playBusy: r?.musicPlayback?.getAttribute('aria-busy') === 'true',
+      presets: [...(r?.musicPresets?.children ?? [])]
+        .filter((button) => button.dataset?.presetId)
+        .map((button) => ({
+          id: button.dataset.presetId,
+          label: button.textContent.trim(),
+          disabled: button.disabled,
+          busy: button.getAttribute('aria-busy') === 'true',
+        })),
+      volume:
+        typeof volume === 'number' && Number.isFinite(volume)
+          ? `Volym ${Math.round(volume * 100)} %`
+          : '',
+      progress:
+        typeof musicProgress === 'object' && musicProgress
+          ? { ...musicProgress }
+          : null,
+    };
+  }
+
+  function drawMusic() {
+    const state = musicState();
+    // The cover URL (possibly a long data: URL of Hem's trimmed cover) is
+    // compared on its own, not serialised into the key every second.
+    drawCover(state.art);
+    const key = JSON.stringify({
+      ...state,
+      art: undefined,
+      progress: undefined,
+    });
+    if (key !== musicKey) {
+      musicKey = key;
+      const root = view('music', 'root');
+      root.dataset.active = String(state.active);
+      root.dataset.playing = String(state.playing);
+      setText(view('music', 'title'), state.title);
+      setText(view('music', 'artist'), state.artist);
+      setText(view('music', 'source'), state.source);
+      setText(view('music', 'volume'), state.volume);
+      drawPresets(state);
+      const play = view('music', 'play');
+      shownPlayAction = state.playing ? 'paused' : 'playing';
+      play.disabled = !state.canPlay;
+      setAttr(play, 'aria-busy', String(state.playBusy));
+      setAttr(play, 'aria-label', state.playing ? 'Pausa' : 'Spela');
+      view('music', 'play-icon').setAttribute(
+        'd',
+        state.playing ? PAUSE_PATH : PLAY_PATH,
+      );
+    }
+    drawProgress(state.progress);
+  }
+
+  // Hem's choices in Hem's order, disabled and busy as there.
+  function drawPresets(state) {
+    const box = view('music', 'presets');
+    box.hidden = state.active;
+    const key = state.presets.map((preset) => `${preset.id}:${preset.label}`);
+    if (box.dataset.key !== key.join('|')) {
+      box.dataset.key = key.join('|');
+      box.replaceChildren(
+        ...state.presets.map((preset) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.dataset.preset = preset.id;
+          button.textContent = preset.label;
+          return button;
+        }),
+      );
+    }
+    for (const button of box.children) {
+      const preset = state.presets.find((p) => p.id === button.dataset.preset);
+      if (!preset) continue;
+      if (button.disabled !== preset.disabled)
+        button.disabled = preset.disabled;
+      setAttr(button, 'aria-busy', String(preset.busy));
+    }
+  }
+
+  // Musik's own image decides whether its cover shows: Hem having loaded the
+  // same URL says nothing about this request.
+  function drawCover(url) {
+    const art = view('music', 'art');
+    if ((art.getAttribute('src') || '') === url) return;
+    view('music', 'backdrop').hidden = true;
+    art.hidden = true;
+    view('music', 'cover').dataset.state = url ? 'loading' : 'missing';
+    if (url) art.setAttribute('src', url);
+    else art.removeAttribute('src');
+  }
+  view('music', 'art')?.addEventListener('error', () => {
+    const art = view('music', 'art');
+    art.hidden = true;
+    view('music', 'backdrop').hidden = true;
+    view('music', 'cover').dataset.state = 'missing';
+  });
+
+  // The bar runs as one compositor animation from where playback is to the
+  // end of the track; it is restarted only when the sample changes.
+  function drawProgress(sample) {
+    const box = view('music', 'progress');
+    const bar = view('music', 'bar');
+    if (!sample || !(sample.duration > 0)) {
+      if (!box.hidden) box.hidden = true;
+      if (barKey) {
+        barKey = '';
+        barAnimation?.cancel();
+        barAnimation = null;
+      }
+      return;
+    }
+    if (box.hidden) box.hidden = false;
+    const now =
+      typeof estimatedServerNow === 'function'
+        ? estimatedServerNow()
+        : Date.now();
+    const position = Math.min(
+      sample.duration,
+      sample.position +
+        (sample.playing ? Math.max(0, (now - sample.at) / 1000) : 0),
+    );
+    setText(view('music', 'elapsed'), clockText(position));
+    setText(view('music', 'duration'), clockText(sample.duration));
+    const key = JSON.stringify([
+      sample.position,
+      sample.at,
+      sample.duration,
+      sample.playing,
+    ]);
+    if (key === barKey) return;
+    barKey = key;
+    barAnimation?.cancel();
+    barAnimation = null;
+    const from = position / sample.duration;
+    bar.style.transform = `scaleX(${from.toFixed(4)})`;
+    const remaining = (sample.duration - position) * 1000;
+    // Only the shown page animates; a neighbour shows where playback is.
+    if (
+      musicShown &&
+      sample.playing &&
+      remaining > 0 &&
+      typeof bar.animate === 'function'
+    ) {
+      barAnimation = bar.animate(
+        [
+          { transform: `scaleX(${from.toFixed(4)})` },
+          { transform: 'scaleX(1)' },
+        ],
+        { duration: remaining, easing: 'linear', fill: 'forwards' },
+      );
+    }
+  }
+
+  // The backdrop is the loaded cover drawn small, once (same-origin art).
+  view('music', 'art')?.addEventListener('load', () => {
+    const art = view('music', 'art');
+    art.hidden = false;
+    view('music', 'cover').dataset.state = 'available';
+    const canvas = view('music', 'backdrop');
+    const context = canvas?.getContext?.('2d');
+    if (!context || !art.naturalWidth) return;
+    try {
+      const { width, height } = canvas;
+      const scale = Math.max(
+        width / art.naturalWidth,
+        height / art.naturalHeight,
+      );
+      const w = art.naturalWidth * scale;
+      const h = art.naturalHeight * scale;
+      context.clearRect(0, 0, width, height);
+      context.drawImage(art, (width - w) / 2, (height - h) / 2, w, h);
+      canvas.hidden = false;
+    } catch {
+      canvas.hidden = true;
+    }
+  });
+
+  // A press sends what the button shows (as Hem holds its action through a
+  // press), never an action recomputed from a newer state behind the label.
+  // The action is taken when the press starts, as Hem holds its own, so a
+  // redraw during the press cannot change what the release sends.
+  let pressedPlay = null;
+  view('music', 'play')?.addEventListener('pointerdown', () => {
+    pressedPlay = { action: shownPlayAction, at: performance.now() };
+  });
+  view('music', 'play')?.addEventListener('click', () => {
+    // A press that never clicked (a swipe that started here) is forgotten.
+    const action =
+      pressedPlay && performance.now() - pressedPlay.at < 2000
+        ? pressedPlay.action
+        : shownPlayAction;
+    pressedPlay = null;
+    const data = payload();
+    const target = typeof musicTarget === 'string' ? musicTarget : '';
+    const device = target ? data?.state?.music?.devices?.[target] : undefined;
+    if (
+      !device ||
+      view('music', 'play').disabled ||
+      hem()?.musicPlayback?.disabled !== false ||
+      typeof runCommand !== 'function'
+    )
+      return;
+    void runCommand(`music:${target}`, {
+      target,
+      request: { property: 'playback', value: action },
+    });
+    window.setTimeout(drawMusic, 0);
+  });
+
+  // A choice is sent only while Hem's own button for it is enabled.
+  view('music', 'presets')?.addEventListener('click', (event) => {
+    const button = event.target.closest?.('button[data-preset]');
+    if (!button || button.disabled || typeof selectMusicPreset !== 'function')
+      return;
+    const source = [...(hem()?.musicPresets?.children ?? [])].find(
+      (candidate) => candidate.dataset?.presetId === button.dataset.preset,
+    );
+    if (!source || source.disabled) return;
+    selectMusicPreset(Number(button.dataset.preset));
+    window.setTimeout(drawMusic, 0);
+  });
+
+  // Tapping the cover on Hem opens Musik. The visible cover image is the
+  // target (in every layout, at its own size), reachable by keyboard; the
+  // controls around it keep their own actions.
+  const hemCover = document.getElementById('music-artwork-image');
+  if (hemCover) {
+    hemCover.setAttribute('role', 'button');
+    hemCover.setAttribute('tabindex', '0');
+    hemCover.setAttribute('aria-label', 'Visa musiken i helskärm');
+    const open = () => {
+      if (
+        !hemCover.hidden &&
+        document.getElementById('app-root')?.dataset.musicVisible === 'true'
+      )
+        pagesApi.go('music');
+    };
+    hemCover.addEventListener('click', open);
+    hemCover.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      open();
+    });
+  }
+
+  function musicTick() {
+    drawMusic();
+    drawDock('music');
+  }
+
+  pagesApi.define('music', {
+    prepare: musicTick,
+    enter() {
+      window.clearInterval(musicTimer);
+      musicShown = true;
+      barKey = '';
+      musicTick();
+      musicTimer = window.setInterval(musicTick, 1000);
+    },
+    leave() {
+      window.clearInterval(musicTimer);
+      musicTimer = 0;
+      musicShown = false;
+      barAnimation?.cancel();
+      barAnimation = null;
+      barKey = '';
+      drawProgress(musicState().progress);
+    },
+    sleep() {
+      // Nothing runs while away: the bar stops with the page.
+      barAnimation?.cancel();
+      barAnimation = null;
+      barKey = '';
     },
   });
 })();

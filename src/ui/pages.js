@@ -325,11 +325,15 @@
     }
   }
 
-  // Before a gesture can show a neighbour, it must not be `off`.
+  // Before a gesture can show a neighbour, it must not be `off`, and it is
+  // drawn again from the latest state, so a swipe never reveals a page as
+  // it was when it was first prepared.
   function prepareNeighbours() {
     for (const i of [index - 1, index + 1]) {
       const page = pages[i];
-      if (page && page.state === 'off') setState(page, 'near');
+      if (!page) continue;
+      if (page.state === 'off') setState(page, 'near');
+      else if (page.state === 'near') callHook(page, 'prepare');
     }
   }
 

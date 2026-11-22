@@ -712,6 +712,20 @@ describe('Hub pager', () => {
     expect(seen).toEqual(['home>clock', 'clock>info']);
   });
 
+  it('draws a prepared neighbour again when a press starts', () => {
+    const { api, pages, pointer } = setup();
+    let prepared = 0;
+    (
+      api as unknown as {
+        define(id: string, hooks: Record<string, () => void>): void;
+      }
+    ).define('clock', { prepare: () => (prepared += 1) });
+    expect(prepared).toBe(1);
+    pointer('pointerdown', pages[0]!.button, 500);
+    pointer('pointerup', pages[0]!.button, 500);
+    expect(prepared).toBe(2);
+  });
+
   it('goes to a page by id, and refuses unknown ones', () => {
     const { api, track } = setup(4);
     expect(api.go('four')).toBe(true);
@@ -721,5 +735,20 @@ describe('Hub pager', () => {
       'translate3d(-2000px, 0, 0)',
     );
     expect(api.go('nope')).toBe(false);
+  });
+});
+
+describe('Hub page markup', () => {
+  const html = readFileSync(
+    new URL('../src/ui/display.html', import.meta.url),
+    'utf8',
+  );
+  it('has one dot per page, Hem first and Musik next to it', () => {
+    const pages = [
+      ...html.matchAll(/class="hub-page" data-page="([a-z]+)"/g),
+    ].map((match) => match[1]);
+    expect(pages).toEqual(['home', 'music', 'clock', 'info']);
+    const dots = /<div class="hub-dots"[^>]*>(.*?)<\/div>/.exec(html)?.[1];
+    expect(dots?.match(/<i><\/i>/g)).toHaveLength(pages.length);
   });
 });

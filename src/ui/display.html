@@ -670,12 +670,46 @@
       </section>
     </div>
     </section>
+    <section class="hub-page" data-page="music" aria-label="Musik">
+      <div class="page-canvas music-page" data-view="root" data-playing="false">
+        <div class="music-page-backdrop" aria-hidden="true">
+          <canvas data-view="backdrop" width="40" height="24"></canvas>
+        </div>
+        <div class="music-page-cover" data-view="cover" data-state="missing">
+          <img data-view="art" alt="" decoding="async" hidden />
+          <span class="music-page-record" aria-hidden="true"></span>
+        </div>
+        <div class="music-page-info">
+          <span class="music-page-source" data-view="source"></span>
+          <strong class="music-page-title" data-view="title">Ingen musik spelar</strong>
+          <span class="music-page-artist" data-view="artist"></span>
+          <div class="music-page-progress" data-view="progress" hidden>
+            <span class="music-page-bar"><i data-view="bar"></i></span>
+            <span class="music-page-times"
+              ><span data-view="elapsed"></span><span data-view="duration"></span
+            ></span>
+          </div>
+          <div class="music-page-controls">
+            <button type="button" class="music-page-play" data-view="play" aria-label="Spela">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path data-view="play-icon" d="M8 5.5v13l11-6.5Z" /></svg>
+            </button>
+            <span class="music-page-volume" data-view="volume"></span>
+          </div>
+          <div class="music-page-presets" data-view="presets" hidden>
+            <button type="button" data-preset="1">Spotify DJ</button>
+            <button type="button" data-preset="4">Optical</button>
+          </div>
+        </div>
+        <div class="scene-dock" data-view="dock" aria-label="Ljuslägen"></div>
+      </div>
+    </section>
     <section class="hub-page" data-page="clock" aria-label="Klocka och klimat">
       <div class="page-canvas clock-page">
         <time class="clock-page-time" data-view="time">—:—</time>
         <span class="clock-page-date" data-view="date"></span>
         <dl class="clock-page-air" data-view="air"></dl>
         <span class="clock-page-presence" data-view="presence"></span>
+        <div class="scene-dock" data-view="dock" aria-label="Ljuslägen"></div>
       </div>
     </section>
     <section class="hub-page" data-page="info" aria-label="Info">
@@ -688,7 +722,8 @@
       </div>
     </section>
     </div>
-    <div class="hub-dots" id="hub-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="pages-notice" id="pages-notice" role="status" aria-live="polite" hidden></div>
+    <div class="hub-dots" id="hub-dots" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
     </div>
   </body>
 </html>
