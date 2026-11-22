@@ -180,12 +180,12 @@
     stopAnimation(false);
     const to = base(target);
     const from = offset;
-    const previous = setIndex(target);
+    setIndex(target);
     if (Math.abs(from - to) < 0.5) {
       offset = to;
       write(to);
+      announce();
       motionEnded();
-      announce(previous);
       return;
     }
     const samples = springSamples(from, to, velocity);
@@ -193,8 +193,8 @@
     offset = to;
     if (typeof track.animate !== 'function') {
       write(to);
+      announce();
       motionEnded();
-      announce(previous);
       return;
     }
     lift();
@@ -216,7 +216,7 @@
       motionEnded();
     };
     if (probe.enabled) probeStart();
-    announce(previous);
+    announce();
   }
 
   // Where the running settle shows the track now, from the samples.
@@ -249,12 +249,14 @@
 
   // ── Page states ──
 
-  // Returns the page left, if any; `announce` tells the others once the
-  // transition is in place, so a listener may call `go` again safely.
+  // Queues the change at once, so changes are told in the order they
+  // happened; `announce` tells the others once the transition is in place,
+  // so a listener may call `go` again safely.
   function setIndex(target) {
     if (target === index) return null;
     const previous = pages[index];
     index = target;
+    announcements.push({ page: pages[index].id, previous: previous.id });
     syncDots();
     callHook(previous, 'leave');
     setState(pages[index], 'active');
@@ -266,10 +268,8 @@
   // even when a listener goes on to another page.
   const announcements = [];
   let announcing = false;
-  function announce(previous) {
-    if (!previous) return;
-    announcements.push({ page: pages[index].id, previous: previous.id });
-    if (announcing) return;
+  function announce() {
+    if (announcing || !announcements.length) return;
     announcing = true;
     try {
       while (announcements.length) {
@@ -394,7 +394,8 @@
       y0: event.clientY,
       startOffset: unrubber(offset),
       dragging: catching,
-      samples: [[event.timeStamp || clock(), offset]],
+      press: [event.timeStamp || clock(), offset],
+      samples: [],
     };
     if (catching) beginDrag(event);
   }
@@ -422,7 +423,6 @@
   // the bridge sends held moves once per frame but a release at once, so a
   // fast swipe may reach the release with few or no moves.
   function follow(event) {
-    if (gesture.cancelled) return gesture.dragging;
     const dx = event.clientX - gesture.x0;
     if (!gesture.dragging) {
       const dy = event.clientY - gesture.y0;
@@ -434,16 +434,23 @@
       }
       if (Math.abs(dx) <= slop || Math.abs(dx) < Math.abs(dy) * LOCK_RATIO)
         return false;
+      // After a resize a held pointer is still told apart as tap or swipe
+      // (a swipe's click is swallowed), but it no longer moves the pages.
+      if (gesture.cancelled) {
+        gesture.dragging = true;
+        return true;
+      }
       beginDrag(event);
       // Start from the lock point less the slop, so the page neither jumps
       // by the slop nor loses a long first move.
       gesture.x0 = event.clientX - Math.sign(dx) * (Math.abs(dx) - slop);
     }
+    if (gesture.cancelled) return true;
     offset = rubber(gesture.startOffset + (event.clientX - gesture.x0));
     const samples = gesture.samples;
     // Only a change of position counts as motion: a release (or move) where
     // the pointer already was must not look like a fresh, fast sample.
-    if (samples[samples.length - 1]?.[1] !== offset) {
+    if ((samples[samples.length - 1] ?? gesture.press)[1] !== offset) {
       samples.push([event.timeStamp || clock(), offset]);
       if (samples.length > 8) samples.shift();
     }
@@ -454,21 +461,28 @@
     return true;
   }
 
-  // The speed over the last ~90 ms of the drag (at least two moves). A slow
+  // The speed over the last ~90 ms of the drag. `samples` are the moves that
+  // changed the position; `press` (optional) is where the drag began. A slow
   // main thread spaces moves out and delays the release, so "held still"
-  // means a pause clearly longer than the moves' own spacing.
-  function releaseVelocity(samples, now) {
+  // means a pause clearly longer than the spacing between actual moves (the
+  // wait from the press to the first move does not count).
+  function releaseVelocity(samples, now, press) {
     const n = samples.length;
     const last = samples[n - 1];
-    if (!last || n < 2) return 0;
-    let first = samples[n - 2];
+    if (!last) return 0;
+    let still = STILL_MS;
+    if (n >= 2) {
+      const intervals = Math.min(3, n - 1);
+      const spacing = (last[0] - samples[n - 1 - intervals][0]) / intervals;
+      still = Math.max(STILL_MS, spacing * 2.5);
+    }
+    if (now - last[0] > still) return 0;
+    let first = n >= 2 ? samples[n - 2] : press;
+    if (!first) return 0;
     for (let i = n - 3; i >= 0; i -= 1) {
       if (last[0] - samples[i][0] > VELOCITY_WINDOW_MS) break;
       first = samples[i];
     }
-    const spacing =
-      (last[0] - samples[Math.max(0, n - 4)][0]) / Math.min(3, n - 1);
-    if (now - last[0] > Math.max(STILL_MS, spacing * 2.5)) return 0;
     // A move and a release in the same instant (the bridge, a stalled
     // thread) count as one frame; and no release throws the pages wildly.
     const dt = Math.max(last[0] - first[0], MIN_VELOCITY_DT_MS);
@@ -491,11 +505,15 @@
       return;
     }
     swallowSwipeClick();
-    if (g.cancelled) return; // a resize already put the pages at rest
+    if (g.cancelled) {
+      // A resize already put the pages at rest; tidy up after the hold.
+      settled();
+      return;
+    }
     const velocity =
       event.type === 'pointercancel'
         ? 0
-        : releaseVelocity(g.samples, event.timeStamp || clock());
+        : releaseVelocity(g.samples, event.timeStamp || clock(), g.press);
     finish(velocity);
   }
 

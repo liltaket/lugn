@@ -149,6 +149,7 @@ function setup(count = 3) {
     dispatchEvent: (event: FakeEvent) => {
       if (event.type === 'lugn:pages-settled') settled += 1;
       if (event.type === 'lugn:page') pageEvents.push(event['detail']);
+      window.fire(event);
       return true;
     },
     setTimeout: (fn: () => void, ms: number) => {
@@ -261,6 +262,7 @@ function setup(count = 3) {
     wheel,
     resize,
     settledEvents: () => settled,
+    window,
     pageEvents,
     pages,
     track,
@@ -505,6 +507,57 @@ describe('Hub pager', () => {
     pointer('pointerup', pages[0]!.button, 300, 300, 'mouse');
     expect(click(pages[0]!.button).defaultPrevented).toBe(true);
     expect(api.current()).toBe('home');
+  });
+
+  it('tells a swipe from a tap after a resize before the first move', () => {
+    const swipe = setup();
+    swipe.pointer('pointerdown', swipe.pages[0]!.button, 700, 300, 'mouse');
+    swipe.resize(976);
+    swipe.pointer('pointerup', swipe.pages[0]!.button, 640, 300, 'mouse');
+    expect(swipe.click(swipe.pages[0]!.button).defaultPrevented).toBe(true);
+    expect(swipe.api.current()).toBe('home');
+
+    const tap = setup();
+    tap.pointer('pointerdown', tap.pages[0]!.button, 700, 300, 'mouse');
+    tap.resize(976);
+    tap.pointer('pointerup', tap.pages[0]!.button, 702, 300, 'mouse');
+    expect(tap.click(tap.pages[0]!.button).defaultPrevented).toBe(false);
+  });
+
+  it('lowers the layer after a swipe held through a resize is released', () => {
+    const { pages, pager, pointer, resize, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 600, 300, 'mouse');
+    resize(976);
+    advance(650);
+    pointer('pointerup', pages[0]!.button, 600, 300, 'mouse');
+    advance(100);
+    advance(500);
+    expect(pager.classes.has('moving')).toBe(false);
+  });
+
+  it('does not fling one move after a long press and a hold', () => {
+    const { api, pages, pointer, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    advance(400);
+    pointer('pointermove', pages[0]!.button, 536, 300, 'mouse');
+    advance(300);
+    pointer('pointerup', pages[0]!.button, 536, 300, 'mouse');
+    expect(api.current()).toBe('home');
+  });
+
+  it('tells changes in order when a settled listener goes on', () => {
+    const { api, window: win, wheel, pages, advance } = setup();
+    const seen: string[] = [];
+    api.onChange((page, previous) => seen.push(`${previous}>${page}`));
+    win.addEventListener('lugn:pages-settled', () => {
+      if (api.current() === 'clock') api.go('info');
+    });
+    // Exactly one page of wheel: the turn needs no animation.
+    wheel(pages[0]!.button, 1000);
+    advance(200);
+    expect(seen).toEqual(['home>clock', 'clock>info']);
   });
 
   it('turns no page when a dialog opens during a wheel gesture', () => {
