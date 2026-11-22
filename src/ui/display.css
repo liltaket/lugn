@@ -3413,8 +3413,7 @@ h2 {
     left var(--move),
     width var(--move),
     top var(--move),
-    height var(--move),
-    --fx-panel 1.4s ease;
+    height var(--move);
 }
 #app-root .music-section .music-artwork {
   position: absolute;
@@ -3651,17 +3650,15 @@ h2 {
   left: -100%;
   clip-path: inset(0 50% 0 0);
   transform: rotate(calc(min(var(--progress), 0.5) * 360deg));
-  transition:
-    transform var(--ring-first-time, 1s) linear var(--ring-first-delay, 0s),
-    border-color 1.4s ease;
+  transition: transform var(--ring-first-time, 1s) linear
+    var(--ring-first-delay, 0s);
 }
 #app-root .progress-second::before {
   left: 0;
   clip-path: inset(0 0 0 50%);
   transform: rotate(calc(max(var(--progress) - 0.5, 0) * 360deg));
-  transition:
-    transform var(--ring-second-time, 1s) linear var(--ring-second-delay, 0s),
-    border-color 1.4s ease;
+  transition: transform var(--ring-second-time, 1s) linear
+    var(--ring-second-delay, 0s);
 }
 /* Hidden, not removed, so a returning position keeps animating from where the
    ring was. */
@@ -4105,12 +4102,7 @@ body {
    a custom property changed on the root restyles the whole page, which stalled
    a Hub for 60 to 120 ms at every play/pause and track change. The
    background cross-fades between the two layers by opacity (composited) and
-   the few cards that carry a theme color fade it locally. */
-@property --fx-panel {
-  syntax: '<color>';
-  inherits: false;
-  initial-value: #1c2523;
-}
+   the cards that carry a theme color take it at once (their own 1.4 s fades cost a Hub 20 of its 60 frames). */
 #app-root {
   --art-accent: #e7bc78;
   --art-deep: #141c1b;
@@ -4191,25 +4183,20 @@ body {
   --art-panel: #121817;
 }
 #app-root .music-feature::after {
-  --fx-panel: var(--art-panel);
   background: linear-gradient(
     to bottom,
     transparent 0%,
     transparent 40%,
-    var(--fx-panel) 82%
+    var(--art-panel) 82%
   );
   opacity: 0.94;
-  transition: --fx-panel 1.4s ease;
 }
 #app-root .music-section .music-feature,
 #app-root[data-feedback='true'] .music-section .music-feature {
-  --fx-panel: var(--art-panel);
-  background: var(--fx-panel);
+  background: var(--art-panel);
 }
 #app-root .music-section .music-artwork {
-  --fx-panel: var(--art-panel);
-  background: var(--fx-panel);
-  transition: --fx-panel 1.4s ease;
+  background: var(--art-panel);
 }
 
 /* Sliding thumbs: the pressed choice is a pill that moves, not a swap. */
@@ -4229,8 +4216,7 @@ body {
   transform: translateX(0);
   transition:
     transform 0.45s var(--spring),
-    opacity 0.25s ease,
-    background-color 1.4s ease;
+    opacity 0.25s ease;
   z-index: 0;
 }
 #app-root .music-presets::before {
@@ -4684,11 +4670,9 @@ body {
   height: 252px;
   border-radius: 22px;
   overflow: hidden;
-  --fx-panel: var(--art-panel);
   background:
     radial-gradient(80% 90% at 50% 40%, rgba(238, 241, 232, 0.06), transparent),
-    var(--fx-panel);
-  transition: --fx-panel 1.4s ease;
+    var(--art-panel);
 }
 #app-root .camera-frame .camera-blur,
 #app-root .camera-frame .camera-under,
@@ -5001,10 +4985,8 @@ button[data-pointer-pressed]:not(:disabled) {
   overflow: hidden;
   z-index: 3;
   color: var(--ink);
-  --fx-panel: var(--panel);
   background:
-    linear-gradient(var(--print-tint), var(--print-tint)), var(--fx-panel);
-  transition: --fx-panel 1.4s ease;
+    linear-gradient(var(--print-tint), var(--print-tint)), var(--panel);
   box-shadow: inset 0 0 0 1px var(--hair);
   animation: redesign-cam-in 0.5s cubic-bezier(0.2, 0.9, 0.25, 1);
 }
