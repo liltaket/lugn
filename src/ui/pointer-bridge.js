@@ -19,9 +19,9 @@
   const CONFIG_RETRY_MIN_MS = 5000;
   const CONFIG_RETRY_MAX_MS = 60000;
   // Hover hit tests: at most this often while moving...
-  const HOVER_INTERVAL_MS = 60;
+  const HOVER_INTERVAL_MS = 40;
   // ...and once this long after the last move.
-  const HOVER_SETTLE_MS = 50;
+  const HOVER_SETTLE_MS = 30;
   // After a click, Escape or wheel the page may change under a still cursor:
   // hover and the plate are measured again this long after.
   const HOVER_RECHECK_MS = 300;

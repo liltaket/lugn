@@ -482,7 +482,7 @@ describe('Hub pointer bridge page script', () => {
     expect(page.hitTests()).toBe(0);
     expect(button.hasAttribute('data-pointer-hover')).toBe(false);
 
-    page.advance(50);
+    page.advance(30);
     expect(page.hitTests()).toBe(1);
     expect(button.hasAttribute('data-pointer-hover')).toBe(true);
 
@@ -504,7 +504,7 @@ describe('Hub pointer bridge page script', () => {
     );
   });
 
-  it('hit tests for hover at most every 60 ms while moving and once after it settles', async () => {
+  it('hit tests for hover at most every 40 ms while moving and once after it settles', async () => {
     const page = await connected();
     const first = page.document.element('button');
     const second = page.document.element('button');
@@ -520,10 +520,10 @@ describe('Hub pointer bridge page script', () => {
     }
     const { hitTimes } = page;
     expect(hitTimes.length).toBeGreaterThanOrEqual(20);
-    expect(hitTimes.length).toBeLessThanOrEqual(Math.ceil(1600 / 60) + 1);
+    expect(hitTimes.length).toBeLessThanOrEqual(Math.ceil(1600 / 40) + 1);
     for (let index = 1; index < hitTimes.length; index += 1)
       expect(hitTimes[index]! - hitTimes[index - 1]!).toBeGreaterThanOrEqual(
-        60,
+        40,
       );
     // Hover changes touch attributes only when the control changes.
     expect(first.attributeWrites).toBe(2);

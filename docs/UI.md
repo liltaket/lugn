@@ -201,9 +201,13 @@ clicks and the pointer bridge responsive while something plays:
   (`transform`, composited). A transition of the progress value itself would
   restyle and repaint the page every frame while music plays.
 - Nothing inherited that changes per frame may be transitioned on `#app-root`
-  or any ancestor of many elements. The remaining exception is the artwork
-  theme cross-fade (`--art-*`), which restyles the page for 1.4 s when the
-  cover colors change.
+  or any ancestor of many elements. The artwork theme (`--art-*`) therefore
+  changes once: the page background cross-fades on its own layer
+  (`#app-root::before`, opacity, composited; the script holds the previous
+  look in `--hold-image` / `--hold-color` for 1.5 s), and the few cards that
+  carry a theme color fade it locally (`--fx-panel`, a non-inheriting
+  `<color>` property per card). The blurred artwork and camera copies are their
+  own layers so a card repainting does not blur them again.
 - A state message that differs from the last drawn one only in
   `deliveryRevision` and `generatedAt` (the stream heartbeat) is not parsed or
   rendered; only the clock reference moves. Any other difference, a poll or a
