@@ -1823,11 +1823,6 @@ function updateArtworkColor(image) {
     const colors = sum.map((value) => value / weight);
     const shade = (base, strength) =>
       `rgb(${colors.map((value) => Math.round(base + value * strength)).join(', ')})`;
-    root.style.setProperty('--art-ground', shade(12, 0.09));
-    root.style.setProperty('--art-surface', shade(24, 0.12));
-    root.style.setProperty('--art-raised', shade(38, 0.15));
-    root.style.setProperty('--art-night-ground', shade(7, 0.05));
-    root.style.setProperty('--art-night-surface', shade(15, 0.07));
     artTheme = artPalette(colors);
     root.dataset.artColor = 'true';
     syncArtTheme();

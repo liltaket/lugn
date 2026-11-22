@@ -4133,6 +4133,10 @@ body {
 #app-root .music-section,
 #app-root #print-activity {
   --accent: var(--art-accent);
+}
+/* At night the grounds and panels keep the room's own dark values. */
+#app-root:not([data-time='night']) .music-section,
+#app-root:not([data-time='night']) #print-activity {
   --ground: var(--art-deep);
   --panel: var(--art-panel);
 }

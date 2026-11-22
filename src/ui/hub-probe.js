@@ -646,7 +646,10 @@
   async function themeParts() {
     if (typeof syncArtTheme !== 'function' || typeof root === 'undefined')
       return [];
-    const css = getComputedStyle(root);
+    // The cover colors live on the music column now, not on the root.
+    const css = getComputedStyle(
+      document.querySelector('.music-section') ?? root,
+    );
     const current = {
       accent: css.getPropertyValue('--art-accent').trim(),
       deep: css.getPropertyValue('--art-deep').trim(),
