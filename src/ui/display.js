@@ -3895,11 +3895,14 @@ window.addEventListener('lugn:page', (event) => {
   const away = event?.detail?.page !== 'home';
   if (away === cameraPagedAway) return;
   cameraPagedAway = away;
-  if (away || !cameraMediaKey || !cameraActive) return;
+  // Either way the running loop ends now, its request and decode included;
+  // the last shown frame stays.
   cameraMediaEpoch += 1;
   window.clearTimeout(cameraImageTimer);
+  window.clearTimeout(cameraMediaTimeout);
   cameraImageController?.abort();
   cameraImageController = null;
+  if (away || !cameraMediaKey || !cameraActive) return;
   startCameraImages(cameraActive, cameraMediaEpoch);
 });
 

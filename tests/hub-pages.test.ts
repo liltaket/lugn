@@ -456,7 +456,8 @@ describe('Hub pager', () => {
     const { api, pages, drag, resize, advance, pager, track } = setup();
     drag(pages[0]!.button, 800, 200);
     resize(800);
-    advance(1000);
+    advance(100);
+    advance(500);
     expect(api.current()).toBe('clock');
     expect(pages.map(({ page }) => page.dataset['state'])).toEqual([
       'near',
@@ -491,6 +492,57 @@ describe('Hub pager', () => {
     pointer('pointerdown', pages[0]!.button, 500);
     pointer('pointerup', pages[0]!.button, 500);
     expect(api.go('clock')).toBe(true);
+  });
+
+  it('still swallows the click of a swipe held through a resize', () => {
+    const { api, pages, pointer, click, resize, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 640, 300, 'mouse');
+    resize(1000 - 24);
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 300, 300, 'mouse');
+    pointer('pointerup', pages[0]!.button, 300, 300, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
+    expect(api.current()).toBe('home');
+  });
+
+  it('turns no page when a dialog opens during a wheel gesture', () => {
+    const { api, pages, pager, wheel, advance } = setup();
+    wheel(pages[0]!.button, 400);
+    pager.modal = new FakeElement();
+    advance(200);
+    expect(api.current()).toBe('home');
+  });
+
+  it('does not fling a release after the pointer was held still', () => {
+    const { api, pages, pointer, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700);
+    for (let x = 680; x >= 450; x -= 23) {
+      advance(16);
+      pointer('pointermove', pages[0]!.button, x);
+    }
+    advance(65);
+    pointer('pointerup', pages[0]!.button, 450);
+    expect(api.current()).toBe('home');
+  });
+
+  it('swallows only a click in the same task as the swipe release', () => {
+    const { pages, drag, click, advance } = setup();
+    drag(pages[0]!.button, 800, 200);
+    advance(0);
+    expect(click(pages[1]!.button).defaultPrevented).toBe(false);
+  });
+
+  it('tells every listener about each change in order when one goes on', () => {
+    const { api } = setup();
+    const seen: string[] = [];
+    api.onChange((page) => {
+      if (page === 'clock') api.go('info');
+    });
+    api.onChange((page, previous) => seen.push(`${previous}>${page}`));
+    api.go('clock');
+    expect(seen).toEqual(['home>clock', 'clock>info']);
   });
 
   it('goes to a page by id, and refuses unknown ones', () => {

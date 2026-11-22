@@ -24,7 +24,7 @@
 }
 /* The desk Hub's hover plate (pointer-bridge.js) is measured against a still
    page: it is hidden while the pages move. */
-.hub-pager.moving ~ [data-hub-pointer='plate'] {
+.hub-pager.paging ~ [data-hub-pointer='plate'] {
   opacity: 0 !important;
 }
 .hub-page {
