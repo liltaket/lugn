@@ -3604,33 +3604,61 @@ h2 {
   inherits: true;
   initial-value: 0;
 }
-/* The value is set on the play button and only its ring transitions it: a
-   transition of an inherited property on #app-root restyles the whole page
-   every frame, which a Hub cannot keep up with while something plays. */
-#app-root .play-button::before {
-  transition: --progress 1s linear;
-  content: '';
+/* The arc is drawn once and only rotated. Two half rings sit behind their own
+   half-plane clip, so the page never repaints the ring: its rotation is
+   animated on the compositor. The first half sweeps the right side over the
+   first half of the track, the second the left side. (A transition of the
+   progress value itself restyles and repaints every frame while music plays.) */
+#app-root .progress-ring {
   position: absolute;
   inset: -7px;
   border-radius: 50%;
-  background: conic-gradient(
-    var(--accent) calc(var(--progress) * 360deg),
-    rgba(238, 241, 232, 0.14) 0
-  );
-  -webkit-mask: radial-gradient(
-    farthest-side,
-    transparent calc(100% - 3px),
-    #000 calc(100% - 3px)
-  );
-  mask: radial-gradient(
-    farthest-side,
-    transparent calc(100% - 3px),
-    #000 calc(100% - 3px)
-  );
   pointer-events: none;
 }
-#app-root[data-progress='false'] .play-button::before {
-  background: rgba(238, 241, 232, 0.14);
+#app-root .progress-ring::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid rgba(238, 241, 232, 0.14);
+}
+#app-root .progress-half {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  overflow: hidden;
+}
+#app-root .progress-first {
+  right: 0;
+}
+#app-root .progress-second {
+  left: 0;
+}
+#app-root .progress-half::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 200%;
+  box-sizing: border-box;
+  border: 3px solid var(--accent);
+  border-radius: 50%;
+  will-change: transform;
+  transition: transform 1s linear;
+}
+#app-root .progress-first::before {
+  left: -100%;
+  clip-path: inset(0 50% 0 0);
+  transform: rotate(calc(min(var(--progress), 0.5) * 360deg));
+}
+#app-root .progress-second::before {
+  left: 0;
+  clip-path: inset(0 0 0 50%);
+  transform: rotate(calc(max(var(--progress) - 0.5, 0) * 360deg));
+}
+#app-root[data-progress='false'] .progress-half {
+  display: none;
 }
 #app-root #music-playback-icon {
   transform: scale(0.82);

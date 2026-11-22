@@ -121,6 +121,18 @@ async function setup(streaming = true, music = false, computerAudio = false) {
 }
 
 describe('secret-path Hub state stream', () => {
+  it('keeps an idle snapshot identical except for its delivery counters and timestamp', async () => {
+    const { base } = await setup(true, true, true);
+    const read = async () =>
+      (await (await fetch(`${base}/state`)).text()).replace(
+        /"(?:deliveryRevision|generatedAt)":\d+/g,
+        '',
+      );
+    const first = await read();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(await read()).toBe(first);
+  });
+
   it('delivers current computer media through polling and SSE without rewriting music observations', async () => {
     const { base, open, engine } = await setup(true, true, true);
     engine.state.music.devices['music.room']!.observed.source = 'Optical In';

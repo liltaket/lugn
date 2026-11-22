@@ -192,6 +192,27 @@ After command acceptance the Hub waits for a new status read started after
 acceptance before enabling the controls again. An earlier background poll is
 allowed to finish first, but cannot replace that fresh read.
 
+## Hub responsiveness rules
+
+The Hub's main thread is slow, so the page follows a few rules that keep
+clicks and the pointer bridge responsive while something plays:
+
+- The playback ring is two clipped half rings that are only rotated
+  (`transform`, composited). A transition of the progress value itself would
+  restyle and repaint the page every frame while music plays.
+- Nothing inherited that changes per frame may be transitioned on `#app-root`
+  or any ancestor of many elements. The remaining exception is the artwork
+  theme cross-fade (`--art-*`), which restyles the page for 1.4 s when the
+  cover colors change.
+- A state message that differs from the last drawn one only in
+  `deliveryRevision` and `generatedAt` (the stream heartbeat) is not parsed or
+  rendered; only the clock reference moves. Any other difference, a poll or a
+  reconnect draws in full.
+- `pulse()` restarts an animation class once per frame at the start of the next
+  frame, not with a forced reflow in the middle of the render. A command only
+  redraws the controls of its own kind while pending.
+- Releasing a press redraws only if a render was held back during the press.
+
 ## Hub roles and access
 
 Each configured Hub has a role (`bed` or `desk`), a Cast receiver IP and a
