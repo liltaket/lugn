@@ -74,7 +74,7 @@ async fn load(connection: &Connection, file: &str) -> Result<()> {
 /// How often the observer script is checked for having been unloaded.
 const WATCHDOG: Duration = Duration::from_secs(2);
 
-async fn still_loaded(connection: &Connection) -> bool {
+async fn script_lost(connection: &Connection) -> bool {
     let check = async {
         let scripting = Proxy::new(
             connection,
@@ -87,7 +87,7 @@ async fn still_loaded(connection: &Connection) -> bool {
             .call::<_, _, bool>("isScriptLoaded", &(PLUGIN,))
             .await
     };
-    // An unanswered check is not proof of loss; only a clear "no" reloads.
+    // An unanswered check is not proof of loss; only a clear "no" counts.
     matches!(
         tokio::time::timeout(Duration::from_secs(2), check).await,
         Ok(Ok(false))
@@ -138,7 +138,7 @@ async fn monitor_in(tx: &Sender<Event>, runtime: &std::path::Path) -> Result<()>
                 // Other tools can unload our script without telling us, which
                 // would leave the last window (and its full-screen state)
                 // stale for good. Forget it and load the script again.
-                if !still_loaded(&connection).await {
+                if script_lost(&connection).await {
                     tx.send(Event::Application(None)).await?;
                     load(&connection, file_path).await?;
                 }
