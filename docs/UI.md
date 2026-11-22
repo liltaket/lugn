@@ -247,8 +247,12 @@ The pager follows the responsiveness rules above:
   tasks, so the Hub itself can report how a swipe ran; it is off by default and
   remembered per Hub.
 
-Hem still runs while another page is shown (a camera view keeps its stream);
-pausing Hem's media while it is hidden is planned work.
+The pager announces each page change as a `lugn:page` window event and the
+end of every motion as `lugn:pages-settled`; the pointer bridge measures its
+hover again on the latter. While a page other than Hem is shown, Hem's camera
+view fetches no frames; the last frame stays and fetching resumes when Hem is
+shown again. Hem's playback ring keeps running, which costs nothing while it
+is not painted.
 
 ## Hub roles and access
 

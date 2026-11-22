@@ -135,10 +135,12 @@ function setup(count = 3) {
   let timerId = 0;
   const frames: Array<(t: number) => void> = [];
   let settled = 0;
+  const pageEvents: unknown[] = [];
   Object.assign(window, {
     innerWidth: 1000,
     dispatchEvent: (event: FakeEvent) => {
       if (event.type === 'lugn:pages-settled') settled += 1;
+      if (event.type === 'lugn:page') pageEvents.push(event['detail']);
       return true;
     },
     setTimeout: (fn: () => void, ms: number) => {
@@ -159,6 +161,11 @@ function setup(count = 3) {
     getComputedStyle: () => ({ overflowY: 'visible' }),
     console,
     Event: FakeEvent,
+    CustomEvent: class extends FakeEvent {
+      constructor(type: string, init: { detail?: unknown } = {}) {
+        super(type, { detail: init.detail });
+      }
+    },
   });
   context['globalThis'] = context;
   Object.assign(context, window);
@@ -232,6 +239,7 @@ function setup(count = 3) {
     api,
     pager,
     settledEvents: () => settled,
+    pageEvents,
     pages,
     track,
     dots,
@@ -266,6 +274,7 @@ describe('Hub pager', () => {
       advance,
       finishAnimations,
       settledEvents,
+      pageEvents,
     } = setup();
     drag(pages[0]!.button, 800, 200);
     expect(api.current()).toBe('clock');
@@ -286,6 +295,7 @@ describe('Hub pager', () => {
     advance(400);
     expect(pager.classes.has('moving')).toBe(false);
     expect(settledEvents()).toBe(1);
+    expect(pageEvents).toEqual([{ page: 'clock', previous: 'home' }]);
     expect(track.style['transform']).toBe('translate(-1000px, 0)');
   });
 

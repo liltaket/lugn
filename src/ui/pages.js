@@ -246,6 +246,12 @@
     callHook(previous, 'leave');
     setState(pages[index], 'active');
     callHook(pages[index], 'enter');
+    if (typeof CustomEvent === 'function')
+      window.dispatchEvent(
+        new CustomEvent('lugn:page', {
+          detail: { page: pages[index].id, previous: previous.id },
+        }),
+      );
     for (const fn of listeners) {
       try {
         fn(pages[index].id, previous.id);
