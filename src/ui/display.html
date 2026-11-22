@@ -739,7 +739,14 @@
         <span class="clock-page-date" data-view="date"></span>
         <dl class="clock-page-air" data-view="air"></dl>
         <span class="clock-page-presence" data-view="presence"></span>
-        <div class="scene-dock" data-view="dock" aria-label="Ljuslägen"></div>
+        <div class="qm" data-view="menu">
+          <div class="qm-actions">
+            <button type="button" class="qm-round" data-qm="camera" aria-label="Kameror" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z" /><circle cx="12" cy="13.5" r="3.5" /></svg>
+            </button>
+          </div>
+          <div class="scene-dock" data-view="dock" aria-label="Ljuslägen"></div>
+        </div>
       </div>
     </section>
     <section class="hub-page" data-page="foto" aria-label="Foto">

@@ -155,6 +155,17 @@
 
   globalThis.lugnQuickMenu = { attach };
 
+  // Klocka has it too (the page is only to look at, so any tap on it is a tap
+  // on the bare page).
+  const clockRoot = document.querySelector(
+    ".hub-page[data-page='clock'] .clock-page",
+  );
+  attach({
+    id: 'clock',
+    root: clockRoot,
+    menu: clockRoot?.querySelector("[data-view='menu']"),
+  });
+
   // Musik has the same menu (without the music controls: the page is those).
   const musicRoot = document.querySelector(
     ".hub-page[data-page='music'] [data-view='root']",

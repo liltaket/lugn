@@ -496,6 +496,33 @@ describe('processing and places', () => {
   });
 });
 
+describe('photo page veils', () => {
+  const script = readFileSync(
+    new URL('../src/ui/photos-page.js', import.meta.url),
+    'utf8',
+  );
+  const context = createContext({ globalThis: {}, document: undefined });
+  (context as { globalThis: unknown }).globalThis = context;
+  runInContext(script, context);
+  const bottom = (
+    context as unknown as {
+      lugnPhotos: { bottomCell: (layout: string, index: number) => boolean };
+    }
+  ).lugnPhotos.bottomCell;
+  it('puts the menu veil only on pictures that reach the bottom edge', () => {
+    // Three landscapes: the large one and the lower small one, not the upper.
+    expect([0, 1, 2].map((i) => bottom('stack3', i))).toEqual([
+      true,
+      false,
+      true,
+    ]);
+    // Two stacked panoramas: only the lower.
+    expect([0, 1].map((i) => bottom('wide2', i))).toEqual([false, true]);
+    for (const layout of ['single', 'duo', 'pair', 'trio', 'mixed'])
+      expect([0, 1, 2].every((i) => bottom(layout, i))).toBe(true);
+  });
+});
+
 describe('photo page order', () => {
   const script = readFileSync(
     new URL('../src/ui/photos-page.js', import.meta.url),

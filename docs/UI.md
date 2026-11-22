@@ -248,8 +248,12 @@ stops, eight after a tap, on a tap beside it or when the page is left. The
 picture stays while it is open. On Foto the music widget (pause, title and
 artist; Hem's own play button is pressed) is there whenever music plays, at the
 lower left, and is lifted over the menu while that is open; the caption sits at
-the lower right. Musik has the same menu without the music controls, and no
-longer shows its dock all the time. A slide is built off screen, every picture is decoded before it is
+the lower right. Musik and Klocka have the same menu without the music controls, and no
+longer show their dock all the time. The veil is only on the pictures that reach
+the bottom edge of the screen (not on the upper ones of a stack). Each picture
+drifts and swells a few percent over the time it is shown (one transform
+animation per picture; paused while the page is away; off with the Hub's
+localStorage `lugn.photos.kenburns` = `off` or reduced motion). A slide is built off screen, every picture is decoded before it is
 shown and only the slide's opacity animates; nothing changes while the pager is
 moving, and the page releases its pictures when it is two pages away.
 

@@ -223,7 +223,16 @@
     return { place, date };
   }
 
+  // The menu's veil belongs to the screen's bottom edge: only pictures that
+  // reach it get one (not the upper ones of a stack).
+  function bottomCell(layout, index) {
+    if (layout === 'stack3') return index !== 1; // the upper small one is not
+    if (layout === 'wide2') return index === 1;
+    return true;
+  }
+
   globalThis.lugnPhotos = {
+    bottomCell,
     plan,
     caption,
     shuffled,
@@ -336,7 +345,7 @@
   const photoUrl = (photo, variant) =>
     `${base()}display-api/photos/${photo.id}${variant ? `/${variant}` : ''}`;
 
-  function cell(photo, className) {
+  function cell(photo, className, withVeil) {
     const wrap = document.createElement('div');
     wrap.className = `ph-cell ${className || ''}`.trim();
     const image = new Image();
@@ -348,9 +357,12 @@
     wrap.appendChild(image);
     // A soft veil along the bottom, drawn from the picture itself once it is
     // decoded and shown while the menu is up: no blur is computed on the Hub.
-    const veil = document.createElement('canvas');
-    veil.className = 'ph-veil';
-    wrap.appendChild(veil);
+    let veil = null;
+    if (withVeil) {
+      veil = document.createElement('canvas');
+      veil.className = 'ph-veil';
+      wrap.appendChild(veil);
+    }
     return { wrap, image, veil };
   }
 
@@ -391,11 +403,13 @@
     }`;
     const images = [];
     const veils = [];
+    let count = 0;
     const add = (photo, className) => {
-      const made = cell(photo, className);
+      const made = cell(photo, className, bottomCell(chosen.layout, count));
+      count += 1;
       slide.appendChild(made.wrap);
       images.push(made.image);
-      veils.push({ canvas: made.veil, image: made.image });
+      if (made.veil) veils.push({ canvas: made.veil, image: made.image });
       return made;
     };
     const { photos, layout } = chosen;
@@ -520,6 +534,47 @@
     return mine;
   }
 
+  // ── Slow drift ──
+  //
+  // Each picture drifts and swells a little (a few percent) over the time it is
+  // shown: one transform animation per picture, run by the compositor. It is
+  // paused while the page is not shown, and off when the Hub says so
+  // (localStorage 'lugn.photos.kenburns' = 'off') or asks for less motion.
+  const DRIFT_SCALE = 1.06;
+  const DRIFT_MAX = 1.2; // percent
+  function driftOn() {
+    try {
+      if (window.localStorage?.getItem('lugn.photos.kenburns') === 'off')
+        return false;
+    } catch {
+      /* storage can be unavailable */
+    }
+    return !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  }
+  function startDrift(slide) {
+    if (!slide || slide.dataset.drift === '1' || !driftOn()) return;
+    slide.dataset.drift = '1';
+    for (const wrap of slide.querySelectorAll('.ph-cell')) {
+      const image = wrap.querySelector('img');
+      if (typeof image?.animate !== 'function') continue;
+      const dx = (random() * 2 - 1) * DRIFT_MAX;
+      const dy = (random() * 2 - 1) * DRIFT_MAX;
+      image.animate(
+        [
+          { transform: 'scale(1) translate(0%, 0%)' },
+          { transform: `scale(${DRIFT_SCALE}) translate(${dx}%, ${dy}%)` },
+        ],
+        { duration: SHOW_MS + 2 * FADE_MS, easing: 'linear', fill: 'forwards' },
+      );
+    }
+  }
+  function setDriftPlaying(playing) {
+    const animations = current?.el.getAnimations?.({ subtree: true }) ?? [];
+    for (const animation of animations)
+      if (playing) animation.play();
+      else animation.pause();
+  }
+
   // ── Showing ──
 
   function drop(slide) {
@@ -546,6 +601,7 @@
       // being looked at.
       next.slide.classList.add('in');
       stage.appendChild(next.slide);
+      if (active) startDrift(next.slide);
       return;
     }
     fading = true;
@@ -570,7 +626,11 @@
     );
     next.slide.addEventListener('transitionend', onEnd);
     window.setTimeout(() => {
-      if (!finished) whenStill(() => next.slide.classList.add('in'));
+      if (!finished)
+        whenStill(() => {
+          next.slide.classList.add('in');
+          startDrift(next.slide);
+        });
     }, LIFT_MS);
   }
 
@@ -778,6 +838,8 @@
     },
     enter() {
       active = true;
+      setDriftPlaying(true);
+      if (current) startDrift(current.el);
       drawNow();
       if (!nowTimer) nowTimer = window.setInterval(drawNow, 2000);
       void fillFirst(true).then(() => {
@@ -791,6 +853,7 @@
     leave() {
       quickMenu?.close();
       active = false;
+      setDriftPlaying(false);
       window.clearInterval(nowTimer);
       nowTimer = 0;
       window.clearTimeout(showTimer);
