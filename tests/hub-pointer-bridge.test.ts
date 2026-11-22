@@ -223,6 +223,7 @@ async function load(status = 200, pointerEvents = true) {
   const fetches: string[] = [];
   const windowListeners = new Listeners();
   const sockets: FakeWebSocket[] = [];
+  const windowEvents: string[] = [];
   const clock = { now: 1000 };
   const observers: Array<
     (list: { getEntries: () => Array<Record<string, number>> }) => void
@@ -271,6 +272,11 @@ async function load(status = 200, pointerEvents = true) {
     PerformanceObserver: Observer,
     WebSocket: Socket,
     MouseEvent: FakeMouseEvent,
+    Event: FakeEvent,
+    dispatchEvent: (event: FakeEvent) => {
+      windowEvents.push(event.type);
+      return true;
+    },
     ...(pointerEvents ? { PointerEvent: FakePointerEvent } : {}),
     WheelEvent: FakeWheelEvent,
     KeyboardEvent: FakeKeyboardEvent,
@@ -335,6 +341,7 @@ async function load(status = 200, pointerEvents = true) {
     plates().filter((plate) => plate.style['opacity'] === '1');
   return {
     document,
+    windowEvents,
     frames,
     timers,
     pending,
@@ -491,6 +498,78 @@ describe('Hub pointer bridge page script', () => {
     expect(cursor.style['transform']).toBe('translate3d(-100px, -100px, 0)');
     expect(button.hasAttribute('data-pointer-hover')).toBe(false);
     expect(page.cursor()).toBe(cursor);
+  });
+
+  it('tells the window about mouse movement, rarely and only when the dot moved', async () => {
+    const page = await connected();
+    const moves = () =>
+      page.windowEvents.filter((type) => type === 'lugn:pointer-move').length;
+    page.socket.receive({ t: 'enter', x: 100, y: 100 });
+    page.runFrames();
+    const afterEnter = moves();
+    // Standing still tells nothing, however many frames pass.
+    for (let index = 0; index < 20; index += 1) {
+      page.advance(16);
+      page.runFrames();
+    }
+    expect(moves()).toBe(afterEnter);
+    // A move is told, and a burst of moves is told at most every 150 ms.
+    page.advance(500);
+    for (let x = 140; x <= 400; x += 20) {
+      page.socket.receive({ t: 'move', x, y: 100 });
+      page.advance(16);
+      page.runFrames();
+    }
+    const burst = moves() - afterEnter;
+    expect(burst).toBeGreaterThanOrEqual(1);
+    expect(burst).toBeLessThanOrEqual(3);
+    // A move below 2 px is not told.
+    page.advance(1000);
+    for (let index = 0; index < 40; index += 1) {
+      page.advance(16);
+      page.runFrames();
+    }
+    const settled = moves();
+    page.socket.receive({ t: 'move', x: 400.4, y: 100 });
+    page.advance(16);
+    page.runFrames();
+    expect(moves()).toBe(settled);
+  });
+
+  it('tells nothing while a button is held (a swipe, not a hover)', async () => {
+    const page = await connected();
+    const moves = () =>
+      page.windowEvents.filter((type) => type === 'lugn:pointer-move').length;
+    page.document.hit = page.document.element('button');
+    page.socket.receive({ t: 'enter', x: 100, y: 100 });
+    page.runFrames();
+    page.advance(500);
+    const before = moves();
+    page.socket.receive({
+      t: 'button',
+      button: 'left',
+      down: true,
+      x: 100,
+      y: 100,
+    });
+    for (let x = 140; x <= 500; x += 40) {
+      page.socket.receive({ t: 'move', x, y: 100 });
+      page.advance(200);
+      page.runFrames();
+    }
+    expect(moves()).toBe(before);
+    page.socket.receive({
+      t: 'button',
+      button: 'left',
+      down: false,
+      x: 500,
+      y: 100,
+    });
+    page.advance(500);
+    page.socket.receive({ t: 'move', x: 600, y: 100 });
+    page.advance(16);
+    page.runFrames();
+    expect(moves()).toBeGreaterThan(before);
   });
 
   it('follows moves smoothly across frames and snaps after a pause or a jump', async () => {

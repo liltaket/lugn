@@ -1,6 +1,7 @@
 import type { CameraDashboardService } from '../application/camera-dashboard.js';
 import { CameraError } from '../core/cameras.js';
 import type { CameraMediaProvider } from './camera-media.js';
+import type { PhotoLibrary } from './photo-library.js';
 import {
   ComputerNowPlayingSelector,
   type ComputerAudioRoute,
@@ -186,6 +187,8 @@ export type LugnDisplayServerOptions = {
   experience?: ExperienceApi;
   cameraService?: CameraDashboardService;
   cameraMedia?: CameraMediaProvider;
+  /** Cached copy of the public shared album shown on the Hubs' photo page. */
+  photoLibrary?: PhotoLibrary;
   environmentProvider?: () => EnvironmentSnapshot;
   /** Optional 3D printer shown as a live activity while it prints. */
   printer?: PrinterActivityProvider;
@@ -615,6 +618,49 @@ export class LugnDisplayServer {
           'cross-origin-resource-policy': 'same-origin',
         });
         response.end(asset.body);
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        (hubRequest.route === '/display-api/photos' ||
+          hubRequest.route.startsWith('/display-api/photos/'))
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        const library = this.options.photoLibrary;
+        if (!library) {
+          sendJson(response, 404, { error: 'photos_unavailable' });
+          return;
+        }
+        if (hubRequest.route === '/display-api/photos') {
+          sendJson(response, 200, library.snapshot());
+          return;
+        }
+        const image =
+          /^\/display-api\/photos\/([A-Za-z0-9_-]{24})(\/backdrop)?$/.exec(
+            hubRequest.route,
+          );
+        const body = image
+          ? await library.read(image[1]!, image[2] ? 'backdrop' : 'main')
+          : null;
+        if (!body) {
+          sendJson(response, 404, { error: 'photo_unavailable' });
+          return;
+        }
+        // The id is content-addressed, so a Hub may keep the bytes for good.
+        response.writeHead(200, {
+          'cache-control': 'private, max-age=604800, immutable',
+          'content-type': 'image/jpeg',
+          'content-length': body.byteLength,
+          'x-content-type-options': 'nosniff',
+          'cross-origin-resource-policy': 'same-origin',
+        });
+        response.end(body);
         return;
       }
       if (
@@ -1426,6 +1472,10 @@ type UiAssetName =
   | 'pointer-bridge.js'
   | 'pages.css'
   | 'pages.js'
+  | 'quick-menu.css'
+  | 'quick-menu.js'
+  | 'photos-page.css'
+  | 'photos-page.js'
   | 'page-views.js'
   | 'cameras-page.css'
   | 'cameras-page.js'
@@ -1449,6 +1499,22 @@ const PAGE_ASSETS: ReadonlyMap<
   [
     '/cameras-page.js',
     { file: 'cameras-page.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  [
+    '/quick-menu.css',
+    { file: 'quick-menu.css', type: 'text/css; charset=utf-8' },
+  ],
+  [
+    '/quick-menu.js',
+    { file: 'quick-menu.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  [
+    '/photos-page.css',
+    { file: 'photos-page.css', type: 'text/css; charset=utf-8' },
+  ],
+  [
+    '/photos-page.js',
+    { file: 'photos-page.js', type: 'text/javascript; charset=utf-8' },
   ],
   // The on-device profile, loaded only by a Hub opened with #probe.
   [

@@ -2,6 +2,7 @@ import { CameraDashboardService } from '../application/camera-dashboard.js';
 import { createCameraSettings } from '../core/cameras.js';
 import { CameraSettingsStore } from './camera-settings-store.js';
 import { CameraMediaProvider } from './camera-media.js';
+import type { PhotoLibrary } from './photo-library.js';
 import { MusicVolumeSettingsStore } from './music-volume-settings-store.js';
 import { HomeAssistantArtworkService } from './artwork-service.js';
 import { ComputerNowPlayingSelector } from '../application/computer-now-playing.js';
@@ -751,6 +752,30 @@ export async function startRuntime(
           systemClock,
         )
       : undefined;
+  // Loaded only when configured: it needs the native image library, and a
+  // machine where that is missing must still run Lugn.
+  let photoLibrary: PhotoLibrary | undefined;
+  if (config.photoFrame) {
+    try {
+      const { createPhotoFrame } = await import('./photo-frame.js');
+      photoLibrary = createPhotoFrame(
+        {
+          ...config.photoFrame,
+          cacheDir:
+            config.photoFrame.cacheDir ??
+            join(dirname(lightingIntentPath), 'photo-frame'),
+        },
+        {
+          warn: (message) => console.warn(`[lugn] ${message}`),
+          log: (message) => console.info(`[lugn] ${message}`),
+        },
+      );
+    } catch (error) {
+      console.warn(
+        `[lugn] photo frame disabled: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   const bufferedHomeAssistantEvents: unknown[] = [];
   const forwardHomeAssistantEvent = (
     event: unknown,
@@ -1162,6 +1187,7 @@ export async function startRuntime(
         capabilities,
         ...(artwork ? { artworkProvider: artwork } : {}),
         ...(cameraService && cameraMedia ? { cameraService, cameraMedia } : {}),
+        ...(photoLibrary ? { photoLibrary } : {}),
         experience,
         presenceCountCorrectionAvailable: config.presenceControl !== undefined,
         scenes: Array.from(engine.scenes.values()),
@@ -1260,6 +1286,7 @@ export async function startRuntime(
     homeAssistantSocket.start();
     await http.start();
     await displayServer?.start();
+    await photoLibrary?.start();
     castManager?.start();
     // One shared upstream connection keeps the retrospective window warm even
     // when no browser is open; viewers reuse this same validated frame stream.
@@ -1273,6 +1300,7 @@ export async function startRuntime(
     unsubscribeOpticalSettings();
     routines.dispose();
     computerIntelligence.dispose();
+    photoLibrary?.dispose();
     dynamicLighting?.dispose();
     artworkPalette?.dispose();
     cameraMedia?.dispose();
@@ -1320,6 +1348,7 @@ export async function startRuntime(
       unsubscribeOpticalSettings();
       routines.dispose();
       computerIntelligence.dispose();
+      photoLibrary?.dispose();
       dynamicLighting?.dispose();
       artworkPalette?.dispose();
       cameraMedia?.dispose();

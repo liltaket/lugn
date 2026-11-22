@@ -1,0 +1,94 @@
+/* The quick menu (quick-menu.js): a dock of scenes and a few round buttons that
+   slide up from the bottom edge. Only opacity and position change; while it is
+   closed nothing in it is visible or can be pressed, and empty parts of it let
+   a tap through to the page. */
+.qm {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* A very thin dimming over the whole page and, along the bottom edge, a short
+   dark floor so the buttons read over any picture. */
+.qm {
+  z-index: 1;
+}
+.qm::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.55) 0,
+    rgba(0, 0, 0, 0.12) 190px,
+    rgba(0, 0, 0, 0.12) 100%
+  );
+  opacity: 0;
+  transition: opacity 240ms ease-out;
+}
+.qm.open::before {
+  opacity: 1;
+}
+.qm .scene-dock,
+.music-page .qm .scene-dock,
+.qm-actions {
+  opacity: 0;
+  transform: translateY(96px);
+  transition:
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 200ms ease-out;
+}
+.qm.open .scene-dock,
+.music-page .qm.open .scene-dock,
+.qm.open .qm-actions {
+  opacity: 1;
+  transform: none;
+}
+.qm .scene-dock {
+  pointer-events: none;
+}
+.qm button {
+  pointer-events: auto;
+  visibility: hidden;
+  transition: visibility 0s linear 260ms;
+}
+.qm.open button {
+  visibility: visible;
+  transition: none;
+}
+.qm button[hidden] {
+  display: none;
+}
+.qm-actions {
+  position: absolute;
+  right: 36px;
+  bottom: 100px;
+  display: flex;
+  gap: 10px;
+  pointer-events: none;
+}
+.qm-round {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgba(238, 241, 232, 0.18);
+  background: rgba(20, 24, 23, 0.72);
+  color: #eef1e8;
+}
+.qm-round:disabled {
+  opacity: 0.4;
+}
+.qm-round svg {
+  width: 26px;
+  height: 26px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .qm::before,
+  .qm .scene-dock,
+  .qm-actions {
+    transition: none;
+  }
+}

@@ -126,6 +126,10 @@ describe('display pointer bridge', () => {
       ['page-views.js', 'text/javascript; charset=utf-8'],
       ['cameras-page.css', 'text/css; charset=utf-8'],
       ['cameras-page.js', 'text/javascript; charset=utf-8'],
+      ['quick-menu.css', 'text/css; charset=utf-8'],
+      ['quick-menu.js', 'text/javascript; charset=utf-8'],
+      ['photos-page.css', 'text/css; charset=utf-8'],
+      ['photos-page.js', 'text/javascript; charset=utf-8'],
     ] as const) {
       const response = await fetch(`${bed}/${file}`);
       expect(response.status).toBe(200);
