@@ -500,6 +500,34 @@ describe.each(['hub', 'web'] as const)(
   },
 );
 
+it('hub fetches no camera frames while another page is shown and resumes on Hem with the last frame kept', async () => {
+  const ui = setup('hub');
+  ui.setActive();
+  ui.render();
+  await ui.decode();
+  expect(ui.fetch).toHaveBeenCalledTimes(1);
+  expect(ui.image.src).toBe('blob:frame-1');
+  const window = ui.context['window'] as {
+    addEventListener: ReturnType<typeof vi.fn>;
+  };
+  const onPage = window.addEventListener.mock.calls.find(
+    ([type]) => type === 'lugn:page',
+  )?.[1] as (event: { detail: { page: string } }) => void;
+  onPage({ detail: { page: 'clock' } });
+  await vi.advanceTimersByTimeAsync(5000);
+  ui.render();
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(ui.fetch).toHaveBeenCalledTimes(1);
+  expect(ui.image.src).toBe('blob:frame-1');
+  expect(ui.image.hidden).toBe(false);
+  onPage({ detail: { page: 'home' } });
+  await vi.waitFor(() => expect(ui.fetch).toHaveBeenCalledTimes(2));
+  await ui.decode();
+  expect(ui.image.src).toBe('blob:frame-2');
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(ui.fetch).toHaveBeenCalledTimes(3);
+});
+
 it('preserves a dirty camera preference draft and original generation across live updates; persists only explicit saves', async () => {
   const ui = setup('web');
   ui.run('initializeCameraWeb()');

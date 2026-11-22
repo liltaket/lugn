@@ -3793,6 +3793,7 @@ function cameraCanRun(epoch) {
     !stopped &&
     !isUnavailable() &&
     document.visibilityState !== 'hidden' &&
+    !cameraPagedAway &&
     !refs.cameraPanel.hidden &&
     cameraActive?.expiresAt > estimatedServerNow()
   );
@@ -3885,6 +3886,22 @@ function startCameraImages(active, epoch) {
   };
   void frame();
 }
+
+// Pages (pages.js): while a page other than Hem is shown the camera fetches
+// no frames. The last frame stays, so a swipe back shows it at once, and
+// fetching resumes as soon as Hem is the page again.
+let cameraPagedAway = false;
+window.addEventListener('lugn:page', (event) => {
+  const away = event?.detail?.page !== 'home';
+  if (away === cameraPagedAway) return;
+  cameraPagedAway = away;
+  if (away || !cameraMediaKey || !cameraActive) return;
+  cameraMediaEpoch += 1;
+  window.clearTimeout(cameraImageTimer);
+  cameraImageController?.abort();
+  cameraImageController = null;
+  startCameraImages(cameraActive, cameraMediaEpoch);
+});
 
 function startCameraMedia(active) {
   stopCameraMedia();

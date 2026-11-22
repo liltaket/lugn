@@ -217,6 +217,43 @@ clicks and the pointer bridge responsive while something plays:
   redraws the controls of its own kind while pending.
 - Releasing a press redraws only if a render was held back during the press.
 
+## Hub pages
+
+The Hub dashboard is the first of several whole-screen pages (`src/ui/pages.js`,
+`pages.css`, `page-views.js`): **Hem** (the dashboard above), **Klocka** (large
+clock, indoor air and presence) and **Info** (connection, stream, revisions,
+memory, screen, browser, and an opt-in swipe probe). A swipe with a finger or
+the desk Hub's bridged mouse, a horizontal wheel or trackpad, a vertical wheel
+notch outside scrollable areas and the arrow keys turn the page; small dots at
+the bottom show where you are. A swipe turns at most one page; a click that ends
+a swipe is swallowed, and taps and vertical moves stay with the page.
+
+The pager follows the responsiveness rules above:
+
+- Only the track moves, by `transform`. A drag writes one transform per move;
+  the settle after release is one Web Animation sampled from a spring, so it
+  runs on the compositor and a busy main thread does not make it stutter.
+  Past the first or last page the track follows with resistance.
+- The current page is `active`; its neighbours are `near` (painted, static, so
+  a swipe reveals them at once); every other page is `off`
+  (`content-visibility: hidden`). Page timers run only while their page is
+  active (Klocka's minute also while it is a neighbour). Pages other than the
+  current one are `inert`.
+- Page modules register `prepare`, `enter`, `leave` and `sleep` hooks with
+  `lugnPages.define(id, hooks)`; `lugnPages.go(id)` and `lugnPages.onChange`
+  are the entry points for later context switching. New pages read dashboard
+  data from `display.js` read-only.
+- **Mät svep** on Info records animation-frame gaps during swipes and long
+  tasks, so the Hub itself can report how a swipe ran; it is off by default and
+  remembered per Hub.
+
+The pager announces each page change as a `lugn:page` window event and the
+end of every motion as `lugn:pages-settled`; the pointer bridge measures its
+hover again on the latter. While a page other than Hem is shown, Hem's camera
+view fetches no frames; the last frame stays and fetching resumes when Hem is
+shown again. Hem's playback ring keeps running, which costs nothing while it
+is not painted.
+
 ## Hub roles and access
 
 Each configured Hub has a role (`bed` or `desk`), a Cast receiver IP and a
