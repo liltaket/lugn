@@ -515,8 +515,10 @@
           : '',
       source: active ? r?.musicSource?.textContent?.trim() || '' : '',
       art: artReady ? r.musicArtworkImage.getAttribute('src') || '' : '',
-      // Hem's own play button says what a press does there.
-      playing: r?.musicPlayback?.getAttribute('aria-pressed') === 'true',
+      // Hem's own play button label says what a press does there (Pausa
+      // only when a press pauses; a manual pause on a player that still
+      // reports playing reads Spela).
+      playing: r?.musicPlaybackLabel?.textContent?.trim() === 'Pausa',
       canPlay: Boolean(device) && r?.musicPlayback?.disabled === false,
       playBusy: r?.musicPlayback?.getAttribute('aria-busy') === 'true',
       presets: [...(r?.musicPresets?.children ?? [])]
