@@ -57,9 +57,8 @@ export class DynamicLightingController {
   } | null = null;
   private idleSince: number | null = null;
   private sceneRevision = -1;
-  private ownRevisions = new Set<number>();
-  /** True while lamps may hold values this controller put there. */
-  private driving = false;
+  /** Lamps that may still hold a value this controller put there. */
+  private readonly driven = new Set<string>();
   private wake: TimerHandle | undefined;
   private wakeAt: number | null = null;
   private running = false;
@@ -124,13 +123,11 @@ export class DynamicLightingController {
     }
     if (state.lighting.sceneRevision !== this.sceneRevision) {
       // A person (or routine) selected a scene: whatever we sent is superseded.
-      if (!this.ownRevisions.delete(state.lighting.sceneRevision)) {
-        this.applied.clear();
-        this.lastSentAt.clear();
-        this.driving = false;
-        this.committed = null;
-        this.candidate = null;
-      }
+      this.applied.clear();
+      this.lastSentAt.clear();
+      this.driven.clear();
+      this.committed = null;
+      this.candidate = null;
       this.sceneRevision = state.lighting.sceneRevision;
     }
 
@@ -211,11 +208,11 @@ export class DynamicLightingController {
 
     if (entries.length > 0 && entries.every(([, v]) => v === 'release')) {
       // Nothing to follow: return to the scene's own look, once.
-      if (!this.driving) return;
+      if (this.driven.size === 0) return;
       if (await this.releaseToScene()) {
         this.applied.clear();
         this.lastSentAt.clear();
-        this.driving = false;
+        this.driven.clear();
         this.status.heldByUser = [];
       } else {
         // The engine refused (for example an OFF hold); keep trying.
@@ -255,7 +252,7 @@ export class DynamicLightingController {
           'target',
         );
         this.applied.set(target, wanted);
-        this.driving = true;
+        this.driven.add(target);
       } catch {
         // Held or unavailable lamps keep their state; the next change retries.
       }
@@ -272,65 +269,20 @@ export class DynamicLightingController {
   }
 
   /**
-   * The engine can only reapply a whole scene, which would also wipe a lamp a
-   * person adjusted meanwhile. Those adjustments are taken first and put back
-   * right after, still owned by the person who made them.
+   * Hands the lamps this controller drove back to the scene, one by one. The
+   * engine skips any lamp a person has adjusted, so that adjustment is never
+   * overwritten, and leaves every other lamp untouched.
    */
   private async releaseToScene(): Promise<boolean> {
-    const { engine } = this.options;
-    const manual = new Map<string, { values: LightingValues; actor: Actor }>();
-    for (const [target, device] of Object.entries(
-      engine.state.lighting.devices,
-    )) {
-      const values: LightingValues = {};
-      let owner: Actor | undefined;
-      for (const property of [
-        'power',
-        'brightness',
-        'colorTemperature',
-        'rgb',
-      ] as const) {
-        const ownership = device.ownership[property];
-        const desired = device.effectiveDesired[property];
-        if (
-          ownership?.kind === 'override' &&
-          isHumanActor(ownership.actor) &&
-          desired !== undefined
-        ) {
-          (values as Record<string, unknown>)[property] =
-            structuredClone(desired);
-          owner = ownership.actor;
-        }
-      }
-      if (values.rgb !== undefined) delete values.colorTemperature;
-      if (owner) manual.set(target, { values, actor: owner });
-    }
-    let next: number;
     try {
-      next = await engine.reapplyScene(actor, 'dynamic-lighting');
+      await this.options.engine.releaseAutomaticLighting(
+        [...this.driven],
+        'dynamic-lighting',
+      );
+      return true;
     } catch {
       return false;
     }
-    this.ownRevisions.add(next);
-    this.sceneRevision = next;
-    for (const [target, { values, actor: owner }] of manual) {
-      try {
-        await engine.setLighting(
-          target,
-          values,
-          {
-            actor: owner,
-            source: 'dynamic-lighting',
-            reason: 'Keeping a manual adjustment',
-          },
-          undefined,
-          'target',
-        );
-      } catch {
-        // The lamp keeps the scene's value; nothing else can be done here.
-      }
-    }
-    return true;
   }
 
   private computerInput(state: RoomState): DynamicComputerInput | null {
@@ -390,14 +342,13 @@ export class DynamicLightingController {
   private reset(): void {
     if (this.status.mode === null && this.applied.size === 0) return;
     this.clearWake();
-    this.driving = false;
+    this.driven.clear();
     this.applied.clear();
     this.lastSentAt.clear();
     this.committed = null;
     this.candidate = null;
     this.idleSince = null;
     this.sceneRevision = -1;
-    this.ownRevisions.clear();
     this.lastLogged = '';
     this.status = {
       mode: null,

@@ -233,8 +233,15 @@ describe('dynamic lighting controller', () => {
         { power: true, brightness: 90 },
         { actor: user },
       );
+      const before = f.adapter.dispatched.length;
       f.palette.set(false);
       await f.advance(200);
+      // The adjusted lamp is never touched, not even for a moment.
+      expect(
+        f.adapter.dispatched
+          .slice(before)
+          .some((command) => command.target === 'lighting.desk'),
+      ).toBe(false);
       // The accent lamp is back on the scene; the adjusted lamp keeps its value.
       expect(f.desired('lighting.strip').rgb).toBeUndefined();
       expect(f.desired('lighting.desk').brightness).toBe(90);
@@ -243,13 +250,29 @@ describe('dynamic lighting controller', () => {
       ).toMatchObject({ kind: 'override', actor: user });
     });
 
+    it('leaves a lamp the person adjusted by hand when it was one the mode drove', async () => {
+      const f = await fixture();
+      await f.engine.activateScene('scene.music', user);
+      f.palette.set(true, [[255, 40, 0]]);
+      await f.advance(100);
+      await f.engine.setLighting(
+        'lighting.strip',
+        { power: true, brightness: 10, rgb: [0, 255, 0] },
+        { actor: user },
+      );
+      f.palette.set(false);
+      await f.advance(200);
+      expect(f.desired('lighting.strip').rgb).toEqual([0, 255, 0]);
+      expect(f.desired('lighting.strip').brightness).toBe(10);
+    });
+
     it('retries the return to the scene when the engine refuses it first', async () => {
       const f = await fixture();
       await f.engine.activateScene('scene.music', user);
       f.palette.set(true, [[255, 40, 0]]);
       await f.advance(100);
       const reapply = vi
-        .spyOn(f.engine, 'reapplyScene')
+        .spyOn(f.engine, 'releaseAutomaticLighting')
         .mockRejectedValueOnce(new Error('Automatic lighting is held'));
       f.palette.set(false);
       await f.advance(200);

@@ -42,17 +42,25 @@ export class ArtworkPaletteService implements PaletteSource {
       );
     });
     if (!target) return { playing: false, palette: [] };
+    const artwork = this.options.artwork;
+    const entry = artwork?.snapshot(state, PREFIX)[target];
+    // Not admitted (yet): the artwork service notifies us once it is.
+    if (!artwork || !entry?.url?.startsWith(PREFIX))
+      return { playing: true, palette: [] };
+    const token = entry.url.slice(PREFIX.length);
     const observed = state.music.devices[target]!.observed;
+    // The token names this artwork, so new artwork for an unchanged title is a new key.
     const key = JSON.stringify([
       target,
       observed.source ?? null,
       observed.title ?? null,
       observed.artist ?? null,
       observed.album ?? null,
+      token,
     ]);
     const cached = this.cache.get(key);
     if (cached) return { playing: true, palette: cached };
-    this.load(key, target, state);
+    this.load(key, token, state);
     return { playing: true, palette: [] };
   }
 
@@ -62,24 +70,22 @@ export class ArtworkPaletteService implements PaletteSource {
     this.listeners.clear();
   }
 
-  private load(key: string, target: string, state: RoomState): void {
+  private load(key: string, token: string, state: RoomState): void {
     const artwork = this.options.artwork;
     if (!artwork || this.loading.has(key)) return;
-    const entry = artwork.snapshot(state, PREFIX)[target];
-    if (!entry?.url?.startsWith(PREFIX)) return;
-    const token = entry.url.slice(PREFIX.length);
     this.loading.add(key);
     void artwork
       .read(token, state)
       .then((asset) => {
         if (this.disposed) return;
-        // A failed decode is cached as "no colours" so a track is tried once.
-        this.remember(key, asset ? paletteFromArtwork(asset) : []);
-        this.notify();
+        // Only a real image is remembered (an undecodable one as "no colours");
+        // a missing asset may still arrive, so it is tried again.
+        if (asset) {
+          this.remember(key, paletteFromArtwork(asset));
+          this.notify();
+        }
       })
-      .catch(() => {
-        if (!this.disposed) this.remember(key, []);
-      })
+      .catch(() => undefined)
       .finally(() => this.loading.delete(key));
   }
 

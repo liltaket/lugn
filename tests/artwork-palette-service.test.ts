@@ -22,7 +22,10 @@ function redPng(): ArtworkAsset {
   return { body: PNG.sync.write(image), contentType: 'image/png' };
 }
 
-async function fixture(asset: ArtworkAsset | null, hasArtwork = true) {
+async function fixture(
+  asset: ArtworkAsset | null | (() => ArtworkAsset | null),
+  hasArtwork = true,
+) {
   const clock = new FakeClock(Date.parse('2026-11-22T19:00:00Z'));
   const music = new SimulatedMusicAdapter(clock);
   const engine = new LugnEngine(clock, {
@@ -46,22 +49,29 @@ async function fixture(asset: ArtworkAsset | null, hasArtwork = true) {
   observe('playing');
   await flush();
   const reads: string[] = [];
+  let token = 'token-1';
   const artwork: ArtworkProvider = {
     snapshot: () => ({
       'music.room': {
-        url: hasArtwork ? '/palette/token-1' : null,
+        url: hasArtwork ? `/palette/${token}` : null,
         status: hasArtwork ? 'available' : 'missing',
         source: 'home_assistant',
       },
     }),
-    read: async (token) => {
-      reads.push(token);
-      return asset;
+    read: async (readToken) => {
+      reads.push(readToken);
+      return typeof asset === 'function' ? asset() : asset;
     },
   };
   const service = new ArtworkPaletteService({ artwork });
   cleanups.push(() => service.dispose());
-  return { engine, service, observe, reads };
+  return {
+    engine,
+    service,
+    observe,
+    reads,
+    newArtwork: (next: string) => (token = next),
+  };
 }
 
 describe('artwork palette service', () => {
@@ -130,5 +140,28 @@ describe('artwork palette service', () => {
     expect(none.reads).toEqual([]);
     const bare = new ArtworkPaletteService({ artwork: undefined });
     expect(bare.current(none.engine.state).palette).toEqual([]);
+  });
+
+  it('uses new artwork for the same title instead of the cached colours', async () => {
+    const f = await fixture(redPng());
+    f.service.current(f.engine.state);
+    await flush();
+    f.newArtwork('token-2');
+    f.service.current(f.engine.state);
+    await flush();
+    expect(f.reads).toEqual(['token-1', 'token-2']);
+  });
+
+  it('tries again when the artwork was not available yet', async () => {
+    let available = false;
+    const f = await fixture(() => (available ? redPng() : null));
+    f.service.current(f.engine.state);
+    await flush();
+    expect(f.service.current(f.engine.state).palette).toEqual([]);
+    await flush();
+    available = true;
+    f.service.current(f.engine.state);
+    await flush();
+    expect(f.service.current(f.engine.state).palette).toHaveLength(1);
   });
 });

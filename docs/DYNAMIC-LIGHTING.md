@@ -83,9 +83,11 @@ Every target must also be a mapped light in `homeAssistant.entities`, and
    keep the scene's values.
 5. A new track recolours the lamps. Changes below a visible difference are not
    sent again.
-6. When playback stops, or the track has no usable colours, the scene is
-   reapplied once and the lamps return to its definition, including any Govee
-   animation.
+6. When playback stops, or the track has no usable colours, each lamp the
+   mode drove returns to the scene's own definition, including any Govee
+   animation. Only those lamps are touched: a lamp a person has adjusted, a
+   lamp under external control, the window light and lamps the scene does not
+   include are left as they are. A refused release is retried every 10 s.
 
 ## Dynamisk
 
@@ -121,7 +123,8 @@ placement work that is not in place, so the computer's activity stands in for it
 - Every change is an ordinary automatic lighting command through the room
   engine, with the actor `lugn.dynamic`. Holds, away/empty rules and external
   control (a Govee app effect selected on purpose) still apply and win.
-- A lamp adjusted by hand is left alone until a scene is selected again.
+- A lamp adjusted by hand is left alone, also when the mode ends or hands
+  lamps back, until a scene is selected again.
   Selecting Musik or Dynamisk again starts them afresh.
 - Choosing any other scene stops the mode at once.
 - Commands to one lamp are spaced by `minChangeIntervalMs`, and white
