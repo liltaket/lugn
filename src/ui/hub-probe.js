@@ -344,12 +344,13 @@
     );
   }
 
-  async function press() {
+  async function press({ attr = true, lit = true, css = '' } = {}) {
     const tile = visibleSceneTile();
     if (!tile) return { skipped: 'no visible scene tile' };
     const hadLit = tile.classList.contains('lit');
     const hadPressed = tile.hasAttribute('data-pointer-pressed');
     const dot = makeDot();
+    const undo = css ? style(css) : () => {};
     let down = false;
     let up = false;
     try {
@@ -358,17 +359,18 @@
         // Visual press only: the attribute the bridge sets, and the lit pulse.
         if (elapsed > 500 && !down) {
           down = true;
-          tile.setAttribute('data-pointer-pressed', '');
+          if (attr) tile.setAttribute('data-pointer-pressed', '');
         }
         if (elapsed > 700 && down && !up) {
           up = true;
-          tile.removeAttribute('data-pointer-pressed');
-          if (typeof pulse === 'function') pulse(tile, 'lit');
+          if (attr) tile.removeAttribute('data-pointer-pressed');
+          if (lit && typeof pulse === 'function') pulse(tile, 'lit');
         }
       });
       return await summarise(sample);
     } finally {
       dot.remove();
+      undo();
       if (!hadPressed) tile.removeAttribute('data-pointer-pressed');
       if (!hadLit) tile.classList.remove('lit');
     }
@@ -409,7 +411,47 @@
             '*, *::before, *::after { will-change: auto !important; }',
           ),
       ],
-      ['tryck', 'press', press],
+      ['tryck', 'press', async () => ({ variant: 'both', ...(await press()) })],
+      [
+        'tryck (bara tryckt läge)',
+        'press',
+        async () => ({ variant: 'attr', ...(await press({ lit: false })) }),
+      ],
+      [
+        'tryck (bara tänd-puls)',
+        'press',
+        async () => ({ variant: 'lit', ...(await press({ attr: false })) }),
+      ],
+      [
+        'tryck (utan filter)',
+        'press',
+        async () => ({
+          variant: 'nofilter',
+          ...(await press({
+            css: '*, *::before, *::after { filter: none !important; }',
+          })),
+        }),
+      ],
+      [
+        'tryck (utan animationer)',
+        'press',
+        async () => ({
+          variant: 'noanim',
+          ...(await press({
+            css: '*, *::before, *::after { animation: none !important; transition: none !important; }',
+          })),
+        }),
+      ],
+      [
+        'tryck (utan skuggor)',
+        'press',
+        async () => ({
+          variant: 'noshadow',
+          ...(await press({
+            css: '*, *::before, *::after { box-shadow: none !important; }',
+          })),
+        }),
+      ],
     ];
     try {
       say('Profil: startar …');
