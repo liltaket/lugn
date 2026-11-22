@@ -874,7 +874,10 @@
       sample.position +
         (sample.playing ? Math.max(0, (now - sample.at) / 1000) : 0),
     );
-    setText(view('music', 'elapsed'), clockText(position));
+    // The elapsed time ticks only on the shown page; a neighbour kept warm
+    // in idle time is not repainted for it.
+    if (musicShown || !view('music', 'elapsed').textContent)
+      setText(view('music', 'elapsed'), clockText(position));
     setText(view('music', 'duration'), clockText(sample.duration));
     const key = JSON.stringify([
       sample.position,

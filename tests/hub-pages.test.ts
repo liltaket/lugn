@@ -712,8 +712,8 @@ describe('Hub pager', () => {
     expect(seen).toEqual(['home>clock', 'clock>info']);
   });
 
-  it('draws a prepared neighbour again when a press starts', () => {
-    const { api, pages, pointer } = setup();
+  it('keeps a neighbour drawn in idle time, not when a press starts', () => {
+    const { api, pages, pointer, advance, drag } = setup();
     let prepared = 0;
     (
       api as unknown as {
@@ -721,9 +721,23 @@ describe('Hub pager', () => {
       }
     ).define('clock', { prepare: () => (prepared += 1) });
     expect(prepared).toBe(1);
+    // The press that may start a swipe does no page work.
     pointer('pointerdown', pages[0]!.button, 500);
     pointer('pointerup', pages[0]!.button, 500);
+    expect(prepared).toBe(1);
+    // Soon after load, and then every few seconds while nothing moves.
+    advance(1_500);
     expect(prepared).toBe(2);
+    advance(2_000);
+    expect(prepared).toBe(3);
+    // Not while a swipe is under way.
+    pointer('pointerdown', pages[0]!.button, 800);
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 700);
+    advance(2_000);
+    expect(prepared).toBe(3);
+    pointer('pointerup', pages[0]!.button, 700);
+    void drag;
   });
 
   it('goes to a page by id, and refuses unknown ones', () => {

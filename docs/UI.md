@@ -251,7 +251,9 @@ The pager follows the responsiveness rules above:
   runs on the compositor and a busy main thread does not make it stutter.
   Past the first or last page the track follows with resistance.
 - The current page is `active`; its neighbours are `near` (painted, static, so
-  a swipe reveals them at once); every other page is `off`
+  a swipe reveals them at once; they are drawn from the latest state in idle
+  time, about 1.5 s after load and then every 2 s while nothing moves, never
+  by the press that starts a swipe); every other page is `off`
   (`content-visibility: hidden`). Page timers run only while their page is
   active (Klocka's minute also while it is a neighbour). Pages other than the
   current one are `inert`.

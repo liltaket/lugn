@@ -44,6 +44,8 @@
   const WHEEL_STEP = 40; // vertical wheel px for one page
   const WHEEL_COOLDOWN_MS = 450;
   const NEAR_DELAY_MS = 80; // after a settle, before neighbours are prepared
+  const WARM_FIRST_MS = 1500; // after load, the neighbours are drawn once
+  const WARM_EVERY_MS = 2000; // and kept current this often, when idle
   const LOWER_DELAY_MS = 400; // then the track stops being its own layer
 
   const clock = () => performance.now();
@@ -308,8 +310,34 @@
 
   function settled() {
     window.clearTimeout(nearTimer);
-    nearTimer = window.setTimeout(syncStates, NEAR_DELAY_MS);
+    // The new neighbours are prepared when the main thread is idle, not
+    // where the end of the motion lands.
+    nearTimer = window.setTimeout(() => whenIdle(syncStates), NEAR_DELAY_MS);
     if (probe.enabled) probeStop();
+  }
+
+  const moving = () => Boolean(gesture || wheel || animation || paging);
+
+  function whenIdle(fn) {
+    if (typeof requestIdleCallback === 'function')
+      requestIdleCallback(() => fn(), { timeout: 500 });
+    else fn();
+  }
+
+  // Neighbours are drawn from the latest state while nothing moves: once
+  // soon after load (when the first state has arrived) and then every few
+  // seconds, in idle time. A swipe then reveals a page that is already laid
+  // out, painted and decoded, and its first frame does no page work.
+  function warmNeighbours() {
+    window.setTimeout(warmNeighbours, WARM_EVERY_MS);
+    if (moving() || document.visibilityState === 'hidden') return;
+    whenIdle(() => {
+      if (moving()) return;
+      for (const i of [index - 1, index + 1]) {
+        const page = pages[i];
+        if (page?.state === 'near') callHook(page, 'prepare');
+      }
+    });
   }
 
   function syncStates() {
@@ -325,15 +353,13 @@
     }
   }
 
-  // Before a gesture can show a neighbour, it must not be `off`, and it is
-  // drawn again from the latest state, so a swipe never reveals a page as
-  // it was when it was first prepared.
+  // Before a gesture can show a neighbour, it must not be `off`. Neighbours
+  // already near were drawn in idle time (warmNeighbours), so the press
+  // that starts a swipe does no page work.
   function prepareNeighbours() {
     for (const i of [index - 1, index + 1]) {
       const page = pages[i];
-      if (!page) continue;
-      if (page.state === 'off') setState(page, 'near');
-      else if (page.state === 'near') callHook(page, 'prepare');
+      if (page?.state === 'off') setState(page, 'near');
     }
   }
 
@@ -746,6 +772,7 @@
   pages.forEach((page, i) => setState(page, i === 0 ? 'active' : 'off'));
   syncStates();
   syncDots();
+  window.setTimeout(warmNeighbours, WARM_FIRST_MS);
 
   // The page modules register their hooks here; later, context switching
   // (music starts, a camera event, idle → photos) calls `go`.
