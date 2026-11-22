@@ -342,6 +342,9 @@ function acceptUnchangedHeartbeat(data, key) {
 
 function disconnectStream() {
   streamHealthy = false;
+  // Whatever arrives next is drawn in full: the page may have changed while
+  // the stream was away (camera media stops when the page is hidden).
+  drawnStreamKey = '';
   eventSource?.close();
   eventSource = undefined;
   window.clearTimeout(streamWatchdog);
@@ -422,7 +425,9 @@ function flushPulses() {
   pendingPulses.clear();
   for (const [element, names] of batch)
     for (const name of names) element.classList.remove(name);
-  if (batch.length) void batch[0][0].offsetWidth;
+  // Read from the dashboard, not a batched element: a detached one would not
+  // flush style and layout.
+  if (batch.length) void (root?.offsetWidth ?? batch[0][0].offsetWidth);
   for (const [element, names] of batch)
     for (const name of names) element.classList.add(name);
 }
@@ -528,8 +533,32 @@ function renderMusicProgress() {
       Math.min(1, (sample.position + elapsed) / sample.duration),
     );
   }
+  setRingTimings(ringFraction, fraction);
+  ringFraction = fraction;
   refs.musicPlayback.style?.setProperty?.('--progress', fraction.toFixed(4));
   root.dataset.progress = String(!!sample);
+}
+
+// The ring is two half rings that each rotate for their own part of the arc.
+// A move across the halfway point (a seek) is shared out over the one second
+// in the order the arc travels, so the lit arc stays one continuous piece, as
+// it was when the progress value itself was transitioned.
+let ringFraction = 0;
+function setRingTimings(from, to) {
+  const style = refs.musicPlayback.style;
+  if (!style?.setProperty) return;
+  const low = Math.min(from, to);
+  const high = Math.max(from, to);
+  const total = high - low;
+  const first = Math.max(0, Math.min(high, 0.5) - Math.min(low, 0.5));
+  const second = Math.max(0, Math.max(high, 0.5) - Math.max(low, 0.5));
+  const share = (part) => (total > 1e-6 ? part / total : 1);
+  const forward = to >= from;
+  const seconds = (value) => `${value.toFixed(3)}s`;
+  style.setProperty('--ring-first-time', seconds(share(first)));
+  style.setProperty('--ring-first-delay', seconds(forward ? 0 : share(second)));
+  style.setProperty('--ring-second-time', seconds(share(second)));
+  style.setProperty('--ring-second-delay', seconds(forward ? share(first) : 0));
 }
 
 function progressSample(values) {

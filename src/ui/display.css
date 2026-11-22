@@ -3645,20 +3645,25 @@ h2 {
   border: 3px solid var(--accent);
   border-radius: 50%;
   will-change: transform;
-  transition: transform 1s linear;
 }
 #app-root .progress-first::before {
   left: -100%;
   clip-path: inset(0 50% 0 0);
   transform: rotate(calc(min(var(--progress), 0.5) * 360deg));
+  transition: transform var(--ring-first-time, 1s) linear
+    var(--ring-first-delay, 0s);
 }
 #app-root .progress-second::before {
   left: 0;
   clip-path: inset(0 0 0 50%);
   transform: rotate(calc(max(var(--progress) - 0.5, 0) * 360deg));
+  transition: transform var(--ring-second-time, 1s) linear
+    var(--ring-second-delay, 0s);
 }
+/* Hidden, not removed, so a returning position keeps animating from where the
+   ring was. */
 #app-root[data-progress='false'] .progress-half {
-  display: none;
+  visibility: hidden;
 }
 #app-root #music-playback-icon {
   transform: scale(0.82);

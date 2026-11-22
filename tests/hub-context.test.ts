@@ -476,15 +476,31 @@ describe('Hub optional Lugn 2 presentation', () => {
     // An older delivery is still refused, and a real change still draws.
     stream.emit({ ...data, deliveryRevision: 4, generatedAt: 7000 });
     expect(draws()).toBe(1);
+    expect(runInContext('latestPayload.generatedAt', ui.context)).toBe(6000);
+    // After the stream drops, the next identical message is drawn in full.
+    ui.streams[0]!.onerror?.();
+    await vi.advanceTimersByTimeAsync(1000);
+    ui.streams
+      .at(-1)!
+      .emit({ ...data, deliveryRevision: 9, generatedAt: 7500 });
+    expect(draws()).toBe(2);
     const changed = structuredClone(data);
     changed.state.music.devices['music.room'].observed.title = 'Another';
-    stream.emit({ ...changed, deliveryRevision: 7, generatedAt: 8000 });
-    expect(draws()).toBe(2);
+    ui.streams.at(-1)!.emit({
+      ...changed,
+      deliveryRevision: 10,
+      generatedAt: 8000,
+    });
+    expect(draws()).toBe(3);
     // A poll resets the comparison, so the next identical message draws.
     ui.render(changed);
-    expect(draws()).toBe(3);
-    stream.emit({ ...changed, deliveryRevision: 8, generatedAt: 9000 });
     expect(draws()).toBe(4);
+    ui.streams.at(-1)!.emit({
+      ...changed,
+      deliveryRevision: 11,
+      generatedAt: 9000,
+    });
+    expect(draws()).toBe(5);
   });
   it('draws only the controls of a command while it is pending', async () => {
     const release = ui.holdPost();
