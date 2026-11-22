@@ -245,20 +245,26 @@
       fresh ? `${duration(Date.now() - fresh)} sedan` : '—',
     ]);
     out.push(['Roll', data?.role ?? '—']);
+    // Skipped heartbeats move display.js's delivery counter, not the payload.
+    const delivery =
+      typeof latestDeliveryRevision === 'number'
+        ? latestDeliveryRevision
+        : (data?.deliveryRevision ?? -1);
     out.push([
       'Revision',
       data?.state
-        ? `${data.state.revision} · leverans ${data.deliveryRevision ?? '—'}`
+        ? `${data.state.revision} · leverans ${delivery >= 0 ? delivery : '—'}`
         : '—',
     ]);
     out.push([
       'Server-instans',
       data?.instanceId ? String(data.instanceId).slice(0, 8) : '—',
     ]);
+    // The server's time as the dashboard carries it forward, against ours.
     if (typeof data?.generatedAt === 'number')
       out.push([
         'Klockskillnad',
-        `${Math.round((Date.now() - data.generatedAt) / 100) / 10} s mot servern`,
+        `${Math.round((Date.now() - serverNow()) / 100) / 10} s mot servern`,
       ]);
     out.push(['Sidan uppe', duration(performance.now())]);
     const memory = performance.memory;

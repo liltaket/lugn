@@ -75,6 +75,10 @@ class FakeElement extends Target {
     for (let n = node; n; n = n.parentElement) if (n === this) return true;
     return false;
   }
+  modal: FakeElement | null = null;
+  querySelector(): FakeElement | null {
+    return this.modal;
+  }
   querySelectorAll(): FakeElement[] {
     return this.children.filter((child) => child.classes.has('hub-page'));
   }
@@ -130,6 +134,10 @@ function setup(count = 3) {
   document['getElementById'] = (id: string) => byId[id] ?? null;
   Object.defineProperty(document, 'activeElement', { value: null });
   const window = new Target() as Target & Record<string, unknown>;
+  const resize = (width: number) => {
+    window['innerWidth'] = width;
+    window.fire(new FakeEvent('resize'));
+  };
   let now = 0;
   const timers: Array<{ at: number; fn: () => void; id: number }> = [];
   let timerId = 0;
@@ -173,6 +181,7 @@ function setup(count = 3) {
   const api = context['lugnPages'] as {
     go(target: string | number): boolean;
     current(): string;
+    onChange(fn: (page: string, previous: string) => void): () => void;
   };
   const advance = (ms: number) => {
     now += ms;
@@ -235,9 +244,22 @@ function setup(count = 3) {
   const finishAnimations = () => {
     for (const a of track.animations) a.animation.finish();
   };
+  const wheel = (target: FakeElement, deltaX: number, deltaY = 0) => {
+    const event = new FakeEvent('wheel', {
+      target,
+      deltaX,
+      deltaY,
+      deltaMode: 0,
+      timeStamp: now,
+    });
+    pager.fire(event);
+    return event;
+  };
   return {
     api,
     pager,
+    wheel,
+    resize,
     settledEvents: () => settled,
     pageEvents,
     pages,
@@ -386,6 +408,89 @@ describe('Hub pager', () => {
     advance(16);
     pointer('pointerup', pages[1]!.button, 500);
     expect(api.current()).toBe('clock');
+  });
+
+  it('reads a fast bridge swipe from its release alone, and swallows its click', () => {
+    const { api, pages, pointer, click } = setup();
+    // The bridge sends held moves once per frame but the release at once:
+    // a quick swipe across Släck can arrive as down then up, 300 px apart.
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    pointer('pointerup', pages[0]!.button, 398, 300, 'mouse');
+    expect(api.current()).toBe('clock');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
+  });
+
+  it('keeps a long first move beyond the slop', () => {
+    const { track, pages, pointer } = setup();
+    pointer('pointerdown', pages[0]!.button, 700);
+    pointer('pointermove', pages[0]!.button, 500);
+    expect(track.style['transform']).toBe('translate3d(-190px, 0, 0)');
+  });
+
+  it('lets a new press end swallowing when a swipe produced no click', () => {
+    const { pages, drag, pointer, click, advance, finishAnimations } = setup();
+    drag(pages[0]!.button, 800, 200);
+    finishAnimations();
+    advance(50);
+    pointer('pointerdown', pages[1]!.button, 500);
+    pointer('pointerup', pages[1]!.button, 500);
+    expect(click(pages[1]!.button).defaultPrevented).toBe(false);
+  });
+
+  it('hands an unsettled horizontal wheel over to a press', () => {
+    const { api, pages, wheel, pointer, advance } = setup();
+    wheel(pages[0]!.button, 300);
+    pointer('pointerdown', pages[0]!.button, 500);
+    advance(200); // the wheel's idle timer would have settled by now
+    expect(api.current()).toBe('home');
+    for (let x = 520; x <= 700; x += 20) {
+      advance(16);
+      pointer('pointermove', pages[0]!.button, x);
+    }
+    advance(8);
+    pointer('pointerup', pages[0]!.button, 700);
+    expect(api.current()).toBe('home');
+  });
+
+  it('cleans up page states when resized during a settle', () => {
+    const { api, pages, drag, resize, advance, pager, track } = setup();
+    drag(pages[0]!.button, 800, 200);
+    resize(800);
+    advance(1000);
+    expect(api.current()).toBe('clock');
+    expect(pages.map(({ page }) => page.dataset['state'])).toEqual([
+      'near',
+      'active',
+      'near',
+    ]);
+    expect(pages[0]!.page.inert).toBe(true);
+    expect(pager.classes.has('moving')).toBe(false);
+    expect(track.style['transform']).toBe('translate(-800px, 0)');
+  });
+
+  it('lets a change listener go on to another page', () => {
+    const { api, track } = setup();
+    api.onChange((page) => {
+      if (page === 'clock') api.go('info');
+    });
+    api.go('clock');
+    expect(api.current()).toBe('info');
+    expect(track.animations.at(-1)?.keyframes.at(-1)?.transform).toBe(
+      'translate3d(-2000px, 0, 0)',
+    );
+  });
+
+  it('stays put while a modal dialog is open', () => {
+    const { api, pages, pager, drag, wheel, pointer } = setup();
+    pager.modal = new FakeElement();
+    drag(pages[0]!.button, 800, 200);
+    wheel(pages[0]!.button, 0, 120);
+    expect(api.go('clock')).toBe(false);
+    expect(api.current()).toBe('home');
+    pager.modal = null;
+    pointer('pointerdown', pages[0]!.button, 500);
+    pointer('pointerup', pages[0]!.button, 500);
+    expect(api.go('clock')).toBe(true);
   });
 
   it('goes to a page by id, and refuses unknown ones', () => {

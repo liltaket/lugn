@@ -5,9 +5,15 @@
   position: fixed;
   inset: 0;
   overflow: hidden;
-  /* Horizontal moves are the pager's; vertical ones stay with the page. */
-  touch-action: pan-y;
   contain: strict;
+}
+/* Horizontal moves are the pager's; vertical ones stay with the page. The
+   browser resolves touch-action at the nearest scroll container, so every
+   element says so, not only the pager (this also replaces the buttons'
+   manipulation, which pan-y includes apart from horizontal panning). */
+.hub-pager,
+.hub-pager * {
+  touch-action: pan-y;
 }
 .hub-track {
   position: absolute;

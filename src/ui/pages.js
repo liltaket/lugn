@@ -33,6 +33,8 @@
   const STILL_MS = 60; // pointer held still this long before release: no fling
   const FLING_VELOCITY = 0.3; // px/ms: a flick past this turns the page
   const PROJECTION_MS = 160; // how far a release velocity carries
+  const MIN_VELOCITY_DT_MS = 1000 / 60;
+  const MAX_VELOCITY = 4; // px/ms
   const RUBBER = 0.55; // edge resistance (iOS-like)
   const SPRING_RESPONSE = 0.36; // s, period of the undamped spring
   const SPRING_DAMPING = 0.9; // < 1 gives a little overshoot on a fast flick
@@ -120,7 +122,6 @@
     frame = requestAnimationFrame(() => {
       frame = 0;
       write(offset);
-      probeTick();
     });
   }
 
@@ -172,11 +173,12 @@
     stopAnimation(false);
     const to = base(target);
     const from = offset;
-    setIndex(target);
+    const previous = setIndex(target);
     if (Math.abs(from - to) < 0.5) {
       offset = to;
       write(to);
       settled();
+      announce(previous);
       return;
     }
     const samples = springSamples(from, to, velocity);
@@ -185,6 +187,7 @@
     if (typeof track.animate !== 'function') {
       write(to);
       settled();
+      announce(previous);
       return;
     }
     lift();
@@ -206,6 +209,7 @@
       settled();
     };
     if (probe.enabled) probeStart();
+    announce(previous);
   }
 
   // Where the running settle shows the track now, from the samples.
@@ -238,14 +242,21 @@
 
   // ── Page states ──
 
+  // Returns the page left, if any; `announce` tells the others once the
+  // transition is in place, so a listener may call `go` again safely.
   function setIndex(target) {
-    if (target === index) return;
+    if (target === index) return null;
     const previous = pages[index];
     index = target;
     syncDots();
     callHook(previous, 'leave');
     setState(pages[index], 'active');
     callHook(pages[index], 'enter');
+    return previous;
+  }
+
+  function announce(previous) {
+    if (!previous) return;
     if (typeof CustomEvent === 'function')
       window.dispatchEvent(
         new CustomEvent('lugn:page', {
@@ -320,6 +331,11 @@
 
   // ── Gestures ──
 
+  // While a modal dialog is open on a page, the pages stay where they are.
+  function modalOpen() {
+    return Boolean(pager.querySelector('.bedtime-overlay:not([hidden])'));
+  }
+
   function ignoredTarget(target) {
     for (let node = target; node && node !== pager; node = node.parentElement) {
       if (node.dataset?.pager === 'ignore') return true;
@@ -330,10 +346,18 @@
 
   function onPointerDown(event) {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
+    // A new press ends any click swallowing left from the last swipe (a touch
+    // swipe, or a bridge swipe released over another control, has no click).
+    swallowClickUntil = 0;
     if (gesture || !pager.contains(event.target)) return;
-    if (ignoredTarget(event.target)) return;
-    const catching = Boolean(animation);
+    if (ignoredTarget(event.target) || modalOpen()) return;
+    const catching = Boolean(animation || wheel);
     if (catching) stopAnimation(true);
+    if (wheel) {
+      // The press takes over from a horizontal wheel that has not settled.
+      window.clearTimeout(wheel.timer);
+      wheel = null;
+    }
     window.clearTimeout(nearTimer);
     prepareNeighbours();
     gesture = {
@@ -363,6 +387,14 @@
 
   function onPointerMove(event) {
     if (!gesture || event.pointerId !== gesture.id) return;
+    if (follow(event) && event.cancelable) event.preventDefault();
+  }
+
+  // Moves the pages with a pointer position; false while it is not (or no
+  // longer) a horizontal swipe. Also run with the release's own position:
+  // the bridge sends held moves once per frame but a release at once, so a
+  // fast swipe may reach the release with few or no moves.
+  function follow(event) {
     const dx = event.clientX - gesture.x0;
     if (!gesture.dragging) {
       const dy = event.clientY - gesture.y0;
@@ -370,15 +402,15 @@
       if (Math.abs(dy) > slop && Math.abs(dy) >= Math.abs(dx)) {
         gesture = null; // a vertical move belongs to the page
         settled();
-        return;
+        return false;
       }
       if (Math.abs(dx) <= slop || Math.abs(dx) < Math.abs(dy) * LOCK_RATIO)
-        return;
+        return false;
       beginDrag(event);
-      // Start from the lock point, so the page does not jump by the slop.
-      gesture.x0 = event.clientX;
+      // Start from the lock point less the slop, so the page neither jumps
+      // by the slop nor loses a long first move.
+      gesture.x0 = event.clientX - Math.sign(dx) * (Math.abs(dx) - slop);
     }
-    if (event.cancelable) event.preventDefault();
     offset = rubber(gesture.startOffset + (event.clientX - gesture.x0));
     const samples = gesture.samples;
     samples.push([event.timeStamp || clock(), offset]);
@@ -387,7 +419,7 @@
     // and the bridge sends its one move from inside a frame: writing here
     // shows the move in this frame rather than the next.
     write(offset);
-    probeTick();
+    return true;
   }
 
   // The speed over the last ~90 ms of the drag (at least two moves). A slow
@@ -405,15 +437,24 @@
     const spacing =
       (last[0] - samples[Math.max(0, n - 4)][0]) / Math.min(3, n - 1);
     if (now - last[0] > Math.max(STILL_MS, spacing * 2.5)) return 0;
-    const dt = last[0] - first[0];
-    return dt > 0 ? (last[1] - first[1]) / dt : 0;
+    // A move and a release in the same instant (the bridge, a stalled
+    // thread) count as one frame; and no release throws the pages wildly.
+    const dt = Math.max(last[0] - first[0], MIN_VELOCITY_DT_MS);
+    const velocity = (last[1] - first[1]) / dt;
+    return Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, velocity));
   }
 
   function onPointerUp(event) {
     if (!gesture || event.pointerId !== gesture.id) return;
+    if (
+      event.type === 'pointerup' &&
+      Number.isFinite(event.clientX) &&
+      Number.isFinite(event.clientY)
+    )
+      follow(event);
     const g = gesture;
     gesture = null;
-    if (!g.dragging) {
+    if (!g?.dragging) {
       settled();
       return;
     }
@@ -444,6 +485,7 @@
 
   function onClick(event) {
     if (!swallowClickUntil || clock() > swallowClickUntil) return;
+    if (!pager.contains(event.target)) return;
     swallowClickUntil = 0;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -463,6 +505,7 @@
 
   function onWheel(event) {
     if (!pager.contains(event.target) || ignoredTarget(event.target)) return;
+    if (modalOpen()) return;
     const scale =
       event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? width : 1;
     const dx = event.deltaX * scale;
@@ -519,6 +562,7 @@
     if (event.defaultPrevented || event.altKey || event.ctrlKey) return;
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (modalOpen()) return;
     if (event.key === 'ArrowRight') go(index + 1);
     else if (event.key === 'ArrowLeft') go(index - 1);
     else return;
@@ -531,7 +575,7 @@
         ? pages.findIndex((page) => page.id === target)
         : target;
     if (!Number.isInteger(i) || i < 0 || i > maxIndex()) return false;
-    if (gesture || wheel) return false;
+    if (gesture || wheel || modalOpen()) return false;
     stopAnimation(true);
     window.clearTimeout(nearTimer);
     // A jump of more than one page shows only the target's neighbour on the way.
@@ -547,10 +591,16 @@
   function onResize() {
     const next = window.innerWidth || width;
     if (next === width) return;
+    // Whatever moved stops on the current page at the new width.
     stopAnimation(false);
+    if (wheel) window.clearTimeout(wheel.timer);
+    wheel = null;
+    gesture = null;
     width = next;
     offset = base(index);
     write(offset);
+    window.clearTimeout(nearTimer);
+    syncStates();
   }
 
   // ── Optional frame probe (Info page): rAF gaps during gestures only ──
