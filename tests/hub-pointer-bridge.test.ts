@@ -527,6 +527,16 @@ describe('Hub pointer bridge page script', () => {
     page.socket.receive({ t: 'move', x: 900, y: 100 });
     page.runFrames();
     expect(shownX()).toBe(900);
+    // The distance counts, not each axis: 300 px across and 300 px down is
+    // about 424 px.
+    page.advance(16);
+    page.socket.receive({ t: 'move', x: 600, y: 400 });
+    page.runFrames();
+    expect(shownX()).toBe(600);
+    // Once the dot has arrived no frame is left queued.
+    page.advance(300);
+    page.runFrames();
+    expect(page.frames).toHaveLength(0);
   });
 
   it('rounds the cursor to device pixels', async () => {
@@ -675,9 +685,11 @@ describe('Hub pointer bridge page script', () => {
     const perf = page.socket.sent.at(-1)!;
     expect(perf).toEqual({
       t: 'perf',
-      frames: 7,
+      // Frames and lag count a visible change of the dot, which follows the
+      // position instead of jumping to it.
+      frames: 6,
       moves: 11,
-      lagP50: 6,
+      lagP50: 8,
       lagP95: 120,
       lagMax: 120,
       gapMax: 124,

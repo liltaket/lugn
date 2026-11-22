@@ -105,6 +105,7 @@
   // Where the dot is shown while it follows (x, y).
   let shownX = NaN;
   let shownY = NaN;
+  let drawnTransform = '';
   let framePending = false;
   let lastFrameAt = 0;
   let motionUntil = 0;
@@ -249,6 +250,7 @@
       for (const plate of plates) plate.element.style.visibility = 'hidden';
       drawnX = NaN;
       drawnY = NaN;
+      drawnTransform = '';
       shownX = NaN;
       shownY = NaN;
     }
@@ -413,11 +415,17 @@
       if (shownX !== drawnX || shownY !== drawnY) {
         drawnX = shownX;
         drawnY = shownY;
-        cursor.style.transform = `translate3d(${snap(shownX - DOT_BOX / 2)}px, ${snap(shownY - DOT_BOX / 2)}px, 0)`;
-        frames += 1;
-        if (moveStamp) {
-          recordLag(now - moveStamp);
-          moveStamp = 0;
+        // A frame counts, and the lag is taken, when the dot visibly moves:
+        // a change below a device pixel writes nothing.
+        const transform = `translate3d(${snap(shownX - DOT_BOX / 2)}px, ${snap(shownY - DOT_BOX / 2)}px, 0)`;
+        if (transform !== drawnTransform) {
+          drawnTransform = transform;
+          cursor.style.transform = transform;
+          frames += 1;
+          if (moveStamp) {
+            recordLag(now - moveStamp);
+            moveStamp = 0;
+          }
         }
       }
     }
@@ -441,8 +449,7 @@
       !SMOOTH_MS ||
       !Number.isFinite(shownX) ||
       !(gap > 0 && gap < SMOOTH_IDLE_MS) ||
-      Math.abs(x - shownX) > SMOOTH_JUMP_PX ||
-      Math.abs(y - shownY) > SMOOTH_JUMP_PX
+      Math.hypot(x - shownX, y - shownY) > SMOOTH_JUMP_PX
     ) {
       shownX = x;
       shownY = y;
