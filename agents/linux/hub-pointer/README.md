@@ -10,10 +10,12 @@ a pause hands the pointer straight back to the desktop instead. Move the
 cursor up out of the page's top edge (anywhere along it) and the desktop
 pointer comes back just above the monitor's bottom edge at the matching x. The
 move has to mean it: the cursor leaves only after it has been pushed 32 Hub px
-up past the top without moving down in between, so a swipe that brushes the
+up past the top. Only motion that goes mostly up counts; any move down starts
+over, and sideways motion neither adds nor resets, so a swipe that brushes the
 top stays on the Hub. While the left button is held (a swipe or a drag on the
-Hub) the top is a wall too, unless the push up goes on for 400 px (the way out
-if a release were ever missed). The Hub's left, right and bottom edges are
+Hub) the top is a wall too, unless a mostly-upward push goes on for 400 px (the
+way out if a release were ever missed); pressing or releasing it starts the
+push over. The Hub's left, right and bottom edges are
 walls, so a sideways swipe never leaves the Hub.
 The keyboard always stays on the desktop, and typing on it ends the capture:
 the pointer comes back where it left the screen.

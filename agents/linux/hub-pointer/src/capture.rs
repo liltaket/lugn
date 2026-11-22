@@ -533,20 +533,32 @@ impl Pointer {
 
     fn active_frame(&mut self, map: Mapping, mut a: Active, f: FrameAcc) -> FrameOutcome {
         let mut out = FrameOutcome::default();
+        // The left button's order against the motion within one frame is
+        // lost, so a frame that presses it counts as held (the top stays a
+        // wall) and one that only releases it as not held. Either change
+        // starts the push up afresh.
+        let left = |down: bool| {
+            f.buttons
+                .iter()
+                .any(|&(button, d)| button == ButtonName::Left && d == down)
+        };
+        let (pressed, released) = (left(true), left(false));
+        if pressed || released {
+            a.top_push = 0.0;
+        }
+        let held = pressed || (a.held && !released);
         if f.dx != 0.0 || f.dy != 0.0 {
             // Bottom, left and right are walls; only the top leads back.
             let nx = (a.x + f.dx * self.gain).clamp(0.0, map.w - 1.0);
             let ny = (a.y + f.dy * self.gain).min(map.h - 1.0);
-            if f.dy >= 0.0 {
+            // Only motion that is mostly upward pushes towards the exit; any
+            // move down starts over, and sideways frames change nothing.
+            if f.dy > 0.0 {
                 a.top_push = 0.0;
-            } else if ny < 0.0 {
-                a.top_push += -ny;
+            } else if ny < 0.0 && -f.dy >= f.dx.abs() {
+                a.top_push += -ny.max(f.dy * self.gain);
             }
-            let needed = if a.held {
-                TOP_EXIT_HELD_PX
-            } else {
-                TOP_EXIT_PX
-            };
+            let needed = if held { TOP_EXIT_HELD_PX } else { TOP_EXIT_PX };
             let exit = if ny < 0.0 && a.top_push >= needed {
                 // Anywhere along the top: straight up onto the monitor.
                 Some((Exit::Top, map.return_point(nx)))
@@ -571,7 +583,6 @@ impl Pointer {
                 out.msgs.push(AgentMsg::Move { x: nx, y: ny });
             }
         }
-        self.state = State::Active(a);
 
         let (x, y) = (a.x, a.y);
         for (button, down) in f.buttons {
@@ -1016,11 +1027,13 @@ mod tests {
         // Sideways motion in the same frame still counts toward the exit x.
         p.motion(0.0, -114.0);
         assert_eq!(p.frame(now).msgs, [AgentMsg::Move { x: 960.0, y: 0.0 }]);
-        // Brushing the top is not leaving it.
+        // Brushing the top is not leaving it, and sliding along it changes
+        // only where the pointer will come back.
         p.motion(0.0, -31.0);
         assert_eq!(p.frame(now), FrameOutcome::default());
-        p.motion(-320.0, -1.0);
-        p.button(0x110, true);
+        p.motion(-320.0, 0.0);
+        assert_eq!(p.frame(now).msgs, [AgentMsg::Move { x: 640.0, y: 0.0 }]);
+        p.motion(0.0, -1.0);
         let out = p.frame(now);
         assert_eq!(out.msgs, [AgentMsg::Leave]);
         assert_eq!(
@@ -1117,6 +1130,98 @@ mod tests {
         p.button(0x110, true);
         p.frame(now);
         p.motion(0.0, -64.0 - 400.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+    }
+
+    #[test]
+    fn a_held_sideways_swipe_never_reaches_the_held_way_out() {
+        let mut p = hub();
+        enter(&mut p, Some(6), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        p.button(0x110, true);
+        p.frame(now);
+        // Mostly sideways with a steady drift up, far past both thresholds,
+        // into the left wall and on.
+        for _ in 0..100 {
+            p.motion(-10.0, -4.0);
+            assert!(p.frame(now).release.is_none());
+        }
+        assert!(p.is_capturing());
+    }
+
+    #[test]
+    fn sideways_and_empty_frames_neither_add_nor_reset() {
+        let mut p = hub();
+        enter(&mut p, Some(3), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        for step in 0..16 {
+            p.motion(0.0, -2.0);
+            let out = p.frame(now);
+            p.motion(5.0, 0.0);
+            p.frame(now);
+            if step < 15 {
+                assert!(out.release.is_none(), "left after {step}");
+            } else {
+                assert_eq!(out.release.map(|r| r.1), Some(Ended::Exit(Exit::Top)));
+            }
+        }
+    }
+
+    #[test]
+    fn a_left_button_change_starts_the_push_over() {
+        let mut p = hub();
+        enter(&mut p, Some(2), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        p.button(0x110, true);
+        p.frame(now);
+        p.motion(0.0, -120.0);
+        assert!(p.frame(now).release.is_none());
+        // Released: the held push does not carry over.
+        p.button(0x110, false);
+        p.frame(now);
+        p.motion(0.0, -0.5);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -31.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -1.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+    }
+
+    #[test]
+    fn a_frame_with_a_left_press_keeps_the_top_a_wall() {
+        let mut p = hub();
+        enter(&mut p, Some(1), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        // Press and push up in one frame: the press is delivered, no exit.
+        p.button(0x110, true);
+        p.motion(0.0, -40.0);
+        let out = p.frame(now);
+        assert!(out.release.is_none());
+        assert!(out.msgs.iter().any(|m| matches!(
+            m,
+            AgentMsg::Button {
+                button: ButtonName::Left,
+                down: true,
+                ..
+            }
+        )));
+        // Release and push up in one frame: out at once.
+        p.button(0x110, false);
+        p.motion(0.0, -40.0);
         assert_eq!(
             p.frame(now).release.map(|r| r.1),
             Some(Ended::Exit(Exit::Top))
