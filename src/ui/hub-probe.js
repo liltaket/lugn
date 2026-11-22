@@ -293,12 +293,144 @@
         box.remove();
       }
     });
+    // The dashboard's own work on this Hub: a full draw of the last state (what
+    // every changed stream message costs) and parsing a payload of that size.
+    let renderMs = null;
+    let payloadKB = null;
+    let payloadParseMs = null;
+    try {
+      if (
+        typeof render === 'function' &&
+        typeof latestPayload === 'object' &&
+        latestPayload
+      ) {
+        const text = JSON.stringify(latestPayload);
+        payloadKB = round(text.length / 1024);
+        payloadParseMs = time(() => {
+          for (let i = 0; i < 20; i += 1) sink += JSON.parse(text).role ? 1 : 0;
+        });
+        payloadParseMs = round(payloadParseMs / 20, 2);
+        renderMs = round(
+          time(() => {
+            for (let i = 0; i < 5; i += 1) render(latestPayload);
+          }) / 5,
+          2,
+        );
+      }
+    } catch {
+      // The numbers above are still sent.
+    }
     return {
+      renderMs,
+      payloadKB,
+      payloadParseMs,
       arithmeticMs: arithmetic,
       jsonMs: json,
       domMs: dom,
       sink: sink > 0,
     };
+  }
+
+  // The pager lifts its track to a layer (class `moving`, will-change) only
+  // while a drag is on. What does that cost on this Hub? (a) frames right
+  // after adding the class from rest, then a simulated sideways swipe with
+  // (b) the layer lifted at its start, (c) the layer already there, (d) no
+  // layer class at all.
+  async function layerTests() {
+    const pager = document.getElementById('hub-pager');
+    const track = document.getElementById('hub-track');
+    if (!pager || !track) return [{ variant: 'layer', skipped: 'no pager' }];
+    const out = [];
+    const previous = track.style.transform;
+    const rest = async (ms = 1300) => {
+      pager.classList.remove('moving');
+      await sleep(ms);
+      drain();
+    };
+    try {
+      const first = [];
+      const later = [];
+      for (let run = 0; run < 3 && !aborted; run += 1) {
+        await rest();
+        const gaps = [];
+        await new Promise((resolve, reject) => {
+          let last;
+          let added = false;
+          const frame = (time) => {
+            try {
+              if (!added) {
+                last = time;
+                added = true;
+                pager.classList.add('moving');
+              } else {
+                gaps.push(time - last);
+                last = time;
+              }
+              if (gaps.length >= 24) resolve();
+              else requestAnimationFrame(frame);
+            } catch (error) {
+              reject(error);
+            }
+          };
+          requestAnimationFrame(frame);
+        });
+        first.push(round(gaps[0]));
+        later.push(round(Math.max(...gaps.slice(1))));
+      }
+      out.push({
+        variant: 'layer-add',
+        firstGapMs: first,
+        maxLaterGapMs: later,
+      });
+      const swipe = async (variant, mode) => {
+        await rest();
+        if (mode === 'perm') {
+          pager.classList.add('moving');
+          await sleep(1300);
+          drain();
+        }
+        const sample = await sampleFrames(700, (elapsed) => {
+          if (mode === 'new' && elapsed < 20) pager.classList.add('moving');
+          const x = 300 * Math.sin(Math.PI * Math.min(1, elapsed / 600));
+          track.style.transform = `translate3d(${-Math.round(x)}px, 0, 0)`;
+        });
+        track.style.transform = previous;
+        out.push({ variant, ...(await summarise(sample)) });
+      };
+      for (const [variant, mode] of [
+        ['swipe-new', 'new'],
+        ['swipe-perm', 'perm'],
+        ['swipe-none', 'none'],
+      ])
+        if (!aborted) await swipe(variant, mode);
+    } finally {
+      track.style.transform = previous;
+      pager.classList.remove('moving');
+    }
+    return out;
+  }
+
+  // A long still window: how often does the Hub stop for 50 ms or more with
+  // nothing happening, and where in the window.
+  async function soak(ms = 30000) {
+    const times = [];
+    const startedAt = performance.now();
+    const heap = [];
+    const sample = await sampleFrames(ms, (elapsed) => {
+      if (performance.memory && heap.length < 40 && elapsed > heap.length * 750)
+        heap.push(round(performance.memory.usedJSHeapSize / 1048576));
+    });
+    const sorted = sample.gaps.slice(1);
+    sorted.forEach((gap, index) => {
+      if (gap > 33.5) times.push([round(gap), index]);
+    });
+    const result = await summarise(sample);
+    result.variant = 'soak';
+    result.stalls = times.sort((a, b) => b[0] - a[0]).slice(0, 6);
+    result.heapMin = heap.length ? Math.min(...heap) : null;
+    result.heapMax = heap.length ? Math.max(...heap) : null;
+    result.seconds = round((performance.now() - startedAt) / 1000);
+    return result;
   }
 
   async function bare() {
@@ -380,7 +512,9 @@
     const phases = [
       ['processor', 'cpu', async () => cpu()],
       ['stilla sida', 'idle', async () => summarise(await sampleFrames(4000))],
+      ['lång stilla mätning', 'idle', () => soak(30000)],
       ['tom sida', 'bare', bare],
+      ['sidlager', 'dot', layerTests],
       ['markör', 'dot', () => measureDot('')],
       [
         'utan filter',
@@ -463,7 +597,9 @@
         // Late entries of the work before must not land in this phase.
         await sleep(900);
         drain();
-        await post(name, await work());
+        const result = await work();
+        for (const report of Array.isArray(result) ? result : [result])
+          await post(name, report);
       }
       await post(
         aborted ? 'error' : 'done',
