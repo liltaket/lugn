@@ -47,8 +47,17 @@ export type MusicOptions = {
   observationTrusted?: (target: string) => boolean;
 };
 
-/** How long after a track step a playback change still belongs to it. */
-const TRACK_STEP_SETTLE_MS = 5_000;
+type TrackStep = {
+  issuedAt: number;
+  /** Playback as observed when the step was issued. */
+  playback: string | undefined;
+  timer: ReturnType<Clock['setTimeout']>;
+  /** A playback change held back during the window, if any. */
+  heldBack?: { changedAt: number | undefined };
+};
+
+/** How long after a track step a playback change may still be its own. */
+const TRACK_STEP_SETTLE_MS = 4_000;
 
 export class MusicFadeUnavailableError extends Error {
   constructor() {
@@ -100,6 +109,7 @@ export class MusicController {
   readonly state: MusicState = { devices: {}, commands: [], fades: {} };
   private readonly adapter: MusicAdapter;
   private readonly timeoutMs: number;
+  private readonly trackSteps = new Map<string, TrackStep>();
   private readonly observationTrusted: (target: string) => boolean;
   private readonly recovery: MusicCommandRecovery;
   private disposed = false;
@@ -590,6 +600,8 @@ export class MusicController {
     // preset recovery (only an earlier pending track step, below).
     if (recover && requested.property !== 'track')
       this.bumpIntent(target, this.intentDomain(requested));
+    if (requested.property === 'track')
+      this.beginTrackStep(target, this.clock.now());
     const supersededIds = new Set<string>();
     for (const prior of this.state.commands) {
       if (
@@ -718,6 +730,9 @@ export class MusicController {
       this.clock.clearTimeout(timer);
     this.sourceSettling.clear();
     this.recovery.dispose();
+    for (const step of this.trackSteps.values())
+      this.clock.clearTimeout(step.timer);
+    this.trackSteps.clear();
     this.unsubscribe();
     this.attributedSupersededVolumeCommands.clear();
     for (const timer of this.timers.values()) this.clock.clearTimeout(timer);
@@ -1309,7 +1324,7 @@ export class MusicController {
         observation,
         observedPlayback,
       ) &&
-      !this.duringTrackStep(observation.target);
+      !this.duringTrackStep(observation);
     device.observed = structuredClone(observation.values);
     device.observedAt = observation.observedAt;
     device.availability = observation.available ? 'available' : 'unavailable';
@@ -1416,54 +1431,120 @@ export class MusicController {
         'interrupted',
       );
     }
-    if (externalPlaybackChange) {
-      this.latestExternalPlaybackIntent.set(observation.target, {
-        sequence: this.nextCommandId,
-        changedAt: observation.playbackChangedAt,
-        playback: observedPlayback as 'playing' | 'paused',
-      });
-      this.bumpIntent(observation.target, 'playback');
-      for (const command of this.state.commands) {
-        if (
-          command.target !== observation.target ||
-          command.requested.property !== 'playback' ||
-          command.status !== 'pending'
-        )
-          continue;
-        command.status = 'superseded';
-        command.diagnosticReason =
-          'A newer external playback change superseded this request';
-        this.releaseTracking(command.id);
-        confirmedIds.add(command.id);
-      }
-      delete device.requested.playback;
-      this.onExternalPlaybackChange?.(
+    if (externalPlaybackChange)
+      this.applyExternalPlaybackChange(
         observation.target,
         observedPlayback,
-        device.observedProvenance,
         observation.playbackChangedAt,
+        confirmedIds,
       );
-    }
     const fade = this.fades.get(observation.target);
     if (fade && !staleVolumeFeedback && fadeFeedbackAllowed)
       this.acceptFadeObservation(fade, observation, sequence);
     this.pruneHistory(confirmedIds);
     this.publish();
   }
-  /**
-   * A player changing tracks may report a brief pause, idle or buffering on
-   * the way; while a track step is pending, or shortly after it, a playback
-   * change is the step's own and not someone's external Play or Pause.
-   */
-  private duringTrackStep(target: string): boolean {
-    const now = this.clock.now();
-    const window = Math.max(this.timeoutMs, TRACK_STEP_SETTLE_MS);
-    return this.state.commands.some(
-      (command) =>
-        command.target === target &&
-        command.requested.property === 'track' &&
-        (command.status === 'pending' || now - command.issuedAt < window),
+  /** An external Play or Pause: newer than any pending request. */
+  private applyExternalPlaybackChange(
+    target: string,
+    playback: MusicObservation['values']['playback'],
+    changedAt: number | undefined,
+    confirmedIds: Set<string>,
+  ): void {
+    const device = this.state.devices[target];
+    if (!device) return;
+    this.latestExternalPlaybackIntent.set(target, {
+      sequence: this.nextCommandId,
+      changedAt,
+      playback: playback as 'playing' | 'paused',
+    });
+    this.bumpIntent(target, 'playback');
+    for (const command of this.state.commands) {
+      if (
+        command.target !== target ||
+        command.requested.property !== 'playback' ||
+        command.status !== 'pending'
+      )
+        continue;
+      command.status = 'superseded';
+      command.diagnosticReason =
+        'A newer external playback change superseded this request';
+      this.releaseTracking(command.id);
+      confirmedIds.add(command.id);
+    }
+    delete device.requested.playback;
+    this.onExternalPlaybackChange?.(
+      target,
+      playback,
+      device.observedProvenance ?? {
+        actor: { type: 'home_assistant' },
+        source: 'external_observation',
+      },
+      changedAt,
     );
+  }
+
+  /**
+   * A player changing tracks may pass through pause, idle or buffering. For
+   * a few seconds after a track step, a playback change that happened after
+   * the step is held back rather than taken as someone's Play or Pause; when
+   * the window ends, a player still on a different playback than before the
+   * step is taken as the external change after all.
+   */
+  private duringTrackStep(observation: MusicObservation): boolean {
+    const step = this.trackSteps.get(observation.target);
+    if (!step || this.clock.now() - step.issuedAt >= TRACK_STEP_SETTLE_MS)
+      return false;
+    const changedAt = observation.playbackChangedAt;
+    if (changedAt !== undefined && changedAt < step.issuedAt) return false;
+    step.heldBack = { changedAt };
+    return true;
+  }
+
+  private beginTrackStep(target: string, issuedAt: number): void {
+    const previous = this.trackSteps.get(target);
+    if (previous) this.clock.clearTimeout(previous.timer);
+    const playback = this.state.devices[target]?.observed.playback;
+    const step: TrackStep = {
+      issuedAt,
+      playback,
+      timer: this.clock.setTimeout(
+        () => this.endTrackStep(target, step),
+        TRACK_STEP_SETTLE_MS,
+      ),
+    };
+    this.trackSteps.set(target, step);
+  }
+
+  private endTrackStep(target: string, step: TrackStep): void {
+    if (this.trackSteps.get(target) !== step) return;
+    this.trackSteps.delete(target);
+    if (this.disposed || !step.heldBack) return;
+    const device = this.state.devices[target];
+    const now = device?.observed.playback;
+    if (
+      !device ||
+      device.availability !== 'available' ||
+      (now !== 'playing' && now !== 'paused') ||
+      now === step.playback ||
+      this.state.commands.some(
+        (command) =>
+          command.target === target &&
+          command.requested.property === 'playback' &&
+          command.status === 'pending' &&
+          command.requested.value === now,
+      )
+    )
+      return;
+    const confirmedIds = new Set<string>();
+    this.applyExternalPlaybackChange(
+      target,
+      now,
+      step.heldBack.changedAt,
+      confirmedIds,
+    );
+    this.pruneHistory(confirmedIds);
+    this.publish();
   }
 
   private isNewPlaybackTransition(

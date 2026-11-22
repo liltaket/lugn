@@ -89,10 +89,8 @@ or WiiM `setPlayerCmd:next` / `prev`). It is a one-off action: nothing in the
 player's state says that it happened, so the command is never confirmed from
 an observation and never retried (a retry could skip twice), and it is not a
 playback intent: it supersedes no pending Play, Pause, source or preset, and
-does not count as a music intervention. While a step is pending, and for five
-seconds after it, a playback change the player reports (players often pass
-through pause or idle on the way to the next track) is taken as part of the
-step, not as an external Play or Pause. On many players `previous` early in
+does not count as a music intervention. See [Music](MUSIC.md#state-and-command-confirmation)
+for how playback changes around a step are attributed. On many players `previous` early in
 a track restarts the current one. A player that is unavailable or playing a
 computer's audio through its input (any configured `computerAudio` route;
 an unknown source counts as the computer) is not skipped: the request is

@@ -19,6 +19,7 @@ import {
   type MusicOptions,
 } from './music-controller.js';
 import { canStepTrack } from './music-track-control.js';
+
 import type { ComputerPlaybackControl } from './computer-playback-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
@@ -104,6 +105,17 @@ import {
   WindowLightingSchema,
   type WindowLighting,
 } from '../core/window-lighting.js';
+
+/** Execution guards: volume, a track step, and everything else (playback). */
+function musicGuardKey(target: string, property: string): string {
+  return `${target}:${
+    property === 'volume'
+      ? 'volume'
+      : property === 'track'
+        ? 'track'
+        : 'playback'
+  }`;
+}
 
 export type EngineOptions = {
   windowLighting?: WindowLighting;
@@ -1049,7 +1061,7 @@ export class LugnEngine {
           (item) => item.id === command.id,
         );
         const guard = this.musicExecutionGuards.get(
-          `${command.target}:${command.requested.property === 'volume' ? 'volume' : 'playback'}`,
+          musicGuardKey(command.target, command.requested.property),
         );
         if (guard && guard.requestId === record?.provenance.requestId)
           this.assertExecution(guard.isCurrent);
@@ -1181,7 +1193,7 @@ export class LugnEngine {
     );
     this.musicController.setRecoveryPolicyGuard((command) => {
       const guard = this.musicExecutionGuards.get(
-        `${command.target}:${command.requested.property === 'volume' ? 'volume' : 'playback'}`,
+        musicGuardKey(command.target, command.requested.property),
       );
       if (
         guard?.requestId === command.provenance.requestId &&
@@ -1827,13 +1839,7 @@ export class LugnEngine {
       requested.property !== 'track'
     )
       this.noteIntervention({ domain: 'music', target });
-    const key = `${target}:${
-      requested.property === 'volume'
-        ? 'volume'
-        : requested.property === 'track'
-          ? 'track'
-          : 'playback'
-    }`;
+    const key = musicGuardKey(target, requested.property);
     if (isCurrent)
       this.musicExecutionGuards.set(key, {
         requestId: provenance.requestId,

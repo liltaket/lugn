@@ -165,6 +165,64 @@ describe('music.skipTrack', () => {
     await s.advance(500);
     brief(s);
     expect(pausedHold(s)).toBe(false);
+    // The next track starts: the pass-through never becomes a Pause.
+    s.adapter.observe(
+      target,
+      { volume: 0.3, playback: 'playing', source: 'Spotify', title: 'Next' },
+      true,
+      undefined,
+      undefined,
+      s.clock.now(),
+    );
+    await s.advance(5_000);
+    expect(pausedHold(s)).toBe(false);
+  });
+
+  it('still takes a real Pause during a track step, when the window ends', async () => {
+    const s = setup();
+    await s.advance(1_000);
+    await s.registry.invoke('music.skipTrack', { target, step: 'next' }, human);
+    await s.advance(2_000);
+    s.adapter.observe(
+      target,
+      { volume: 0.3, playback: 'paused', source: 'Spotify', title: 'Next' },
+      true,
+      undefined,
+      undefined,
+      s.clock.now(),
+    );
+    expect(
+      s.engine.state.intent.holds.some((h) => h.scope === 'music.playback'),
+    ).toBe(false);
+    // Still paused when the window ends: someone paused it.
+    await s.advance(2_500);
+    expect(
+      s.engine.state.intent.holds.some((h) => h.scope === 'music.playback'),
+    ).toBe(true);
+  });
+
+  it('takes a Pause that happened before the step at once', async () => {
+    const s = setup();
+    await s.advance(1_000);
+    const pausedAt = s.clock.now() - 200;
+    await s.registry.invoke('music.skipTrack', { target, step: 'next' }, human);
+    await s.advance(250);
+    s.adapter.observe(
+      target,
+      {
+        volume: 0.3,
+        playback: 'paused',
+        source: 'Spotify',
+        title: 'First song',
+      },
+      true,
+      undefined,
+      undefined,
+      pausedAt,
+    );
+    expect(
+      s.engine.state.intent.holds.some((h) => h.scope === 'music.playback'),
+    ).toBe(true);
   });
 
   it('refuses a player on a computer input before sending or noting anything', async () => {

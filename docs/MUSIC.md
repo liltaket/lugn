@@ -478,6 +478,15 @@ acceptance is separate from observed state:
 - commands time out as unconfirmed when no matching observation arrives;
 - preset selection is never reported as confirmed because the HA media-player
   state does not expose the selected WiiM preset;
+- a track step (`music.skipTrack`, Nästa låt) is never confirmed or retried:
+  nothing in the player's state says it happened, and a retry could skip
+  twice. Players often pass through pause, idle or buffering on the way to the
+  next track, so for four seconds after a step a playback change that happened
+  after the step is held back instead of being taken as someone's Play or
+  Pause. When the four seconds end, a player still on a different playback
+  than before the step (and not matching a pending Play/Pause request) is taken
+  as that external change after all, with the held-back timestamp; a change
+  timestamped before the step is never held back;
 - a successful HA response does not prove that sound is physically audible.
 
 Home Assistant's REST service response does not give this adapter a causal
