@@ -1192,6 +1192,22 @@ describe('Hub pointer bridge page script', () => {
       }
     });
 
+    it('measures again at once when the page pager has settled', async () => {
+      const page = await connected();
+      const button = control(page, tile);
+      page.socket.receive({ t: 'enter', x: 10, y: 10 });
+      hover(page, button, 200, 250);
+      const plate = page.shown()[0]!;
+      // The pager moved the control while the plate was hidden.
+      button.rect = { ...tile, left: 300 };
+      const hits = page.hitTests();
+      page.windowListeners.fire(new FakeEvent('lugn:pages-settled'));
+      page.advance(0);
+      expect(page.hitTests()).toBe(hits + 1);
+      expect(page.shown()).toEqual([plate]);
+      expect(plate.style['left']).toBe('294px');
+    });
+
     it('measures again after a click, Escape or wheel under a still cursor', async () => {
       const page = await connected();
       const button = control(page, tile);
