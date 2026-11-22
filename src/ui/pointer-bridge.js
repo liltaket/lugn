@@ -933,6 +933,16 @@
     cursor = createCursor();
     observeLongTasks();
     window.addEventListener('resize', guard(hello));
+    // The page pager hides the plate while it moves; once it lies still the
+    // control under the cursor is measured again at once.
+    window.addEventListener(
+      'lugn:pages-settled',
+      guard(() => {
+        if (!visible) return;
+        if (recheckTimer !== undefined) clearTimeout(recheckTimer);
+        recheckTimer = setTimeout(onRecheckTimer, 0);
+      }),
+    );
     connect();
   }
 
