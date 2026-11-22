@@ -7,15 +7,21 @@
   inset: 0;
   pointer-events: none;
 }
-/* A soft dark floor so the buttons read over any picture. */
+/* A very thin dimming over the whole page and, along the bottom edge, a short
+   dark floor so the buttons read over any picture. */
+.qm {
+  z-index: 1;
+}
 .qm::before {
   content: '';
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 300px;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.8));
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.55) 0,
+    rgba(0, 0, 0, 0.12) 190px,
+    rgba(0, 0, 0, 0.12) 100%
+  );
   opacity: 0;
   transition: opacity 240ms ease-out;
 }

@@ -471,8 +471,8 @@
       canvas.height = h;
       const ctx = canvas.getContext('2d');
       const step = document.createElement('canvas');
-      step.width = 16;
-      step.height = 6;
+      step.width = 32;
+      step.height = 12;
       const stepCtx = step.getContext('2d');
       if (!ctx || !stepCtx) return;
       const sh = image.naturalHeight * 0.45;
@@ -489,14 +489,14 @@
         h,
       );
       stepCtx.imageSmoothingQuality = 'high';
-      stepCtx.drawImage(canvas, 0, 0, w, h, 0, 0, 16, 6);
+      stepCtx.drawImage(canvas, 0, 0, w, h, 0, 0, 32, 12);
       ctx.clearRect(0, 0, w, h);
-      ctx.drawImage(step, 0, 0, 16, 6, 0, 0, w, h);
+      ctx.drawImage(step, 0, 0, 32, 12, 0, 0, w, h);
       ctx.globalCompositeOperation = 'destination-in';
       const ramp = ctx.createLinearGradient(0, 0, 0, h);
       ramp.addColorStop(0, 'rgba(0,0,0,0)');
-      ramp.addColorStop(0.55, 'rgba(0,0,0,0.8)');
-      ramp.addColorStop(1, 'rgba(0,0,0,0.95)');
+      ramp.addColorStop(0.5, 'rgba(0,0,0,0.55)');
+      ramp.addColorStop(1, 'rgba(0,0,0,0.75)');
       ctx.fillStyle = ramp;
       ctx.fillRect(0, 0, w, h);
     } catch {
@@ -536,12 +536,12 @@
 
   // ── Slow drift ──
   //
-  // Each picture drifts and swells a little (a few percent) over the time it is
+  // Each picture drifts and swells a little (about ten percent) over the time it is
   // shown: one transform animation per picture, run by the compositor. It is
   // paused while the page is not shown, and off when the Hub says so
   // (localStorage 'lugn.photos.kenburns' = 'off') or asks for less motion.
-  const DRIFT_SCALE = 1.06;
-  const DRIFT_MAX = 1.2; // percent
+  const DRIFT_SCALE = 1.11;
+  const DRIFT_MAX = 2.4; // percent
   function driftOn() {
     try {
       if (window.localStorage?.getItem('lugn.photos.kenburns') === 'off')

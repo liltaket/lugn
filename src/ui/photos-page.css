@@ -211,6 +211,7 @@
    lifted over the quick menu while that is open. It sits outside the menu, so
    it stays when the menu goes. */
 .ph-now {
+  z-index: 2;
   position: absolute;
   left: 36px;
   bottom: 28px;
@@ -263,7 +264,7 @@
   left: 0;
   bottom: 0;
   width: 100%;
-  height: min(55%, 300px);
+  height: min(38%, 190px);
   opacity: 0;
   transition: opacity 240ms ease-out;
 }
