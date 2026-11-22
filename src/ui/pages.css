@@ -419,6 +419,12 @@
   pointer-events: auto;
   cursor: pointer;
 }
+/* Its focus ring, drawn inside the card's clip (the image's own outline would
+   be cut off by the card and by its fade). */
+#app-root .music-artwork:has(#music-artwork-image:focus-visible) {
+  outline: 3px solid var(--ink);
+  outline-offset: -3px;
+}
 
 /* Hem's toast and connection notice, shown on the other pages too. */
 .pages-notice {

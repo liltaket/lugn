@@ -542,7 +542,14 @@
 
   function drawMusic() {
     const state = musicState();
-    const key = JSON.stringify({ ...state, progress: undefined });
+    // The cover URL (possibly a long data: URL of Hem's trimmed cover) is
+    // compared on its own, not serialised into the key every second.
+    drawCover(state.art);
+    const key = JSON.stringify({
+      ...state,
+      art: undefined,
+      progress: undefined,
+    });
     if (key !== musicKey) {
       musicKey = key;
       const root = view('music', 'root');
@@ -562,7 +569,6 @@
         'd',
         state.playing ? PAUSE_PATH : PLAY_PATH,
       );
-      drawCover(state.art);
     }
     drawProgress(state.progress);
   }
@@ -693,7 +699,19 @@
 
   // A press sends what the button shows (as Hem holds its action through a
   // press), never an action recomputed from a newer state behind the label.
+  // The action is taken when the press starts, as Hem holds its own, so a
+  // redraw during the press cannot change what the release sends.
+  let pressedPlay = null;
+  view('music', 'play')?.addEventListener('pointerdown', () => {
+    pressedPlay = { action: shownPlayAction, at: performance.now() };
+  });
   view('music', 'play')?.addEventListener('click', () => {
+    // A press that never clicked (a swipe that started here) is forgotten.
+    const action =
+      pressedPlay && performance.now() - pressedPlay.at < 2000
+        ? pressedPlay.action
+        : shownPlayAction;
+    pressedPlay = null;
     const data = payload();
     const target = typeof musicTarget === 'string' ? musicTarget : '';
     const device = target ? data?.state?.music?.devices?.[target] : undefined;
@@ -706,7 +724,7 @@
       return;
     void runCommand(`music:${target}`, {
       target,
-      request: { property: 'playback', value: shownPlayAction },
+      request: { property: 'playback', value: action },
     });
     window.setTimeout(drawMusic, 0);
   });
