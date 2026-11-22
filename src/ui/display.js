@@ -533,8 +533,7 @@ function renderMusicProgress() {
       Math.min(1, (sample.position + elapsed) / sample.duration),
     );
   }
-  setRingTimings(ringFraction, fraction);
-  ringFraction = fraction;
+  setRingTimings(fraction);
   refs.musicPlayback.style?.setProperty?.('--progress', fraction.toFixed(4));
   root.dataset.progress = String(!!sample);
 }
@@ -542,23 +541,45 @@ function renderMusicProgress() {
 // The ring is two half rings that each rotate for their own part of the arc.
 // A move across the halfway point (a seek) is shared out over the one second
 // in the order the arc travels, so the lit arc stays one continuous piece, as
-// it was when the progress value itself was transitioned.
-let ringFraction = 0;
-function setRingTimings(from, to) {
-  const style = refs.musicPlayback.style;
-  if (!style?.setProperty) return;
+// it was when the progress value itself was transitioned. A new target starts
+// from where the ring is shown at that moment, as a retargeted transition
+// does, so a tick or a second update during a seek never splits the arc.
+const ring = { from: 0, to: 0, start: 0 };
+
+function ringTimings(from, to) {
   const low = Math.min(from, to);
   const high = Math.max(from, to);
   const total = high - low;
   const first = Math.max(0, Math.min(high, 0.5) - Math.min(low, 0.5));
   const second = Math.max(0, Math.max(high, 0.5) - Math.max(low, 0.5));
-  const share = (part) => (total > 1e-6 ? part / total : 1);
+  const share = (part) => (total > 1e-6 ? part / total : 0);
   const forward = to >= from;
+  return {
+    firstTime: share(first),
+    firstDelay: forward ? 0 : share(second),
+    secondTime: share(second),
+    secondDelay: forward ? share(first) : 0,
+  };
+}
+
+function setRingTimings(to) {
+  const style = refs.musicPlayback.style;
+  if (!style?.setProperty) return;
+  // The same target again (a second draw in one turn, or a paused track)
+  // changes nothing and must not disturb a move in progress.
+  if (Math.abs(to - ring.to) < 1e-4) return;
+  const now = monotonicNow();
+  const done = Math.min(1, Math.max(0, (now - ring.start) / 1000));
+  const from = ring.from + (ring.to - ring.from) * done;
+  const timings = ringTimings(from, to);
+  ring.from = from;
+  ring.to = to;
+  ring.start = now;
   const seconds = (value) => `${value.toFixed(3)}s`;
-  style.setProperty('--ring-first-time', seconds(share(first)));
-  style.setProperty('--ring-first-delay', seconds(forward ? 0 : share(second)));
-  style.setProperty('--ring-second-time', seconds(share(second)));
-  style.setProperty('--ring-second-delay', seconds(forward ? share(first) : 0));
+  style.setProperty('--ring-first-time', seconds(timings.firstTime));
+  style.setProperty('--ring-first-delay', seconds(timings.firstDelay));
+  style.setProperty('--ring-second-time', seconds(timings.secondTime));
+  style.setProperty('--ring-second-delay', seconds(timings.secondDelay));
 }
 
 function progressSample(values) {

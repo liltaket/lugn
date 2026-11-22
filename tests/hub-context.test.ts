@@ -502,6 +502,37 @@ describe('Hub optional Lugn 2 presentation', () => {
     });
     expect(draws()).toBe(5);
   });
+  it('shares a seek over the half rings in the order the arc travels', () => {
+    const timings = (from: number, to: number) =>
+      JSON.parse(
+        JSON.stringify(runInContext(`ringTimings(${from}, ${to})`, ui.context)),
+      ) as Record<string, number>;
+    const near = (value: number, expected: number) =>
+      expect(value).toBeCloseTo(expected, 5);
+    // Forward over the halfway point: the first half finishes, then the second.
+    const forward = timings(0.25, 0.75);
+    near(forward['firstTime']!, 0.5);
+    near(forward['firstDelay']!, 0);
+    near(forward['secondTime']!, 0.5);
+    near(forward['secondDelay']!, 0.5);
+    // Backward: the second half unwinds first.
+    const backward = timings(0.8, 0.2);
+    near(backward['secondTime']!, 0.5);
+    near(backward['secondDelay']!, 0);
+    near(backward['firstTime']!, 0.5);
+    near(backward['firstDelay']!, 0.5);
+    // Within one half the moving half takes the whole second.
+    const inside = timings(0.1, 0.3);
+    near(inside['firstTime']!, 1);
+    near(inside['firstDelay']!, 0);
+    const late = timings(0.6, 0.9);
+    near(late['secondTime']!, 1);
+    near(late['secondDelay']!, 0);
+    // No movement at all never delays anything.
+    const still = timings(0.4, 0.4);
+    near(still['firstDelay']!, 0);
+    near(still['secondDelay']!, 0);
+  });
   it('draws only the controls of a command while it is pending', async () => {
     const release = ui.holdPost();
     const count = (name: string) =>
