@@ -261,7 +261,8 @@ The pager follows the responsiveness rules above:
   the middle of its motion (on a Hub that cost about 100 ms of style and
   layout in the swipe's frames).
 - Page modules register `prepare`, `enter`, `leave` and `sleep` hooks with
-  `lugnPages.define(id, hooks)`; `lugnPages.go(id)` and `lugnPages.onChange`
+  `lugnPages.define(id, hooks)` (`enter` and `leave` run once the motion has
+  ended, never in its frames); `lugnPages.go(id)` and `lugnPages.onChange`
   are the entry points for later context switching. New pages read dashboard
   data from `display.js` read-only.
 - **Mät svep** on Info records animation-frame gaps during swipes and long

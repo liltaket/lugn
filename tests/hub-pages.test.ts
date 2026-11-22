@@ -749,6 +749,33 @@ describe('Hub pager', () => {
     pointer('pointerup', pages[1]!.button, 700);
   });
 
+  it('enters and leaves a page once the motion has ended', () => {
+    const { api, pages, drag, finishAnimations } = setup();
+    const calls: string[] = [];
+    const define = (
+      api as unknown as {
+        define(id: string, hooks: Record<string, () => void>): void;
+      }
+    ).define;
+    define('clock', {
+      enter: () => calls.push('clock.enter'),
+      leave: () => calls.push('clock.leave'),
+    });
+    define('info', {
+      enter: () => calls.push('info.enter'),
+      leave: () => calls.push('info.leave'),
+    });
+    drag(pages[0]!.button, 800, 200);
+    expect(api.current()).toBe('clock');
+    // Released, but still moving: the page has not started its work.
+    expect(calls).toEqual([]);
+    finishAnimations();
+    expect(calls).toEqual(['clock.enter']);
+    drag(pages[1]!.button, 800, 200);
+    finishAnimations();
+    expect(calls).toEqual(['clock.enter', 'clock.leave', 'info.enter']);
+  });
+
   it('keeps a neighbour drawn in idle time, not when a press starts', () => {
     const { api, pages, pointer, advance } = setup();
     let prepared = 0;

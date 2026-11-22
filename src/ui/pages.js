@@ -265,10 +265,21 @@
     index = target;
     announcements.push({ page: pages[index].id, previous: previous.id });
     syncDots();
-    callHook(previous, 'leave');
     setState(pages[index], 'active');
-    callHook(pages[index], 'enter');
     return previous;
+  }
+
+  // The pages' own enter and leave run once the motion has ended, so a page
+  // starting its timers and drawing its live state never lands in the
+  // frames of the motion. A run of swipes leaves only the first page and
+  // enters only the last.
+  let entered = null;
+  function enterCurrent() {
+    const page = pages[index];
+    if (entered === page) return;
+    if (entered) callHook(entered, 'leave');
+    entered = page;
+    callHook(page, 'enter');
   }
 
   // Each change reaches every listener before the next one does, in order,
@@ -304,6 +315,7 @@
   // else) may measure the page again now.
   function motionEnded() {
     setPaging(false);
+    enterCurrent();
     window.dispatchEvent?.(new Event('lugn:pages-settled'));
     settled();
   }
@@ -807,7 +819,10 @@
       if (!page) return;
       page.hooks = hooks || {};
       if (page.state === 'near') callHook(page, 'prepare');
-      if (page.state === 'active') callHook(page, 'enter');
+      if (page.state === 'active') {
+        entered = page;
+        callHook(page, 'enter');
+      }
     },
     onChange(fn) {
       listeners.add(fn);
