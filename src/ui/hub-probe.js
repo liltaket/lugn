@@ -803,6 +803,34 @@
     };
   }
 
+  // Goes to a page through the pager's own code and measures the frames from
+  // just before to `ms` after, then returns home.
+  async function goRun(target, ms, label) {
+    const api = globalThis.lugnPages;
+    if (!api?.go) return { variant: label, skipped: 'no pager' };
+    let went = false;
+    try {
+      await sleep(2500);
+      drain();
+      const sample = await sampleFrames(ms, (elapsed) => {
+        if (elapsed >= 300 && !went) {
+          went = true;
+          api.go(target);
+        }
+      });
+      return {
+        variant: label,
+        page: String(api.current?.()),
+        ...(await summarise(sample)),
+      };
+    } finally {
+      await sleep(800);
+      if (api.current?.() !== 'home') api.go('home');
+      await sleep(1500);
+      drain();
+    }
+  }
+
   async function swipeRun(mode, label, css = '', prepare = null) {
     const api = globalThis.lugnPages;
     const pager = document.getElementById('hub-pager');
@@ -1071,6 +1099,8 @@
             '.hub-page > * { display: none !important; }',
           ),
       ],
+      ['foto-ankomst', 'dot', () => goRun('foto', 3000, 'go-foto')],
+      ['foto-byte', 'dot', () => goRun('foto', 30000, 'go-foto-long')],
       [
         'sidsvep-varm',
         'dot',
