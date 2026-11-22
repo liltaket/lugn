@@ -913,8 +913,25 @@ describe('Home Assistant music adapter', () => {
       target: 'music.room',
       requested: { property: 'source', value: 'Optical' },
     });
+    await adapter.dispatch({
+      id: '4n',
+      target: 'music.room',
+      requested: { property: 'track', value: 'next' },
+    });
+    await adapter.dispatch({
+      id: '4p',
+      target: 'music.room',
+      requested: { property: 'track', value: 'previous' },
+    });
     expect(transport.mock.calls.map(([url]) => url)).toEqual(
-      ['media_play', 'media_pause', 'volume_set', 'select_source'].map(
+      [
+        'media_play',
+        'media_pause',
+        'volume_set',
+        'select_source',
+        'media_next_track',
+        'media_previous_track',
+      ].map(
         (service) => `http://ha.local/api/services/media_player/${service}`,
       ),
     );
@@ -925,6 +942,8 @@ describe('Home Assistant music adapter', () => {
       { entity_id: 'media_player.room' },
       { entity_id: 'media_player.desk', volume_level: 0.4 },
       { entity_id: 'media_player.room', source: 'Optical' },
+      { entity_id: 'media_player.room' },
+      { entity_id: 'media_player.room' },
     ]);
     await expect(
       adapter.dispatch({
@@ -940,7 +959,7 @@ describe('Home Assistant music adapter', () => {
         requested: { property: 'playback', value: 'playing' },
       }),
     ).rejects.toThrow('No Home Assistant music');
-    expect(transport).toHaveBeenCalledTimes(4);
+    expect(transport).toHaveBeenCalledTimes(6);
   });
   it('normalizes startup and event observations, unavailable entities and malformed attributes', () => {
     const adapter = new HomeAssistantMusicAdapter(

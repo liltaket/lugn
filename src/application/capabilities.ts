@@ -18,6 +18,7 @@ import {
   MusicVolumeChangeSchema,
   MusicDecisionSchema,
   MusicPresetSchema,
+  MusicTrackStepSchema,
   LightingValuesSchema,
   ProvenanceSchema,
   RoomStateSchema,
@@ -36,6 +37,7 @@ import type { ExecutionGuard, LugnEngine } from './lugn-engine.js';
 import {
   MusicFadeDurationError,
   MusicFadeUnavailableError,
+  MusicTrackUnavailableError,
 } from './music-controller.js';
 import {
   MusicVolumePolicySnapshotSchema,
@@ -73,6 +75,9 @@ const SourceMusicInput = z
 const PresetMusicInput = z
   .object({ target: SemanticMusicIdSchema, preset: MusicPresetSchema })
   .strict();
+const SkipTrackMusicInput = z
+  .object({ target: SemanticMusicIdSchema, step: MusicTrackStepSchema })
+  .strict();
 const MusicCommandOutput = z.object({
   accepted: z.literal(true),
   commandId: z.string(),
@@ -94,6 +99,7 @@ export class CapabilityInputError extends Error {
       | 'presence_feedback_unavailable'
       | 'presence_feedback_save_failed'
       | 'chime_unavailable'
+      | 'music_track_unavailable'
       | 'human_actor_required',
   ) {
     super(code);
@@ -186,6 +192,10 @@ export const CapabilitySchemas = {
   },
   'music.selectSource': { input: SourceMusicInput, output: MusicCommandOutput },
   'music.playPreset': { input: PresetMusicInput, output: MusicCommandOutput },
+  'music.skipTrack': {
+    input: SkipTrackMusicInput,
+    output: MusicCommandOutput,
+  },
   'switch.getState': {
     input: GetSwitchInput,
     output: z.object({ device: DeviceSwitchStateSchema }),
@@ -491,6 +501,29 @@ export class CapabilityRegistry {
           provenance,
           isCurrent,
         );
+        output = {
+          accepted: true,
+          commandId: command.id,
+          status: command.status,
+        };
+        break;
+      }
+      case 'music.skipTrack': {
+        const input = SkipTrackMusicInput.parse(rawInput);
+        getMusicTarget(this.engine, input.target);
+        let command;
+        try {
+          command = await this.engine.requestMusic(
+            input.target,
+            { property: 'track', value: input.step },
+            provenance,
+            isCurrent,
+          );
+        } catch (error) {
+          if (error instanceof MusicTrackUnavailableError)
+            throw new CapabilityInputError('music_track_unavailable');
+          throw error;
+        }
         output = {
           accepted: true,
           commandId: command.id,

@@ -192,7 +192,12 @@ export class MusicCommandRecovery {
       this.stop(command.id, 'newer_report');
       return;
     }
-    if (command.requested.property === 'preset') {
+    // A preset or a track step has nothing to read back, and repeating a
+    // track step would skip twice.
+    if (
+      command.requested.property === 'preset' ||
+      command.requested.property === 'track'
+    ) {
       this.stop(command.id, 'non_retryable');
       return;
     }

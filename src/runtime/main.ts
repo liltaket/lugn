@@ -357,6 +357,13 @@ export async function startRuntime(
       : undefined;
   const engine = new LugnEngine(systemClock, {
     ...(computerPlayback ? { computerPlayback } : {}),
+    // Every computer-audio input, with or without playback control: the
+    // same rule the Hub's Nästa låt follows (musicTrackControl).
+    computerAudioInputs: Object.fromEntries(
+      Object.entries(allMusicMappings).flatMap(([target, mapping]) =>
+        mapping.computerAudio ? [[target, mapping.computerAudio]] : [],
+      ),
+    ),
     adapter: goveeLighting ?? homeAssistantLighting,
     deviceIds,
     scenes,

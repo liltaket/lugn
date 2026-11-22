@@ -401,6 +401,16 @@ describe('WiimMusicAdapter', () => {
       target: 'music.room',
       requested: { property: 'preset', value: 'spotify_dj' },
     });
+    await adapter.dispatch({
+      id: 'c5n',
+      target: 'music.room',
+      requested: { property: 'track', value: 'next' },
+    });
+    await adapter.dispatch({
+      id: 'c5p',
+      target: 'music.room',
+      requested: { property: 'track', value: 'previous' },
+    });
 
     const sent = transport.commands
       .map((c) => c.command)
@@ -415,6 +425,8 @@ describe('WiimMusicAdapter', () => {
       'setPlayerCmd:vol:37',
       'setPlayerCmd:switchmode:optical',
       'MCUKeyShortClick:1',
+      'setPlayerCmd:next',
+      'setPlayerCmd:prev',
     ]);
 
     // Source outside allowlist is rejected without hitting the network.

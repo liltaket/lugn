@@ -13,7 +13,13 @@ import {
   type MusicAdapter,
   type MusicObservation,
 } from '../adapters/simulated-music.js';
-import { MusicController, type MusicOptions } from './music-controller.js';
+import {
+  MusicController,
+  MusicTrackUnavailableError,
+  type MusicOptions,
+} from './music-controller.js';
+import { canStepTrack } from './music-track-control.js';
+
 import type { ComputerPlaybackControl } from './computer-playback-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
@@ -100,6 +106,17 @@ import {
   type WindowLighting,
 } from '../core/window-lighting.js';
 
+/** Execution guards: volume, a track step, and everything else (playback). */
+function musicGuardKey(target: string, property: string): string {
+  return `${target}:${
+    property === 'volume'
+      ? 'volume'
+      : property === 'track'
+        ? 'track'
+        : 'playback'
+  }`;
+}
+
 export type EngineOptions = {
   windowLighting?: WindowLighting;
   deviceIds?: string[];
@@ -125,6 +142,9 @@ export type EngineOptions = {
   switchFeedbackTimeoutMs?: number;
   music?: MusicOptions;
   computerPlayback?: ComputerPlaybackControl;
+  /** Players' computer-audio inputs (all of them, with or without playback
+   * control): a player on one of these does not take track steps. */
+  computerAudioInputs?: Readonly<Record<string, { source: string }>>;
   stateHistoryLimit?: number;
   prelight?: {
     targets: Record<string, LightingValues>;
@@ -575,6 +595,9 @@ export class LugnEngine {
   private readonly musicController: MusicController;
   private readonly musicAutomation: MusicAutomation;
   private readonly computerPlayback: ComputerPlaybackControl | undefined;
+  private readonly computerAudioInputs: Readonly<
+    Record<string, { source: string }>
+  >;
   private readonly roomSessions: RoomSessions;
   private lastNonOffSceneId: string | null = null;
   private bilresaPriorVolumeAutomation: boolean | null = null;
@@ -1029,6 +1052,7 @@ export class LugnEngine {
       };
     }
     this.computerPlayback = options.computerPlayback;
+    this.computerAudioInputs = options.computerAudioInputs ?? {};
     const musicAdapter: MusicAdapter =
       options.music?.adapter ?? new SimulatedMusicAdapter(clock);
     const guardedMusicAdapter: MusicAdapter = {
@@ -1037,7 +1061,7 @@ export class LugnEngine {
           (item) => item.id === command.id,
         );
         const guard = this.musicExecutionGuards.get(
-          `${command.target}:${command.requested.property === 'volume' ? 'volume' : 'playback'}`,
+          musicGuardKey(command.target, command.requested.property),
         );
         if (guard && guard.requestId === record?.provenance.requestId)
           this.assertExecution(guard.isCurrent);
@@ -1169,7 +1193,7 @@ export class LugnEngine {
     );
     this.musicController.setRecoveryPolicyGuard((command) => {
       const guard = this.musicExecutionGuards.get(
-        `${command.target}:${command.requested.property === 'volume' ? 'volume' : 'playback'}`,
+        musicGuardKey(command.target, command.requested.property),
       );
       if (
         guard?.requestId === command.provenance.requestId &&
@@ -1801,9 +1825,21 @@ export class LugnEngine {
     requested = MusicRequestSchema.parse(requested);
     provenance = ProvenanceSchema.parse(provenance);
     this.musicController.getState(target);
-    if (isHumanActor(provenance.actor) && !isCurrent)
+    // A track step is refused before anything else happens, and it is not a
+    // playback or volume intent: it notes no intervention and has its own
+    // execution guard.
+    if (
+      requested.property === 'track' &&
+      !canStepTrack(this.state, target, this.computerAudioInputs)
+    )
+      throw new MusicTrackUnavailableError(target);
+    if (
+      isHumanActor(provenance.actor) &&
+      !isCurrent &&
+      requested.property !== 'track'
+    )
       this.noteIntervention({ domain: 'music', target });
-    const key = `${target}:${requested.property === 'volume' ? 'volume' : 'playback'}`;
+    const key = musicGuardKey(target, requested.property);
     if (isCurrent)
       this.musicExecutionGuards.set(key, {
         requestId: provenance.requestId,

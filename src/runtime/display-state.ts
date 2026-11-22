@@ -49,3 +49,5 @@ export function displayPayloadKey(json: string): string {
     '',
   );
 }
+
+export { musicTrackControl } from '../application/music-track-control.js';

@@ -889,6 +889,12 @@ export class WiimMusicAdapter implements MusicAdapter {
         wireCommand = `MCUKeyShortClick:${presetNumber}`;
         break;
       }
+      case 'track':
+        wireCommand =
+          requested.value === 'next'
+            ? 'setPlayerCmd:next'
+            : 'setPlayerCmd:prev';
+        break;
     }
 
     let reply: string;
