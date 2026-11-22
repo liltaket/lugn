@@ -172,13 +172,23 @@ class El {
       fn({ target: this, ...event });
   }
   closest(selector: string): El | null {
-    if (selector === '.cams-tile' && this.className.includes('cams-tile'))
-      return this;
+    const name = selector.replace(/^\./, '');
+    if (this.className.split(' ').includes(name)) return this;
     return this.parent?.closest(selector) ?? null;
+  }
+  contains(node: El | null): boolean {
+    for (let n = node; n; n = n.parent) if (n === this) return true;
+    return false;
   }
 }
 
 type Hooks = { enter(): void; leave(): void; sleep(): void };
+type MenuOptions = {
+  id: string;
+  root: El;
+  menu: El;
+  handleTap(event: { target: El }): boolean;
+};
 
 function setup(count = 5) {
   vi.useFakeTimers();
@@ -188,7 +198,7 @@ function setup(count = 5) {
     root: new El('div'),
     stage: new El('div'),
     notice: new El('div'),
-    sub: new El('span'),
+    menu: new El('div'),
     back: new El('button'),
   };
   views['root']!.style['--W'] = '1024';
@@ -204,6 +214,8 @@ function setup(count = 5) {
     getPropertyValue: (name: string) => views['root']!.style[name] ?? '',
   };
   const document = {
+    readyState: 'complete',
+    addEventListener: () => undefined,
     querySelector: () => root,
     getElementById: (id: string) => (id === 'hub-pager' ? pager : null),
     createElement: (tag: string) => {
@@ -266,6 +278,7 @@ function setup(count = 5) {
     }
   }
   const hooks: { current?: Hooks } = {};
+  const menu: { options?: MenuOptions } = {};
   const context = createContext({
     document,
     window,
@@ -288,6 +301,9 @@ function setup(count = 5) {
     globalThis: undefined,
   });
   context['globalThis'] = context;
+  context['lugnQuickMenu'] = {
+    attach: (options: MenuOptions) => (menu.options = options),
+  };
   context['lugnPages'] = {
     go: vi.fn(() => true),
     define: (_id: string, h: Hooks) => (hooks.current = h),
@@ -301,6 +317,7 @@ function setup(count = 5) {
     await vi.advanceTimersByTimeAsync(ms);
   };
   return {
+    menu,
     hooks: hooks.current!,
     views,
     stage,
@@ -432,25 +449,55 @@ describe('camera grid page', () => {
     expect(s.revoked.length).toBeGreaterThan(0);
   });
 
-  it('shows one camera large when tapped, faster and alone, and returns on a tap', async () => {
+  it('shows one camera large when tapped, faster and alone; the round button returns', async () => {
     const s = setup();
     s.hooks.enter();
     await s.flush(0);
     await s.answerAll();
-    s.tiles()[2]!.fire('click');
-    s.stage.fire('click', { target: s.tiles()[2] });
+    const tap = s.menu.options!.handleTap;
+    // A tap on a camera in the grid is the page's own.
+    expect(tap({ target: s.tiles()[2]! })).toBe(true);
     await s.flush(0);
     const shown = s.tiles().filter((t) => !t.hidden);
     expect(shown).toHaveLength(1);
     expect(shown[0]!.dataset['camera']).toBe('north');
     expect(shown[0]!.attrs.get('aria-label')).toContain('tillbaka');
+    expect(s.views['back']!.hidden).toBe(false);
     // Only that camera is asked for, one at a time.
-    const before = s.fetchMock.mock.calls.length;
     await s.flush(0);
     expect(s.fetches.every((f) => f.url.includes('/north/'))).toBe(true);
-    expect(s.fetchMock.mock.calls.length).toBeGreaterThanOrEqual(before);
-    s.stage.fire('click', { target: shown[0] });
+    s.views['back']!.fire('click');
     await s.flush(0);
     expect(s.tiles().filter((t) => !t.hidden)).toHaveLength(5);
+    expect(s.views['back']!.hidden).toBe(true);
+  });
+
+  it("shares the quick menu of Foto and Musik: taps on cameras are the page's, the rest the menu's", async () => {
+    const s = setup();
+    expect(s.menu.options?.id).toBe('kameror');
+    expect(s.menu.options?.menu).toBe(s.views['menu']);
+    // Not before the page is shown.
+    expect(s.menu.options!.handleTap({ target: s.views['stage']! })).toBe(
+      false,
+    );
+    s.hooks.enter();
+    await s.flush(0);
+    const tap = s.menu.options!.handleTap;
+    // The menu's own buttons are never taken.
+    const dockButton = new El('button');
+    s.views['menu']!.append(dockButton);
+    expect(tap({ target: dockButton })).toBe(false);
+    // Empty space beside the cameras opens or closes the menu.
+    expect(tap({ target: s.views['stage']! })).toBe(false);
+    // A camera in the grid is taken (and shown large)…
+    expect(tap({ target: s.tiles()[0]! })).toBe(true);
+    await s.flush(0);
+    // …and a tap on the large camera is the menu's (it opens or closes).
+    expect(tap({ target: s.tiles()[0]! })).toBe(false);
+    expect(s.tiles().filter((t) => !t.hidden)).toHaveLength(1);
+    // The round button is the page's own.
+    const round = s.views['back']!;
+    round.className = 'cams-back';
+    expect(tap({ target: round })).toBe(true);
   });
 });

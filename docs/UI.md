@@ -259,7 +259,9 @@ moving, and the page releases its pictures when it is two pages away.
 
 **Kameror** (after Musik) shows every camera at once in a grid; a tap shows
 one large, and tapping the small camera view on Hem opens the page on that
-camera. It asks the server for pictures only while it is the shown page; see
+camera. It has the same quick menu as Foto and Musik (Hem's scenes slide up
+from the bottom edge on mouse movement, or on a tap beside the cameras, or on
+the large camera). It asks the server for pictures only while it is the shown page; see
 [Event camera previews](CAMERAS.md#the-camera-grid-page).
 
 Musik and Klocka end in a **scene dock**: Hem's scenes (not the custom ones),
