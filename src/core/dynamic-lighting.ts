@@ -98,6 +98,8 @@ export type DynamicPlan = {
   targets: Record<string, DynamicTargetPlan>;
 };
 
+const ARTWORK_EVIDENCE = 'Accent lamps carry the artwork colours';
+
 export function classifySituation(
   inputs: DynamicInputs,
   config: Pick<DynamicLightingConfig, 'idleAfterMs'>,
@@ -280,8 +282,8 @@ export function adaptivePlan(
     situation,
     reason,
     evidence: [
-      ...evidence,
-      ...(following ? ['Accent lamps carry the artwork colours'] : []),
+      ...evidence.filter((line) => line !== ARTWORK_EVIDENCE),
+      ...(following ? [ARTWORK_EVIDENCE] : []),
     ],
     targets,
   };

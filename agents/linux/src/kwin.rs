@@ -63,29 +63,37 @@ async fn load(connection: &Connection, file: &str) -> Result<()> {
     // loadScript returns -1 and the outer failure backoff retries.
     let id: i32 = scripting.call("loadScript", &(file, PLUGIN)).await?;
     ensure!(id >= 0, "KWin observer already loaded or refused");
-    let path = format!("/Scripting/Script{id}");
-    let script = Proxy::new(
-        connection,
-        "org.kde.KWin",
-        path.as_str(),
-        "org.kde.kwin.Script",
-    )
-    .await?;
-    if script.call::<_, _, ()>("run", &()).await.is_err() {
-        // Plasma 5 used /{id}; retry only this known interface difference.
-        let path = format!("/{id}");
-        Proxy::new(
-            connection,
-            "org.kde.KWin",
-            path.as_str(),
-            "org.kde.kwin.Script",
-        )
-        .await?
-        .call::<_, _, ()>("run", &())
-        .await?;
-    }
+    // KWin numbers scripts by list length, so after any removal in the middle
+    // of its list `/Scripting/Script<id>` can belong to another script, and
+    // tools that load, run and stop helper scripts (kdotool, OpenDeck) then
+    // stop the wrong one. Scripting.start() runs every loaded script that is
+    // not running yet, ours included, without going through that path.
+    scripting.call::<_, _, ()>("start", &()).await?;
     Ok(())
 }
+/// How often the observer script is checked for having been unloaded.
+const WATCHDOG: Duration = Duration::from_secs(2);
+
+async fn script_lost(connection: &Connection) -> bool {
+    let check = async {
+        let scripting = Proxy::new(
+            connection,
+            "org.kde.KWin",
+            "/Scripting",
+            "org.kde.kwin.Scripting",
+        )
+        .await?;
+        scripting
+            .call::<_, _, bool>("isScriptLoaded", &(PLUGIN,))
+            .await
+    };
+    // An unanswered check is not proof of loss; only a clear "no" counts.
+    matches!(
+        tokio::time::timeout(Duration::from_secs(2), check).await,
+        Ok(Ok(false))
+    )
+}
+
 async fn monitor(tx: &Sender<Event>) -> Result<()> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR missing")?;
     monitor_in(tx, std::path::Path::new(&runtime)).await
@@ -113,12 +121,28 @@ async fn monitor_in(tx: &Sender<Event>, runtime: &std::path::Path) -> Result<()>
         .build();
     let mut owners = MessageStream::for_match_rule(rule, &connection, Some(16)).await?;
     load(&connection, file_path).await?;
-    while let Some(message) = owners.next().await {
-        let message = message?;
-        let (_, _, new): (String, String, String) = message.body().deserialize()?;
-        tx.send(Event::Application(None)).await?;
-        if !new.is_empty() {
-            load(&connection, file_path).await?;
+    let mut watchdog = tokio::time::interval(WATCHDOG);
+    watchdog.tick().await;
+    loop {
+        tokio::select! {
+            message = owners.next() => {
+                let Some(message) = message else { break };
+                let message = message?;
+                let (_, _, new): (String, String, String) = message.body().deserialize()?;
+                tx.send(Event::Application(None)).await?;
+                if !new.is_empty() {
+                    load(&connection, file_path).await?;
+                }
+            }
+            _ = watchdog.tick() => {
+                // Other tools can unload our script without telling us, which
+                // would leave the last window (and its full-screen state)
+                // stale for good. Forget it and load the script again.
+                if script_lost(&connection).await {
+                    tx.send(Event::Application(None)).await?;
+                    load(&connection, file_path).await?;
+                }
+            }
         }
     }
     anyhow::bail!("KWin bus disconnected")
@@ -194,6 +218,17 @@ mod tests {
             }
             self.0.loaded.lock().unwrap().push(file.into());
             Ok(0)
+        }
+
+        #[zbus(name = "start")]
+        fn start(&self) {
+            self.0.runs.fetch_add(1, Ordering::SeqCst);
+            self.0.ready.notify_one();
+        }
+
+        #[zbus(name = "isScriptLoaded")]
+        fn is_script_loaded(&self, plugin: &str) -> bool {
+            plugin == PLUGIN
         }
 
         #[zbus(name = "unloadScript")]
