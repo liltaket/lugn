@@ -13,7 +13,11 @@ import {
   type MusicAdapter,
   type MusicObservation,
 } from '../adapters/simulated-music.js';
-import { MusicController, type MusicOptions } from './music-controller.js';
+import {
+  MusicController,
+  MusicTrackUnavailableError,
+  type MusicOptions,
+} from './music-controller.js';
 import type { ComputerPlaybackControl } from './computer-playback-controller.js';
 import { AutomationHolds, isHumanActor } from '../core/automation-holds.js';
 import {
@@ -1869,6 +1873,13 @@ export class LugnEngine {
     }
     if (requested.property === 'source' || requested.property === 'preset')
       this.computerPlayback?.invalidate(target);
+    // A computer's audio through the player's input is not skipped by the
+    // player; there is no computer track control (yet).
+    if (
+      requested.property === 'track' &&
+      this.computerPlayback?.handles(target)
+    )
+      throw new MusicTrackUnavailableError(target);
     return this.musicController.request(target, requested, provenance);
   }
 

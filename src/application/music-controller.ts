@@ -54,6 +54,14 @@ export class MusicFadeUnavailableError extends Error {
   }
 }
 
+/** The player's current input (a computer's audio) cannot be skipped. */
+export class MusicTrackUnavailableError extends Error {
+  constructor(target: string) {
+    super(`${target} cannot skip tracks on its current input`);
+    this.name = 'MusicTrackUnavailableError';
+  }
+}
+
 export class MusicFadeDurationError extends Error {
   constructor() {
     super('The requested fade is too short for bounded volume steps');
@@ -1795,6 +1803,8 @@ export class MusicController {
     // Home Assistant does not expose WiiM's selected preset in the state
     // snapshot, so playback state alone must never claim a preset confirmed.
     if (command.requested.property === 'preset') return false;
+    // Nor is there a "next" to observe: a track step stays unconfirmed.
+    if (command.requested.property === 'track') return false;
     const { property, value } = command.requested;
     const actual = observation.values[property];
     const matches =

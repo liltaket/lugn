@@ -164,6 +164,7 @@ export const SemanticMusicIdSchema = z
   .string()
   .regex(/^music\.[a-z0-9][a-z0-9._-]*$/);
 export const MusicPresetSchema = z.enum(['spotify_dj', 'optical']);
+export const MusicTrackStepSchema = z.enum(['next', 'previous']);
 export const MusicRequestSchema = z.discriminatedUnion('property', [
   z
     .object({
@@ -179,6 +180,10 @@ export const MusicRequestSchema = z.discriminatedUnion('property', [
     .strict(),
   z
     .object({ property: z.literal('preset'), value: MusicPresetSchema })
+    .strict(),
+  // A one-off action, not a state: the player has no "next" to observe.
+  z
+    .object({ property: z.literal('track'), value: MusicTrackStepSchema })
     .strict(),
 ]);
 export type MusicRequest = z.infer<typeof MusicRequestSchema>;
@@ -271,6 +276,7 @@ export const DeviceMusicStateSchema = z.object({
     volume: z.number().min(0).max(1).optional(),
     source: z.string().optional(),
     preset: MusicPresetSchema.optional(),
+    track: MusicTrackStepSchema.optional(),
   }),
   availability: z.enum(['available', 'unavailable']),
   observedAt: z.number().nonnegative().nullable(),

@@ -23,7 +23,11 @@ import {
 } from '../application/capabilities.js';
 import type { LightingScene, RoomState } from '../core/schemas.js';
 import { lightingFeedbackBrowserScript } from './lighting-feedback-script.js';
-import { displayPayloadKey, displayState } from './display-state.js';
+import {
+  displayPayloadKey,
+  displayState,
+  musicTrackControl,
+} from './display-state.js';
 import {
   MusicRequestSchema,
   SemanticMusicIdSchema,
@@ -801,6 +805,10 @@ export class LugnDisplayServer {
         : {}),
       ...this.options.experience?.snapshot(),
       computerNowPlaying: this.computerNowPlaying.snapshot(state),
+      musicTrackControl: musicTrackControl(
+        state,
+        this.options.computerAudioMappings ?? {},
+      ),
       artwork:
         this.options.artworkProvider?.snapshot(
           state,
@@ -1157,7 +1165,8 @@ function musicCapability(
     | 'music.pause'
     | 'music.setVolume'
     | 'music.selectSource'
-    | 'music.playPreset';
+    | 'music.playPreset'
+    | 'music.skipTrack';
   input: unknown;
 } {
   switch (request.property) {
@@ -1180,6 +1189,11 @@ function musicCapability(
       return {
         name: 'music.playPreset',
         input: { target, preset: request.value },
+      };
+    case 'track':
+      return {
+        name: 'music.skipTrack',
+        input: { target, step: request.value },
       };
   }
 }

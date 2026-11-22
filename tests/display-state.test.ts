@@ -5,6 +5,7 @@ import {
   DISPLAY_DECISIONS_PER_TARGET,
   displayPayloadKey,
   displayState,
+  musicTrackControl,
 } from '../src/runtime/display-state.js';
 
 function engineState() {
@@ -94,5 +95,32 @@ describe('displayPayloadKey', () => {
     expect(displayPayloadKey('{"sceneRevision":3}')).toBe(
       '{"sceneRevision":3}',
     );
+  });
+});
+
+describe('musicTrackControl', () => {
+  it('offers Nästa låt for an available player that is not on a computer input', () => {
+    const { state } = engineState();
+    const room = state.music.devices['music.room']!;
+    const other = state.music.devices['music.other']!;
+    room.availability = 'available';
+    room.observed.source = 'Spotify';
+    other.availability = 'available';
+    other.observed.source = 'Optical';
+    const routes = { 'music.other': { deviceId: 'kuffe', source: 'Optical' } };
+    expect(musicTrackControl(state, routes)).toEqual({
+      'music.room': true,
+      'music.other': false,
+    });
+    // Off the computer's input the player skips again; unavailable never.
+    other.observed.source = 'Spotify';
+    room.availability = 'unavailable';
+    expect(musicTrackControl(state, routes)).toEqual({
+      'music.room': false,
+      'music.other': true,
+    });
+    // An unknown source on a computer-routed player counts as the computer.
+    other.observed.source = null;
+    expect(musicTrackControl(state, routes)['music.other']).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import type { RoomState } from '../core/schemas.js';
+import type { ComputerAudioRoute } from '../application/computer-now-playing.js';
 
 /** Decisions kept per music target: the Hub lists the latest eight. */
 export const DISPLAY_DECISIONS_PER_TARGET = 8;
@@ -48,4 +49,24 @@ export function displayPayloadKey(json: string): string {
     /"(?:deliveryRevision|generatedAt|revision|updatedAt|evaluatedAt)":\d+/g,
     '',
   );
+}
+
+/**
+ * Per player, whether the Hub may offer Nästa låt: the player is available
+ * and is not playing a computer's audio through its input (a computer's
+ * media is not skipped through the player).
+ */
+export function musicTrackControl(
+  state: RoomState,
+  routes: Readonly<Record<string, ComputerAudioRoute>>,
+): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const [target, device] of Object.entries(state.music.devices)) {
+    const route = routes[target];
+    const source = device.observed.source;
+    const computerInput =
+      !!route && (source == null || source === route.source);
+    out[target] = device.availability === 'available' && !computerInput;
+  }
+  return out;
 }
