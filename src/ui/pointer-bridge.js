@@ -28,6 +28,15 @@
   // Frames keep running this long after the last move, so frame gaps are
   // measured across a whole gesture rather than per move.
   const MOTION_TAIL_MS = 100;
+  // The agent sends moves at most about 50 times a second and Wi-Fi delivers
+  // them in bursts, so the page often has a new position only every second or
+  // third frame. The dot follows the position exponentially instead of
+  // jumping to it, so it moves on every frame. This is its time constant; 0
+  // switches smoothing off. A gap longer than SMOOTH_IDLE_MS, or a jump of
+  // more than SMOOTH_JUMP_PX, puts the dot straight on the position.
+  const SMOOTH_MS = 28;
+  const SMOOTH_IDLE_MS = 100;
+  const SMOOTH_JUMP_PX = 400;
   // Longest heartbeat after `warm`, in case `enter` never comes.
   const WARM_MAX_MS = 3000;
   const PERF_INTERVAL_MS = 2000;
@@ -93,6 +102,10 @@
   // Point the cursor transform was last written for.
   let drawnX = NaN;
   let drawnY = NaN;
+  // Where the dot is shown while it follows (x, y).
+  let shownX = NaN;
+  let shownY = NaN;
+  let drawnTransform = '';
   let framePending = false;
   let lastFrameAt = 0;
   let motionUntil = 0;
@@ -237,6 +250,9 @@
       for (const plate of plates) plate.element.style.visibility = 'hidden';
       drawnX = NaN;
       drawnY = NaN;
+      drawnTransform = '';
+      shownX = NaN;
+      shownY = NaN;
     }
     if (hoverTimer !== undefined) clearTimeout(hoverTimer);
     hoverTimer = undefined;
@@ -395,18 +411,25 @@
         if (target)
           dispatchPointer('pointermove', target, { button: -1, buttons: 1 });
       }
-      if (x !== drawnX || y !== drawnY) {
-        drawnX = x;
-        drawnY = y;
-        cursor.style.transform = `translate3d(${snap(x - DOT_BOX / 2)}px, ${snap(y - DOT_BOX / 2)}px, 0)`;
-        frames += 1;
-        if (moveStamp) {
-          recordLag(now - moveStamp);
-          moveStamp = 0;
+      follow(now);
+      if (shownX !== drawnX || shownY !== drawnY) {
+        drawnX = shownX;
+        drawnY = shownY;
+        // A frame counts, and the lag is taken, when the dot visibly moves:
+        // a change below a device pixel writes nothing.
+        const transform = `translate3d(${snap(shownX - DOT_BOX / 2)}px, ${snap(shownY - DOT_BOX / 2)}px, 0)`;
+        if (transform !== drawnTransform) {
+          drawnTransform = transform;
+          cursor.style.transform = transform;
+          frames += 1;
+          if (moveStamp) {
+            recordLag(now - moveStamp);
+            moveStamp = 0;
+          }
         }
       }
     }
-    if (now < motionUntil || now < warmUntil) {
+    if (now < motionUntil || now < warmUntil || (visible && following())) {
       lastFrameAt = now;
       requestFrame();
     } else {
@@ -414,6 +437,31 @@
     }
   }
   const onFrame = guard(frame);
+
+  function following() {
+    return shownX !== x || shownY !== y;
+  }
+
+  // Moves the shown position toward (x, y) by the time since the last frame.
+  function follow(now) {
+    const gap = lastFrameAt ? now - lastFrameAt : 0;
+    if (
+      !SMOOTH_MS ||
+      !Number.isFinite(shownX) ||
+      !(gap > 0 && gap < SMOOTH_IDLE_MS) ||
+      Math.hypot(x - shownX, y - shownY) > SMOOTH_JUMP_PX
+    ) {
+      shownX = x;
+      shownY = y;
+      return;
+    }
+    const share = 1 - Math.exp(-gap / SMOOTH_MS);
+    shownX += (x - shownX) * share;
+    shownY += (y - shownY) * share;
+    // The last fraction of a pixel is the position itself.
+    if (Math.abs(x - shownX) < 0.25) shownX = x;
+    if (Math.abs(y - shownY) < 0.25) shownY = y;
+  }
 
   function snap(value) {
     return Math.round(value * pixelRatio) / pixelRatio;

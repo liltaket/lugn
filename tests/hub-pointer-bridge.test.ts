@@ -493,6 +493,52 @@ describe('Hub pointer bridge page script', () => {
     expect(page.cursor()).toBe(cursor);
   });
 
+  it('follows moves smoothly across frames and snaps after a pause or a jump', async () => {
+    const page = await connected();
+    page.socket.receive({ t: 'enter', x: 100, y: 100 });
+    page.runFrames();
+    const cursor = page.cursor()!;
+    const shownX = () =>
+      Number(/translate3d\((-?[\d.]+)px/.exec(cursor.style['transform']!)![1]) +
+      15;
+    expect(shownX()).toBeCloseTo(100, 0);
+    // A new position a frame later is approached, not jumped to.
+    page.advance(16);
+    page.socket.receive({ t: 'move', x: 200, y: 100 });
+    page.runFrames();
+    const first = shownX();
+    expect(first).toBeGreaterThan(100);
+    expect(first).toBeLessThan(200);
+    // The dot keeps moving without another move and arrives exactly.
+    let last = first;
+    for (let index = 0; index < 40; index += 1) {
+      page.advance(16);
+      page.runFrames();
+      expect(shownX()).toBeGreaterThanOrEqual(last);
+      last = shownX();
+    }
+    expect(last).toBe(200);
+    // After a pause the next position is taken at once, and so is a jump.
+    page.advance(500);
+    page.socket.receive({ t: 'move', x: 260, y: 100 });
+    page.runFrames();
+    expect(shownX()).toBe(260);
+    page.advance(16);
+    page.socket.receive({ t: 'move', x: 900, y: 100 });
+    page.runFrames();
+    expect(shownX()).toBe(900);
+    // The distance counts, not each axis: 300 px across and 300 px down is
+    // about 424 px.
+    page.advance(16);
+    page.socket.receive({ t: 'move', x: 600, y: 400 });
+    page.runFrames();
+    expect(shownX()).toBe(600);
+    // Once the dot has arrived no frame is left queued.
+    page.advance(300);
+    page.runFrames();
+    expect(page.frames).toHaveLength(0);
+  });
+
   it('rounds the cursor to device pixels', async () => {
     const page = await load();
     page.context['devicePixelRatio'] = 2;
@@ -639,9 +685,11 @@ describe('Hub pointer bridge page script', () => {
     const perf = page.socket.sent.at(-1)!;
     expect(perf).toEqual({
       t: 'perf',
-      frames: 7,
+      // Frames and lag count a visible change of the dot, which follows the
+      // position instead of jumping to it.
+      frames: 6,
       moves: 11,
-      lagP50: 6,
+      lagP50: 8,
       lagP95: 120,
       lagMax: 120,
       gapMax: 124,
