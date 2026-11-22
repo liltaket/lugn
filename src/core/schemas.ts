@@ -602,6 +602,12 @@ export const SceneSchema = z
     govee: z
       .record(SemanticLightingIdSchema, GoveeSceneIntentSchema)
       .optional(),
+    /**
+     * Marks a scene whose lamps follow live context. The scene's own `lighting`
+     * stays the static fallback the room returns to whenever there is nothing
+     * to follow.
+     */
+    dynamic: z.enum(['music', 'adaptive']).optional(),
   })
   .superRefine((scene, context) => {
     for (const [target, intent] of Object.entries(scene.govee ?? {})) {

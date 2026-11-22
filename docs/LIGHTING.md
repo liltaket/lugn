@@ -22,6 +22,12 @@ The runtime adds these room-wide presets for the configured light targets:
 | Vardagsljus | Accent lights at 55% and 2700 K; ceiling light off. WLED is 61%.                                   |
 | Filmkväll   | Accents at 6% and 2700 K; ceiling/front light/Cleverio bar off; monitor backlight on. WLED is 12%. |
 | Fokus       | All configured lights on at 100% and 4000 K. WLED is 100%.                                         |
+| Musik       | Follows the playing track's artwork colours; see [Dynamic lighting](DYNAMIC-LIGHTING.md).          |
+| Dynamisk    | Adapts to computer activity, room and music; see [Dynamic lighting](DYNAMIC-LIGHTING.md).          |
+
+Musik and Dynamisk are the built-in fallbacks (accents at 35% and 2400 K, or
+40% and 2700 K; ceiling off) until the dynamic controller has something to
+follow. They replace the former Party preset.
 
 Map the WLED CCT white strip as a normal Home Assistant light, for example:
 

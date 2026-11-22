@@ -57,7 +57,7 @@ enforcement of the desired state; see [Lighting](docs/LIGHTING.md#lighting-contr
 
 ### Built-in light presets
 
-The room dashboard offers five large buttons:
+The room dashboard offers these large buttons:
 
 | Preset      | Effect                                                                        |
 | ----------- | ----------------------------------------------------------------------------- |
@@ -66,6 +66,8 @@ The room dashboard offers five large buttons:
 | Vardagsljus | Brighter warm accent lights; ceiling light off.                               |
 | Filmkväll   | Warm accents dim; ceiling/front light/Cleverio bar off; monitor backlight on. |
 | Fokus       | All configured lights on at 100% and 4000 K.                                  |
+| Musik       | Accent lamps take the colours of the playing track's artwork.                 |
+| Dynamisk    | Adapts to computer activity, room and music (exploratory).                    |
 
 The exact semantic light target for the ceiling is selected from configured
 targets; if no target looks like a ceiling light, Lugn uses the first configured
@@ -184,6 +186,8 @@ or replay pending device commands after restart.
 - [Presence and continuity](docs/PRESENCE.md) — room occupancy versus home
   status, prelight and short absences
 - [Lighting](docs/LIGHTING.md) — presets, scene behavior and fast path
+- [Dynamic lighting](docs/DYNAMIC-LIGHTING.md) — Musik and Dynamisk,
+  following artwork colours and computer activity
 - [Music](docs/MUSIC.md) — presets, away gate, 23:00 rule and volume curve
 - [UI, Nest Hubs and DashCast](docs/UI.md) — custom dashboard and receiver
   lifecycle

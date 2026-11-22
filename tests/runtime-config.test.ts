@@ -37,6 +37,29 @@ describe('runtime configuration cross references', () => {
     },
     scenes: [],
   };
+  it('accepts dynamic lighting roles and rejects unmapped lamps or computers', () => {
+    const roles = { 'lighting.ceiling': 'accent' };
+    expect(
+      loadConfig({ ...minimal, dynamicLighting: { targets: roles } })
+        .dynamicLighting,
+    ).toMatchObject({ targets: roles, idleAfterMs: 300_000 });
+    expect(
+      captureConfigError(() =>
+        loadConfig({
+          ...minimal,
+          dynamicLighting: { targets: { 'lighting.nowhere': 'accent' } },
+        }),
+      ).message,
+    ).toContain('Dynamic lighting target lighting.nowhere');
+    expect(
+      captureConfigError(() =>
+        loadConfig({
+          ...minimal,
+          dynamicLighting: { targets: roles, computerDeviceId: 'desktop' },
+        }),
+      ).message,
+    ).toContain('Dynamic lighting computer must be configured');
+  });
   it('rejects RGB in a dedicated WLED CCT scene before runtime startup', () => {
     expect(() =>
       loadConfig({

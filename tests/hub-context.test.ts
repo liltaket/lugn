@@ -858,7 +858,8 @@ describe('Hub lighting pictograms', () => {
   it('uses distinct built-in icons with learnable name captions and keeps unknown presets readable', () => {
     const data = ui.payload();
     data.scenes.push(
-      { id: 'scene.party', name: 'Party' },
+      { id: 'scene.music', name: 'Musik' },
+      { id: 'scene.dynamic', name: 'Dynamisk' },
       { id: 'scene.custom_evening', name: 'Min sena kväll' },
     );
     delete data.routines;
@@ -870,7 +871,8 @@ describe('Hub lighting pictograms', () => {
       'scene.everyday_light': 'sun',
       'scene.focus_light': 'desk-lamp',
       'scene.movie_light': 'film',
-      'scene.party': 'disco-ball',
+      'scene.music': 'music',
+      'scene.dynamic': 'sparkles',
     };
     for (const button of ui.get('#scene-grid').children) {
       const scene = data.scenes.find(
@@ -895,7 +897,7 @@ describe('Hub lighting pictograms', () => {
         expect(symbol?.innerHTML).toContain('<svg viewBox="0 0 24 24"');
       }
     }
-    expect(new Set(Object.values(expected)).size).toBe(6);
+    expect(new Set(Object.values(expected)).size).toBe(7);
     expect(ui.calls).toEqual([]);
   });
 
