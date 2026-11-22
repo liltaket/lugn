@@ -524,18 +524,22 @@
         active &&
         (hemTitle(r).lastPlayed ||
           r?.musicPlayerStatus?.textContent?.trim() === 'Senast spelat'),
+      // When the card has gone (no music, or the pause has run out) nothing of
+      // the last track stays: no artist and no cover.
       artist:
-        r?.musicArtist && !r.musicArtist.hidden
+        active && r?.musicArtist && !r.musicArtist.hidden
           ? r.musicArtist.textContent.trim()
           : '',
       source: active ? r?.musicSource?.textContent?.trim() || '' : '',
       // While Hem loads a new cover, keep what is shown (null) rather than
       // flashing the empty cover.
-      art: artReady
-        ? r.musicArtworkImage.getAttribute('src') || ''
-        : active && r?.musicArtwork?.dataset.state === 'loading'
-          ? null
-          : '',
+      art: !active
+        ? ''
+        : artReady
+          ? r.musicArtworkImage.getAttribute('src') || ''
+          : active && r?.musicArtwork?.dataset.state === 'loading'
+            ? null
+            : '',
       // Hem's own play button label says what a press does there (Pausa
       // only when a press pauses; a manual pause on a player that still
       // reports playing reads Spela).
@@ -953,6 +957,7 @@
       target,
       request: { property: 'track', value: 'next' },
     });
+    window.setTimeout(drawMusic, 0);
   });
 
   // A choice is sent only while Hem's own button for it is enabled.
