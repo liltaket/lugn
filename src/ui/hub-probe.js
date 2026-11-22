@@ -40,11 +40,14 @@
   }
 
   let undelivered = 0;
+  // Captured before any phase replaces fetch: reports always go out for real.
+  const realFetch = window.fetch.bind(window);
+
   async function post(phase, data) {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), 5000);
     try {
-      const response = await fetch(PROBE_URL, {
+      const response = await realFetch(PROBE_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ run, phase, data }),
@@ -433,6 +436,207 @@
     return result;
   }
 
+  // ── Phases that exercise the dashboard's own paths ──
+
+  // The click path of a scene tile with Lugn's answer faked: the page runs its
+  // real handler, pending state, post, state read and redraw, but the POST
+  // never leaves the Hub (fetch is replaced for the length of the phase), so
+  // no scene is activated.
+  async function clickPath() {
+    const tile = visibleSceneTile();
+    if (!tile)
+      return { variant: 'click-real', skipped: 'no visible scene tile' };
+    let blocked = 0;
+    const clicked = new Set();
+    const stub = (input, init) => {
+      const method = String(init?.method ?? 'GET').toUpperCase();
+      if (method === 'POST') {
+        blocked += 1;
+        return Promise.resolve(
+          new Response('{"accepted":true}', {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }
+      return realFetch(input, init);
+    };
+    window.fetch = stub;
+    if (window.fetch !== stub)
+      return { variant: 'click-real', skipped: 'fetch locked' };
+    const dot = makeDot();
+    try {
+      const sample = await sampleFrames(6500, (elapsed) => {
+        moveDot(dot)(elapsed);
+        for (const at of [800, 2600, 4400]) {
+          if (elapsed >= at && !clicked.has(at)) {
+            clicked.add(at);
+            tile.click();
+          }
+        }
+      });
+      return {
+        variant: 'click-real',
+        blockedPosts: blocked,
+        ...(await summarise(sample)),
+      };
+    } finally {
+      window.fetch = realFetch;
+      dot.remove();
+    }
+  }
+
+  // A change of the artwork theme, as at play/pause or a new track.
+  async function themeSwap() {
+    if (typeof syncArtTheme !== 'function' || typeof root === 'undefined')
+      return [];
+    const saved = {
+      theme: artTheme,
+      color: root.dataset.artColor,
+      playing: root.dataset.musicPlaying,
+    };
+    const palettes = [
+      {
+        accent: '#7aa6ff',
+        deep: '#0b1230',
+        panel: '#16204a',
+        glow: 'rgba(122,166,255,0.2)',
+        glowSoft: 'rgba(122,166,255,0.12)',
+        tint: 'rgba(180,200,255,0.08)',
+        tint2: 'rgba(180,200,255,0.12)',
+      },
+      {
+        accent: '#ff9a62',
+        deep: '#2a1208',
+        panel: '#3a1c10',
+        glow: 'rgba(255,154,98,0.2)',
+        glowSoft: 'rgba(255,154,98,0.12)',
+        tint: 'rgba(255,210,180,0.08)',
+        tint2: 'rgba(255,210,180,0.12)',
+      },
+    ];
+    const out = [];
+    try {
+      for (const [index, palette] of palettes.entries()) {
+        if (aborted) break;
+        await sleep(1700);
+        drain();
+        artTheme = palette;
+        root.dataset.artColor = 'true';
+        root.dataset.musicPlaying = 'true';
+        const frames = sampleFrames(2000, () => {});
+        syncArtTheme();
+        out.push({
+          variant: `theme-swap-${index + 1}`,
+          ...(await summarise(await frames)),
+        });
+      }
+    } finally {
+      artTheme = saved.theme;
+      if (saved.color === undefined) delete root.dataset.artColor;
+      else root.dataset.artColor = saved.color;
+      if (saved.playing === undefined) delete root.dataset.musicPlaying;
+      else root.dataset.musicPlaying = saved.playing;
+      syncArtTheme();
+      await sleep(1700);
+    }
+    return out;
+  }
+
+  async function artIn() {
+    const art = document.getElementById('music-artwork');
+    if (!art || art.offsetParent === null || typeof pulse !== 'function')
+      return { variant: 'art-in', skipped: 'no artwork shown' };
+    const hadClass = art.classList.contains('art-in');
+    const frames = sampleFrames(1600, () => {});
+    pulse(art, 'art-in');
+    const sample = await frames;
+    if (!hadClass) art.classList.remove('art-in');
+    return { variant: 'art-in', ...(await summarise(sample)) };
+  }
+
+  // The same moving dot with the bridge's hover work every 40 ms, with the
+  // dashboard's timers and stream paused, or moved by the compositor alone.
+  async function hoverDot(mode) {
+    const dot = makeDot();
+    const plate = document.createElement('div');
+    plate.style.cssText =
+      'position:fixed;left:0;top:0;width:10px;height:10px;border-radius:12px;' +
+      'background:rgba(255,255,255,.2);pointer-events:none;z-index:2147483645;will-change:opacity';
+    document.body.append(plate);
+    const controls = [...document.querySelectorAll('button')].filter(
+      (button) => button.offsetParent !== null,
+    );
+    const rects = controls.map((control) => ({
+      control,
+      box: control.getBoundingClientRect(),
+    }));
+    let x = 0;
+    let y = 0;
+    const place = (control, box) => {
+      plate.style.left = `${box.left - 6}px`;
+      plate.style.top = `${box.top - 6}px`;
+      plate.style.width = `${box.width + 12}px`;
+      plate.style.height = `${box.height + 12}px`;
+      plate.style.borderRadius = control
+        ? getComputedStyle(control).borderTopLeftRadius
+        : '12px';
+    };
+    const timer = setInterval(() => {
+      if (mode === 'hover-real') {
+        const control = document.elementFromPoint(x, y)?.closest('button');
+        if (control) place(control, control.getBoundingClientRect());
+      } else if (mode === 'hover-cached') {
+        const hit = rects.find(
+          ({ box }) =>
+            x >= box.left && x <= box.right && y >= box.top && y <= box.bottom,
+        );
+        if (hit) place(null, hit.box);
+      }
+    }, 40);
+    const quiet = mode === 'quiet';
+    if (quiet) {
+      if (typeof clockTimer !== 'undefined') window.clearInterval(clockTimer);
+      if (typeof disconnectStream === 'function') disconnectStream();
+    }
+    try {
+      await sleep(600);
+      if (mode === 'compositor') {
+        const animation = dot.animate(
+          [
+            { transform: 'translate3d(100px, 300px, 0)' },
+            { transform: 'translate3d(900px, 300px, 0)' },
+          ],
+          { duration: 1000, iterations: Infinity, direction: 'alternate' },
+        );
+        const sample = await sampleFrames(3500, () => {});
+        animation.cancel();
+        return { variant: 'compositor-only', ...(await summarise(sample)) };
+      }
+      const move = moveDot(dot);
+      const sample = await sampleFrames(3500, (elapsed) => {
+        move(elapsed);
+        const match = /translate3d\((-?\d+)px, (-?\d+)px/.exec(
+          dot.style.transform,
+        );
+        if (match) {
+          x = Number(match[1]) + 10;
+          y = Number(match[2]) + 10;
+        }
+      });
+      return { variant: mode, ...(await summarise(sample)) };
+    } finally {
+      clearInterval(timer);
+      dot.remove();
+      plate.remove();
+      if (quiet) {
+        if (typeof setClock === 'function' && typeof clockTimer !== 'undefined')
+          clockTimer = window.setInterval(setClock, 1000);
+        if (typeof connectStream === 'function') connectStream();
+      }
+    }
+  }
+
   async function bare() {
     const hidden = [
       ...document.querySelectorAll('#hub-pager, #app-root'),
@@ -512,7 +716,7 @@
     const phases = [
       ['processor', 'cpu', async () => cpu()],
       ['stilla sida', 'idle', async () => summarise(await sampleFrames(4000))],
-      ['lång stilla mätning', 'idle', () => soak(30000)],
+      ['lång stilla mätning', 'idle', () => soak(15000)],
       ['tom sida', 'bare', bare],
       ['sidlager', 'dot', layerTests],
       ['markör', 'dot', () => measureDot('')],
@@ -545,6 +749,13 @@
             '*, *::before, *::after { will-change: auto !important; }',
           ),
       ],
+      ['kompositor-prick', 'dot', () => hoverDot('compositor')],
+      ['hover (som bryggan)', 'dot', () => hoverDot('hover-real')],
+      ['hover (cachad)', 'dot', () => hoverDot('hover-cached')],
+      ['utan timers och ström', 'dot', () => hoverDot('quiet')],
+      ['temabyte', 'dot', themeSwap],
+      ['omslag in', 'dot', artIn],
+      ['riktigt klick (låtsassvar)', 'press', clickPath],
       ['tryck', 'press', async () => ({ variant: 'both', ...(await press()) })],
       [
         'tryck (bara tryckt läge)',
