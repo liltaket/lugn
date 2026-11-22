@@ -112,7 +112,7 @@ function dashboard() {
   const calls: { url: string; body: Record<string, unknown> }[] = [];
   const streams: Stream[] = [];
   class Stream {
-    onmessage?: (event: { data: string }) => void;
+    onmessage?: (event: { data: string; lastEventId?: string }) => void;
     onerror?: () => void;
     closed = false;
     constructor(readonly url: string) {
