@@ -805,10 +805,11 @@
 
   // Goes to a page through the pager's own code and measures the frames from
   // just before to `ms` after, then returns home.
-  async function goRun(target, ms, label) {
+  async function goRun(target, ms, label, after = null) {
     const api = globalThis.lugnPages;
     if (!api?.go) return { variant: label, skipped: 'no pager' };
     let went = false;
+    let acted = false;
     try {
       await sleep(2500);
       drain();
@@ -822,6 +823,11 @@
         if (elapsed >= 300 && !went) {
           went = true;
           api.go(target);
+        }
+        // Once the page has arrived, whatever the variant does there.
+        if (after && elapsed >= 1800 && !acted) {
+          acted = true;
+          after();
         }
       });
       // What the page fetched meanwhile: how many requests, how long each took.
@@ -1121,6 +1127,14 @@
       ],
       ['kameror-ankomst', 'dot', () => goRun('kameror', 3000, 'go-kameror')],
       ['kameror-30s', 'dot', () => goRun('kameror', 30000, 'go-kameror-30s')],
+      [
+        'kameror-fokus',
+        'dot',
+        () =>
+          goRun('kameror', 30000, 'go-kameror-fokus', () =>
+            document.querySelector('.cams-tile')?.click(),
+          ),
+      ],
       ['foto-ankomst', 'dot', () => goRun('foto', 3000, 'go-foto')],
       ['foto-byte', 'dot', () => goRun('foto', 30000, 'go-foto-long')],
       [
