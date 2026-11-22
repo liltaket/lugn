@@ -150,6 +150,30 @@ describe('secret-path Hub state stream', () => {
         .personCount,
     ).toBe(4);
   });
+  it('sends the heartbeat with the latest revision after a suppressed publish', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const { open, engine } = await setup(true, false, false);
+      const stream = await open();
+      const first = await stream.next();
+      engine.state.revision += 5;
+      engine.state.updatedAt += 5;
+      engine.stream.publish({
+        revision: engine.state.revision,
+        at: engine.state.updatedAt,
+        domains: ['computer'],
+        patch: {},
+      });
+      const pending = stream.next();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      vi.advanceTimersByTime(5_000);
+      const beat = await pending;
+      expect(beat.state.revision).toBe(first.state.revision + 5);
+      expect(beat.deliveryRevision).toBeGreaterThan(first.deliveryRevision);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('sends no diagnostics or timing logs to a Hub', async () => {
     const { open, engine } = await setup();
     engine.state.diagnostics.push({

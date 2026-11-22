@@ -326,16 +326,26 @@ function acceptPayload(payload, streamKey = '') {
   return true;
 }
 
-function acceptUnchangedHeartbeat(data, key) {
+function acceptUnchangedHeartbeat(data, key, eventId) {
   if (!key || key !== drawnStreamKey || !latestPayload) return false;
   // Anything but a settled connection takes the full path that restores it.
   if (refs.connection.dataset.state !== 'connected') return false;
   const generatedAt = /"generatedAt":(\d+)/.exec(data)?.[1];
   const delivery = /"deliveryRevision":(\d+)/.exec(data)?.[1];
   if (generatedAt === undefined) return false;
+  // The stream's event id is the state revision, so the same ordering rules
+  // hold as for a drawn message: a later, slower read cannot go back in time.
+  const revision = /^\d+$/.test(eventId ?? '') ? Number(eventId) : undefined;
+  if (
+    revision !== undefined &&
+    revision < (latestPayload.state?.revision ?? -1)
+  )
+    return false;
   if (delivery !== undefined && Number(delivery) < latestDeliveryRevision)
     return false;
   if (delivery !== undefined) latestDeliveryRevision = Number(delivery);
+  if (revision !== undefined && latestPayload.state)
+    latestPayload.state.revision = revision;
   latestPayload.generatedAt = Number(generatedAt);
   payloadReceivedAt = monotonicNow();
   lastFreshAt = Date.now();
@@ -384,7 +394,7 @@ function connectStream() {
     try {
       const key = event.data.replace(UNSTABLE_FIELDS, '');
       if (
-        !acceptUnchangedHeartbeat(event.data, key) &&
+        !acceptUnchangedHeartbeat(event.data, key, event.lastEventId) &&
         !acceptPayload(JSON.parse(event.data), key)
       )
         return;

@@ -121,8 +121,8 @@ function dashboard() {
     close() {
       this.closed = true;
     }
-    emit(value: unknown) {
-      this.onmessage?.({ data: JSON.stringify(value) });
+    emit(value: unknown, lastEventId = '') {
+      this.onmessage?.({ data: JSON.stringify(value), lastEventId });
     }
   }
   const context = createContext({
@@ -537,6 +537,27 @@ describe('Hub optional Lugn 2 presentation', () => {
     const still = timings(0.4, 0.4);
     near(still['firstDelay']!, 0);
     near(still['secondDelay']!, 0);
+  });
+  it('keeps the state revision of a skipped heartbeat, so a slower read cannot go back', async () => {
+    const data = ui.payload();
+    const at = (revision: number) => {
+      const next = structuredClone(data);
+      next.state.revision = revision;
+      return next;
+    };
+    const stream = ui.streams[0]!;
+    stream.emit({ ...at(10), deliveryRevision: 1, generatedAt: 1000 }, '10');
+    // A heartbeat with a newer state revision and nothing else new.
+    stream.emit({ ...at(12), deliveryRevision: 2, generatedAt: 6000 }, '12');
+    expect(runInContext('latestPayload.state.revision', ui.context)).toBe(12);
+    // A read that started before it and finishes after it is refused.
+    expect(
+      runInContext(
+        `acceptPayload(${JSON.stringify({ ...at(11), deliveryRevision: 1, generatedAt: 5000 })})`,
+        ui.context,
+      ),
+    ).toBe(false);
+    expect(runInContext('latestPayload.generatedAt', ui.context)).toBe(6000);
   });
   it('draws only the controls of a command while it is pending', async () => {
     const release = ui.holdPost();
