@@ -112,6 +112,8 @@
   let warmUntil = 0;
   let lastMotionAt = -Infinity;
   let lastMoveEvent = 0;
+  let lastEventX = -Infinity;
+  let lastEventY = -Infinity;
   let hoverTimer;
   let lastHoverAt = -Infinity;
   let recheckTimer;
@@ -424,11 +426,19 @@
           cursor.style.transform = transform;
           frames += 1;
           // Pages that show something on mouse movement (the quick menu) are
-          // told, at most every 150 ms; the bridged mouse sends no pointermove
-          // while no button is held.
-          if (now - lastMoveEvent > 150) {
+          // told, when the dot has moved at least 2 px and at most every
+          // 150 ms; the bridged mouse sends no pointermove while no button is
+          // held.
+          if (
+            now - lastMoveEvent > 150 &&
+            Math.abs(shownX - lastEventX) + Math.abs(shownY - lastEventY) >=
+              2 &&
+            typeof Event === 'function'
+          ) {
             lastMoveEvent = now;
-            window.dispatchEvent(new Event('lugn:pointer-move'));
+            lastEventX = shownX;
+            lastEventY = shownY;
+            window.dispatchEvent?.(new Event('lugn:pointer-move'));
           }
           if (moveStamp) {
             recordLag(now - moveStamp);

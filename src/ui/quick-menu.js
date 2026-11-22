@@ -99,15 +99,20 @@
       const target = event.target;
       if (camera && camera.contains(target)) {
         close();
-        // The cameras live on Hem: go there and open its camera menu.
-        const open_ = () => hem()?.cameraMenu?.click?.();
-        if (pagesApi.current() === 'home') open_();
-        else if (pagesApi.go('home')) {
-          const once = () => {
-            window.removeEventListener('lugn:pages-settled', once);
-            open_();
-          };
-          window.addEventListener('lugn:pages-settled', once);
+        // The cameras have their own page; where there is none, Hem's camera
+        // menu.
+        if (pagesApi.ids().includes('kameror')) {
+          pagesApi.go('kameror');
+        } else {
+          const open_ = () => hem()?.cameraMenu?.click?.();
+          if (pagesApi.current() === 'home') open_();
+          else if (pagesApi.go('home')) {
+            const once = () => {
+              window.removeEventListener('lugn:pages-settled', once);
+              open_();
+            };
+            window.addEventListener('lugn:pages-settled', once);
+          }
         }
         return;
       }

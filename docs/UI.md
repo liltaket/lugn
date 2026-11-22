@@ -237,12 +237,19 @@ portrait never stands alone with black around it unless nothing else is left).
 Pictures taken within a few hours of each other and in the same area are played
 near each other, but the groups are shuffled and some pictures wander, so no
 group is fixed. Newly added pictures play next, each with a
-quiet caption of the place and date the picture was taken. A tap opens a quick menu: Hem's scenes (the dock of the other pages), pause
-and the playing title (Hem's own play button, shown while music is on), a
-camera button (it goes to Hem and opens its camera menu) and a button for the
-next picture, so the lights and the music can be changed without leaving the
-frame. The picture stays while the menu is open; it closes after a few seconds,
-on a tap beside it or when the page is left. A slide is built off screen, every picture is decoded before it is
+quiet caption of the place and date the picture was taken. The quick menu (`quick-menu.js`) slides up from the bottom edge when the mouse
+moves over the page (a real mouse, or the Hub's bridged one, which
+`pointer-bridge.js` announces as the window event `lugn:pointer-move`) or the
+page is tapped: Hem's scenes (the dock of the other pages), a camera button
+(to the Kameror page) and, on Foto, a button for the next picture. A soft
+veil, drawn from each picture's own bottom edge (no blur is computed), and a
+dark floor make the buttons readable. It closes four seconds after the mouse
+stops, eight after a tap, on a tap beside it or when the page is left. The
+picture stays while it is open. On Foto the music widget (pause, title and
+artist; Hem's own play button is pressed) is there whenever music plays, at the
+lower left, and is lifted over the menu while that is open; the caption sits at
+the lower right. Musik has the same menu without the music controls, and no
+longer shows its dock all the time. A slide is built off screen, every picture is decoded before it is
 shown and only the slide's opacity animates; nothing changes while the pager is
 moving, and the page releases its pictures when it is two pages away.
 
