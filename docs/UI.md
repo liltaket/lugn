@@ -259,7 +259,11 @@ The pager follows the responsiveness rules above:
   current one are `aria-hidden`; only `off` pages are also `inert`, because
   toggling `inert` restyles a page's whole subtree and a page turns active in
   the middle of its motion (on a Hub that cost about 100 ms of style and
-  layout in the swipe's frames).
+  layout in the swipe's frames). Focus that lands on a neighbour is sent back,
+  and focus left on the page a swipe leaves is let go when the motion ends.
+  With a keyboard, Tab passes the neighbours' controls as empty stops; the
+  Hubs have none (the pointer bridge keeps the keyboard on the desktop), so
+  this is accepted.
 - Page modules register `prepare`, `enter`, `leave` and `sleep` hooks with
   `lugnPages.define(id, hooks)` (`enter` and `leave` run once the motion has
   ended, never in its frames); `lugnPages.go(id)` and `lugnPages.onChange`

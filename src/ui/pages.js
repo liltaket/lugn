@@ -276,6 +276,16 @@
   let entered = null;
   function enterCurrent() {
     const page = pages[index];
+    // Focus left on a control of a page now out of view (neighbours are not
+    // inert) is let go, so a key or a bridged Escape cannot act on it.
+    const focused = document.activeElement;
+    if (
+      focused &&
+      focused !== document.body &&
+      pager.contains(focused) &&
+      !page.el.contains(focused)
+    )
+      focused.blur?.();
     if (entered === page) return;
     if (entered) callHook(entered, 'leave');
     entered = page;
@@ -796,7 +806,8 @@
   // sent back, and the pager never scrolls to show it.
   pager.addEventListener('focusin', (event) => {
     const page = event.target.closest?.('.hub-page');
-    if (page && page !== pages[index].el) event.target.blur?.();
+    if (!page || page === pages[index].el) return;
+    event.target.blur?.();
     if (pager.scrollLeft) pager.scrollLeft = 0;
   });
   window.addEventListener('resize', onResize);

@@ -41,7 +41,22 @@ class Target {
   }
 }
 
+const focus: { active: FakeElement | null } = { active: null };
+
 class FakeElement extends Target {
+  blurred = 0;
+  focus(): void {
+    focus.active = this;
+  }
+  blur(): void {
+    this.blurred += 1;
+    if (focus.active === this) focus.active = null;
+  }
+  closest(selector: string): FakeElement | null {
+    if (selector !== '.hub-page') return null;
+    if (this.classes.has('hub-page')) return this;
+    return this.parentElement?.closest(selector) ?? null;
+  }
   children: FakeElement[] = [];
   parentElement: FakeElement | null = null;
   dataset: Record<string, string> = {};
@@ -132,7 +147,11 @@ function setup(count = 3) {
   };
   const document = new Target() as Target & Record<string, unknown>;
   document['getElementById'] = (id: string) => byId[id] ?? null;
-  Object.defineProperty(document, 'activeElement', { value: null });
+  focus.active = null;
+  Object.defineProperty(document, 'activeElement', {
+    get: () => focus.active,
+  });
+  document['body'] = new FakeElement('BODY');
   const window = new Target() as Target & Record<string, unknown>;
   const resize = (width: number) => {
     window['innerWidth'] = width;
@@ -774,6 +793,80 @@ describe('Hub pager', () => {
     drag(pages[1]!.button, 800, 200);
     finishAnimations();
     expect(calls).toEqual(['clock.enter', 'clock.leave', 'info.enter']);
+  });
+
+  it('lets go of focus left on the page a swipe leaves', () => {
+    const { pages, drag, finishAnimations } = setup();
+    pages[0]!.button.focus();
+    drag(pages[0]!.button, 800, 200);
+    expect(pages[0]!.button.blurred).toBe(0);
+    finishAnimations();
+    expect(pages[0]!.button.blurred).toBe(1);
+  });
+
+  it('sends back focus that lands on a neighbour, not on the current page', () => {
+    const { pages, pager } = setup();
+    const focusin = (target: FakeElement) =>
+      pager.fire(new FakeEvent('focusin', { target }));
+    focusin(pages[0]!.button);
+    expect(pages[0]!.button.blurred).toBe(0);
+    focusin(pages[1]!.button);
+    expect(pages[1]!.button.blurred).toBe(1);
+  });
+
+  it('toggles inert only for pages going out of or into reach', () => {
+    const { api, pages, advance, finishAnimations } = setup(4);
+    const inert = () => pages.map(({ page }) => page.inert);
+    expect(inert()).toEqual([false, false, true, true]);
+    api.go('four');
+    finishAnimations();
+    advance(1_000);
+    // Jumped: Hem and Klocka are now out of reach, Info is the neighbour.
+    expect(inert()).toEqual([true, true, false, false]);
+  });
+
+  it('enters only the final page when a settle is caught and dragged back', () => {
+    const { api, pages, drag, pointer, advance, track, finishAnimations } =
+      setup();
+    const calls: string[] = [];
+    (
+      api as unknown as {
+        define(id: string, hooks: Record<string, () => void>): void;
+      }
+    ).define('clock', {
+      enter: () => calls.push('clock.enter'),
+      leave: () => calls.push('clock.leave'),
+    });
+    drag(pages[0]!.button, 800, 200);
+    track.animations.at(-1)!.animation.currentTime = 50;
+    // Caught mid-settle and taken back to Hem.
+    pointer('pointerdown', pages[1]!.button, 300);
+    for (let x = 340; x <= 900; x += 40) {
+      advance(16);
+      pointer('pointermove', pages[1]!.button, x);
+    }
+    pointer('pointerup', pages[1]!.button, 900);
+    finishAnimations();
+    expect(api.current()).toBe('home');
+    expect(calls).toEqual([]);
+  });
+
+  it('enters the page a change listener goes on to, once', () => {
+    const { api, finishAnimations } = setup();
+    const calls: string[] = [];
+    const define = (
+      api as unknown as {
+        define(id: string, hooks: Record<string, () => void>): void;
+      }
+    ).define;
+    define('clock', { enter: () => calls.push('clock.enter') });
+    define('info', { enter: () => calls.push('info.enter') });
+    api.onChange((page) => {
+      if (page === 'clock') api.go('info');
+    });
+    api.go('clock');
+    finishAnimations();
+    expect(calls).toEqual(['info.enter']);
   });
 
   it('keeps a neighbour drawn in idle time, not when a press starts', () => {
