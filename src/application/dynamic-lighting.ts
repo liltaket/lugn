@@ -340,13 +340,18 @@ export class DynamicLightingController {
       observation.activity.classification;
     if (activity !== 'gaming' && activity !== 'video') {
       const listed = this.options.idleBlockers?.(id!);
-      // The same evidence the display power policy trusts: a video blocker, or
-      // a full-screen window with a playing player and sound on this computer.
+      // The display power policy's evidence, stricter for lamps (a wrong guess
+      // changes light, not just keeps a screen awake): a video blocker, or a
+      // full-screen window with sound and a playing player that is not music.
       const fullscreenPlayback =
         observation.observed.fullscreen === true &&
         observation.observed.audio?.playing === true &&
+        activity !== 'music' &&
         observation.observed.media?.some(
-          (player) => player.playback === 'playing',
+          (player) =>
+            player.playback === 'playing' &&
+            (player.contentType === null ||
+              player.contentType.startsWith('video/')),
         ) === true;
       if (
         fullscreenPlayback ||

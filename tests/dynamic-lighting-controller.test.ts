@@ -402,6 +402,29 @@ describe('dynamic lighting controller', () => {
       expect(f.desired('lighting.desk').power).toBe(false);
     });
 
+    it('does not mistake music in a full-screen window for a film', async () => {
+      const f = await fixture();
+      f.computer('music', {
+        fullscreen: true,
+        audio: { playing: true, applications: ['spotify'], roles: ['music'] },
+        media: [
+          {
+            player: 'spotify',
+            identity: null,
+            desktopEntry: null,
+            playback: 'playing',
+            title: null,
+            artists: null,
+            album: null,
+            contentType: 'audio/mpeg',
+          },
+        ],
+      });
+      await f.engine.activateScene('scene.adaptive', user);
+      await f.advance(5000);
+      expect(f.controller.snapshot().situation).not.toBe('cinema');
+    });
+
     it('ignores an audio-only blocker', async () => {
       const f = await fixture();
       f.computer('desktop', { fullscreen: true });

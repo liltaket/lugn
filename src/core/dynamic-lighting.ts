@@ -197,16 +197,18 @@ export function planDynamicLighting(
       reason: cinema ? 'artwork_colours_dimmed' : 'artwork_colours',
       evidence: [
         cinema
-          ? 'Full-screen video is showing; accent lamps follow the artwork at cinema brightness'
+          ? 'Full-screen video or game is showing; accent lamps follow the artwork at cinema brightness'
           : 'Accent lamps follow the artwork of the playing track',
       ],
       targets: accentTargets(
         roles,
         colours,
-        cinema ? config.cinemaBrightness : config.musicBrightness,
+        cinema
+          ? Math.min(config.musicBrightness, config.cinemaBrightness)
+          : config.musicBrightness,
         {
           power: true,
-          brightness: cinema ? config.cinemaBrightness : 25,
+          brightness: cinema ? Math.min(25, config.cinemaBrightness) : 25,
           colorTemperature: cinema ? 2200 : 2700,
         },
       ),
