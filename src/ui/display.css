@@ -4099,7 +4099,7 @@ body {
 /* ── Round 5, 2026-11-20: artwork theme, sliding segments, motion ──
    While music plays with known artwork, the whole Hub takes on its colors:
    ground, panels, glass, glow and the accent. Without artwork it rests on the
-   room's own palette. All theme colors are registered so they cross-fade. */
+   room's own palette. */
 /* The theme colors are plain custom properties: they change once, in one style
    pass. The background cross-fades on its own layer (opacity, composited) and
    the few cards that carry a theme color fade it locally, so the cover colors

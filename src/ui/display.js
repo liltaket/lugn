@@ -613,7 +613,7 @@ function setClock(afterRender = false) {
   const period = hour >= 23 || hour < 6 ? 'night' : 'day';
   if (root.dataset.time === undefined || root.dataset.time === period)
     root.dataset.time = period;
-  else changeTheme(() => (root.dataset.time = period));
+  else if (!themeFading) changeTheme(() => (root.dataset.time = period));
   setText(refs.clockTime, time);
   setText(refs.clockDate, date);
   const dateParts = datePartsFormat.formatToParts(now);
@@ -1881,9 +1881,29 @@ function artPalette([r, g, b]) {
 
 // A theme change fades on its own layer instead of restyling the page every
 // frame: the page keeps showing the look it had (held as two inline values)
-// while the new look fades in above it by opacity, then the hold is dropped.
-// The few cards that carry a theme color fade it themselves in CSS.
+// while the new look fades in above it by opacity, then the hold is dropped
+// when that animation ends. The few cards that carry a theme color fade it
+// themselves in CSS. A change that arrives during a fade waits for it, so the
+// visible blend is never cut short.
 let themeFadeTimer;
+let themeFading = false;
+function endThemeFade() {
+  window.clearTimeout(themeFadeTimer);
+  themeFading = false;
+  root.style.removeProperty('--hold-image');
+  root.style.removeProperty('--hold-color');
+  delete root.dataset.fade;
+  // Picks up a change that came in meanwhile.
+  syncArtTheme();
+}
+root.addEventListener?.('animationend', (event) => {
+  if (
+    themeFading &&
+    event.target === root &&
+    event.animationName === `theme-fade-${root.dataset.fade}`
+  )
+    endThemeFade();
+});
 function changeTheme(apply) {
   const canFade =
     typeof globalThis.getComputedStyle === 'function' &&
@@ -1896,13 +1916,11 @@ function changeTheme(apply) {
   root.style.setProperty('--hold-image', look.backgroundImage);
   root.style.setProperty('--hold-color', look.backgroundColor);
   apply();
+  themeFading = true;
   root.dataset.fade = root.dataset.fade === 'a' ? 'b' : 'a';
+  // Only a safety net (a hidden page never finishes its animation).
   window.clearTimeout(themeFadeTimer);
-  themeFadeTimer = window.setTimeout(() => {
-    root.style.removeProperty('--hold-image');
-    root.style.removeProperty('--hold-color');
-    delete root.dataset.fade;
-  }, 1500);
+  themeFadeTimer = window.setTimeout(endThemeFade, 4000);
 }
 
 // The artwork theme applies only while music plays with known artwork.
@@ -1931,9 +1949,13 @@ function syncArtTheme() {
     root.dataset.themed = String(active);
   };
   // The first sync only sets the theme; later changes fade.
-  if (themeSignature === null || signature === themeSignature) apply();
-  else changeTheme(apply);
-  themeSignature = signature;
+  if (themeSignature === null || signature === themeSignature) {
+    apply();
+    themeSignature = signature;
+  } else if (!themeFading) {
+    changeTheme(apply);
+    themeSignature = signature;
+  }
 }
 
 function renderEnvironment(environment) {
