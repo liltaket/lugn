@@ -21,8 +21,8 @@ const { layout, single } = (() => {
   return context['lugnCameras'] as Layout;
 })();
 
-const WIDTH = 952; // a 1024 px Hub (36 px each side)
-const HEIGHT = 484; // 600 less the title and the dots
+const WIDTH = 976; // a 1024 px Hub: the stage is 12 px from each side
+const HEIGHT = 560; // 600 less the top margin and the dots
 
 const inside = (rect: Rect) =>
   rect.x >= 0 &&
@@ -31,69 +31,92 @@ const inside = (rect: Rect) =>
   rect.y + rect.h <= HEIGHT;
 const overlap = (a: Rect, b: Rect) =>
   a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+const rowsOf = (rects: Rect[]) => [...new Set(rects.map((r) => r.y))].length;
+const covered = (rects: Rect[]) =>
+  rects.reduce((sum, r) => sum + r.w * r.h, 0) / (WIDTH * HEIGHT);
+// A tile is 16:9 or a little taller (its picture is cropped at the sides).
+const crop = (rect: Rect) => 1 - rect.w / rect.h / (16 / 9);
 
 describe('camera grid layout', () => {
-  it('fills the area with one camera and keeps 16:9', () => {
+  it('fills the area with one camera', () => {
     const [only] = layout(1, WIDTH, HEIGHT);
-    expect(only!.w / only!.h).toBeCloseTo(16 / 9, 1);
-    expect(only!.h).toBeGreaterThan(HEIGHT - 20);
+    expect(only!.h).toBeGreaterThanOrEqual(HEIGHT - 1);
+    expect(only!.w).toBeGreaterThan(WIDTH - 40);
     expect(inside(only!)).toBe(true);
   });
 
-  it('places any number of cameras (1–8) inside the area without overlap, all alike', () => {
+  it('places 1–8 cameras inside the area without overlap and without cropping a picture by more than 15 %', () => {
     for (let count = 1; count <= 8; count += 1) {
       const rects = layout(count, WIDTH, HEIGHT);
       expect(rects).toHaveLength(count);
       for (const rect of rects) {
         expect(inside(rect)).toBe(true);
-        expect(rect.w).toBe(rects[0]!.w);
-        expect(rect.h).toBe(rects[0]!.h);
+        expect(crop(rect)).toBeLessThanOrEqual(0.155);
+        expect(crop(rect)).toBeGreaterThanOrEqual(-0.02);
       }
       for (let i = 0; i < count; i += 1)
         for (let j = i + 1; j < count; j += 1)
           expect(overlap(rects[i]!, rects[j]!)).toBe(false);
+      // Tiles in a row are alike.
+      for (const y of new Set(rects.map((r) => r.y))) {
+        const row = rects.filter((r) => r.y === y);
+        expect(new Set(row.map((r) => r.w)).size).toBe(1);
+      }
     }
   });
 
-  it('uses two columns for two to four cameras and three for five or six', () => {
-    const columns = (count: number) =>
-      new Set(layout(count, WIDTH, HEIGHT).map((r) => r.x)).size;
-    expect(columns(2)).toBe(2);
-    expect(columns(4)).toBe(2);
-    // Five: three on the first row, two centred below.
+  it('uses the screen: three to eight cameras cover well over half of it, and no row is left half empty', () => {
+    for (let count = 3; count <= 8; count += 1)
+      expect(covered(layout(count, WIDTH, HEIGHT))).toBeGreaterThan(0.6);
+    // Four fill it as a 2 × 2.
+    const four = layout(4, WIDTH, HEIGHT);
+    expect(rowsOf(four)).toBe(2);
+    expect(new Set(four.map((r) => r.x)).size).toBe(2);
+    expect(covered(four)).toBeGreaterThan(0.85);
+  });
+
+  it('gives the first cameras the biggest tiles: five are two big ones over three', () => {
     const five = layout(5, WIDTH, HEIGHT);
-    expect(five.slice(0, 3).every((r) => r.y === five[0]!.y)).toBe(true);
-    expect(five.slice(3).every((r) => r.y === five[3]!.y)).toBe(true);
-    expect(five[3]!.x).toBeGreaterThan(five[0]!.x);
-    expect(five.length).toBe(5);
-    expect(new Set(five.map((r) => r.x)).size).toBeGreaterThanOrEqual(3);
+    expect(rowsOf(five)).toBe(2);
+    expect(five[0]!.y).toBe(five[1]!.y);
+    expect(five[2]!.y).toBe(five[4]!.y);
+    expect(five[0]!.w).toBeGreaterThan(five[2]!.w);
+    expect(five[0]!.h).toBeGreaterThan(five[2]!.h);
+    // The two rows use the height.
+    const bottom = five[2]!.y + five[2]!.h;
+    expect(five[0]!.y + HEIGHT - bottom).toBeLessThanOrEqual(30);
   });
 
-  it('centres a short last row and the whole grid', () => {
-    const three = layout(3, WIDTH, HEIGHT);
-    // Two cameras on the first row, the third centred under them.
-    const middle = (WIDTH - three[2]!.w) / 2;
-    expect(Math.abs(three[2]!.x - middle)).toBeLessThanOrEqual(1);
-    const top = three[0]!.y;
-    const bottom = HEIGHT - (three[2]!.y + three[2]!.h);
-    expect(Math.abs(top - bottom)).toBeLessThanOrEqual(1);
+  it('centres the rows and the whole grid', () => {
+    for (const count of [2, 3, 5, 7]) {
+      const rects = layout(count, WIDTH, HEIGHT);
+      const top = Math.min(...rects.map((r) => r.y));
+      const bottom = HEIGHT - Math.max(...rects.map((r) => r.y + r.h));
+      expect(Math.abs(top - bottom)).toBeLessThanOrEqual(1);
+      for (const y of new Set(rects.map((r) => r.y))) {
+        const row = rects.filter((r) => r.y === y);
+        const left = Math.min(...row.map((r) => r.x));
+        const right = WIDTH - Math.max(...row.map((r) => r.x + r.w));
+        expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
+      }
+    }
   });
 
-  it('keeps tiles big enough on a narrower Hub and returns nothing for no cameras', () => {
+  it('copes with a narrower Hub and returns nothing for no cameras', () => {
     expect(layout(0, WIDTH, HEIGHT)).toEqual([]);
     const desk = layout(5, 828, HEIGHT);
     expect(desk.every((rect) => rect.x >= 0 && rect.x + rect.w <= 828)).toBe(
       true,
     );
-    expect(desk[0]!.w).toBeGreaterThan(250);
+    expect(Math.min(...desk.map((r) => r.w))).toBeGreaterThan(230);
   });
 
   it('shows one camera as large as the area allows, centred', () => {
     const one = single(WIDTH, HEIGHT);
     expect(one.h).toBeLessThanOrEqual(HEIGHT);
     expect(one.w).toBeLessThanOrEqual(WIDTH);
+    expect(one.h).toBeGreaterThanOrEqual(HEIGHT - 1);
     expect(Math.abs(one.x - (WIDTH - one.w) / 2)).toBeLessThanOrEqual(1);
-    expect(one.w / one.h).toBeCloseTo(16 / 9, 1);
   });
 });
 

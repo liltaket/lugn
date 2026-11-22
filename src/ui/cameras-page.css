@@ -1,51 +1,20 @@
-#camera-panel {
-  cursor: pointer;
-}
 /* Kameror (cameras-page.js). Tiles stand where the script puts them (a layout
    written once per set of cameras); a tile's picture changes in place, and
    the only thing that animates is a picture's opacity when it first appears.
    No filters, shadows with blur or masks: the Hub pays for each of them. */
 .cams-page {
-  background: #101514;
+  background: #0d1110;
   overflow: hidden;
 }
-.cams-head {
-  position: absolute;
-  top: 0;
-  left: 36px;
-  right: 36px;
-  height: 76px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  /* The Bed system overlay owns the top-right corner. */
-  padding-right: 120px;
-}
-.cams-head h2 {
-  margin: 0;
-  font-size: 26px;
-  font-weight: 500;
-}
-.cams-sub {
-  font-size: 17px;
-  color: rgba(238, 241, 232, 0.5);
-}
-.cams-back {
-  margin-left: auto;
-  min-height: 44px;
-  padding: 8px 20px;
-  border-radius: 22px;
-  border: 1px solid rgba(238, 241, 232, 0.14);
-  background: rgba(238, 241, 232, 0.07);
-  color: inherit;
-  font-size: 16px;
+#camera-panel {
+  cursor: pointer;
 }
 .cams-stage {
   position: absolute;
-  left: 36px;
-  top: 76px;
-  right: 36px;
-  bottom: 40px;
+  left: 12px;
+  right: 12px;
+  top: 12px;
+  bottom: 28px;
 }
 .cams-tile {
   position: absolute;
@@ -69,48 +38,88 @@
   height: 100%;
   object-fit: cover;
 }
+/* The camera's name, as on Hem's camera view: a pill with a dot that says
+   whether the picture is fresh. */
 .cams-name {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 26px 14px 10px;
-  font-size: 17px;
-  font-weight: 600;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.55));
-}
-/* A tile waiting for its first picture is a quiet, empty frame with its name
-   (no spinner, nothing that animates). */
-.cams-tile[data-state='waiting'] .cams-name {
-  top: 0;
+  left: 10px;
+  top: 10px;
   display: flex;
   align-items: center;
-  padding: 0 14px;
-  background: none;
-  color: rgba(238, 241, 232, 0.45);
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px 0 11px;
+  border-radius: 17px;
+  background: rgba(14, 18, 17, 0.62);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
 }
-.cams-state {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  font-size: 14px;
-  color: rgba(238, 241, 232, 0.85);
+.cams-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #6fd08c;
+}
+.cams-tile[data-state='waiting'] .cams-dot {
+  background: rgba(238, 241, 232, 0.35);
+}
+.cams-tile[data-state='stale'] .cams-dot {
+  background: #e7bc78;
+}
+.cams-tile[data-state='offline'] .cams-dot {
+  background: #e07a6a;
 }
 .cams-tile[data-state='stale'] img {
-  opacity: 0.55;
-}
-.cams-tile[data-state='stale'] .cams-state::before {
-  content: 'Gammal bild';
-}
-.cams-tile[data-state='offline'] .cams-state::before {
-  content: 'Ingen bild';
+  opacity: 0.6;
 }
 .cams-tile[data-state='offline'] img {
-  opacity: 0.35;
+  opacity: 0.3;
+}
+.cams-tile[data-state='stale'] .cams-name::after {
+  content: 'gammal bild';
+  font-weight: 400;
+  opacity: 0.7;
+}
+.cams-tile[data-state='offline'] .cams-name::after {
+  content: 'ingen bild';
+  font-weight: 400;
+  opacity: 0.7;
+}
+/* A tile waiting for its first picture is a quiet, empty frame (nothing that
+   animates). */
+/* The way back from one camera to all: a round button like the menu's. */
+.cams-back {
+  position: absolute;
+  left: 22px;
+  top: 22px;
+  width: 52px;
+  height: 52px;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgba(238, 241, 232, 0.2);
+  background: rgba(14, 18, 17, 0.62);
+  color: #eef1e8;
+}
+.cams-back[hidden] {
+  display: none;
+}
+.cams-back svg {
+  width: 26px;
+  height: 26px;
+}
+/* One camera large: its name sits to the right of the back button. */
+.cams-page[data-mode='focus'] .cams-name {
+  left: 82px;
+  top: 21px;
 }
 .cams-notice {
   position: absolute;
-  inset: 76px 36px 40px;
+  inset: 12px 24px 28px;
   display: grid;
   place-items: center;
   text-align: center;
