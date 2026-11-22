@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { hsvToRgb, rgbToHsv, type Rgb } from './artwork-palette.js';
+import { rgbToHsv, type Rgb } from './artwork-palette.js';
 import { ComputerDeviceIdSchema } from './computer.js';
 import { SemanticLightingIdSchema, type LightingValues } from './schemas.js';
 
@@ -259,10 +259,18 @@ export function adaptivePlan(
       : situation === 'lounge'
         ? Math.min(config.musicBrightness, 55)
         : Math.min(config.musicBrightness, 35);
+  // Without music the accent lamps are plain white (their white channel on a
+  // colour lamp): neutral at the desk, warm when relaxing, dim and warm for a film.
   const warmAccent: LightingValues = {
     power: true,
-    brightness: situation === 'cinema' ? config.cinemaBrightness : 30,
-    colorTemperature: situation === 'cinema' ? 2200 : 2700,
+    brightness:
+      situation === 'cinema'
+        ? config.cinemaBrightness
+        : situation === 'desk'
+          ? 45
+          : 30,
+    colorTemperature:
+      situation === 'cinema' ? 2200 : situation === 'desk' ? 4000 : 2700,
   };
   const targets: Record<string, DynamicTargetPlan> = {};
   for (const [target, role] of roles) {
@@ -357,16 +365,27 @@ function accentTargets(
 }
 
 /**
- * One colour is shifted a little for the next lamp so a single-colour cover
- * still looks like a gradient rather than a flat wash.
+ * Lamps share the cover's dominant colour: a red cover is red everywhere. Only
+ * colours close to it in hue (a related shade) are kept as variation; a distant
+ * second colour is dropped, since lamps in different hues look random. With
+ * fewer colours than lamps they repeat, never invented.
  */
+const SAME_FAMILY_HUE = 40;
+
 function expandPalette(palette: readonly Rgb[], count: number): Rgb[] {
   if (palette.length === 0 || count === 0) return [];
-  const colours = [...palette];
-  const [hue, saturation, value] = rgbToHsv(...palette[0]!);
-  for (let step = 1; colours.length < count; step++)
-    colours.push(hsvToRgb(hue + 28 * step, saturation, value));
-  return colours.slice(0, count);
+  const first = palette[0]!;
+  const [lead] = rgbToHsv(...first);
+  const family = palette.filter((colour, index) => {
+    if (index === 0) return true;
+    const [hue] = rgbToHsv(...colour);
+    const gap = Math.abs(hue - lead);
+    return Math.min(gap, 360 - gap) <= SAME_FAMILY_HUE;
+  });
+  return Array.from(
+    { length: count },
+    (_, index) => family[index % family.length]!,
+  );
 }
 
 /** True when two settings are close enough that a lamp would not visibly change. */

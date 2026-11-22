@@ -173,30 +173,53 @@ describe('music plan', () => {
   const music = (over: Partial<DynamicInputs>) =>
     planDynamicLighting('music', inputs(over), config);
 
-  it('gives accent lamps distinct colours and leaves other lamps alone', () => {
+  it('colours only the accent lamps and leaves other lamps alone', () => {
     const plan = music({
       musicPlaying: true,
       palette: [
         [255, 0, 0],
-        [0, 0, 255],
+        [255, 60, 0],
       ],
     });
     expect(plan.targets['lighting.strip_a']).toMatchObject({
       rgb: [255, 0, 0],
     });
     expect(plan.targets['lighting.strip_b']).toMatchObject({
-      rgb: [0, 0, 255],
+      rgb: [255, 60, 0],
     });
     expect(plan.targets['lighting.ceiling']).toBeUndefined();
     expect(plan.targets['lighting.desk']).toBeUndefined();
   });
 
-  it('derives a neighbouring hue for a single-colour cover', () => {
+  it('gives every accent lamp the same colour for a single-colour cover', () => {
     const plan = music({ musicPlaying: true, palette: [[255, 0, 0]] });
-    const a = (plan.targets['lighting.strip_a'] as { rgb: number[] }).rgb;
-    const b = (plan.targets['lighting.strip_b'] as { rgb: number[] }).rgb;
-    expect(a).toEqual([255, 0, 0]);
-    expect(b).not.toEqual(a);
+    expect(plan.targets['lighting.strip_a']).toMatchObject({
+      rgb: [255, 0, 0],
+    });
+    expect(plan.targets['lighting.strip_b']).toMatchObject({
+      rgb: [255, 0, 0],
+    });
+  });
+
+  it('drops a distant second colour but keeps a related shade', () => {
+    const far = music({
+      musicPlaying: true,
+      palette: [
+        [255, 0, 0],
+        [0, 0, 255],
+      ],
+    });
+    expect(far.targets['lighting.strip_b']).toMatchObject({ rgb: [255, 0, 0] });
+    const near = music({
+      musicPlaying: true,
+      palette: [
+        [255, 0, 0],
+        [255, 60, 0],
+      ],
+    });
+    expect(near.targets['lighting.strip_b']).toMatchObject({
+      rgb: [255, 60, 0],
+    });
   });
 
   it('returns to the scene when nothing plays or the cover has no colours', () => {

@@ -79,7 +79,7 @@ Every target must also be a mapped light in `homeAssistant.entities`, and
    separately). Monochrome, near-black and undecodable artwork, and WebP/GIF,
    give no colours.
 4. `accent` lamps, in a stable order, take those colours at `musicBrightness`.
-   With a one-colour cover, the next lamps get neighbouring hues. Other lamps
+   All accent lamps share the cover's dominant colour; only a second colour within 40° of hue is used as variation, and a distant one is dropped (no invented hues). Other lamps
    keep the scene's values.
 5. A new track recolours the lamps. Changes below a visible difference are not
    sent again.
@@ -159,3 +159,7 @@ full-screen window has a playing player and sound on that computer. Blockers in
 the display policy's `ignoreIdleBlockers` list are skipped, and "Playing audio"
 never counts. Full screen plus video gives `cinema`; the Musik scene keeps its
 artwork colours but dims them to `cinemaBrightness` while that is true.
+
+Without music, Dynamisk shows accent lamps as plain white on their white
+channel: 4000 K at 45 % at the desk, warm 2700 K at 30 % in the lounge and
+2200 K at the cinema level for a film.
