@@ -4,8 +4,9 @@ The current Nest Hub design uses a clock and climate rail, paged lighting tiles,
 a separate all-off control, and a music panel with cover art. Bed keeps controls
 outside its top-right system overlay. Camera images retain their proportions.
 
-Trusted playback opens the music panel. After a pause it remains visible for ten
-seconds with its last loaded cover; the Musik button can hold it open longer.
+Trusted playback opens the music panel. After a pause it remains visible for two
+minutes with its last loaded cover (the plain title for 30 seconds, then marked
+as last played); the Musik button can hold it open longer.
 Source changes and untrusted observations clear retained media. Artwork can tint
 the playing view; otherwise the palette is neutral.
 

@@ -1547,7 +1547,7 @@ describe('Opus Hub presentation with real display handlers', () => {
       target: grid.children[0]!,
       pointerId: 9,
     });
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(120_000);
     expect(root.dataset['lightingExpanded']).toBe('true');
     ui.get('#music-menu').click();
     expect(root.dataset['lightingExpanded']).toBe('false');
@@ -1562,7 +1562,7 @@ describe('Opus Hub presentation with real display handlers', () => {
     player.observed.playback = 'paused';
     ui.render();
     expect(root.dataset['musicVisible']).toBe('true');
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(120_000);
     expect(root.dataset['musicVisible']).toBe('false');
     expect(ui.get('#music-playback').hidden).toBe(true);
     ui.get('#music-menu').click();
@@ -1592,7 +1592,7 @@ describe('Opus Hub presentation with real display handlers', () => {
   });
 
   it.each(['Spotify', 'Optical In'])(
-    'keeps the %s panel for ten seconds after pause',
+    'keeps the %s panel for two minutes after pause',
     async (source) => {
       const data = ui.payload();
       const player = data.state.music.devices['music.room'];
@@ -1604,13 +1604,48 @@ describe('Opus Hub presentation with real display handlers', () => {
       player.observed.title = null;
       ui.render(data);
       expect(ui.get('#music-title').textContent).toBe('Last song');
-      await vi.advanceTimersByTimeAsync(9_999);
+      await vi.advanceTimersByTimeAsync(119_999);
       ui.render(data);
       expect(ui.get('#app-root').dataset['musicVisible']).toBe('true');
       await vi.advanceTimersByTimeAsync(1);
       expect(ui.get('#app-root').dataset['musicVisible']).toBe('false');
     },
   );
+
+  it('marks a retained title as last played when the player cleared it on pause', async () => {
+    const data = ui.payload();
+    const player = data.state.music.devices['music.room'];
+    player.observed.source = 'Spotify';
+    player.observed.playback = 'playing';
+    player.observed.title = 'Song';
+    ui.render(data);
+    player.observed.playback = 'paused';
+    player.observed.title = null;
+    ui.render(data);
+    expect(ui.get('#music-title').textContent).toBe('Song');
+    await vi.advanceTimersByTimeAsync(30_050);
+    expect(ui.get('#music-title').textContent).toBe('Senast spelat: Song');
+  });
+
+  it('shows just the title for half a minute after pause, then as last played', async () => {
+    const data = ui.payload();
+    const player = data.state.music.devices['music.room'];
+    player.observed.source = 'Spotify';
+    player.observed.playback = 'playing';
+    player.observed.title = 'Song';
+    ui.render(data);
+    player.observed.playback = 'paused';
+    ui.render(data);
+    expect(ui.get('#music-title').textContent).toBe('Song');
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(ui.get('#music-title').textContent).toBe('Song');
+    // Redrawn by itself at half a minute, without a new state.
+    await vi.advanceTimersByTimeAsync(51);
+    expect(ui.get('#music-title').textContent).toBe('Senast spelat: Song');
+    expect(ui.get('#app-root').dataset['musicVisible']).toBe('true');
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(ui.get('#app-root').dataset['musicVisible']).toBe('false');
+  });
 
   it('clears retained artwork immediately if the source changes during the pause', () => {
     const data = ui.payload();
@@ -1641,7 +1676,7 @@ describe('Opus Hub presentation with real display handlers', () => {
     player.observed.playback = 'paused';
     data.artwork['music.room'] = { status: 'unavailable', url: null };
     ui.render(data);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(120_000);
     expect(ui.get('#app-root').dataset['musicVisible']).toBe('true');
     expect(image.hidden).toBe(false);
     ui.get('#music-menu').click();
@@ -1664,7 +1699,7 @@ describe('Opus Hub presentation with real display handlers', () => {
       data.artwork['music.room'] = { status: 'unavailable', url: null };
       ui.render(data);
       expect(image.hidden).toBe(false);
-      await vi.advanceTimersByTimeAsync(9_999);
+      await vi.advanceTimersByTimeAsync(119_999);
       expect(image.hidden).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(image.hidden).toBe(true);
@@ -1748,7 +1783,7 @@ describe('Opus Hub presentation with real display handlers', () => {
     });
     await vi.advanceTimersByTimeAsync(1);
     expect(ui.get('#app-root').dataset['musicVisible']).toBe('true');
-    await vi.advanceTimersByTimeAsync(9_999);
+    await vi.advanceTimersByTimeAsync(119_999);
     expect(ui.get('#app-root').dataset['musicVisible']).toBe('false');
   });
 
@@ -1784,7 +1819,7 @@ it('keeps a keyboard playback gesture bound to its original action and clears it
   ui.documentListeners.get('keyup')?.({ target: button, key: ' ' });
   await vi.advanceTimersByTimeAsync(1);
   expect(ui.get('#app-root').dataset['musicVisible']).toBe('true');
-  await vi.advanceTimersByTimeAsync(9_999);
+  await vi.advanceTimersByTimeAsync(119_999);
   expect(ui.get('#app-root').dataset['musicVisible']).toBe('false');
 });
 

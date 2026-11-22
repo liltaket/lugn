@@ -1609,7 +1609,7 @@ describe('truthful Hub music and presence labels', () => {
         expect(ui.get('#music-title').textContent).toBe(
           playback === 'playing'
             ? 'Previous track'
-            : 'Senaste titel: Previous track',
+            : 'Senast spelat: Previous track',
         );
       } finally {
         ui.windowListeners.get('pagehide')?.();
@@ -2017,7 +2017,7 @@ describe('Hub Optical computer media projection', () => {
     },
   );
 
-  it('keeps the last title for ten seconds without heartbeats extending the pause', async () => {
+  it('keeps the last title for two minutes without heartbeats extending the pause', async () => {
     vi.useFakeTimers();
     const ui = dashboard();
     try {
@@ -2043,8 +2043,11 @@ describe('Hub Optical computer media projection', () => {
       runInContext(`render(${JSON.stringify(paused)})`, ui.context);
       expect(ui.get('#music-title').textContent).toBe('Last track');
       expect(ui.get('#music-player-status').textContent).toBe('Senast spelat');
-      await vi.advanceTimersByTimeAsync(9_000);
-      runInContext(`render(${JSON.stringify(paused)})`, ui.context);
+      // Heartbeats keep the connection fresh; none extends the pause.
+      for (let elapsed = 0; elapsed < 119_000; elapsed += 7_000) {
+        await vi.advanceTimersByTimeAsync(Math.min(7_000, 119_000 - elapsed));
+        runInContext(`acceptPayload(${JSON.stringify(paused)})`, ui.context);
+      }
       await vi.advanceTimersByTimeAsync(999);
       expect(ui.get('#music-title').textContent).toBe('Last track');
       await vi.advanceTimersByTimeAsync(1);
@@ -2091,7 +2094,10 @@ describe('Hub Optical computer media projection', () => {
       await vi.advanceTimersByTimeAsync(2_000);
       payload.computerNowPlaying!['music.room']!.status = 'idle';
       runInContext(`render(${JSON.stringify(payload)})`, ui.context);
-      await vi.advanceTimersByTimeAsync(8_000);
+      for (let elapsed = 0; elapsed < 118_000; elapsed += 7_000) {
+        await vi.advanceTimersByTimeAsync(Math.min(7_000, 118_000 - elapsed));
+        runInContext(`acceptPayload(${JSON.stringify(payload)})`, ui.context);
+      }
       expect(ui.get('#music-title').textContent).toBe(
         'Inget media spelas på datorn',
       );
@@ -2669,7 +2675,7 @@ describe('Hub desktop playback controls', () => {
       runInContext(`render(${JSON.stringify(payload)})`, ui.context);
 
       expect(ui.get('#music-title').textContent).toBe(
-        'Senaste titel: Receiver track',
+        'Senast spelat: Receiver track',
       );
       expect(ui.get('#music-source').textContent).toBe('Spotify DJ');
       expect(ui.get('#music-playback').getAttribute('aria-pressed')).toBe(

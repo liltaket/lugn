@@ -13,7 +13,10 @@ const PRINT_LIGHT_URL = `${BASE_PATH}display-api/printer/light`;
 const POLL_MS = 2000;
 const STREAM_CHECK_MS = 15000;
 const SENSOR_STALE_AFTER_MS = 15 * 60 * 1000;
-const MEDIA_PAUSE_GRACE_MS = 10_000;
+// After a pause the music stays: for the first half minute as it was (just
+// the title), then marked as last played, and it goes after two minutes.
+const MEDIA_PAUSE_GRACE_MS = 120_000;
+const MEDIA_PAUSE_PLAIN_MS = 30_000;
 
 // Bolt optimization: Cache Intl instantiations to prevent O(N) object allocations during high-frequency render loops.
 const timeFormat = new Intl.DateTimeFormat('sv-SE', {
@@ -268,9 +271,11 @@ let latestDeliveryRevision = -1;
 let currentInstanceId;
 let computerMediaDisplay = null;
 let computerMediaPauseTimer;
+let computerMediaLabelTimer;
 let musicPauseTimer;
 let musicPauseKey = null;
 let musicPauseDeadline = null;
+let musicPauseLabelTimer;
 let musicWasPlaying = false;
 let receiverMediaDisplay = null;
 let instanceGeneration = 0;
@@ -2171,11 +2176,15 @@ function clearComputerMediaDisplay() {
   computerMediaDisplay = null;
   window.clearTimeout(computerMediaPauseTimer);
   computerMediaPauseTimer = undefined;
+  window.clearTimeout(computerMediaLabelTimer);
+  computerMediaLabelTimer = undefined;
 }
 
 function clearMusicPause() {
   window.clearTimeout(musicPauseTimer);
   musicPauseTimer = undefined;
+  window.clearTimeout(musicPauseLabelTimer);
+  musicPauseLabelTimer = undefined;
   musicPauseDeadline = null;
   musicWasPlaying = false;
   receiverMediaDisplay = null;
@@ -2216,7 +2225,22 @@ function updateMusicPause(payload, target, observed, isPlaying, reportedOnly) {
       clearMusicPause();
       if (!stopped && latestPayload) renderMusic(latestPayload);
     }, MEDIA_PAUSE_GRACE_MS);
+    // Redraw once when the title turns into "last played" (a little after,
+    // so a timer that fires early still finds the pause old).
+    musicPauseLabelTimer = window.setTimeout(() => {
+      musicPauseLabelTimer = undefined;
+      if (!stopped && latestPayload) renderMusic(latestPayload);
+    }, MEDIA_PAUSE_PLAIN_MS + 50);
   }
+}
+
+// True from half a minute into a pause: the title then reads as last played.
+function musicPauseIsOld() {
+  return (
+    musicPauseDeadline === null ||
+    monotonicNow() >=
+      musicPauseDeadline - MEDIA_PAUSE_GRACE_MS + MEDIA_PAUSE_PLAIN_MS
+  );
 }
 
 function compactMediaText(value, limit) {
@@ -2300,8 +2324,20 @@ function renderComputerNowPlaying(
     if (remaining > 0) {
       renderComputerMediaTitle(
         computerMediaDisplay,
-        observed.playback === 'paused' ? 'Pausad' : 'Senast spelat',
+        observed.playback === 'paused' &&
+          MEDIA_PAUSE_GRACE_MS - remaining < MEDIA_PAUSE_PLAIN_MS
+          ? 'Pausad'
+          : 'Senast spelat',
       );
+      // Once more at half a minute, when it turns into "last played".
+      if (MEDIA_PAUSE_GRACE_MS - remaining < MEDIA_PAUSE_PLAIN_MS)
+        computerMediaLabelTimer ??= window.setTimeout(
+          () => {
+            computerMediaLabelTimer = undefined;
+            if (!stopped && latestPayload) renderMusic(latestPayload);
+          },
+          MEDIA_PAUSE_PLAIN_MS - (MEDIA_PAUSE_GRACE_MS - remaining),
+        );
       // One deadline per pause: polling and heartbeats must not extend it.
       computerMediaPauseTimer ??= window.setTimeout(() => {
         computerMediaPauseTimer = undefined;
@@ -2336,6 +2372,8 @@ function renderComputerNowPlaying(
   if (status === 'playing') {
     window.clearTimeout(computerMediaPauseTimer);
     computerMediaPauseTimer = undefined;
+    window.clearTimeout(computerMediaLabelTimer);
+    computerMediaLabelTimer = undefined;
     computerMediaDisplay = {
       key,
       title:
@@ -3021,8 +3059,8 @@ function renderMusic(payload) {
     typeof observed.title === 'string' && observed.title.trim()
       ? reportedOnly
         ? `Senast rapporterat: ${title}`
-        : !isPlaying
-          ? `Senaste titel: ${title}`
+        : !isPlaying && musicPauseIsOld()
+          ? `Senast spelat: ${title}`
           : title
       : title,
   );
@@ -3046,7 +3084,13 @@ function renderMusic(payload) {
     !(typeof observed.title === 'string' && observed.title.trim())
       ? receiverMediaDisplay
       : null;
-  if (retainedReceiver) setText(refs.musicTitle, retainedReceiver.title);
+  if (retainedReceiver)
+    setText(
+      refs.musicTitle,
+      musicPauseIsOld()
+        ? `Senast spelat: ${retainedReceiver.title}`
+        : retainedReceiver.title,
+    );
   renderComputerNowPlaying(
     payload,
     musicTarget,
