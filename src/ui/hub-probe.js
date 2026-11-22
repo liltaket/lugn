@@ -442,10 +442,9 @@
   // real handler, pending state, post, state read and redraw, but the POST
   // never leaves the Hub (fetch is replaced for the length of the phase), so
   // no scene is activated.
-  async function clickPath() {
+  async function clickPath(css = '', variant = 'click-real') {
     const tile = visibleSceneTile();
-    if (!tile)
-      return { variant: 'click-real', skipped: 'no visible scene tile' };
+    if (!tile) return { variant, skipped: 'no visible scene tile' };
     let blocked = 0;
     const clicked = new Set();
     const stub = (input, init) => {
@@ -462,10 +461,11 @@
       return realFetch(input, init);
     };
     window.fetch = stub;
-    if (window.fetch !== stub)
-      return { variant: 'click-real', skipped: 'fetch locked' };
+    if (window.fetch !== stub) return { variant, skipped: 'fetch locked' };
     const dot = makeDot();
+    const undo = css ? style(css) : () => {};
     try {
+      await sleep(css ? 900 : 0);
       const sample = await sampleFrames(6500, (elapsed) => {
         moveDot(dot)(elapsed);
         for (const at of [800, 2600, 4400]) {
@@ -476,12 +476,13 @@
         }
       });
       return {
-        variant: 'click-real',
+        variant,
         blockedPosts: blocked,
         ...(await summarise(sample)),
       };
     } finally {
       window.fetch = realFetch;
+      undo();
       dot.remove();
     }
   }
@@ -637,10 +638,6 @@
     }
   }
 
-  // The cards and controls that fade a cover color on their own (1.4 s).
-  const NO_CARD_FADES =
-    '#app-root .music-feature, #app-root .music-feature::after, #app-root .music-section .music-artwork, #app-root .camera-frame, #app-root .print-activity, #app-root .progress-half::before, #app-root .volume-authority::before { transition: none !important; }';
-
   // Which part of a theme change stalls the Hub: the whole palette, only the
   // page background colors, or only the colors the cards and controls use.
   async function themeParts() {
@@ -670,7 +667,6 @@
     };
     const variants = [
       ['theme-all', other],
-      ['theme-all-nofx', other, NO_CARD_FADES],
       [
         'theme-bg-only',
         {
@@ -900,7 +896,34 @@
       ['temats delar', 'dot', themeParts],
       ['rotattribut', 'dot', rootAttrs],
       ['omslag in', 'dot', artIn],
-      ['riktigt klick (låtsassvar)', 'press', clickPath],
+      ['riktigt klick (låtsassvar)', 'press', () => clickPath()],
+      [
+        'riktigt klick (utan skimmer)',
+        'press',
+        () =>
+          clickPath(
+            '#app-root .scene-button[data-state=pending]::after { animation: none !important; display: none !important; }',
+            'click-noshimmer',
+          ),
+      ],
+      [
+        'riktigt klick (utan filter)',
+        'press',
+        () =>
+          clickPath(
+            '*, *::before, *::after { filter: none !important; }',
+            'click-nofilter',
+          ),
+      ],
+      [
+        'riktigt klick (utan animationer)',
+        'press',
+        () =>
+          clickPath(
+            '*, *::before, *::after { animation: none !important; transition: none !important; }',
+            'click-noanim',
+          ),
+      ],
       ['tryck', 'press', async () => ({ variant: 'both', ...(await press()) })],
       [
         'tryck (bara tryckt läge)',

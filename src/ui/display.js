@@ -1821,8 +1821,6 @@ function updateArtworkColor(image) {
     }
     if (!weight) return;
     const colors = sum.map((value) => value / weight);
-    const shade = (base, strength) =>
-      `rgb(${colors.map((value) => Math.round(base + value * strength)).join(', ')})`;
     artTheme = artPalette(colors);
     root.dataset.artColor = 'true';
     syncArtTheme();
