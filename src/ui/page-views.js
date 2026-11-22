@@ -51,7 +51,10 @@
   // ── Scene dock: Hem's scenes on the other pages ──
   //
   // The buttons send exactly what Hem's scene buttons send (runCommand) and
-  // show the state Hem's own buttons show, so the two never disagree.
+  // take their state from the same payload Hem's buttons do: selected is
+  // the current scene, busy while its command is pending, waiting while the
+  // lamps have not reported the current scene revision, and disabled while
+  // Lugn is unavailable or the command is pending.
 
   const hem = () => (typeof refs === 'object' ? refs : null);
 
@@ -99,20 +102,36 @@
       dock.replaceChildren(...scenes.map(dockButton));
     }
     const offline = typeof isUnavailable === 'function' && isUnavailable();
+    const state = payload()?.state;
+    const current = state?.lighting?.currentScene;
+    const awaiting = Boolean(
+      state?.commands?.some(
+        (command) =>
+          command.revision === state.lighting?.sceneRevision &&
+          command.status === 'pending',
+      ),
+    );
     for (const button of dock.children) {
       const id = button.dataset.scene;
-      const source =
-        typeof sceneButtons === 'object' ? sceneButtons.get(id) : null;
-      const pressed = source?.getAttribute('aria-pressed') === 'true';
-      const state =
-        typeof pending === 'object' && pending.has(`scene:${id}`)
-          ? 'pending'
-          : (source?.dataset.state ?? 'idle');
-      if (button.getAttribute('aria-pressed') !== String(pressed))
-        button.setAttribute('aria-pressed', String(pressed));
-      if (button.dataset.state !== state) button.dataset.state = state;
-      if (button.disabled !== offline) button.disabled = offline;
+      const busy = typeof pending === 'object' && pending.has(`scene:${id}`);
+      const selected = id === current;
+      const look = busy
+        ? 'pending'
+        : !selected
+          ? 'idle'
+          : awaiting
+            ? 'awaiting'
+            : 'selected';
+      setAttr(button, 'aria-pressed', String(selected));
+      setAttr(button, 'aria-busy', String(busy));
+      if (button.dataset.state !== look) button.dataset.state = look;
+      if (button.disabled !== (offline || busy))
+        button.disabled = offline || busy;
     }
+  }
+
+  function setAttr(element, name, value) {
+    if (element.getAttribute(name) !== value) element.setAttribute(name, value);
   }
 
   function onDockClick(event) {
@@ -127,6 +146,48 @@
   }
   for (const page of ['clock', 'music'])
     view(page, 'dock')?.addEventListener('click', onDockClick);
+
+  // ── Notices: Hem's toast and connection notice on every page ──
+  //
+  // Commands sent from any page report through Hem's toast; while another
+  // page is shown, the same words show here (a live region), and a lost
+  // connection stays shown until Hem's notice goes.
+
+  const notice = document.getElementById('pages-notice');
+  const hemToast = document.getElementById('toast');
+  const hemConnection = document.getElementById('connection-notice');
+  function syncNotice() {
+    if (!notice) return;
+    let text = '';
+    let look = '';
+    if (pagesApi.current() !== 'home') {
+      if (hemConnection && !hemConnection.hidden) {
+        text =
+          document.getElementById('connection-message')?.textContent?.trim() ||
+          '';
+        look = 'error';
+      } else if (hemToast && !hemToast.hidden) {
+        text = hemToast.textContent.trim();
+        look = hemToast.dataset.state || '';
+      }
+    }
+    setText(notice, text);
+    if (notice.dataset.state !== look) notice.dataset.state = look;
+    if (notice.hidden !== !text) notice.hidden = !text;
+  }
+  if (notice && typeof MutationObserver === 'function') {
+    const observer = new MutationObserver(syncNotice);
+    for (const element of [hemToast, hemConnection])
+      if (element)
+        observer.observe(element, {
+          attributes: true,
+          attributeFilter: ['hidden', 'data-state'],
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+  }
+  pagesApi.onChange(syncNotice);
 
   // ── Klocka: big time, indoor air, presence ──
 
@@ -425,6 +486,8 @@
   let barKey = '';
   let barAnimation = null;
   let musicShown = false;
+  // The action the play button shows; a press sends exactly this.
+  let shownPlayAction = 'playing';
 
   function clockText(seconds) {
     const s = Math.max(0, Math.floor(seconds));
@@ -452,11 +515,18 @@
           : '',
       source: active ? r?.musicSource?.textContent?.trim() || '' : '',
       art: artReady ? r.musicArtworkImage.getAttribute('src') || '' : '',
-      playing:
-        Boolean(target) &&
-        typeof musicPlaybackAction === 'function' &&
-        musicPlaybackAction(data, target) === 'paused',
-      canPlay: Boolean(device) && !r?.musicPlayback?.disabled,
+      // Hem's own play button says what a press does there.
+      playing: r?.musicPlayback?.getAttribute('aria-pressed') === 'true',
+      canPlay: Boolean(device) && r?.musicPlayback?.disabled === false,
+      playBusy: r?.musicPlayback?.getAttribute('aria-busy') === 'true',
+      presets: [...(r?.musicPresets?.children ?? [])]
+        .filter((button) => button.dataset?.presetId)
+        .map((button) => ({
+          id: button.dataset.presetId,
+          label: button.textContent.trim(),
+          disabled: button.disabled,
+          busy: button.getAttribute('aria-busy') === 'true',
+        })),
       volume:
         typeof volume === 'number' && Number.isFinite(volume)
           ? `Volym ${Math.round(volume * 100)} %`
@@ -480,27 +550,64 @@
       setText(view('music', 'artist'), state.artist);
       setText(view('music', 'source'), state.source);
       setText(view('music', 'volume'), state.volume);
-      view('music', 'presets').hidden = state.active;
+      drawPresets(state);
       const play = view('music', 'play');
+      shownPlayAction = state.playing ? 'paused' : 'playing';
       play.disabled = !state.canPlay;
-      play.setAttribute('aria-label', state.playing ? 'Pausa' : 'Spela');
+      setAttr(play, 'aria-busy', String(state.playBusy));
+      setAttr(play, 'aria-label', state.playing ? 'Pausa' : 'Spela');
       view('music', 'play-icon').setAttribute(
         'd',
         state.playing ? PAUSE_PATH : PLAY_PATH,
       );
-      const art = view('music', 'art');
-      if ((art.getAttribute('src') || '') !== state.art) {
-        view('music', 'backdrop').hidden = true;
-        if (state.art) art.setAttribute('src', state.art);
-        else art.removeAttribute('src');
-      }
-      art.hidden = !state.art;
-      view('music', 'cover').dataset.state = state.art
-        ? 'available'
-        : 'missing';
+      drawCover(state.art);
     }
     drawProgress(state.progress);
   }
+
+  // Hem's choices in Hem's order, disabled and busy as there.
+  function drawPresets(state) {
+    const box = view('music', 'presets');
+    box.hidden = state.active;
+    const key = state.presets.map((preset) => `${preset.id}:${preset.label}`);
+    if (box.dataset.key !== key.join('|')) {
+      box.dataset.key = key.join('|');
+      box.replaceChildren(
+        ...state.presets.map((preset) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.dataset.preset = preset.id;
+          button.textContent = preset.label;
+          return button;
+        }),
+      );
+    }
+    for (const button of box.children) {
+      const preset = state.presets.find((p) => p.id === button.dataset.preset);
+      if (!preset) continue;
+      if (button.disabled !== preset.disabled)
+        button.disabled = preset.disabled;
+      setAttr(button, 'aria-busy', String(preset.busy));
+    }
+  }
+
+  // Musik's own image decides whether its cover shows: Hem having loaded the
+  // same URL says nothing about this request.
+  function drawCover(url) {
+    const art = view('music', 'art');
+    if ((art.getAttribute('src') || '') === url) return;
+    view('music', 'backdrop').hidden = true;
+    art.hidden = true;
+    view('music', 'cover').dataset.state = url ? 'loading' : 'missing';
+    if (url) art.setAttribute('src', url);
+    else art.removeAttribute('src');
+  }
+  view('music', 'art')?.addEventListener('error', () => {
+    const art = view('music', 'art');
+    art.hidden = true;
+    view('music', 'backdrop').hidden = true;
+    view('music', 'cover').dataset.state = 'missing';
+  });
 
   // The bar runs as one compositor animation from where playback is to the
   // end of the track; it is restarted only when the sample changes.
@@ -508,13 +615,15 @@
     const box = view('music', 'progress');
     const bar = view('music', 'bar');
     if (!sample || !(sample.duration > 0)) {
-      box.hidden = true;
-      barKey = '';
-      barAnimation?.cancel();
-      barAnimation = null;
+      if (!box.hidden) box.hidden = true;
+      if (barKey) {
+        barKey = '';
+        barAnimation?.cancel();
+        barAnimation = null;
+      }
       return;
     }
-    box.hidden = false;
+    if (box.hidden) box.hidden = false;
     const now =
       typeof estimatedServerNow === 'function'
         ? estimatedServerNow()
@@ -559,6 +668,8 @@
   // The backdrop is the loaded cover drawn small, once (same-origin art).
   view('music', 'art')?.addEventListener('load', () => {
     const art = view('music', 'art');
+    art.hidden = false;
+    view('music', 'cover').dataset.state = 'available';
     const canvas = view('music', 'backdrop');
     const context = canvas?.getContext?.('2d');
     if (!context || !art.naturalWidth) return;
@@ -578,56 +689,61 @@
     }
   });
 
+  // A press sends what the button shows (as Hem holds its action through a
+  // press), never an action recomputed from a newer state behind the label.
   view('music', 'play')?.addEventListener('click', () => {
     const data = payload();
     const target = typeof musicTarget === 'string' ? musicTarget : '';
     const device = target ? data?.state?.music?.devices?.[target] : undefined;
     if (
       !device ||
-      hem()?.musicPlayback?.disabled ||
-      typeof runCommand !== 'function' ||
-      typeof musicPlaybackAction !== 'function'
+      view('music', 'play').disabled ||
+      hem()?.musicPlayback?.disabled !== false ||
+      typeof runCommand !== 'function'
     )
       return;
     void runCommand(`music:${target}`, {
       target,
-      request: {
-        property: 'playback',
-        value: musicPlaybackAction(data, target),
-      },
+      request: { property: 'playback', value: shownPlayAction },
     });
+    window.setTimeout(drawMusic, 0);
   });
 
+  // A choice is sent only while Hem's own button for it is enabled.
   view('music', 'presets')?.addEventListener('click', (event) => {
     const button = event.target.closest?.('button[data-preset]');
-    if (!button || typeof selectMusicPreset !== 'function') return;
+    if (!button || button.disabled || typeof selectMusicPreset !== 'function')
+      return;
+    const source = [...(hem()?.musicPresets?.children ?? [])].find(
+      (candidate) => candidate.dataset?.presetId === button.dataset.preset,
+    );
+    if (!source || source.disabled) return;
     selectMusicPreset(Number(button.dataset.preset));
+    window.setTimeout(drawMusic, 0);
   });
 
-  // Tapping the cover on Hem opens Musik; the buttons on and around it keep
-  // their own actions. The cover itself takes no pointer events (it is drawn
-  // under the card), so a click that reached no control is placed against
-  // the cover's box, above the title.
-  const hemRoot = document.getElementById('app-root');
-  const hemCover = document.getElementById('music-artwork');
-  const HEM_CONTROLS =
-    'button, a, input, select, textarea, label, [role="button"]';
-  hemRoot?.addEventListener('click', (event) => {
-    if (!hemCover || hemRoot.dataset.musicVisible !== 'true') return;
-    if (event.defaultPrevented || event.target.closest?.(HEM_CONTROLS)) return;
-    const cover = hemCover.getBoundingClientRect();
-    const title = document
-      .getElementById('music-now-playing')
-      ?.getBoundingClientRect();
-    const bottom = title && title.top > cover.top ? title.top : cover.bottom;
-    if (
-      event.clientX >= cover.left &&
-      event.clientX <= cover.right &&
-      event.clientY >= cover.top &&
-      event.clientY <= bottom
-    )
-      pagesApi.go('music');
-  });
+  // Tapping the cover on Hem opens Musik. The visible cover image is the
+  // target (in every layout, at its own size), reachable by keyboard; the
+  // controls around it keep their own actions.
+  const hemCover = document.getElementById('music-artwork-image');
+  if (hemCover) {
+    hemCover.setAttribute('role', 'button');
+    hemCover.setAttribute('tabindex', '0');
+    hemCover.setAttribute('aria-label', 'Visa musiken i helskärm');
+    const open = () => {
+      if (
+        !hemCover.hidden &&
+        document.getElementById('app-root')?.dataset.musicVisible === 'true'
+      )
+        pagesApi.go('music');
+    };
+    hemCover.addEventListener('click', open);
+    hemCover.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      open();
+    });
+  }
 
   function musicTick() {
     drawMusic();
