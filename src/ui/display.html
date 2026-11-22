@@ -8,8 +8,16 @@
     <link rel="stylesheet" href="./display.css" />
     <script src="./display.js" defer></script>
     <script src="./pointer-bridge.js" defer></script>
+    <link rel="stylesheet" href="./pages.css" />
+    <script src="./pages.js" defer></script>
+    <script src="./page-views.js" defer></script>
   </head>
   <body>
+    <!-- Pages (pages.js): the existing dashboard is the first page, Hem.
+         The wrappers are left unindented so the dashboard markup is unchanged. -->
+    <div class="hub-pager" id="hub-pager">
+    <div class="hub-track" id="hub-track">
+    <section class="hub-page" data-page="home" aria-label="Hem">
     <main class="screen" id="app-root" data-role="unknown">
       <section class="glance" aria-label="Tid och inomhusklimat">
         <div class="clock-block" aria-label="Lokal tid och datum">
@@ -660,6 +668,27 @@
           </div>
         </form>
       </section>
+    </div>
+    </section>
+    <section class="hub-page" data-page="clock" aria-label="Klocka och klimat">
+      <div class="page-canvas clock-page">
+        <time class="clock-page-time" data-view="time">—:—</time>
+        <span class="clock-page-date" data-view="date"></span>
+        <dl class="clock-page-air" data-view="air"></dl>
+        <span class="clock-page-presence" data-view="presence"></span>
+      </div>
+    </section>
+    <section class="hub-page" data-page="info" aria-label="Info">
+      <div class="page-canvas info-page">
+        <header class="info-head">
+          <h2>Info</h2>
+          <button type="button" data-view="probe">Mät svep</button>
+        </header>
+        <dl class="info-grid" data-view="facts"></dl>
+      </div>
+    </section>
+    </div>
+    <div class="hub-dots" id="hub-dots" aria-hidden="true"><i></i><i></i><i></i></div>
     </div>
   </body>
 </html>

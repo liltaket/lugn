@@ -1,0 +1,173 @@
+/* Hub pages (pages.js). Only .hub-track ever moves, by transform; pages not
+   on screen or next to it skip rendering (content-visibility). Nothing here
+   changes per frame. */
+.hub-pager {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  /* Horizontal moves are the pager's; vertical ones stay with the page. */
+  touch-action: pan-y;
+  contain: strict;
+}
+.hub-track {
+  position: absolute;
+  inset: 0;
+}
+.hub-track.moving {
+  will-change: transform;
+}
+.hub-page {
+  position: absolute;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  contain: strict;
+  background: #141c1b;
+}
+.hub-page[data-state='off'] {
+  content-visibility: hidden;
+}
+
+/* Page dots: low on the screen, below every control, and never a target. */
+.hub-dots {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  display: flex;
+  gap: 6px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 30;
+}
+.hub-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgb(238, 241, 232);
+  opacity: 0.22;
+  transition: opacity 0.2s;
+}
+.hub-dots i.current {
+  opacity: 0.7;
+}
+
+/* New pages draw on the dashboard's own 600 px canvas (zoom mirrored from
+   #app-root by page-views.js). */
+.page-canvas {
+  --W: 1024px;
+  position: relative;
+  width: var(--W);
+  height: 600px;
+  box-sizing: border-box;
+  padding: 28px 36px;
+  color: #eef1e8;
+  font-family: system-ui, sans-serif;
+}
+
+/* ── Klocka ── */
+.clock-page {
+  display: grid;
+  grid-template-rows: 1fr auto auto auto;
+  justify-items: center;
+  align-content: center;
+  gap: 10px;
+  text-align: center;
+}
+.clock-page-time {
+  align-self: end;
+  font-size: 196px;
+  line-height: 0.9;
+  font-weight: 200;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+.clock-page-date {
+  font-size: 28px;
+  color: rgba(238, 241, 232, 0.64);
+}
+.clock-page-air {
+  display: flex;
+  gap: 44px;
+  margin: 34px 0 0;
+}
+.clock-page-air div {
+  display: grid;
+  gap: 2px;
+}
+.clock-page-air dt {
+  font-size: 15px;
+  color: rgba(238, 241, 232, 0.42);
+}
+.clock-page-air dd {
+  margin: 0;
+  font-size: 34px;
+  font-variant-numeric: tabular-nums;
+}
+.clock-page-air dd[data-stale='true'] {
+  color: rgba(238, 241, 232, 0.42);
+}
+.clock-page-presence {
+  margin-top: 18px;
+  font-size: 17px;
+  color: rgba(238, 241, 232, 0.42);
+}
+
+/* ── Info ── */
+.info-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+}
+.info-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* The Bed system overlay owns the top-right corner. */
+  padding-right: 120px;
+}
+.info-head h2 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 500;
+}
+.info-head button {
+  min-height: 44px;
+  padding: 8px 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(238, 241, 232, 0.14);
+  background: rgba(238, 241, 232, 0.055);
+  color: inherit;
+  font-size: 16px;
+}
+.info-head button[aria-pressed='true'] {
+  background: rgba(231, 188, 120, 0.22);
+  border-color: rgba(231, 188, 120, 0.5);
+}
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 36px;
+  margin: 0;
+  overflow-y: auto;
+  align-content: start;
+}
+.info-grid div {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(238, 241, 232, 0.08);
+  font-size: 15px;
+}
+.info-grid dt {
+  color: rgba(238, 241, 232, 0.5);
+}
+.info-grid dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.info-grid div[data-wide='true'] {
+  grid-column: 1 / -1;
+}

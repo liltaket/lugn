@@ -387,7 +387,14 @@ const server = createServer(async (request, response) => {
         ? 'tests/fixtures/hub/cover.svg'
         : !route
           ? 'src/ui/display.html'
-          : ['display.css', 'display.js', 'pointer-bridge.js'].includes(route)
+          : [
+                'display.css',
+                'display.js',
+                'pointer-bridge.js',
+                'pages.css',
+                'pages.js',
+                'page-views.js',
+              ].includes(route)
             ? `src/ui/${route}`
             : null;
     if (!name) return sendJson(response, 404, {});

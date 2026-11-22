@@ -151,7 +151,7 @@ type HubRequest = {
 };
 
 type DisplayResourceCategory =
-  'html' | 'css' | 'js' | 'state' | 'pointer-js' | 'pointer-config';
+  'html' | 'css' | 'js' | 'state' | 'pointer-js' | 'pointer-config' | 'pages';
 
 function displayResourceCategory(
   route: string,
@@ -169,6 +169,10 @@ function displayResourceCategory(
       return 'pointer-js';
     case '/display-api/pointer-bridge':
       return 'pointer-config';
+    case '/pages.css':
+    case '/pages.js':
+    case '/page-views.js':
+      return 'pages';
     default:
       return undefined;
   }
@@ -443,6 +447,11 @@ export class LugnDisplayServer {
           'pointer-bridge.js',
           'text/javascript; charset=utf-8',
         );
+        return;
+      }
+      const pageAsset = PAGE_ASSETS.get(hubRequest.route);
+      if (request.method === 'GET' && pageAsset) {
+        await this.serveAsset(response, pageAsset.file, pageAsset.type);
         return;
       }
       if (
@@ -1262,7 +1271,26 @@ function secretsEqual(supplied: string, configured: string): boolean {
 }
 
 type UiAssetName =
-  'display.html' | 'display.css' | 'display.js' | 'pointer-bridge.js';
+  | 'display.html'
+  | 'display.css'
+  | 'display.js'
+  | 'pointer-bridge.js'
+  | 'pages.css'
+  | 'pages.js'
+  | 'page-views.js';
+
+/** The Hub pager and its pages (src/ui/pages*.{css,js}, page-views.js). */
+const PAGE_ASSETS: ReadonlyMap<
+  string,
+  { readonly file: UiAssetName; readonly type: string }
+> = new Map([
+  ['/pages.css', { file: 'pages.css', type: 'text/css; charset=utf-8' }],
+  ['/pages.js', { file: 'pages.js', type: 'text/javascript; charset=utf-8' }],
+  [
+    '/page-views.js',
+    { file: 'page-views.js', type: 'text/javascript; charset=utf-8' },
+  ],
+]);
 
 /**
  * The UI directory is the first candidate holding the three core files; any

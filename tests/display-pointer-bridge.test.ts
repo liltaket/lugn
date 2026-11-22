@@ -118,6 +118,37 @@ describe('display pointer bridge', () => {
     ).toBeGreaterThan(html.indexOf('<script src="./display.js" defer>'));
   });
 
+  it('serves the pager and its pages and loads them after the dashboard', async () => {
+    const { origin, bed } = await setup();
+    for (const [file, type] of [
+      ['pages.css', 'text/css; charset=utf-8'],
+      ['pages.js', 'text/javascript; charset=utf-8'],
+      ['page-views.js', 'text/javascript; charset=utf-8'],
+    ] as const) {
+      const response = await fetch(`${bed}/${file}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe(type);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.text()).toBe(
+        readFileSync(new URL(`../src/ui/${file}`, import.meta.url), 'utf8'),
+      );
+      expect(
+        (await fetch(`${origin}/k/${'x'.repeat(32)}/${file}`)).status,
+      ).toBe(404);
+    }
+    const html = await (await fetch(`${bed}/`)).text();
+    const bridge = html.indexOf('<script src="./pointer-bridge.js" defer>');
+    const pages = html.indexOf('<script src="./pages.js" defer></script>');
+    const views = html.indexOf('<script src="./page-views.js" defer></script>');
+    expect(bridge).toBeGreaterThan(html.indexOf('<script src="./display.js"'));
+    expect(pages).toBeGreaterThan(bridge);
+    expect(views).toBeGreaterThan(pages);
+    expect(html).toContain('<link rel="stylesheet" href="./pages.css" />');
+    expect(html.indexOf('id="hub-track"')).toBeLessThan(
+      html.indexOf('id="app-root"'),
+    );
+  });
+
   it('returns bridge credentials only to the configured Hub', async () => {
     const { desk, bed } = await setup();
     const configured = await fetch(`${desk}/display-api/pointer-bridge`);
