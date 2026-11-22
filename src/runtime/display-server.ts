@@ -56,6 +56,15 @@ const CameraActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('hide') }).strict(),
 ]);
 const MAX_REQUEST_BYTES = 8 * 1024;
+/** One phase of the on-device profile (src/ui/hub-probe.js), logged as is. */
+const DisplayProbeSchema = z
+  .object({
+    run: z.string().max(40),
+    phase: z.string().max(40),
+    data: z.record(z.string().max(60), z.unknown()),
+  })
+  .strict();
+const PROBE_REPORTS_PER_MINUTE = 40;
 const DisplaySceneRequestSchema = z
   .object({ sceneId: z.string().min(1).max(128) })
   .strict();
@@ -172,6 +181,7 @@ function displayResourceCategory(
     case '/pages.css':
     case '/pages.js':
     case '/page-views.js':
+    case '/hub-probe.js':
       return 'pages';
     default:
       return undefined;
@@ -603,6 +613,28 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'POST' &&
+        hubRequest.route === '/display-api/probe'
+      ) {
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        const report = DisplayProbeSchema.parse(await readJsonBody(request));
+        if (!this.allowProbe(hubRequest.hub.id)) {
+          sendJson(response, 429, { error: 'probe_rate_limited' });
+          return;
+        }
+        // Read from the journal: the Hub has no other way to report.
+        console.info(
+          `[lugn] hub probe hub=${hubRequest.hub.id} ${JSON.stringify(report)}`,
+        );
+        sendJson(response, 202, { accepted: true });
+        return;
+      }
+      if (
+        request.method === 'POST' &&
         hubRequest.route === '/display-api/presence-count-one'
       ) {
         if (!isJsonRequest(request)) {
@@ -702,6 +734,22 @@ export class LugnDisplayServer {
       hub.role,
       `${this.pathForHub(hub.id)}display-api/cameras/`,
     );
+  }
+
+  private readonly probeWindows = new Map<
+    string,
+    { startedAt: number; count: number }
+  >();
+
+  private allowProbe(hubId: string): boolean {
+    const now = Date.now();
+    const current = this.probeWindows.get(hubId);
+    if (!current || now - current.startedAt >= 60_000) {
+      this.probeWindows.set(hubId, { startedAt: now, count: 1 });
+      return true;
+    }
+    current.count += 1;
+    return current.count <= PROBE_REPORTS_PER_MINUTE;
   }
 
   private snapshot(hub: LugnDisplayHub) {
@@ -1277,7 +1325,8 @@ type UiAssetName =
   | 'pointer-bridge.js'
   | 'pages.css'
   | 'pages.js'
-  | 'page-views.js';
+  | 'page-views.js'
+  | 'hub-probe.js';
 
 /** The Hub pager and its pages (src/ui/pages*.{css,js}, page-views.js). */
 const PAGE_ASSETS: ReadonlyMap<
@@ -1289,6 +1338,11 @@ const PAGE_ASSETS: ReadonlyMap<
   [
     '/page-views.js',
     { file: 'page-views.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  // The on-device profile, loaded only by a Hub opened with #probe.
+  [
+    '/hub-probe.js',
+    { file: 'hub-probe.js', type: 'text/javascript; charset=utf-8' },
   ],
 ]);
 

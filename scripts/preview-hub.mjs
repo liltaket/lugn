@@ -13,6 +13,7 @@ const fixture = JSON.parse(
 const startedAt = Date.now();
 const scenarios = new Map();
 const actions = [];
+const probeReports = [];
 let offline = false;
 const clients = new Set();
 const port = Number(process.argv[2] ?? 4178);
@@ -195,6 +196,8 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 403, { error: 'origin' });
     const path = new URL(request.url, `http://${allowedHost}`).pathname;
     if (path === '/__fixture/actions') return sendJson(response, 200, actions);
+    if (path === '/__fixture/probe')
+      return sendJson(response, 200, probeReports);
     if (path === '/__fixture/offline' && request.method === 'POST') {
       offline = !offline;
       if (offline) for (const client of clients) client.end();
@@ -270,6 +273,12 @@ const server = createServer(async (request, response) => {
           error: 'pointer_bridge_not_configured',
         });
       if (request.method !== 'POST') return sendJson(response, 405, {});
+      if (route === 'display-api/probe') {
+        let text = '';
+        for await (const chunk of request) text += chunk;
+        probeReports.push(JSON.parse(text || '{}'));
+        return sendJson(response, 202, { accepted: true });
+      }
       let raw = '';
       for await (const chunk of request) {
         raw += chunk;
@@ -394,6 +403,7 @@ const server = createServer(async (request, response) => {
                 'pages.css',
                 'pages.js',
                 'page-views.js',
+                'hub-probe.js',
               ].includes(route)
             ? `src/ui/${route}`
             : null;

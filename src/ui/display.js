@@ -4526,3 +4526,11 @@ setClock();
 clockTimer = window.setInterval(setClock, 1000);
 void refresh();
 connectStream();
+
+// A Hub opened with #probe runs the on-device profile (hub-probe.js) once the
+// dashboard has settled; nothing is loaded otherwise.
+if (location.hash === '#probe') {
+  const probe = document.createElement('script');
+  probe.src = './hub-probe.js';
+  document.head.append(probe);
+}

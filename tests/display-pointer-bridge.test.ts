@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { FakeClock } from '../src/core/clock.js';
@@ -147,6 +147,47 @@ describe('display pointer bridge', () => {
     expect(html.indexOf('id="hub-track"')).toBeLessThan(
       html.indexOf('id="app-root"'),
     );
+  });
+
+  it('serves the on-device probe and logs what a Hub reports', async () => {
+    const { origin, bed } = await setup();
+    const response = await fetch(`${bed}/hub-probe.js`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe(
+      'text/javascript; charset=utf-8',
+    );
+    expect(await response.text()).toBe(
+      readFileSync(new URL('../src/ui/hub-probe.js', import.meta.url), 'utf8'),
+    );
+    // Nothing loads it but a Hub opened with #probe.
+    expect(await (await fetch(`${bed}/`)).text()).not.toContain('hub-probe');
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const post = (body: unknown, url = `${bed}/display-api/probe`) =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin },
+        body: JSON.stringify(body),
+      });
+    const report = { run: 'abc123', phase: 'idle', data: { fps: 31.5 } };
+    expect((await post(report)).status).toBe(202);
+    expect(log).toHaveBeenCalledWith(
+      `[lugn] hub probe hub=bed ${JSON.stringify(report)}`,
+    );
+    // Anything but the report shape is refused and never logged.
+    log.mockClear();
+    expect((await post({ ...report, extra: 1 })).status).toBe(400);
+    expect((await post({ run: 'x', phase: 'y' })).status).toBe(400);
+    expect(
+      (await post(report, `${origin}/k/${'x'.repeat(32)}/display-api/probe`))
+        .status,
+    ).toBe(404);
+    expect(log).not.toHaveBeenCalled();
+    // A Hub that floods it is cut off.
+    let limited = 0;
+    for (let index = 0; index < 60; index += 1)
+      if ((await post(report)).status === 429) limited += 1;
+    expect(limited).toBeGreaterThan(0);
+    log.mockRestore();
   });
 
   it('returns bridge credentials only to the configured Hub', async () => {
