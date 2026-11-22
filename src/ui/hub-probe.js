@@ -637,6 +637,10 @@
     }
   }
 
+  // The cards and controls that fade a cover color on their own (1.4 s).
+  const NO_CARD_FADES =
+    '#app-root .music-feature, #app-root .music-feature::after, #app-root .music-section .music-artwork, #app-root .camera-frame, #app-root .print-activity, #app-root .progress-half::before, #app-root .volume-authority::before { transition: none !important; }';
+
   // Which part of a theme change stalls the Hub: the whole palette, only the
   // page background colors, or only the colors the cards and controls use.
   async function themeParts() {
@@ -663,6 +667,7 @@
     };
     const variants = [
       ['theme-all', other],
+      ['theme-all-nofx', other, NO_CARD_FADES],
       [
         'theme-bg-only',
         {
@@ -690,7 +695,7 @@
     };
     const out = [];
     try {
-      for (const [variant, palette] of variants) {
+      for (const [variant, palette, css] of variants) {
         if (aborted) break;
         // Back to where it was and let the fade finish.
         artTheme = saved.theme;
@@ -704,9 +709,14 @@
         artTheme = palette;
         root.dataset.artColor = 'true';
         root.dataset.musicPlaying = 'true';
-        const frames = sampleFrames(1800, () => {});
-        syncArtTheme();
-        out.push({ variant, ...(await summarise(await frames)) });
+        const undo = css ? style(css) : () => {};
+        try {
+          const frames = sampleFrames(1800, () => {});
+          syncArtTheme();
+          out.push({ variant, ...(await summarise(await frames)) });
+        } finally {
+          undo();
+        }
       }
     } finally {
       artTheme = saved.theme;

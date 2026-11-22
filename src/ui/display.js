@@ -622,10 +622,7 @@ function setClock(afterRender = false) {
   const time = timeFormat.format(now);
   const date = dateFormat.format(now);
   const hour = Number(timeFormat.format(now).split(':')[0]);
-  const period = hour >= 23 || hour < 6 ? 'night' : 'day';
-  if (root.dataset.time === undefined || root.dataset.time === period)
-    root.dataset.time = period;
-  else if (!themeFading) changeTheme(() => (root.dataset.time = period));
+  root.dataset.time = hour >= 23 || hour < 6 ? 'night' : 'day';
   setText(refs.clockTime, time);
   setText(refs.clockDate, date);
   const dateParts = datePartsFormat.formatToParts(now);
@@ -1891,48 +1888,79 @@ function artPalette([r, g, b]) {
   };
 }
 
-// A theme change fades on its own layer instead of restyling the page every
-// frame: the page keeps showing the look it had (held as two inline values)
-// while the new look fades in above it by opacity, then the hold is dropped
-// when that animation ends. The few cards that carry a theme color fade it
-// themselves in CSS. A change that arrives during a fade waits for it, so the
-// visible blend is never cut short.
+// The cover colors never go on the root: a custom property changed there
+// restyles the whole page (60 to 120 ms on a Hub, at every play/pause and track
+// change). They are set on the two places that use them (the music column and
+// the print card) and on two background layers. The background cross-fades:
+// the layer that is not showing is given the new colors and fades in over the
+// one that is, by opacity, so the compositor does it. The cards that carry a
+// theme color fade it themselves in CSS. A change that arrives during a fade
+// waits for it, so the visible blend is never cut short.
+const themeLayers = [0, 1].map((index) => {
+  const layer = document.createElement('div');
+  layer.className = index === 0 ? 'theme-bg on' : 'theme-bg';
+  layer.setAttribute?.('aria-hidden', 'true');
+  return layer;
+});
+root.prepend?.(...themeLayers);
+let themeLive = 0;
 let themeFadeTimer;
 let themeFading = false;
+
 function endThemeFade() {
   window.clearTimeout(themeFadeTimer);
+  if (!themeFading) return;
   themeFading = false;
-  root.style.removeProperty('--hold-image');
-  root.style.removeProperty('--hold-color');
-  delete root.dataset.fade;
+  const done = themeLayers[themeLive ^ 1];
+  done.classList.remove('on', 'fading');
   // Picks up a change that came in meanwhile.
   syncArtTheme();
 }
-root.addEventListener?.('animationend', (event) => {
-  if (
-    themeFading &&
-    event.target === root &&
-    event.animationName === `theme-fade-${root.dataset.fade}`
-  )
-    endThemeFade();
-});
-function changeTheme(apply) {
-  const canFade =
-    typeof globalThis.getComputedStyle === 'function' &&
-    !!root.style?.setProperty;
-  if (!canFade) {
-    apply();
-    return;
+for (const layer of themeLayers)
+  layer.addEventListener?.('transitionend', (event) => {
+    if (
+      themeFading &&
+      event.target === layer &&
+      event.propertyName === 'opacity' &&
+      layer === themeLayers[themeLive]
+    )
+      endThemeFade();
+  });
+
+// Gives a layer the cover colors, or the room's own when there are none.
+function paintThemeLayer(layer, theme) {
+  const style = layer.style;
+  if (!style) return;
+  for (const [key, property] of [
+    ['deep', '--tb-deep'],
+    ['glow', '--tb-glow'],
+    ['glowSoft', '--tb-glow-soft'],
+  ]) {
+    if (theme) style.setProperty(property, theme[key]);
+    else style.removeProperty?.(property);
   }
-  const look = globalThis.getComputedStyle(root);
-  root.style.setProperty('--hold-image', look.backgroundImage);
-  root.style.setProperty('--hold-color', look.backgroundColor);
-  apply();
+  layer.classList.toggle('themed', !!theme);
+}
+
+// Fades the background to `theme` (or to the room's own palette for null).
+function fadeThemeBackground(theme) {
+  const next = themeLayers[themeLive ^ 1];
+  paintThemeLayer(next, theme);
   themeFading = true;
-  root.dataset.fade = root.dataset.fade === 'a' ? 'b' : 'a';
-  // Only a safety net (a hidden page never finishes its animation).
+  // The one showing steps under the incoming one.
+  themeLayers[themeLive].classList.remove('fading');
+  next.classList.add('fading', 'on');
+  themeLive ^= 1;
+  // Only a safety net: a hidden page never finishes its transition.
   window.clearTimeout(themeFadeTimer);
   themeFadeTimer = window.setTimeout(endThemeFade, 4000);
+}
+
+function themeHosts() {
+  return [
+    document.querySelector('.music-section'),
+    document.getElementById?.('print-activity'),
+  ].filter((host) => host?.style);
 }
 
 // The artwork theme applies only while music plays with known artwork.
@@ -1945,27 +1973,31 @@ function syncArtTheme() {
     panel: '--art-panel',
     glow: '--art-glow',
     glowSoft: '--art-glow-soft',
-    tint: '--art-tint',
-    tint2: '--art-tint-2',
   };
   const active =
     !!artTheme &&
     root.dataset.artColor === 'true' &&
     root.dataset.musicPlaying === 'true';
   const signature = active ? JSON.stringify(artTheme) : '';
+  const theme = active ? artTheme : null;
   const apply = () => {
-    for (const [key, property] of Object.entries(names)) {
-      if (active) root.style.setProperty(property, artTheme[key]);
-      else root.style.removeProperty?.(property);
-    }
+    for (const host of themeHosts())
+      for (const [key, property] of Object.entries(names)) {
+        if (theme) host.style.setProperty(property, theme[key]);
+        else host.style.removeProperty?.(property);
+      }
     root.dataset.themed = String(active);
   };
-  // The first sync only sets the theme; later changes fade.
   if (themeSignature === null || signature === themeSignature) {
+    // The first sync, or nothing new: set the colors, no fade.
     apply();
+    if (themeSignature === null) {
+      paintThemeLayer(themeLayers[themeLive], theme);
+    }
     themeSignature = signature;
   } else if (!themeFading) {
-    changeTheme(apply);
+    apply();
+    fadeThemeBackground(theme);
     themeSignature = signature;
   }
 }
