@@ -780,7 +780,30 @@
   // like a finger), with Lugn's answers faked so nothing a swipe might touch
   // leaves the Hub. `mode` says what is prepared before the swipe: nothing, the
   // track lifted to a layer, the neighbour page lifted to a layer, or both.
-  async function swipeRun(mode, label, css = '') {
+  // Makes the pager's inert and aria-hidden bookkeeping on the pages do
+  // nothing, to see what it costs a swipe. Returns the undo.
+  function blockPageInert() {
+    const pages = [...document.querySelectorAll('.hub-page')];
+    for (const page of pages) {
+      Object.defineProperty(page, 'inert', {
+        configurable: true,
+        get: () => true,
+        set: () => {},
+      });
+      const original = page.setAttribute.bind(page);
+      page.setAttribute = (name, value) => {
+        if (name !== 'aria-hidden') original(name, value);
+      };
+    }
+    return () => {
+      for (const page of pages) {
+        delete page.inert;
+        delete page.setAttribute;
+      }
+    };
+  }
+
+  async function swipeRun(mode, label, css = '', prepare = null) {
     const api = globalThis.lugnPages;
     const pager = document.getElementById('hub-pager');
     if (!api || !pager || typeof PointerEvent !== 'function')
@@ -834,7 +857,12 @@
     let down = false;
     let up = false;
     let moved = 0;
-    const undo = css ? style(css) : () => {};
+    const undoStyle = css ? style(css) : () => {};
+    const undoPrepare = prepare ? prepare() : () => {};
+    const undo = () => {
+      undoPrepare();
+      undoStyle();
+    };
     try {
       if (mode === 'track' || mode === 'both') pager.classList.add('moving');
       if (mode === 'near' || mode === 'both')
@@ -1026,6 +1054,21 @@
             'asis',
             'swipe-cold-nocontain',
             '.hub-page { contain: none !important; }',
+          ),
+      ],
+      [
+        'sidsvep-kall-noinert',
+        'dot',
+        () => swipeRun('asis', 'swipe-cold-noinert', '', blockPageInert),
+      ],
+      [
+        'sidsvep-kall-nocontent',
+        'dot',
+        () =>
+          swipeRun(
+            'asis',
+            'swipe-cold-nocontent',
+            '.hub-page > * { display: none !important; }',
           ),
       ],
       [
