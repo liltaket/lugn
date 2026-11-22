@@ -722,6 +722,17 @@ export async function startRuntime(
           engine,
           config: config.dynamicLighting,
           palette: artworkPalette,
+          idleBlockers: (id) => {
+            const snapshot = displayAdapters.get(id)?.getSnapshot();
+            if (!snapshot?.fresh) return null;
+            return {
+              blockers: snapshot.state.idle_blockers,
+              ignored:
+                displaySettings.effective(id)?.ignoreIdleBlockers ??
+                displayConfigs[id]?.ignoreIdleBlockers ??
+                [],
+            };
+          },
           onDecision: (message) => console.info(`[lugn] ${message}`),
         })
       : undefined;
@@ -1031,7 +1042,10 @@ export async function startRuntime(
           subscribe: mqttSubscriber.subscribe.bind(mqttSubscriber),
           publish: publish.bind(mqttSubscriber),
         },
-        onChange: () => displayControllers.get(deviceId)?.observe(),
+        onChange: () => {
+          displayControllers.get(deviceId)?.observe();
+          dynamicLighting?.observe();
+        },
       });
       displayAdapters.set(deviceId, adapter);
       displayControllers.set(

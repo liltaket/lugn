@@ -148,3 +148,14 @@ dimming for a film, and the thresholds above are starting values.
 - Presence position, once a finer-grained location signal exists.
 - Palette smoothing for fast track changes, and a settings panel with a live
   explanation of the current decision.
+
+## Video in Firefox and Zen
+
+The agent's own activity class is conservative, so a browser video often shows
+as plain desktop. Lugn therefore also counts the computer as watching video when
+the display power policy would: PowerDevil lists an application (Firefox, Zen,
+...) holding the machine awake with a reason containing "video", or a
+full-screen window has a playing player and sound on that computer. Blockers in
+the display policy's `ignoreIdleBlockers` list are skipped, and "Playing audio"
+never counts. Full screen plus video gives `cinema`; the Musik scene keeps its
+artwork colours but dims them to `cinemaBrightness` while that is true.

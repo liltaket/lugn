@@ -920,9 +920,9 @@ describe('Hub page markup', () => {
     expect(pages).toEqual([
       'home',
       'music',
+      'foto',
       'kameror',
       'clock',
-      'foto',
       'info',
     ]);
     const dots = /<div class="hub-dots"[^>]*>(.*?)<\/div>/.exec(html)?.[1];
