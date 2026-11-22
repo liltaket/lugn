@@ -157,8 +157,10 @@ external change. The displayed current volume remains the player's observation.
 The volume controls reflect backend authority and observed values. Detailed
 policy explanations remain available in the desktop control panel.
 
-The music panel stays visible for ten seconds after a trusted playback pause;
-the last loaded cover remains visible during that interval. `Musik` can keep the
+The music panel stays visible for two minutes after a trusted playback pause;
+the last loaded cover remains visible during that interval. For the first 30
+seconds the title shows as it was; after that it reads `Senast spelat: <title>`
+(a computer's media reads `Pausad`, then `Senast spelat`). `Musik` can keep the
 panel open longer. Changing source or losing trusted observations clears retained
 media. Playing artwork can tint the dashboard; otherwise the palette is neutral.
 

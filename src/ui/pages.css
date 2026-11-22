@@ -245,29 +245,34 @@
   border-style: dashed;
 }
 
-/* ── Musik ── */
+/* ── Musik ──
+   The cover's own colour (--music-accent, measured once per cover) tints the
+   controls and the scene dock, so the page reads as one piece with what
+   plays. Everything that moves is opacity or transform. */
 .music-page {
+  --music-accent: #e7bc78;
+  --music-on-accent: #1b1a17;
   display: grid;
-  grid-template-columns: 380px minmax(0, 1fr);
+  grid-template-columns: 372px minmax(0, 1fr);
   align-items: center;
-  gap: 44px;
-  padding: 30px 48px 110px;
+  gap: 48px;
+  padding: 34px 52px 112px;
   overflow: hidden;
 }
 .music-page-backdrop {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  background: #141c1b;
+  background: #121716;
 }
-/* A 40 × 24 copy of the cover, drawn once per cover and scaled up: soft
-   without a filter, so moving the page never blurs anything again. */
+/* A blurred copy of the cover, drawn once per cover at 192 × 112 and scaled
+   up: soft and even, with no filter for the compositor to run. */
 .music-page-backdrop canvas {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0.55;
+  inset: -4%;
+  width: 108%;
+  height: 108%;
+  opacity: 0.85;
 }
 .music-page-backdrop canvas[hidden] {
   display: none;
@@ -276,59 +281,92 @@
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(
-    90deg,
-    rgba(10, 14, 13, 0.25),
-    rgba(10, 14, 13, 0.7)
-  );
+  background:
+    radial-gradient(
+      120% 90% at 25% 40%,
+      rgba(8, 10, 10, 0.05),
+      rgba(8, 10, 10, 0.55)
+    ),
+    linear-gradient(180deg, rgba(8, 10, 10, 0) 55%, rgba(8, 10, 10, 0.55));
 }
 .music-page-cover {
   position: relative;
-  width: 380px;
-  height: 380px;
-  border-radius: 20px;
+  width: 372px;
+  height: 372px;
+  border-radius: 22px;
   overflow: hidden;
-  background: rgba(238, 241, 232, 0.06);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  background: #2a2a24;
+  background: color-mix(in srgb, var(--music-accent) 18%, #1a1f1e);
+  box-shadow:
+    0 30px 70px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 .music-page-cover img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-.music-page-record {
+.music-page-empty {
   position: absolute;
-  inset: 70px;
-  border-radius: 50%;
-  background: repeating-radial-gradient(circle, #1b1f1e 0 3px, #222827 3px 5px);
-  box-shadow: inset 0 0 0 60px rgba(0, 0, 0, 0.25);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(238, 241, 232, 0.35);
 }
-.music-page-record::after {
-  content: '';
-  position: absolute;
-  inset: 38%;
-  border-radius: 50%;
-  background: #e7bc78;
+.music-page-empty svg {
+  width: 96px;
+  height: 96px;
 }
-.music-page-cover[data-state='available'] .music-page-record {
+.music-page-cover[data-state='available'] .music-page-empty {
   display: none;
 }
 .music-page-info {
   position: relative;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
+.music-page-info,
+.music-page-cover,
+.music-page .scene-dock {
+  transition: opacity 0.45s ease-out;
+}
+/* Until the first state arrives the page shows only its backdrop (and its
+   empty controls are neither seen nor reached). */
+.music-page[data-ready='false'] .music-page-info,
+.music-page[data-ready='false'] .music-page-cover,
+.music-page[data-ready='false'] .scene-dock {
+  opacity: 0;
+  visibility: hidden;
+}
+@media (prefers-reduced-motion: reduce) {
+  .music-page-info,
+  .music-page-cover,
+  .music-page .scene-dock,
+  .music-page-volume-track i {
+    transition: none;
+  }
+}
 .music-page-source {
-  font-size: 15px;
-  letter-spacing: 0.08em;
+  min-height: 18px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: rgba(238, 241, 232, 0.55);
+  color: var(--music-accent);
+  color: color-mix(in srgb, var(--music-accent) 55%, #eef1e8);
+}
+.music-page-text {
+  display: grid;
+  gap: 6px;
 }
 .music-page-title {
-  font-size: 42px;
-  line-height: 1.1;
-  font-weight: 650;
+  font-size: 44px;
+  line-height: 1.08;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -336,7 +374,7 @@
 }
 .music-page-artist {
   font-size: 24px;
-  color: rgba(238, 241, 232, 0.7);
+  color: rgba(238, 241, 232, 0.72);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -344,12 +382,12 @@
 .music-page-progress {
   display: grid;
   gap: 6px;
-  margin-top: 14px;
+  margin-top: 18px;
 }
 .music-page-bar {
-  height: 5px;
-  border-radius: 3px;
-  background: rgba(238, 241, 232, 0.16);
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(238, 241, 232, 0.18);
   overflow: hidden;
 }
 /* Moved by a Web Animation of transform alone (compositor). */
@@ -364,53 +402,107 @@
   display: flex;
   justify-content: space-between;
   font-size: 14px;
-  color: rgba(238, 241, 232, 0.55);
+  color: rgba(238, 241, 232, 0.6);
   font-variant-numeric: tabular-nums;
 }
 .music-page-controls {
   display: flex;
   align-items: center;
-  gap: 22px;
-  margin-top: 16px;
+  gap: 18px;
+  margin-top: 18px;
 }
-.music-page-play {
-  width: 92px;
-  height: 92px;
+.music-page-play,
+.music-page-next {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: #eef1e8;
-  color: #151a19;
   display: grid;
   place-items: center;
+  color: inherit;
+}
+.music-page-play {
+  width: 88px;
+  height: 88px;
+  background: #f4f4ef;
+  color: #151a19;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 .music-page-play svg {
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   fill: currentColor;
 }
+.music-page-next {
+  width: 64px;
+  height: 64px;
+  background: rgba(238, 241, 232, 0.12);
+  border: 1px solid rgba(238, 241, 232, 0.14);
+}
+.music-page-next svg {
+  width: 26px;
+  height: 26px;
+  fill: currentColor;
+}
+.music-page-play[aria-busy='true'],
+.music-page-next[aria-busy='true'] {
+  opacity: 0.6;
+}
 .music-page-volume {
-  font-size: 17px;
-  color: rgba(238, 241, 232, 0.65);
-  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 6px;
+  color: rgba(238, 241, 232, 0.7);
+}
+.music-page-volume svg {
+  width: 24px;
+  height: 24px;
+}
+.music-page-volume-track {
+  width: 120px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(238, 241, 232, 0.18);
+  overflow: hidden;
+}
+.music-page-volume-track i {
+  display: block;
+  height: 100%;
+  background: var(--music-accent);
+  background: color-mix(in srgb, var(--music-accent) 60%, #eef1e8);
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .music-page-presets {
   display: flex;
   gap: 12px;
-  margin-top: 16px;
+  margin-top: 18px;
 }
 .music-page-presets button {
   min-height: 60px;
   padding: 0 26px;
   border-radius: 30px;
-  border: 1px solid rgba(238, 241, 232, 0.14);
-  background: rgba(238, 241, 232, 0.08);
+  border: 1px solid rgba(238, 241, 232, 0.16);
+  background: rgba(238, 241, 232, 0.1);
   color: inherit;
   font-size: 18px;
   font-weight: 600;
 }
 .music-page[data-active='false'] .music-page-controls {
   display: none;
+}
+/* The dock as part of the page: glass over the backdrop, the lit scene in
+   the cover's colour. */
+.music-page .scene-dock button {
+  min-height: 58px;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(10, 12, 12, 0.32);
+}
+.music-page .scene-dock button[aria-pressed='true'] {
+  background: var(--music-accent);
+  border-color: var(--music-accent);
+  color: var(--music-on-accent);
 }
 
 /* Hem's cover opens Musik (page-views.js): the visible image takes the tap,

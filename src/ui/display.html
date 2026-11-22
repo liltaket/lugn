@@ -671,18 +671,23 @@
     </div>
     </section>
     <section class="hub-page" data-page="music" aria-label="Musik">
-      <div class="page-canvas music-page" data-view="root" data-playing="false">
+      <div class="page-canvas music-page" data-view="root" data-playing="false" data-ready="false">
         <div class="music-page-backdrop" aria-hidden="true">
-          <canvas data-view="backdrop" width="40" height="24"></canvas>
+          <canvas data-view="backdrop" width="192" height="112" hidden></canvas>
         </div>
         <div class="music-page-cover" data-view="cover" data-state="missing">
+          <img data-view="art-prev" alt="" decoding="async" hidden />
           <img data-view="art" alt="" decoding="async" hidden />
-          <span class="music-page-record" aria-hidden="true"></span>
+          <span class="music-page-empty" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M9 18V5l11-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="17" cy="16" r="3" /></svg>
+          </span>
         </div>
         <div class="music-page-info">
           <span class="music-page-source" data-view="source"></span>
-          <strong class="music-page-title" data-view="title">Ingen musik spelar</strong>
-          <span class="music-page-artist" data-view="artist"></span>
+          <div class="music-page-text" data-view="text">
+            <strong class="music-page-title" data-view="title"></strong>
+            <span class="music-page-artist" data-view="artist"></span>
+          </div>
           <div class="music-page-progress" data-view="progress" hidden>
             <span class="music-page-bar"><i data-view="bar"></i></span>
             <span class="music-page-times"
@@ -693,12 +698,15 @@
             <button type="button" class="music-page-play" data-view="play" aria-label="Spela">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path data-view="play-icon" d="M8 5.5v13l11-6.5Z" /></svg>
             </button>
-            <span class="music-page-volume" data-view="volume"></span>
+            <button type="button" class="music-page-next" data-view="next" aria-label="Nästa låt" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 5.5v13l9.5-6.5Z M16.5 5.5h2.5v13h-2.5Z" /></svg>
+            </button>
+            <span class="music-page-volume" data-view="volume" role="img" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4Z" /><path d="M15.5 9a4 4 0 0 1 0 6" /><path d="M18 6.5a7.5 7.5 0 0 1 0 11" /></svg>
+              <span class="music-page-volume-track"><i data-view="volume-fill"></i></span>
+            </span>
           </div>
-          <div class="music-page-presets" data-view="presets" hidden>
-            <button type="button" data-preset="1">Spotify DJ</button>
-            <button type="button" data-preset="4">Optical</button>
-          </div>
+          <div class="music-page-presets" data-view="presets" hidden></div>
         </div>
         <div class="scene-dock" data-view="dock" aria-label="Ljuslägen"></div>
       </div>

@@ -494,6 +494,14 @@
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
 
+  const LAST_PLAYED = 'Senast spelat: ';
+  function hemTitle(r) {
+    const text = r?.musicTitle?.textContent?.trim() || '';
+    return text.startsWith(LAST_PLAYED)
+      ? { title: text.slice(LAST_PLAYED.length), lastPlayed: true }
+      : { title: text, lastPlayed: false };
+  }
+
   function musicState() {
     const r = hem();
     const data = payload();
@@ -507,14 +515,27 @@
       !r.musicArtworkImage.hidden;
     const volume = device?.observed?.volume;
     return {
+      ready: Boolean(data),
       active,
-      title: r?.musicTitle?.textContent?.trim() || 'Ingen musik spelar',
+      title: active ? hemTitle(r).title : 'Ingen musik spelar',
+      // Last played: Hem's receiver title says so, or (computer media) its
+      // status line.
+      lastPlayed:
+        active &&
+        (hemTitle(r).lastPlayed ||
+          r?.musicPlayerStatus?.textContent?.trim() === 'Senast spelat'),
       artist:
         r?.musicArtist && !r.musicArtist.hidden
           ? r.musicArtist.textContent.trim()
           : '',
       source: active ? r?.musicSource?.textContent?.trim() || '' : '',
-      art: artReady ? r.musicArtworkImage.getAttribute('src') || '' : '',
+      // While Hem loads a new cover, keep what is shown (null) rather than
+      // flashing the empty cover.
+      art: artReady
+        ? r.musicArtworkImage.getAttribute('src') || ''
+        : active && r?.musicArtwork?.dataset.state === 'loading'
+          ? null
+          : '',
       // Hem's own play button label says what a press does there (Pausa
       // only when a press pauses; a manual pause on a player that still
       // reports playing reads Spela).
@@ -531,8 +552,15 @@
         })),
       volume:
         typeof volume === 'number' && Number.isFinite(volume)
-          ? `Volym ${Math.round(volume * 100)} %`
-          : '',
+          ? Math.round(Math.min(1, Math.max(0, volume)) * 100)
+          : null,
+      // The server says whether this player can skip (Nästa låt).
+      nextBusy:
+        typeof pending === 'object' && pending.has(`music-track:${target}`),
+      canSkip:
+        Boolean(device) &&
+        data?.musicTrackControl?.[target] === true &&
+        r?.musicPlayback?.disabled === false,
       progress:
         typeof musicProgress === 'object' && musicProgress
           ? { ...musicProgress }
@@ -553,12 +581,29 @@
     if (key !== musicKey) {
       musicKey = key;
       const root = view('music', 'root');
+      root.dataset.ready = String(state.ready);
       root.dataset.active = String(state.active);
       root.dataset.playing = String(state.playing);
+      const titleChanged =
+        view('music', 'title').textContent !== state.title ||
+        view('music', 'artist').textContent !== state.artist;
       setText(view('music', 'title'), state.title);
       setText(view('music', 'artist'), state.artist);
-      setText(view('music', 'source'), state.source);
-      setText(view('music', 'volume'), state.volume);
+      // After a while in pause Hem marks the title as last played; here it
+      // is said quietly above the title instead.
+      setText(
+        view('music', 'source'),
+        state.lastPlayed
+          ? ['Senast spelat', state.source].filter(Boolean).join(' · ')
+          : state.source,
+      );
+      if (titleChanged) reveal(view('music', 'text'), 8);
+      drawVolume(state.volume);
+      const next = view('music', 'next');
+      setAttr(next, 'aria-busy', String(state.nextBusy));
+      if (next.disabled !== state.nextBusy) next.disabled = state.nextBusy;
+      if (next.hidden !== !(state.active && state.canSkip))
+        next.hidden = !(state.active && state.canSkip);
       drawPresets(state);
       const play = view('music', 'play');
       shownPlayAction = state.playing ? 'paused' : 'playing';
@@ -599,23 +644,207 @@
     }
   }
 
-  // Musik's own image decides whether its cover shows: Hem having loaded the
-  // same URL says nothing about this request.
-  function drawCover(url) {
-    const art = view('music', 'art');
-    if ((art.getAttribute('src') || '') === url) return;
-    view('music', 'backdrop').hidden = true;
-    art.hidden = true;
-    view('music', 'cover').dataset.state = url ? 'loading' : 'missing';
-    if (url) art.setAttribute('src', url);
-    else art.removeAttribute('src');
+  // The volume as a level, not a number (the number is for screen readers).
+  function drawVolume(percent) {
+    const box = view('music', 'volume');
+    if (box.hidden !== (percent === null)) box.hidden = percent === null;
+    if (percent === null) return;
+    setAttr(box, 'aria-label', `Volym ${percent} %`);
+    const fill = view('music', 'volume-fill');
+    const transform = `scaleX(${(percent / 100).toFixed(2)})`;
+    if (fill.style.transform !== transform) fill.style.transform = transform;
   }
-  view('music', 'art')?.addEventListener('error', () => {
-    const art = view('music', 'art');
-    art.hidden = true;
-    view('music', 'backdrop').hidden = true;
-    view('music', 'cover').dataset.state = 'missing';
-  });
+
+  // A short rise and fade-in (opacity and transform only), shown only on the
+  // page in view and not when the viewer asks for less motion.
+  const calm =
+    typeof matchMedia === 'function' &&
+    matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function reveal(element, rise = 12, delay = 0, duration = 360) {
+    if (!musicShown || calm || typeof element?.animate !== 'function') return;
+    element.animate(
+      [
+        { opacity: 0, transform: `translateY(${rise}px)` },
+        { opacity: 1, transform: 'none' },
+      ],
+      {
+        duration,
+        delay,
+        easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+        fill: 'backwards',
+      },
+    );
+  }
+
+  // Musik's own image decides what its cover shows. A new cover is decoded
+  // first and then faded in over the old one, so a track change never shows
+  // an empty square; a failed one falls back to the note.
+  let coverRequest = 0;
+  let coverUrl = '';
+  function resetAccent() {
+    view('music', 'root').style.removeProperty('--music-accent');
+  }
+
+  function drawCover(url) {
+    if (url === null || url === coverUrl) return;
+    coverUrl = url;
+    const request = ++coverRequest;
+    const cover = view('music', 'cover');
+    if (!url) {
+      view('music', 'art').hidden = true;
+      view('music', 'art-prev').hidden = true;
+      view('music', 'backdrop').hidden = true;
+      cover.dataset.state = 'missing';
+      resetAccent();
+      return;
+    }
+    if (cover.dataset.state !== 'available') cover.dataset.state = 'loading';
+    const next = new Image();
+    next.decoding = 'async';
+    next.src = url;
+    const shown = () => {
+      if (request !== coverRequest) return;
+      const art = view('music', 'art');
+      const prev = view('music', 'art-prev');
+      // The old cover stays underneath while the new one fades in over it.
+      const crossfade =
+        musicShown &&
+        !calm &&
+        !art.hidden &&
+        art.getAttribute('src') &&
+        typeof art.animate === 'function';
+      if (crossfade) {
+        prev.setAttribute('src', art.getAttribute('src'));
+        prev.hidden = false;
+      }
+      art.setAttribute('src', url);
+      art.hidden = false;
+      cover.dataset.state = 'available';
+      drawBackdrop(next, crossfade);
+      if (musicShown && !calm && typeof art.animate === 'function') {
+        const fade = art.animate(
+          [
+            { opacity: 0, transform: 'scale(1.04)' },
+            { opacity: 1, transform: 'none' },
+          ],
+          { duration: 480, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+        );
+        fade.onfinish = () => {
+          if (request === coverRequest) prev.hidden = true;
+        };
+      } else prev.hidden = true;
+    };
+    const failed = () => {
+      if (request !== coverRequest) return;
+      view('music', 'art').hidden = true;
+      view('music', 'art-prev').hidden = true;
+      view('music', 'backdrop').hidden = true;
+      cover.dataset.state = 'missing';
+      resetAccent();
+    };
+    (typeof next.decode === 'function'
+      ? next.decode()
+      : new Promise((resolve, reject) => {
+          next.onload = resolve;
+          next.onerror = reject;
+        })
+    ).then(shown, failed);
+  }
+
+  // The backdrop: the cover drawn once into a small canvas with a blur, and
+  // its average colour as the page's accent (one style write per cover).
+  function drawBackdrop(image, fadeIn = false) {
+    const canvas = view('music', 'backdrop');
+    const context = canvas?.getContext?.('2d', { willReadFrequently: true });
+    if (!context || !image.naturalWidth) return;
+    try {
+      const { width, height } = canvas;
+      const scale =
+        Math.max(width / image.naturalWidth, height / image.naturalHeight) *
+        1.25;
+      const w = image.naturalWidth * scale;
+      const h = image.naturalHeight * scale;
+      context.clearRect(0, 0, width, height);
+      context.filter = 'blur(10px) saturate(1.25)';
+      context.drawImage(image, (width - w) / 2, (height - h) / 2, w, h);
+      context.filter = 'none';
+      const data = context.getImageData(0, 0, width, height).data;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let n = 0;
+      // Coloured, opaque pixels count most: transparent ones and greys
+      // barely move the accent.
+      for (let i = 0; i < data.length; i += 16) {
+        const alpha = data[i + 3] / 255;
+        const chroma =
+          (Math.max(data[i], data[i + 1], data[i + 2]) -
+            Math.min(data[i], data[i + 1], data[i + 2])) /
+          255;
+        const weight = alpha * (0.15 + chroma);
+        r += data[i] * weight;
+        g += data[i + 1] * weight;
+        b += data[i + 2] * weight;
+        n += weight;
+      }
+      const root = view('music', 'root');
+      if (n > 0) {
+        const [ar, ag, ab] = accentFrom(r / n, g / n, b / n);
+        root.style.setProperty('--music-accent', `rgb(${ar}, ${ag}, ${ab})`);
+      } else resetAccent();
+      const wasHidden = canvas.hidden;
+      canvas.hidden = false;
+      if (
+        (wasHidden || fadeIn) &&
+        musicShown &&
+        !calm &&
+        typeof canvas.animate === 'function'
+      )
+        canvas.animate([{ opacity: wasHidden ? 0 : 0.35 }, { opacity: 0.85 }], {
+          duration: 700,
+          easing: 'ease-out',
+        });
+    } catch {
+      canvas.hidden = true;
+      resetAccent();
+    }
+  }
+
+  // The average of a cover is often muddy: keep its hue, give it a clear,
+  // light tone; a grey cover falls back to the dashboard's warm accent.
+  function accentFrom(r, g, b) {
+    const max = Math.max(r, g, b) / 255;
+    const min = Math.min(r, g, b) / 255;
+    const delta = max - min;
+    // Grey or nearly black covers have no colour worth taking.
+    if (delta < 0.06 || max < 0.14) return [231, 188, 120];
+    let hue;
+    if (max === r / 255) hue = ((g - b) / 255 / delta) % 6;
+    else if (max === g / 255) hue = (b - r) / 255 / delta + 2;
+    else hue = (r - g) / 255 / delta + 4;
+    hue = (hue * 60 + 360) % 360;
+    const sat = Math.min(
+      0.62,
+      Math.max(0.32, (delta / (1 - Math.abs(max + min - 1))) * 1.2),
+    );
+    const light = 0.68;
+    const c = (1 - Math.abs(2 * light - 1)) * sat;
+    const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const m = light - c / 2;
+    const [r1, g1, b1] =
+      hue < 60
+        ? [c, x, 0]
+        : hue < 120
+          ? [x, c, 0]
+          : hue < 180
+            ? [0, c, x]
+            : hue < 240
+              ? [0, x, c]
+              : hue < 300
+                ? [x, 0, c]
+                : [c, 0, x];
+    return [r1, g1, b1].map((v) => Math.round((v + m) * 255));
+  }
 
   // The bar runs as one compositor animation from where playback is to the
   // end of the track; it is restarted only when the sample changes.
@@ -673,30 +902,6 @@
     }
   }
 
-  // The backdrop is the loaded cover drawn small, once (same-origin art).
-  view('music', 'art')?.addEventListener('load', () => {
-    const art = view('music', 'art');
-    art.hidden = false;
-    view('music', 'cover').dataset.state = 'available';
-    const canvas = view('music', 'backdrop');
-    const context = canvas?.getContext?.('2d');
-    if (!context || !art.naturalWidth) return;
-    try {
-      const { width, height } = canvas;
-      const scale = Math.max(
-        width / art.naturalWidth,
-        height / art.naturalHeight,
-      );
-      const w = art.naturalWidth * scale;
-      const h = art.naturalHeight * scale;
-      context.clearRect(0, 0, width, height);
-      context.drawImage(art, (width - w) / 2, (height - h) / 2, w, h);
-      canvas.hidden = false;
-    } catch {
-      canvas.hidden = true;
-    }
-  });
-
   // A press sends what the button shows (as Hem holds its action through a
   // press), never an action recomputed from a newer state behind the label.
   // The action is taken when the press starts, as Hem holds its own, so a
@@ -727,6 +932,27 @@
       request: { property: 'playback', value: action },
     });
     window.setTimeout(drawMusic, 0);
+  });
+
+  // Nästa låt: a one-off request the player either takes or not; the new
+  // title arrives with the next state.
+  view('music', 'next')?.addEventListener('click', () => {
+    const data = payload();
+    const target = typeof musicTarget === 'string' ? musicTarget : '';
+    if (
+      !target ||
+      view('music', 'next').hidden ||
+      data?.musicTrackControl?.[target] !== true ||
+      hem()?.musicPlayback?.disabled !== false ||
+      typeof runCommand !== 'function'
+    )
+      return;
+    // Its own command key: a pending play does not swallow it, nor does it
+    // make the play button look busy.
+    void runCommand(`music-track:${target}`, {
+      target,
+      request: { property: 'track', value: 'next' },
+    });
   });
 
   // A choice is sent only while Hem's own button for it is enabled.
@@ -777,6 +1003,14 @@
       musicShown = true;
       barKey = '';
       musicTick();
+      // Arriving on the page: the cover and the words settle in.
+      reveal(view('music', 'cover'), 14, 0, 420);
+      reveal(
+        document.querySelector("[data-page='music'] .music-page-info"),
+        14,
+        70,
+        420,
+      );
       musicTimer = window.setInterval(musicTick, 1000);
     },
     leave() {
