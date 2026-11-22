@@ -424,7 +424,14 @@
   // Element under the cursor. `cached` reuses the last result for the same
   // point while that element is still in the document.
   function hitAt(cached) {
-    if (cached && x === hitX && y === hitY && connected(hitTarget))
+    // A page change can make the cached element inert without removing it.
+    if (
+      cached &&
+      x === hitX &&
+      y === hitY &&
+      connected(hitTarget) &&
+      !hitTarget.closest?.('[inert]')
+    )
       return hitTarget;
     const element = document.elementFromPoint(x, y);
     hitX = x;
@@ -939,8 +946,17 @@
       'lugn:pages-settled',
       guard(() => {
         if (!visible) return;
+        hitX = NaN;
         if (recheckTimer !== undefined) clearTimeout(recheckTimer);
         recheckTimer = setTimeout(onRecheckTimer, 0);
+      }),
+    );
+    // A page change (at release, before the track settles) drops what the
+    // cursor was last known to be over.
+    window.addEventListener(
+      'lugn:page',
+      guard(() => {
+        hitX = NaN;
       }),
     );
     connect();

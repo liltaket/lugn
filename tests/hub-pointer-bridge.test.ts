@@ -904,6 +904,29 @@ describe('Hub pointer bridge page script', () => {
     ]);
   });
 
+  it('does not send a wheel to an element a page change made inert', async () => {
+    const page = await connected();
+    const before = page.document.element('p');
+    const after = page.document.element('p');
+    page.document.hit = before;
+    page.socket.receive({ t: 'enter', x: 10, y: 10 });
+    page.socket.receive({ t: 'wheel', dx: 0, dy: 10, x: 10, y: 10 });
+    // The pager made the old page inert; another element is under the cursor.
+    before.setAttribute('inert', '');
+    page.document.hit = after;
+    page.socket.receive({ t: 'wheel', dx: 0, dy: 10, x: 10, y: 10 });
+    expect(page.document.log.map((entry) => entry.target)).toEqual([
+      before,
+      after,
+    ]);
+    // A page event also drops the cached element on its own.
+    page.document.hit = before;
+    page.windowListeners.fire(new FakeEvent('lugn:page'));
+    page.document.hit = after;
+    page.socket.receive({ t: 'wheel', dx: 0, dy: 10, x: 10, y: 10 });
+    expect(page.document.log.at(-1)!.target).toBe(after);
+  });
+
   describe('highlight plate', () => {
     type Page = Awaited<ReturnType<typeof connected>>;
 
