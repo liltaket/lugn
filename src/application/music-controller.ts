@@ -47,6 +47,9 @@ export type MusicOptions = {
   observationTrusted?: (target: string) => boolean;
 };
 
+/** How long after a track step a playback change still belongs to it. */
+const TRACK_STEP_SETTLE_MS = 5_000;
+
 export class MusicFadeUnavailableError extends Error {
   constructor() {
     super('A recent observed volume is required to start a fade');
@@ -1302,7 +1305,11 @@ export class MusicController {
       observedPlayback !== 'unknown' &&
       newPlaybackTransition &&
       !latePausePredatesNewerIntent &&
-      !this.matchesRecentPendingPlaybackCommand(observation, observedPlayback);
+      !this.matchesRecentPendingPlaybackCommand(
+        observation,
+        observedPlayback,
+      ) &&
+      !this.duringTrackStep(observation.target);
     device.observed = structuredClone(observation.values);
     device.observedAt = observation.observedAt;
     device.availability = observation.available ? 'available' : 'unavailable';
@@ -1443,6 +1450,22 @@ export class MusicController {
     this.pruneHistory(confirmedIds);
     this.publish();
   }
+  /**
+   * A player changing tracks may report a brief pause, idle or buffering on
+   * the way; while a track step is pending, or shortly after it, a playback
+   * change is the step's own and not someone's external Play or Pause.
+   */
+  private duringTrackStep(target: string): boolean {
+    const now = this.clock.now();
+    const window = Math.max(this.timeoutMs, TRACK_STEP_SETTLE_MS);
+    return this.state.commands.some(
+      (command) =>
+        command.target === target &&
+        command.requested.property === 'track' &&
+        (command.status === 'pending' || now - command.issuedAt < window),
+    );
+  }
+
   private isNewPlaybackTransition(
     observation: MusicObservation,
     previousPlayback: MusicObservation['values']['playback'],

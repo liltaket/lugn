@@ -134,6 +134,39 @@ describe('music.skipTrack', () => {
     );
   });
 
+  it('does not take a brief pause during a track change for an external Pause', async () => {
+    const pausedHold = (s: ReturnType<typeof setup>) =>
+      s.engine.state.intent.holds.some(
+        (hold) => hold.scope === 'music.playback',
+      );
+    const brief = (s: ReturnType<typeof setup>) =>
+      s.adapter.observe(
+        target,
+        {
+          volume: 0.3,
+          playback: 'paused',
+          source: 'Spotify',
+          title: 'First song',
+        },
+        true,
+        undefined,
+        undefined,
+        s.clock.now(),
+      );
+    // Without a track step, the same report is someone pausing.
+    const control = setup();
+    await control.advance(1_000);
+    brief(control);
+    expect(pausedHold(control)).toBe(true);
+
+    const s = setup();
+    await s.advance(1_000);
+    await s.registry.invoke('music.skipTrack', { target, step: 'next' }, human);
+    await s.advance(500);
+    brief(s);
+    expect(pausedHold(s)).toBe(false);
+  });
+
   it('refuses a player on a computer input before sending or noting anything', async () => {
     const s = setup({
       source: 'Optical',
