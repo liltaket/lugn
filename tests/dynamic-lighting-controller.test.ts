@@ -82,6 +82,9 @@ async function fixture(over: { settleMs?: number } = {}) {
   });
   const palette = new FakePalette();
   const decisions: string[] = [];
+  const listed: { blockers: Array<{ app: string; reason: string }> | null } = {
+    blockers: null,
+  };
   const controller = new DynamicLightingController({
     clock,
     engine,
@@ -96,6 +99,7 @@ async function fixture(over: { settleMs?: number } = {}) {
       settleMs: over.settleMs ?? 4000,
       minChangeIntervalMs: 1000,
     }),
+    idleBlockers: () => ({ blockers: listed.blockers, ignored: [] }),
     onDecision: (message) => decisions.push(message),
   });
   cleanups.push(() => controller.dispose());
@@ -146,6 +150,7 @@ async function fixture(over: { settleMs?: number } = {}) {
     desired,
     advance,
     adapter,
+    listed,
   };
 }
 
@@ -380,6 +385,30 @@ describe('dynamic lighting controller', () => {
       f.computer('desktop');
       await f.advance(5000);
       expect(f.desired('lighting.desk').power).toBe(true);
+    });
+
+    it('treats a browser video blocker as cinema when the agent could not classify the activity', async () => {
+      const f = await fixture();
+      f.computer('desktop');
+      await f.engine.activateScene('scene.adaptive', user);
+      await f.advance(100);
+      f.listed.blockers = [{ app: 'Zen', reason: 'Playing video' }];
+      f.computer('desktop', { fullscreen: true });
+      await f.advance(5000);
+      expect(f.controller.snapshot()).toMatchObject({
+        situation: 'cinema',
+        reason: 'fullscreen_media',
+      });
+      expect(f.desired('lighting.desk').power).toBe(false);
+    });
+
+    it('ignores an audio-only blocker', async () => {
+      const f = await fixture();
+      f.computer('desktop', { fullscreen: true });
+      f.listed.blockers = [{ app: 'Firefox', reason: 'Playing audio' }];
+      await f.engine.activateScene('scene.adaptive', user);
+      await f.advance(5000);
+      expect(f.controller.snapshot().situation).not.toBe('cinema');
     });
 
     it('settles on time even while an idle deadline is also pending', async () => {

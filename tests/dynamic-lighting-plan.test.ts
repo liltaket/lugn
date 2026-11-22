@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  blockersShowVideo,
   DynamicLightingConfigSchema,
   classifySituation,
   planDynamicLighting,
@@ -241,5 +242,35 @@ describe('config and comparison', () => {
       ),
     ).toBe(false);
     expect(sameDynamicValues(undefined, { power: false })).toBe(false);
+  });
+});
+
+describe('video from idle blockers', () => {
+  it('sees a playing video but not audio, and honours the ignore list', () => {
+    expect(
+      blockersShowVideo([{ app: 'firefox', reason: 'Playing video' }]),
+    ).toBe(true);
+    expect(
+      blockersShowVideo([{ app: 'firefox', reason: 'Playing audio' }]),
+    ).toBe(false);
+    expect(
+      blockersShowVideo([{ app: 'Zen', reason: 'Playing video' }], ['zen']),
+    ).toBe(false);
+    expect(blockersShowVideo(null)).toBe(false);
+  });
+
+  it('dims music colours to the cinema level during full-screen video', () => {
+    const plan = planDynamicLighting(
+      'music',
+      inputs({
+        musicPlaying: true,
+        palette: [[255, 0, 0]],
+        computer: computer({ fullscreen: true, activity: 'video' }),
+      }),
+      config,
+    );
+    expect(plan.reason).toBe('artwork_colours_dimmed');
+    for (const target of Object.values(plan.targets))
+      expect(target).toMatchObject({ brightness: config.cinemaBrightness });
   });
 });

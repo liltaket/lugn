@@ -256,7 +256,7 @@
   grid-template-columns: 372px minmax(0, 1fr);
   align-items: center;
   gap: 48px;
-  padding: 34px 52px 112px;
+  padding: 34px 52px;
   overflow: hidden;
 }
 .music-page-backdrop {
@@ -332,6 +332,21 @@
 .music-page-cover,
 .music-page .scene-dock {
   transition: opacity 0.45s ease-out;
+}
+/* With the quick menu open the content makes room for it: it lifts a little
+   and the cover shrinks towards the top. Transform only. */
+.music-page-info,
+.music-page-cover {
+  transition:
+    opacity 0.45s ease-out,
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.music-page.menu-open .music-page-info {
+  transform: translateY(-52px);
+}
+.music-page.menu-open .music-page-cover {
+  transform: translateY(-40px) scale(0.86);
+  transform-origin: 50% 0;
 }
 /* Until the first state arrives the page shows only its backdrop (and its
    empty controls are neither seen nor reached). */

@@ -60,6 +60,24 @@ export type DynamicComputerInput = {
   idleForMs: number | null;
 };
 
+/**
+ * True when PowerDevil lists an application holding the machine awake for
+ * playing video (Firefox, Zen and other browsers do this for a playing video
+ * tab, including full-screen ones). Blockers named in `ignored` are skipped.
+ * The display power policy reads the same list.
+ */
+export function blockersShowVideo(
+  blockers: ReadonlyArray<{ app: string; reason: string }> | null,
+  ignored: readonly string[] = [],
+): boolean {
+  if (!blockers) return false;
+  const skip = new Set(ignored.map((name) => name.toLowerCase()));
+  return blockers.some(
+    (blocker) =>
+      !skip.has(blocker.app.toLowerCase()) && /video/i.test(blocker.reason),
+  );
+}
+
 export type DynamicInputs = {
   roomOccupied: boolean;
   /** Null when no trusted, fresh computer observation exists. */
@@ -171,15 +189,27 @@ export function planDynamicLighting(
           ? 'The playing track has no usable artwork colours'
           : 'Nothing is playing',
       ]);
+    // A full-screen film outshines the music: keep the colours, but dim them
+    // to the cinema level so the lamps never glare over the picture.
+    const cinema = classifySituation(inputs, config).situation === 'cinema';
     return {
       situation: 'music',
-      reason: 'artwork_colours',
-      evidence: ['Accent lamps follow the artwork of the playing track'],
-      targets: accentTargets(roles, colours, config.musicBrightness, {
-        power: true,
-        brightness: 25,
-        colorTemperature: 2700,
-      }),
+      reason: cinema ? 'artwork_colours_dimmed' : 'artwork_colours',
+      evidence: [
+        cinema
+          ? 'Full-screen video is showing; accent lamps follow the artwork at cinema brightness'
+          : 'Accent lamps follow the artwork of the playing track',
+      ],
+      targets: accentTargets(
+        roles,
+        colours,
+        cinema ? config.cinemaBrightness : config.musicBrightness,
+        {
+          power: true,
+          brightness: cinema ? config.cinemaBrightness : 25,
+          colorTemperature: cinema ? 2200 : 2700,
+        },
+      ),
     };
   }
 

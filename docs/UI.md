@@ -228,8 +228,10 @@ progress with elapsed and total time, play/pause and the reported volume; the
 Spotify DJ and Optical choices when nothing plays), **Klocka** (large clock,
 indoor air and presence) and **Info** (connection, stream, revisions, memory,
 screen, browser, and an opt-in swipe probe). Tapping the cover on Hem opens
-Musik; the controls on and around it keep their own actions. **Foto** (between
-Klocka and Info) is a picture frame over a public iCloud shared album (see
+Musik; the controls on and around it keep their own actions. Musik has no
+permanent dock: its scene dock is the hidden quick menu, and while that is open
+the content lifts and the cover shrinks to make room (transform only). **Foto** (right after
+Musik; the order is Hem, Musik, Foto, Kameror, Klocka, Info) is a picture frame over a public iCloud shared album (see
 CONFIGURATION.md): one to three pictures at a time in changing layouts (a
 landscape full screen, two portraits, a portrait with a landscape, three
 portraits, a landscape with two portraits, three landscapes, two panoramas; a

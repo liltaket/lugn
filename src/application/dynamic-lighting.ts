@@ -3,6 +3,7 @@ import type { Clock, TimerHandle } from '../core/clock.js';
 import { isHumanActor } from '../core/automation-holds.js';
 import {
   adaptivePlan,
+  blockersShowVideo,
   planDynamicLighting,
   sameDynamicValues,
   type DynamicComputerInput,
@@ -30,6 +31,15 @@ export type DynamicLightingStatus = {
 };
 
 export type DynamicLightingOptions = {
+  /**
+   * The computer's idle blockers as PowerDevil lists them (null when
+   * unreadable), plus the applications to ignore. Firefox and Zen report a
+   * playing video this way even when the agent cannot classify the activity.
+   */
+  idleBlockers?: (deviceId: string) => {
+    blockers: ReadonlyArray<{ app: string; reason: string }> | null;
+    ignored: readonly string[];
+  } | null;
   clock: Clock;
   engine: LugnEngine;
   config: DynamicLightingConfig;
@@ -326,11 +336,29 @@ export class DynamicLightingController {
     const idle = observation.observed.idle;
     if (idle === true) this.idleSince ??= clock.monotonicNow();
     else this.idleSince = null;
+    let activity: DynamicComputerInput['activity'] =
+      observation.activity.classification;
+    if (activity !== 'gaming' && activity !== 'video') {
+      const listed = this.options.idleBlockers?.(id!);
+      // The same evidence the display power policy trusts: a video blocker, or
+      // a full-screen window with a playing player and sound on this computer.
+      const fullscreenPlayback =
+        observation.observed.fullscreen === true &&
+        observation.observed.audio?.playing === true &&
+        observation.observed.media?.some(
+          (player) => player.playback === 'playing',
+        ) === true;
+      if (
+        fullscreenPlayback ||
+        (listed && blockersShowVideo(listed.blockers, listed.ignored))
+      )
+        activity = 'video';
+    }
     return {
       locked: observation.observed.locked,
       idle,
       fullscreen: observation.observed.fullscreen,
-      activity: observation.activity.classification,
+      activity,
       idleForMs:
         this.idleSince === null ? null : clock.monotonicNow() - this.idleSince,
     };
