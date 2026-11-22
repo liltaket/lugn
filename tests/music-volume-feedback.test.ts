@@ -23,6 +23,8 @@ function setup() {
     deviceIds: [],
     scenes: [],
     music: { targets: { 'music.room': [] }, adapter, feedbackTimeoutMs: 1_000 },
+    // These cases pin the exact policy command and its feedback matching.
+    musicAutomaticFades: false,
   });
   const observe = (volume: number) => {
     clock.advanceBy(1);

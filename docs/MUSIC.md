@@ -59,6 +59,46 @@ marks the fade interrupted. An overall duration-plus-30-second deadline and
 the existing per-command timeout keep a stalled fade bounded. These tolerances
 are initial software defaults and need measurement against the real WiiM.
 
+### Automatic fades
+
+Volume changes the policy makes on a **playing** player move gradually instead of
+jumping: a second person arriving or leaving, the room volume returning to its
+curve after a longer gap, or the passive person reduction under a human hold.
+Each is the same attributed fade as above, begun by Lugn, so the controller keeps
+following every step. A fade takes at least 3 and at most 30 seconds (400 ms per
+0.02 step).
+
+A move is still one exact command when it is too small to fade (under 3 points),
+when the player is not playing (nothing is audible, and playback starts at the
+right level), when a volume command is already in flight, when the observation is
+too old to start from, and always for the optical/source trim, because a receiver
+restores its own volume on a source change. `musicAutomaticFades: false` on the
+engine sends every policy volume as one command.
+
+Manual-change detection depends on three rules:
+
+- Intermediate fade steps and the destination sit on **whole percent**. A player
+  that truncates (the WiiM through Home Assistant) would report a fractional step
+  below its value, and a fade step is deliberately not matched by the truncation
+  rule, so it would read as a human adjustment. A policy volume of 0.2088 fades to
+  0.21; the reached level is not corrected again.
+- Every step is authorized by re-evaluating the policy itself. The fade continues
+  only while the policy still wants the same destination and operation, and a step
+  must lie between the fade's start and destination. Under a human hold only the
+  passive person reduction qualifies; a fade started on the policy's behalf
+  without that evaluation is still held, and the hold, its reference and the
+  selected mode are never rewritten by the fade.
+- A report that matches no step is an external change as before. It claims manual
+  ownership (de-offset by the person reduction), cancels the remaining steps and
+  leaves the human's value in place. A dashboard volume request during a fade
+  does the same through the ordinary direct path.
+
+When the policy's destination changes during a fade (for example the count
+changes again), the fade is replaced toward the new destination or, if the policy
+no longer wants a move, cancelled. Confirmed absence, home/away, disabled
+automation and settings changes cancel it as they cancel any automatic fade. The
+per-player Manual/Auto selector is refused while a fade runs, as for any fade.
+
 Volume matching allows a difference of 0.005 in Home Assistant's 0..1 scale.
 The WiiM stores whole percent and truncates, so a policy request between two
 percent steps (for example 0.2088) is reported as the lower one (0.20). That

@@ -28,6 +28,8 @@ function setup() {
     scenes: [{ id: 'scene.all_off', name: 'Off', lighting: {} }],
     musicVolumeSettings: structuredClone(defaultMusicVolumeSettings),
     music: { targets: { 'music.room': [] }, adapter },
+    // These cases pin whole-percent truncation of exact policy commands.
+    musicAutomaticFades: false,
   });
   engines.push(engine);
   adapter.observe('music.room', values);

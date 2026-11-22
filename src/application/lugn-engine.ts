@@ -112,6 +112,8 @@ export type EngineOptions = {
   restoredMusicIntent?: MusicIntentSnapshot;
   musicVolumeSettings?: MusicVolumeSettings;
   musicVolumeSettingsGeneration?: string;
+  /** Policy volume changes on a playing player fade by default; false sends them at once. */
+  musicAutomaticFades?: boolean;
   convergenceTimeoutMs?: number;
   retryDelayMs?: number;
   continuityMs?: number;
@@ -1123,6 +1125,11 @@ export class LugnEngine {
       openComputerInput: (target, provenance) =>
         this.openComputerInput(target, provenance),
       cancelAutomaticFade: (target) => this.musicController.cancelFade(target),
+      startAutomaticFade: (request, provenance) =>
+        this.startMusicFade(request, provenance),
+      ...(options.musicAutomaticFades === undefined
+        ? {}
+        : { automaticFades: options.musicAutomaticFades }),
       onChange: () => this.publish(['music', 'intent']),
       onPauseReleased: (target, endedAt) => {
         this.musicController.releasePauseIntent(target, endedAt);
@@ -1147,16 +1154,19 @@ export class LugnEngine {
     this.musicController.setSourceTrimConfigured((target) =>
       this.musicAutomation.isSourceVolumeManaged(target),
     );
-    this.musicController.setVolumeRequestGuard((target, provenance, volume) => {
-      const guard = this.musicExecutionGuards.get(`${target}:volume`);
-      if (guard && guard.requestId === provenance.requestId)
-        this.assertExecution(guard.isCurrent);
-      this.musicAutomation.assertVolumeRequestAllowed(
-        target,
-        provenance,
-        volume,
-      );
-    });
+    this.musicController.setVolumeRequestGuard(
+      (target, provenance, volume, fadeStart) => {
+        const guard = this.musicExecutionGuards.get(`${target}:volume`);
+        if (guard && guard.requestId === provenance.requestId)
+          this.assertExecution(guard.isCurrent);
+        this.musicAutomation.assertVolumeRequestAllowed(
+          target,
+          provenance,
+          volume,
+          fadeStart,
+        );
+      },
+    );
     this.musicController.setRecoveryPolicyGuard((command) => {
       const guard = this.musicExecutionGuards.get(
         `${command.target}:${command.requested.property === 'volume' ? 'volume' : 'playback'}`,

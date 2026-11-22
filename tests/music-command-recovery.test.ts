@@ -45,6 +45,8 @@ function setup(feedbackTimeoutMs = 1_000, clockStart = start) {
       { id: 'scene.all_off', name: 'Off', lighting: {} },
     ],
     music: { targets: { [target]: ['Optical'] }, adapter, feedbackTimeoutMs },
+    // These cases pin exact policy commands and their recovery.
+    musicAutomaticFades: false,
   });
   adapter.observe(
     target,

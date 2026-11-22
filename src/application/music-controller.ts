@@ -147,7 +147,12 @@ export class MusicController {
     | ((target: string, volume: number, provenance: Provenance) => void)
     | undefined;
   private volumeRequestGuard:
-    | ((target: string, provenance: Provenance, volume?: number) => void)
+    | ((
+        target: string,
+        provenance: Provenance,
+        volume?: number,
+        fadeStart?: boolean,
+      ) => void)
     | undefined;
   private onExternalPlaybackChange:
     | ((
@@ -353,7 +358,12 @@ export class MusicController {
     this.onExternalVolumeChange = handler;
   }
   setVolumeRequestGuard(
-    handler: (target: string, provenance: Provenance, volume?: number) => void,
+    handler: (
+      target: string,
+      provenance: Provenance,
+      volume?: number,
+      fadeStart?: boolean,
+    ) => void,
   ): void {
     this.volumeRequestGuard = handler;
   }
@@ -446,7 +456,12 @@ export class MusicController {
     const request = MusicFadeRequestSchema.parse(rawRequest);
     const device = this.requireTarget(request.target);
     const normalizedProvenance = ProvenanceSchema.parse(provenance);
-    this.volumeRequestGuard?.(request.target, normalizedProvenance);
+    this.volumeRequestGuard?.(
+      request.target,
+      normalizedProvenance,
+      request.volume,
+      true,
+    );
     const observationAt = device.observedAt;
     const startVolume = device.observed.volume;
     if (
@@ -742,12 +757,20 @@ export class MusicController {
     }
     this.fadeDispatching.add(runtime.state.target);
     const step = runtime.stepIndex + 1;
+    // Intermediate steps sit on whole percent. A player that stores whole
+    // percent and truncates (the WiiM through Home Assistant) would otherwise
+    // report a fractional step below its value, and a fade step is deliberately
+    // not matched by the truncation rule: it would look like a human adjustment.
     const volume =
       step === runtime.stepCount
         ? runtime.state.targetVolume
-        : runtime.state.startVolume +
-          ((runtime.state.targetVolume - runtime.state.startVolume) * step) /
-            runtime.stepCount;
+        : Math.round(
+            (runtime.state.startVolume +
+              ((runtime.state.targetVolume - runtime.state.startVolume) *
+                step) /
+                runtime.stepCount) *
+              100,
+          ) / 100;
     runtime.baselineSequence =
       this.observedSequence.get(runtime.state.target) ?? 0;
     runtime.commandId = undefined;

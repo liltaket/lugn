@@ -33,6 +33,30 @@ import {
 
 const automationActor = { type: 'automation' as const, id: 'lugn.music' };
 const musicContinuityMs = 20 * 60_000;
+// The controller steps in 0.02 and needs 250 ms per step. Smaller moves are one
+// exact command; larger ones take at least 3 s and at most 30 s.
+const POLICY_FADE_STEP = 0.02;
+const POLICY_FADE_STEP_MS = 400;
+const MIN_POLICY_FADE_DISTANCE = 0.03;
+const MIN_POLICY_FADE_MS = 3_000;
+const MAX_POLICY_FADE_MS = 30_000;
+
+/**
+ * A fade destination sits on whole percent: a player that truncates (the WiiM
+ * through Home Assistant) would report a fractional last step below it, which a
+ * fade step cannot tell apart from a human landing on the truncated value.
+ */
+function fadeDestination(volume: number): number {
+  return Math.round(volume * 100) / 100;
+}
+
+type VolumePlan = {
+  desired: number;
+  hold: ManualVolumeHold | undefined;
+  sourceManaged: boolean;
+  operation:
+    'set room volume' | 'set passive room volume' | 'set source volume';
+};
 
 export const VolumeAuthorityRequestSchema = z
   .object({ target: SemanticMusicIdSchema, mode: z.enum(['auto', 'manual']) })
@@ -64,10 +88,13 @@ const VolumeAuthorityIntentSchema = z.object({
 
 type ActiveFade = {
   id: string;
+  startVolume: number;
   targetVolume: number;
   isUser: boolean;
   manualRevision: number;
   manualPersonOffset: number;
+  /** Set only for a fade the volume policy itself began. */
+  policy?: { operation: VolumePlan['operation']; targetVolume: number };
 };
 
 export type { ManualVolumeHold } from '../core/schemas.js';
@@ -143,6 +170,13 @@ export type MusicAutomationOptions = {
   ) => Promise<unknown>;
   onError?: (target: string, operation: string) => void;
   cancelAutomaticFade?: (target: string) => void;
+  /** Begin an attributed, bounded volume fade on the player's behalf. */
+  startAutomaticFade?: (
+    request: MusicFadeRequest,
+    provenance: Provenance,
+  ) => unknown;
+  /** Set false to send every policy volume as one exact command. */
+  automaticFades?: boolean;
   onChange?: () => void;
   onPauseReleased?: (target: string, endedAt: number) => void;
   onPolicyTick?: () => void;
@@ -182,6 +216,11 @@ export class MusicAutomation {
   private readonly pendingReturns = new Set<string>();
   private readonly deferredComputerPauses = new Map<string, number>();
   private readonly activeFades = new Map<string, ActiveFade>();
+  private pendingPolicyFade: {
+    target: string;
+    operation: VolumePlan['operation'];
+    targetVolume: number;
+  } | null = null;
   private readonly manualVolumeHolds = new Map<string, ManualVolumeHold>();
   private readonly authorityIntents = new Map<
     string,
@@ -427,13 +466,24 @@ export class MusicAutomation {
           event.state.targetVolume,
           event.provenance,
         );
-      else this.volumeControllers.set(event.target, 'lugn');
+      // A passive fade under a human hold stays the human's selected mode.
+      else if (!this.getManualVolumeHold(event.target))
+        this.volumeControllers.set(event.target, 'lugn');
+      const policy =
+        !isUser && this.pendingPolicyFade?.target === event.target
+          ? {
+              operation: this.pendingPolicyFade.operation,
+              targetVolume: this.pendingPolicyFade.targetVolume,
+            }
+          : undefined;
       this.activeFades.set(event.target, {
         id: event.state.id,
+        startVolume: event.state.startVolume,
         targetVolume: event.state.targetVolume,
         isUser,
         manualRevision: this.manualRevisions.get(event.target) ?? 0,
         manualPersonOffset: this.manualAdjustmentOffset(event.target),
+        ...(policy === undefined ? {} : { policy }),
       });
       return;
     }
@@ -1139,9 +1189,15 @@ export class MusicAutomation {
   assertVolumeRequestAllowed(
     target: string,
     provenance: Provenance,
-    volume?: number,
+    requestedVolume?: number,
+    fadeStart = false,
   ): void {
     if (isHumanActor(provenance.actor)) return;
+    if (this.policyFadeAllowed(target, provenance, requestedVolume, fadeStart))
+      return;
+    // A fade start is not a direct command: the exact-target rules below never
+    // authorize one, so only the policy's own fade above can pass.
+    const volume = fadeStart ? undefined : requestedVolume;
     if (this.sourceVolumeAllowed(target, provenance, volume)) return;
     if (
       (this.getManualVolumeHold(target) &&
@@ -1185,12 +1241,13 @@ export class MusicAutomation {
   private volumeActivityReason(
     target: string,
     baseline: number | undefined,
+    ignoreOwnFade = false,
   ): VolumeActivityReason {
     if (!this.volumeAutomationEnabled) return 'automation_disabled';
     if (this.homePresence === 'away') return 'home_away';
     if (this.presence === 'unknown') return 'presence_unknown';
     if (this.presence === 'confirmed_empty') return 'confirmed_empty';
-    if (this.activeFades.has(target)) return 'fade_active';
+    if (this.activeFades.has(target) && !ignoreOwnFade) return 'fade_active';
     if (
       baseline === undefined ||
       this.options.getState(target).availability !== 'available' ||
@@ -1276,64 +1333,194 @@ export class MusicAutomation {
     if (this.presence !== 'occupied' || this.homePresence === 'away') return;
     for (const target of this.options.targets) {
       if (onlyTarget !== undefined && target !== onlyTarget) continue;
+      const running = this.activeFades.get(target)?.policy;
+      if (this.activeFades.has(target) && !running) continue;
+      const plan = this.evaluateVolumePolicy(target, running !== undefined);
+      if (running) {
+        // The policy is the only authority over its own fade. Keep it while it
+        // still wants the same destination, otherwise replace or stop it.
+        if (!plan) {
+          this.options.cancelAutomaticFade?.(target);
+          continue;
+        }
+        if (
+          plan.operation === running.operation &&
+          Math.abs(fadeDestination(plan.desired) - running.targetVolume) <=
+            Number.EPSILON
+        )
+          continue;
+      }
+      if (!plan) continue;
       const device = this.options.getState(target);
-      if (
-        device.availability !== 'available' ||
-        device.observed.volume === null ||
-        this.activeFades.has(target)
-      )
-        continue;
-      const sourceManaged = this.isSourceVolumeManaged(target);
-      if (!this.volumeAutomationEnabled && !sourceManaged) continue;
-      if (sourceManaged && this.options.sourceForVolumeTrim?.(target) == null)
-        continue;
-      const hold = this.getManualVolumeHold(target);
-      if (
-        hold &&
-        this.volumeAutomationEnabled &&
-        this.volumeSettings.passiveMultiPersonReductionEnabled &&
-        this.personCount === null
-      )
-        continue;
-      if (
-        hold &&
-        !sourceManaged &&
-        (this.personCount === null ||
-          (!this.volumeSettings.passiveMultiPersonReductionEnabled &&
-            !this.passiveManaged.get(target)))
-      )
-        continue;
-      const baseline = this.configuredBaseline(target);
-      if (
-        !hold &&
-        this.volumeAutomationEnabled &&
-        this.volumeActivityReason(target, baseline) !== 'active'
-      )
-        continue;
-      const desired = hold
-        ? this.manualTarget(target, hold)
-        : this.volumeAutomationEnabled
-          ? this.calculateVolume(baseline, target).target!
-          : this.sourceOnlyTarget(target);
       const current = device.requested.volume ?? device.observed.volume;
-      if (current !== null && volumeReached(current, desired)) continue;
-      if (!hold) this.volumeControllers.set(target, 'lugn');
-      this.send(
-        target,
-        { property: 'volume', value: desired },
-        sourceManaged
-          ? 'set source volume'
-          : hold
-            ? 'set passive room volume'
-            : 'set room volume',
-      );
-      if (hold)
+      if (!running && current !== null && volumeReached(current, plan.desired))
+        continue;
+      if (!plan.hold) this.volumeControllers.set(target, 'lugn');
+      if (!this.startPolicyFade(target, plan))
+        this.send(
+          target,
+          { property: 'volume', value: plan.desired },
+          plan.operation,
+        );
+      if (plan.hold)
         this.passiveManaged.set(
           target,
           this.volumeSettings.passiveMultiPersonReductionEnabled ||
             !!this.passiveManaged.get(target),
         );
     }
+  }
+
+  /**
+   * The one place that decides whether, and where, the policy moves a player's
+   * volume. Both dispatch and the authorization of a policy fade use it, so a
+   * fade can never continue toward a destination the policy no longer wants.
+   */
+  private evaluateVolumePolicy(
+    target: string,
+    ignoreOwnFade = false,
+  ): VolumePlan | null {
+    const device = this.options.getState(target);
+    if (
+      device.availability !== 'available' ||
+      device.observed.volume === null ||
+      (this.activeFades.has(target) && !ignoreOwnFade)
+    )
+      return null;
+    const sourceManaged = this.isSourceVolumeManaged(target);
+    if (!this.volumeAutomationEnabled && !sourceManaged) return null;
+    if (sourceManaged && this.options.sourceForVolumeTrim?.(target) == null)
+      return null;
+    const hold = this.getManualVolumeHold(target);
+    if (
+      hold &&
+      this.volumeAutomationEnabled &&
+      this.volumeSettings.passiveMultiPersonReductionEnabled &&
+      this.personCount === null
+    )
+      return null;
+    if (
+      hold &&
+      !sourceManaged &&
+      (this.personCount === null ||
+        (!this.volumeSettings.passiveMultiPersonReductionEnabled &&
+          !this.passiveManaged.get(target)))
+    )
+      return null;
+    const baseline = this.configuredBaseline(target);
+    if (
+      !hold &&
+      this.volumeAutomationEnabled &&
+      this.volumeActivityReason(target, baseline, ignoreOwnFade) !== 'active'
+    )
+      return null;
+    const desired = hold
+      ? this.manualTarget(target, hold)
+      : this.volumeAutomationEnabled
+        ? this.calculateVolume(baseline, target).target!
+        : this.sourceOnlyTarget(target);
+    return {
+      desired,
+      hold,
+      sourceManaged,
+      operation: sourceManaged
+        ? 'set source volume'
+        : hold
+          ? 'set passive room volume'
+          : 'set room volume',
+    };
+  }
+
+  /**
+   * Move a playing player to the policy's destination gradually. Only the room
+   * and passive person adjustments fade: a source trim follows a receiver that
+   * restores its own volume on a source change, so it stays an exact command.
+   * Every step is an ordinary attributed volume command, which keeps the
+   * controller's manual-change detection aware of each one.
+   */
+  private startPolicyFade(target: string, plan: VolumePlan): boolean {
+    if (
+      this.options.startAutomaticFade === undefined ||
+      this.options.automaticFades === false ||
+      plan.sourceManaged ||
+      !this.isPlaying(target) ||
+      this.options.computerPlayback?.handles(target)
+    )
+      return false;
+    const device = this.options.getState(target);
+    const start = device.observed.volume;
+    if (start === null || device.requested.volume !== undefined) return false;
+    const destination = fadeDestination(plan.desired);
+    const distance = Math.abs(destination - start);
+    if (distance < MIN_POLICY_FADE_DISTANCE - Number.EPSILON) return false;
+    const steps = Math.ceil(distance / POLICY_FADE_STEP);
+    const durationMs = Math.min(
+      MAX_POLICY_FADE_MS,
+      Math.max(MIN_POLICY_FADE_MS, steps * POLICY_FADE_STEP_MS),
+    );
+    this.pendingPolicyFade = {
+      target,
+      operation: plan.operation,
+      targetVolume: destination,
+    };
+    try {
+      this.options.startAutomaticFade(
+        { target, volume: destination, durationMs },
+        {
+          actor: automationActor,
+          source: 'presence_music_automation',
+          reason: plan.operation,
+        },
+      );
+      return true;
+    } catch {
+      // A stale reading or a refused guard falls back to the exact command.
+      return false;
+    } finally {
+      this.pendingPolicyFade = null;
+    }
+  }
+
+  /** Authorize the start and every step of the fade the policy itself began. */
+  private policyFadeAllowed(
+    target: string,
+    provenance: Provenance,
+    volume: number | undefined,
+    fadeStart: boolean,
+  ): boolean {
+    if (
+      volume === undefined ||
+      provenance.actor.type !== 'automation' ||
+      provenance.actor.id !== 'lugn.music' ||
+      provenance.source !== 'presence_music_automation' ||
+      this.presence !== 'occupied' ||
+      this.homePresence === 'away'
+    )
+      return false;
+    const fade = fadeStart
+      ? this.pendingPolicyFade?.target === target
+        ? this.pendingPolicyFade
+        : undefined
+      : this.activeFades.get(target)?.policy;
+    if (!fade || (fadeStart && provenance.reason !== fade.operation))
+      return false;
+    if (!fadeStart && !provenance.reason?.startsWith('Volume fade step '))
+      return false;
+    const plan = this.evaluateVolumePolicy(target, true);
+    if (
+      !plan ||
+      plan.operation !== fade.operation ||
+      Math.abs(fadeDestination(plan.desired) - fade.targetVolume) >
+        Number.EPSILON
+    )
+      return false;
+    if (fadeStart)
+      return Math.abs(volume - fade.targetVolume) <= Number.EPSILON;
+    const start = this.activeFades.get(target)!.startVolume;
+    return (
+      volume >= Math.min(start, fade.targetVolume) - Number.EPSILON &&
+      volume <= Math.max(start, fade.targetVolume) + Number.EPSILON
+    );
   }
 
   validateVolumeSettings(settings: MusicVolumeSettings): void {
