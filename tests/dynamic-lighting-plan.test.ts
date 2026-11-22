@@ -15,6 +15,8 @@ const config = DynamicLightingConfigSchema.parse({
     'lighting.strip_a': 'accent',
     'lighting.strip_b': 'accent',
     'lighting.monitor': 'backlight',
+    'lighting.front': 'front',
+    'lighting.under_bed': 'decor',
   },
 });
 const working: DynamicComputerInput = {
@@ -96,6 +98,29 @@ describe('adaptive plan', () => {
       brightness: config.cinemaBrightness,
     });
     expect(plan.targets['lighting.monitor']).toMatchObject({ power: true });
+  });
+
+  it('keeps the front light on except for a film, and decoration white-only', () => {
+    const watching = adaptive({
+      computer: computer({ fullscreen: true, activity: 'video' }),
+    });
+    expect(watching.targets['lighting.front']).toEqual({ power: false });
+    const working = adaptive({ palette: [[255, 0, 0]], musicPlaying: true });
+    expect(working.targets['lighting.front']).toMatchObject({ power: true });
+    const lounge = adaptive({
+      computer: computer({ locked: true }),
+      palette: [[255, 0, 0]],
+      musicPlaying: true,
+    });
+    expect(lounge.targets['lighting.front']).toMatchObject({ power: true });
+    for (const plan of [watching, working, lounge])
+      expect(plan.targets['lighting.under_bed']).toMatchObject({
+        power: true,
+        colorTemperature: expect.any(Number),
+      });
+    expect(
+      (lounge.targets['lighting.under_bed'] as { rgb?: unknown }).rgb,
+    ).toBeUndefined();
   });
 
   it('lights the desk for work and keeps colour subdued', () => {

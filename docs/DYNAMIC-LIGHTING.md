@@ -30,22 +30,28 @@ other static scene.
 ```json
 "dynamicLighting": {
   "targets": {
-    "lighting.ceiling": "main",
     "lighting.desk": "desk",
-    "lighting.govee_strip_1": "accent",
+    "lighting.front_light": "front",
     "lighting.govee_strip_2": "accent",
-    "lighting.monitor_backlight": "backlight"
+    "lighting.monitor_backlight": "accent",
+    "lighting.wled_cct": "decor"
   },
   "computerDeviceId": "desktop"
-}
+  }
 ```
 
-| Role        | Meaning                                         |
-| ----------- | ----------------------------------------------- |
-| `main`      | The large white light, normally the ceiling.    |
-| `desk`      | Task light by the computer.                     |
-| `accent`    | Colour-capable lamps that may follow the music. |
-| `backlight` | Bias light behind the monitor.                  |
+| Role        | Meaning                                                               |
+| ----------- | --------------------------------------------------------------------- |
+| `main`      | A large white light that should be on only while working at the desk. |
+| `desk`      | Task light over the desk; on only while working there.                |
+| `front`     | Everyday functional light, on except while watching.                  |
+| `accent`    | Colour-capable lamps that follow the music.                           |
+| `decor`     | White-only decoration; it dims and warms but never takes a colour.    |
+| `backlight` | Bias light behind the monitor, steady white.                          |
+
+A lamp with no role is left to the scene and the room engine. Use that for a
+lamp that something else already governs, such as the window light, or a
+lamp you never want these modes to touch.
 
 Optional tuning (defaults shown):
 
@@ -86,12 +92,14 @@ Every target must also be a mapped light in `homeAssistant.entities`, and
 The computer's observed state (the same Linux desktop agent used elsewhere)
 selects one situation:
 
-| Situation | When                                                                                                                   | `main`      | `desk`      | `backlight` | `accent`                                          |
-| --------- | ---------------------------------------------------------------------------------------------------------------------- | ----------- | ----------- | ----------- | ------------------------------------------------- |
-| `cinema`  | Full screen **and** video or game activity, not locked.                                                                | off         | off         | low, 6500 K | `cinemaBrightness`, warm, or dimmed music colours |
-| `desk`    | The computer is in use; video or a game is playing in a window (even with no input); idle for less than `idleAfterMs`. | 60%, 4000 K | 80%, 4000 K | 35%, 6500 K | 30% warm, or music colours at up to 35%           |
-| `lounge`  | Locked, or idle for `idleAfterMs` or more, while the room is occupied.                                                 | off         | off         | off         | 35% warm, or music colours at up to 55%           |
-| `unknown` | No fresh computer observation, or it reports neither idle nor lock state.                                              | scene's own | scene's own | scene's own | scene's own                                       |
+| Situation | When                                                                                                                   | `main`, `desk` | `front`     | `accent`                                          | `decor`     | `backlight` |
+| --------- | ---------------------------------------------------------------------------------------------------------------------- | -------------- | ----------- | ------------------------------------------------- | ----------- | ----------- |
+| `cinema`  | Full screen **and** video or game activity, not locked.                                                                | off            | off         | `cinemaBrightness`, warm, or dimmed music colours | 6%, warm    | low, 6500 K |
+| `desk`    | The computer is in use; video or a game is playing in a window (even with no input); idle for less than `idleAfterMs`. | on, 4000 K     | 65%, 4000 K | 30% warm, or music colours at up to 35%           | 20%, warm   | 35%, 6500 K |
+| `lounge`  | Locked, or idle for `idleAfterMs` or more, while the room is occupied.                                                 | off            | 35%, 2700 K | 35% warm, or music colours at up to 55%           | 30%, warm   | off         |
+| `unknown` | No fresh computer observation, or it reports neither idle nor lock state.                                              | scene's own    | scene's own | scene's own                                       | scene's own | scene's own |
+
+`main` is 60% and `desk` 80% in the desk situation.
 
 Video and games count as someone at the desk however long the keyboard has been
 quiet. Time since last input comes from the agent's idle flag: Lugn counts from

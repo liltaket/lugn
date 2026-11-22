@@ -7,15 +7,19 @@ import { SemanticLightingIdSchema, type LightingValues } from './schemas.js';
  * What a lamp is for. Roles are the only thing the dynamic modes need to know
  * about the room, and they are configured rather than guessed from names.
  *
- * - `main`: the large white light (ceiling).
- * - `desk`: task light by the computer.
- * - `accent`: colour-capable lamps that may follow the music.
+ * - `main`: a large white light that is on only while working at the desk.
+ * - `desk`: task light over the desk; on only while working there.
+ * - `front`: everyday functional light, on except while watching.
+ * - `accent`: colour-capable lamps that follow the music.
+ * - `decor`: white-only decoration; it dims and warms but never takes colour.
  * - `backlight`: bias light behind the monitor.
  */
 export const DynamicRoleSchema = z.enum([
   'main',
   'desk',
+  'front',
   'accent',
+  'decor',
   'backlight',
 ]);
 export type DynamicRole = z.infer<typeof DynamicRoleSchema>;
@@ -257,6 +261,26 @@ function roleValues(
       return situation === 'desk'
         ? { power: true, brightness: 80, colorTemperature: 4000 }
         : { power: false };
+    case 'front':
+      // Everyday functional light: wanted on except while watching.
+      return situation === 'desk'
+        ? { power: true, brightness: 65, colorTemperature: 4000 }
+        : situation === 'lounge'
+          ? { power: true, brightness: 35, colorTemperature: 2700 }
+          : { power: false };
+    case 'decor':
+      // White-only decoration: it can dim and warm, never take a colour.
+      return situation === 'cinema'
+        ? {
+            power: true,
+            brightness: config.cinemaBrightness,
+            colorTemperature: 2200,
+          }
+        : {
+            power: true,
+            brightness: situation === 'lounge' ? 30 : 20,
+            colorTemperature: 2400,
+          };
     case 'backlight':
       return situation === 'cinema'
         ? {
