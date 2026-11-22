@@ -25,7 +25,39 @@ class Element {
   listeners = new Map<string, Listener>();
   classList = {
     contains: (name: string) => this.className.split(' ').includes(name),
+    add: (...names: string[]) => {
+      for (const name of names)
+        if (!this.classList.contains(name))
+          this.className = `${this.className} ${name}`.trim();
+    },
+    remove: (...names: string[]) => {
+      this.className = this.className
+        .split(' ')
+        .filter((name) => name && !names.includes(name))
+        .join(' ');
+    },
+    toggle: (name: string, force?: boolean) => {
+      const on = force ?? !this.classList.contains(name);
+      if (on) this.classList.add(name);
+      else this.classList.remove(name);
+      return on;
+    },
   };
+  /** A style declaration that remembers custom properties (set per test). */
+  withStyle(): this {
+    const values = new Map<string, string>();
+    (this as unknown as { style: unknown }).style = {
+      values,
+      setProperty: (name: string, value: string) => values.set(name, value),
+      removeProperty: (name: string) => values.delete(name),
+    };
+    return this;
+  }
+  prepend(...children: Element[]): void {
+    for (const child of children) child.remove();
+    this.children.unshift(...children);
+    for (const child of children) child.parentElement = this;
+  }
   get firstElementChild() {
     return this.children[0];
   }
@@ -92,7 +124,7 @@ const initial = JSON.parse(
 async function settle() {
   for (let i = 0; i < 40; i++) await Promise.resolve();
 }
-function dashboard(hash = '') {
+function dashboard(hash = '', themed = false) {
   let payload = structuredClone(initial);
   let offline = false;
   let postGate: Promise<void> | undefined;
@@ -102,6 +134,10 @@ function dashboard(hash = '') {
     if (!elements.has(selector)) elements.set(selector, new Element());
     return elements.get(selector)!;
   };
+  if (themed) {
+    get('#app-root').withStyle();
+    get('.music-section').withStyle();
+  }
   get('#music-presets').append(
     get('#music-preset-dj'),
     get('#music-preset-optical'),
@@ -134,7 +170,7 @@ function dashboard(hash = '') {
       },
       visibilityState: 'visible',
       querySelector: get,
-      createElement: () => new Element(),
+      createElement: () => (themed ? new Element().withStyle() : new Element()),
       createTextNode: (text: string) => {
         const el = new Element();
         el.textContent = text;
@@ -193,6 +229,13 @@ function dashboard(hash = '') {
     calls,
     streams,
     scripts,
+    themeValues: (selector: string) =>
+      (get(selector) as unknown as { style: { values: Map<string, string> } })
+        .style.values,
+    layers: () =>
+      get('#app-root').children.filter((child) =>
+        child.className.includes('theme-bg'),
+      ),
     documentListeners,
     payload: () => payload,
     render: (value = payload) => {
@@ -563,6 +606,56 @@ describe('Hub optional Lugn 2 presentation', () => {
       ),
     ).toBe(false);
     expect(runInContext('latestPayload.generatedAt', ui.context)).toBe(6000);
+  });
+  it('sets the cover colors on the music column, never on the root, and fades the background between two layers', () => {
+    const themed = dashboard('', true);
+    const set = (value: string) =>
+      runInContext(
+        `artTheme = { accent: '${value}', deep: '${value}d', panel: '${value}p', glow: '${value}g', glowSoft: '${value}s' }; root.dataset.artColor = 'true'; root.dataset.musicPlaying = 'true'; syncArtTheme();`,
+        themed.context,
+      );
+    const layers = () => themed.layers();
+    // Two layers, the first showing.
+    expect(layers().map((layer) => layer.className)).toEqual([
+      'theme-bg on',
+      'theme-bg',
+    ]);
+    // The first sync sets the colors without a fade.
+    set('#111');
+    expect(themed.themeValues('.music-section').get('--art-accent')).toBe(
+      '#111',
+    );
+    expect(layers()[0]!.className).toContain('themed');
+    expect(layers()[1]!.className).toBe('theme-bg');
+    // A later change: colors on the music column (never the root) and the idle
+    // layer fades in over the showing one.
+    set('#222');
+    expect(themed.themeValues('.music-section').get('--art-accent')).toBe(
+      '#222',
+    );
+    expect(themed.themeValues('#app-root').size).toBe(0);
+    expect(layers()[0]!.className).toBe('theme-bg on themed');
+    expect(layers()[1]!.className).toContain('fading');
+    expect(layers()[1]!.className).toContain('on');
+    expect(layers()[1]!.className).toContain('themed');
+    // A change during the fade waits; the colors do not move yet.
+    set('#333');
+    expect(themed.themeValues('.music-section').get('--art-accent')).toBe(
+      '#222',
+    );
+    // The fade ends, the old layer goes dark, and the waiting change starts.
+    const fading = runInContext('themeLayers[1]', themed.context) as {
+      listeners: Map<string, (event: unknown) => void>;
+    };
+    fading.listeners.get('transitionend')?.({
+      target: fading,
+      propertyName: 'opacity',
+    });
+    expect(themed.themeValues('.music-section').get('--art-accent')).toBe(
+      '#333',
+    );
+    expect(layers()[0]!.className).toContain('fading');
+    themed.dispose();
   });
   it('loads the on-device profile only for a Hub opened with #probe', () => {
     expect(ui.scripts).toEqual([]);

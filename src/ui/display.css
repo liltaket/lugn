@@ -4100,10 +4100,12 @@ body {
    While music plays with known artwork, the whole Hub takes on its colors:
    ground, panels, glass, glow and the accent. Without artwork it rests on the
    room's own palette. */
-/* The theme colors are plain custom properties: they change once, in one style
-   pass. The background cross-fades on its own layer (opacity, composited) and
-   the few cards that carry a theme color fade it locally, so the cover colors
-   never restyle the whole page frame by frame. */
+/* The cover colors are set on the two places that use them (the music column
+   and the print card) and on a pair of background layers, never on the root:
+   a custom property changed on the root restyles the whole page, which stalled
+   a Hub for 60 to 120 ms at every play/pause and track change. The
+   background cross-fades between the two layers by opacity (composited) and
+   the few cards that carry a theme color fade it locally. */
 @property --fx-panel {
   syntax: '<color>';
   inherits: false;
@@ -4115,58 +4117,64 @@ body {
   --art-panel: #1c2523;
   --art-glow: rgba(231, 188, 120, 0.08);
   --art-glow-soft: rgba(231, 188, 120, 0.06);
-  --art-tint: rgba(238, 241, 232, 0.055);
-  --art-tint-2: rgba(238, 241, 232, 0.09);
   --accent: var(--art-accent);
   --ground: var(--art-deep);
   --panel: var(--art-panel);
-  --glass: var(--art-tint);
-  --glass-2: var(--art-tint-2);
+  --glass: rgba(238, 241, 232, 0.055);
+  --glass-2: rgba(238, 241, 232, 0.09);
   --spring: cubic-bezier(0.3, 1.35, 0.45, 1);
   isolation: isolate;
-  /* While the theme fades, the page shows the look it had (held by the script)
-     and the new look fades in over it. */
-  background-image: var(
-    --hold-image,
-    radial-gradient(70% 95% at 100% 0%, var(--art-glow), transparent 70%),
-    radial-gradient(75% 85% at 0% 105%, var(--art-glow-soft), transparent)
-  );
-  background-color: var(--hold-color, var(--art-deep));
-}
-#app-root::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  opacity: 0;
   background-image:
     radial-gradient(70% 95% at 100% 0%, var(--art-glow), transparent 70%),
     radial-gradient(75% 85% at 0% 105%, var(--art-glow-soft), transparent);
   background-color: var(--art-deep);
 }
-/* Two names so a new change restarts the fade without a forced reflow. */
-#app-root[data-fade='a']::before {
-  animation: theme-fade-a 1.4s ease both;
+/* The places that carry the cover colors read them from their own scope. */
+#app-root .music-section,
+#app-root #print-activity {
+  --accent: var(--art-accent);
 }
-#app-root[data-fade='b']::before {
-  animation: theme-fade-b 1.4s ease both;
+/* At night the grounds and panels keep the room's own dark values. */
+#app-root:not([data-time='night']) .music-section,
+#app-root:not([data-time='night']) #print-activity {
+  --ground: var(--art-deep);
+  --panel: var(--art-panel);
 }
-@keyframes theme-fade-a {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+/* The background: one layer shows, the other is made ready and fades in over
+   it. Without values of their own they show the room's palette above. */
+#app-root .theme-bg {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  opacity: 0;
+  background-image:
+    radial-gradient(
+      70% 95% at 100% 0%,
+      var(--tb-glow, var(--art-glow)),
+      transparent 70%
+    ),
+    radial-gradient(
+      75% 85% at 0% 105%,
+      var(--tb-glow-soft, var(--art-glow-soft)),
+      transparent
+    );
+  background-color: var(--tb-deep, var(--art-deep));
 }
-@keyframes theme-fade-b {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+#app-root .theme-bg.on {
+  opacity: 1;
+}
+#app-root .theme-bg.fading {
+  z-index: -1;
+  transition: opacity 1.4s ease;
+}
+/* At night the artwork still colors the room, but only as a soft glow. */
+#app-root[data-time='night'] .theme-bg.themed {
+  background-image: radial-gradient(
+    70% 95% at 100% 0%,
+    var(--tb-glow-soft, var(--art-glow-soft)),
+    transparent 70%
+  );
 }
 #app-root[data-role='desk'] {
   --art-accent: #a4c7d2;
@@ -4181,20 +4189,6 @@ body {
   --art-accent: #b8955e;
   --art-deep: #0b0f0e;
   --art-panel: #121817;
-}
-/* At night the artwork still colors the room, but only as a soft glow. */
-#app-root[data-time='night'][data-themed='true'] {
-  background-image: var(
-    --hold-image,
-    radial-gradient(70% 95% at 100% 0%, var(--art-glow-soft), transparent 70%)
-  );
-}
-#app-root[data-time='night'][data-themed='true']::before {
-  background-image: radial-gradient(
-    70% 95% at 100% 0%,
-    var(--art-glow-soft),
-    transparent 70%
-  );
 }
 #app-root .music-feature::after {
   --fx-panel: var(--art-panel);
