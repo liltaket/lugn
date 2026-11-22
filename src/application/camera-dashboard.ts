@@ -15,6 +15,8 @@ import type { CameraSettingsStore } from '../runtime/camera-settings-store.js';
 
 const viewers: CameraViewer[] = ['bed', 'desk', 'web'];
 const cooldownMs = 60_000;
+/** A camera grid stays open this long without being renewed. */
+export const GRID_LEASE_MS = 45_000;
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -44,6 +46,8 @@ export class CameraDashboardService {
     }
   >();
   private readonly blockedUntil = new Map<CameraViewer, number>();
+  /** Per viewer, when a camera grid's lease ends (monotonic clock). */
+  private readonly gridUntil = new Map<CameraViewer, number>();
   private readonly seen = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
   private readonly unsubscribe: () => void;
@@ -94,6 +98,57 @@ export class CameraDashboardService {
     this.activate(viewer, cameraId, 'Manuell visning', true);
     this.notify();
     return this.snapshot(viewer);
+  }
+  /**
+   * Opens or renews a viewer's camera grid: every camera the viewer may see,
+   * all at once, for as long as the lease is renewed. A grid is a standing
+   * view of the allowed cameras (not of one), so it has its own lease that
+   * lapses by itself when the screen stops renewing it, and ends when
+   * settings change or Home Assistant disconnects, like any other view.
+   */
+  openGrid(viewer: CameraViewer): {
+    cameras: { id: string; name: string }[];
+    expiresAt: number;
+  } {
+    const cameras = this.gridCameras(viewer);
+    if (this.disposed || !this.canGrid(viewer))
+      throw new CameraError(409, 'camera_unavailable_or_disabled');
+    this.gridUntil.set(viewer, this.clock.monotonicNow() + GRID_LEASE_MS);
+    return { cameras, expiresAt: this.clock.now() + GRID_LEASE_MS };
+  }
+  closeGrid(viewer: CameraViewer): void {
+    this.gridUntil.delete(viewer);
+  }
+  /** Whether a viewer's open grid may read this camera right now. */
+  gridAllows(viewer: CameraViewer, cameraId: string): boolean {
+    return (
+      !this.disposed &&
+      this.hasGridLease(viewer) &&
+      this.allowed(viewer, cameraId)
+    );
+  }
+  /** Cameras with an open grid lease on any screen (for cache upkeep). */
+  gridCameraIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const viewer of viewers)
+      if (this.hasGridLease(viewer))
+        for (const camera of this.gridCameras(viewer)) ids.add(camera.id);
+    return ids;
+  }
+  private hasGridLease(viewer: CameraViewer): boolean {
+    const until = this.gridUntil.get(viewer);
+    return until !== undefined && this.clock.monotonicNow() < until;
+  }
+  private canGrid(viewer: CameraViewer): boolean {
+    const settings = this.settings();
+    return (
+      this.connected && settings.enabled && settings.viewers.includes(viewer)
+    );
+  }
+  private gridCameras(viewer: CameraViewer): { id: string; name: string }[] {
+    return this.config.cameras
+      .filter((camera) => this.allowed(viewer, camera.id))
+      .map((camera) => ({ id: camera.id, name: camera.name }));
   }
   dismiss(viewer: CameraViewer): CameraDashboardSnapshot {
     this.clearView(viewer);
@@ -409,6 +464,7 @@ export class CameraDashboardService {
   }
   private clearViews(): void {
     for (const viewer of viewers) this.clearView(viewer);
+    this.gridUntil.clear();
   }
   private notify(): void {
     for (const listener of this.listeners) {

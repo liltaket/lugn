@@ -127,6 +127,12 @@ export interface CameraActiveView {
   imageUrl?: string;
   streamUrl?: string;
 }
+/** What a screen gets when it opens a camera grid. */
+export interface CameraGridLease {
+  cameras: { id: string; name: string; imageUrl: string }[];
+  /** Wall-clock time the lease ends unless renewed. */
+  expiresAt: number;
+}
 export interface CameraDashboardSnapshot {
   generation: string;
   settings: CameraSettings;

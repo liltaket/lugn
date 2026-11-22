@@ -54,6 +54,42 @@ observe existing activity and never invoke or modify that automation/service.
 Do not guess a speaker or match all speaker activity when the existing signal
 is unknown: use an explicitly configured motion edge instead.
 
+## The camera grid page
+
+The Hubs' **Kameror** page shows every camera the screen may see at once, in a
+grid that picks the number of columns giving the biggest 16:9 tiles (one
+camera fills the page, two or four make 2 columns, five or six make 3 with a
+short last row centred; up to eight). A tap on a camera shows it large and
+refreshed faster while the others rest; a tap on it again, or on **Alla
+kameror**, returns to the grid. Tapping the small camera view on Hem opens
+the page on that camera.
+
+A grid is a standing view of the allowed cameras, so it has its own **lease**
+instead of an active view: the page asks `display-api/camera` with
+`{action:'grid'}` when it is shown, renews that every 20 seconds and ends it
+with `{action:'grid-close'}` when it is left. The server answers with the
+cameras this screen may see (previews on, the screen allowed in settings, the
+camera switched on and available) and a same-origin image path per camera,
+`display-api/camera-grid/<camera>/image`. The lease lapses by itself after 45
+seconds without renewal, and ends at once when settings change or Home
+Assistant disconnects, exactly like a single view. A camera that is switched
+off cannot be read through a grid either, and a screen's lease gives access
+only to that screen's cameras.
+
+Pace: the page asks for one picture per camera about every 1.5 seconds (every
+0.8 s for the one shown large), at most three at a time, and only while it is
+the shown page. The server shares one fetch per camera between the screens
+looking at it (a frame is reused for 0.9 s), and allows up to six upstream
+fetches at once for grids on top of the two for single views, which a grid
+cannot crowd out. Measured against Home Assistant from the Lugn host with the
+five Reolink "låg klarhet" cameras (25 KB pictures): one camera answers in
+about 0.3 s and five at once in about 0.5 s each, about nine pictures per
+second in total, so Home Assistant is not what limits the page.
+
+A camera is added to the grid by adding it to `cameraDashboard.cameras` (up to
+eight) and switching it on under Intelligence → camera settings; as for single
+views, a camera missing from the saved settings starts switched off.
+
 ## Prefer existing object detection
 
 Use the camera's existing HA **person, animal or vehicle binary sensors** as
@@ -80,9 +116,10 @@ image routes, never HA credentials, entity IDs or upstream image URLs. The
 backend fetches only allowlisted HA camera endpoints, rejects redirects and
 non-JPEG responses, limits bodies to 1 MiB, times out after four seconds and
 shares a short memory cache across screens. No images are persisted. Requests
-are limited to two upstream camera fetches at a time and require a currently
-active view on the authenticated screen. UI actions require the existing
-session, origin and CSRF protection; Hub paths retain their per-device secret.
+are limited to two upstream camera fetches at a time for single views (and
+six more for open grids) and require a currently active view (or an open grid
+lease) on the authenticated screen. UI actions require the existing session,
+origin and CSRF protection; Hub paths retain their per-device secret.
 
 The dashboard fetches refreshed JPEG previews, at most one request at a time,
 about once per second. The last successful update time is shown; these are not

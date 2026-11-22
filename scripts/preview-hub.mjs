@@ -20,6 +20,22 @@ const port = Number(process.argv[2] ?? 4178);
 if (!Number.isInteger(port) || port < 1024 || port > 65535)
   throw new Error('Invalid preview port');
 
+function gridCameras(count) {
+  const all = [
+    ['entrance', 'Entré', '#3d4a45'],
+    ['front', 'Framsida', '#4a4438'],
+    ['north', 'Norr', '#39485a'],
+    ['south', 'Syd', '#4d3f4f'],
+    ['back', 'Baksida', '#3f4f3c'],
+    ['garage', 'Garage', '#55473a'],
+    ['garden', 'Trädgård', '#3a4f4a'],
+    ['shed', 'Förråd', '#4a3a3a'],
+  ];
+  return all
+    .slice(0, Math.max(0, Math.min(8, count)))
+    .map(([id, name, color]) => ({ id, name, color }));
+}
+
 function snapshot(scenario) {
   if (!scenarios.has(scenario)) {
     const data = structuredClone(fixture);
@@ -155,6 +171,41 @@ function snapshot(scenario) {
         },
       };
     if (scenario === 'camera') delete data.printer;
+    // `cameras` (five) or `cameras-N`: a Hub with several cameras and the
+    // small camera view open on Hem, for the camera grid page.
+    const gridCount = /^cameras(?:-(\d))?$/.exec(scenario);
+    if (gridCount) {
+      const cameras = gridCameras(Number(gridCount[1] ?? 5));
+      data.cameraDashboard = {
+        generation: 'fixture',
+        settings: {
+          enabled: true,
+          automaticEnabled: true,
+          durationSeconds: 30,
+          cameras: Object.fromEntries(cameras.map((c) => [c.id, true])),
+          triggers: {},
+          viewers: ['bed', 'desk', 'web'],
+        },
+        definitions: cameras.map((c) => ({
+          id: c.id,
+          name: c.name,
+          enabled: true,
+          available: true,
+        })),
+        triggers: [],
+        active: cameras[0]
+          ? {
+              id: 'fixture-view',
+              cameraId: cameras[0].id,
+              name: cameras[0].name,
+              reason: 'Person vid entrén',
+              expiresAt: data.generatedAt + 3600000,
+              manual: false,
+              imageUrl: `/${scenario}/display-api/cameras/fixture-view/${cameras[0].id}/image`,
+            }
+          : null,
+      };
+    }
     if (scenario === 'many')
       data.scenes.push(
         ...Array.from({ length: 7 }, (_, index) => ({
@@ -226,6 +277,7 @@ const server = createServer(async (request, response) => {
         'print-desk',
         'camera-print-desk',
       ].includes(scenario) &&
+      !/^cameras(-\d)?$/.test(scenario) &&
       path !== '/fixture-cover.svg'
     )
       return sendJson(response, 404, {});
@@ -233,6 +285,27 @@ const server = createServer(async (request, response) => {
     if (route.startsWith('display-api/')) {
       if (offline)
         return sendJson(response, 503, { error: 'simulated_offline' });
+      // The camera grid: one picture per camera, drawn fresh each time (the
+      // time in it shows that it updates). `?slow=ms` simulates a slow camera.
+      const gridImage = /^display-api\/camera-grid\/([a-z0-9-]+)\/image$/.exec(
+        route,
+      );
+      if (gridImage) {
+        const camera = gridCameras(8).find((c) => c.id === gridImage[1]);
+        if (!camera) return sendJson(response, 404, {});
+        const slow = Number(
+          new URL(request.url, 'http://x').searchParams.get('slow') ?? 0,
+        );
+        if (slow) await new Promise((r) => setTimeout(r, slow));
+        const time = new Date().toISOString().slice(11, 19);
+        response.writeHead(200, {
+          'content-type': 'image/svg+xml',
+          'cache-control': 'no-store',
+        });
+        return response.end(
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"><rect width="640" height="360" fill="${camera.color}"/><rect y="250" width="640" height="110" fill="rgba(0,0,0,0.25)"/><circle cx="${100 + (Date.now() / 40) % 440}" cy="190" r="22" fill="#e7e1cf"/><text x="24" y="52" font-size="34" fill="#fff" font-family="sans-serif">${camera.name}</text><text x="24" y="340" font-size="30" fill="#fff" font-family="sans-serif">${time}</text></svg>`,
+        );
+      }
       const fixtureImage =
         route === 'display-api/printer/cover/fixture'
           ? (process.env.LUGN_PREVIEW_PRINT_COVER ??
@@ -286,6 +359,21 @@ const server = createServer(async (request, response) => {
       }
       const body = JSON.parse(raw || '{}');
       actions.push({ scenario, route, body });
+      if (route === 'display-api/camera' && body.action === 'grid') {
+        const count = Number(/^cameras-(\d)$/.exec(scenario)?.[1] ?? 5);
+        return sendJson(response, 200, {
+          cameraGrid: {
+            expiresAt: Date.now() + 45000,
+            cameras: gridCameras(count).map((c) => ({
+              id: c.id,
+              name: c.name,
+              imageUrl: `/${scenario}/display-api/camera-grid/${c.id}/image`,
+            })),
+          },
+        });
+      }
+      if (route === 'display-api/camera' && body.action === 'grid-close')
+        return sendJson(response, 200, { ok: true });
       const data =
         scenarios.get(scenario) ??
         (snapshot(scenario), scenarios.get(scenario));
@@ -403,6 +491,8 @@ const server = createServer(async (request, response) => {
                 'pages.css',
                 'pages.js',
                 'page-views.js',
+                'cameras-page.css',
+                'cameras-page.js',
                 'hub-probe.js',
               ].includes(route)
             ? `src/ui/${route}`

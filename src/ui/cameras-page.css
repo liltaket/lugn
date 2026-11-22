@@ -1,0 +1,124 @@
+#camera-panel {
+  cursor: pointer;
+}
+/* Kameror (cameras-page.js). Tiles stand where the script puts them (a layout
+   written once per set of cameras); a tile's picture changes in place, and
+   the only thing that animates is a picture's opacity when it first appears.
+   No filters, shadows with blur or masks: the Hub pays for each of them. */
+.cams-page {
+  background: #101514;
+  overflow: hidden;
+}
+.cams-head {
+  position: absolute;
+  top: 0;
+  left: 36px;
+  right: 36px;
+  height: 76px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  /* The Bed system overlay owns the top-right corner. */
+  padding-right: 120px;
+}
+.cams-head h2 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 500;
+}
+.cams-sub {
+  font-size: 17px;
+  color: rgba(238, 241, 232, 0.5);
+}
+.cams-back {
+  margin-left: auto;
+  min-height: 44px;
+  padding: 8px 20px;
+  border-radius: 22px;
+  border: 1px solid rgba(238, 241, 232, 0.14);
+  background: rgba(238, 241, 232, 0.07);
+  color: inherit;
+  font-size: 16px;
+}
+.cams-stage {
+  position: absolute;
+  left: 36px;
+  top: 76px;
+  right: 36px;
+  bottom: 40px;
+}
+.cams-tile {
+  position: absolute;
+  padding: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #1b2220;
+  color: #eef1e8;
+  text-align: left;
+  contain: strict;
+}
+.cams-tile[hidden] {
+  display: none;
+}
+.cams-tile img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cams-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 26px 14px 10px;
+  font-size: 17px;
+  font-weight: 600;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.55));
+}
+/* A tile waiting for its first picture is a quiet, empty frame with its name
+   (no spinner, nothing that animates). */
+.cams-tile[data-state='waiting'] .cams-name {
+  top: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  background: none;
+  color: rgba(238, 241, 232, 0.45);
+}
+.cams-state {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-size: 14px;
+  color: rgba(238, 241, 232, 0.85);
+}
+.cams-tile[data-state='stale'] img {
+  opacity: 0.55;
+}
+.cams-tile[data-state='stale'] .cams-state::before {
+  content: 'Gammal bild';
+}
+.cams-tile[data-state='offline'] .cams-state::before {
+  content: 'Ingen bild';
+}
+.cams-tile[data-state='offline'] img {
+  opacity: 0.35;
+}
+.cams-notice {
+  position: absolute;
+  inset: 76px 36px 40px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  font-size: 20px;
+  line-height: 1.4;
+  color: rgba(238, 241, 232, 0.6);
+  pointer-events: none;
+}
+.cams-notice[hidden] {
+  display: none;
+}

@@ -58,6 +58,9 @@ const CameraActionSchema = z.discriminatedUnion('action', [
     })
     .strict(),
   z.object({ action: z.literal('hide') }).strict(),
+  // The camera grid page: open or renew its lease, or end it.
+  z.object({ action: z.literal('grid') }).strict(),
+  z.object({ action: z.literal('grid-close') }).strict(),
 ]);
 const MAX_REQUEST_BYTES = 8 * 1024;
 /** One phase of the on-device profile (src/ui/hub-probe.js), logged as is. */
@@ -224,6 +227,8 @@ function displayResourceCategory(
     case '/pages.css':
     case '/pages.js':
     case '/page-views.js':
+    case '/cameras-page.css':
+    case '/cameras-page.js':
     case '/hub-probe.js':
       return 'pages';
     default:
@@ -428,12 +433,54 @@ export class LugnDisplayServer {
         if (!service || !this.options.cameraMedia)
           throw new CameraError(503, 'cameras_unavailable');
         const body = CameraActionSchema.parse(await readJsonBody(request));
+        if (body.action === 'grid') {
+          const cameraGrid = this.options.cameraMedia.openGrid(
+            hubRequest.hub.role,
+            `${this.pathForHub(hubRequest.hub.id)}display-api/camera-grid/`,
+          );
+          sendJson(response, 200, { cameraGrid });
+          return;
+        }
+        if (body.action === 'grid-close') {
+          this.options.cameraMedia.closeGrid(hubRequest.hub.role);
+          sendJson(response, 200, { ok: true });
+          return;
+        }
         if (body.action === 'show')
           service.show(hubRequest.hub.role, body.cameraId);
         else service.dismiss(hubRequest.hub.role);
         sendJson(response, 200, {
           cameraDashboard: this.cameraSnapshot(hubRequest.hub),
         });
+        return;
+      }
+      const gridImage =
+        /^\/display-api\/camera-grid\/([A-Za-z0-9][A-Za-z0-9._-]{0,79})\/image$/.exec(
+          hubRequest.route,
+        );
+      if (request.method === 'GET' && gridImage) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        if (!this.options.cameraMedia)
+          throw new CameraError(404, 'camera_view_unavailable');
+        const image = await this.options.cameraMedia.readGrid(
+          hubRequest.hub.role,
+          gridImage[1]!,
+        );
+        response.writeHead(200, {
+          'content-type': image.contentType,
+          'content-length': image.body.byteLength,
+          'cache-control': 'private, no-store',
+          'x-content-type-options': 'nosniff',
+          'cross-origin-resource-policy': 'same-origin',
+          'content-security-policy': "default-src 'none'; sandbox",
+        });
+        response.end(image.body);
         return;
       }
       const cameraImage =
@@ -1380,6 +1427,8 @@ type UiAssetName =
   | 'pages.css'
   | 'pages.js'
   | 'page-views.js'
+  | 'cameras-page.css'
+  | 'cameras-page.js'
   | 'hub-probe.js';
 
 /** The Hub pager and its pages (src/ui/pages*.{css,js}, page-views.js). */
@@ -1392,6 +1441,14 @@ const PAGE_ASSETS: ReadonlyMap<
   [
     '/page-views.js',
     { file: 'page-views.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  [
+    '/cameras-page.css',
+    { file: 'cameras-page.css', type: 'text/css; charset=utf-8' },
+  ],
+  [
+    '/cameras-page.js',
+    { file: 'cameras-page.js', type: 'text/javascript; charset=utf-8' },
   ],
   // The on-device profile, loaded only by a Hub opened with #probe.
   [

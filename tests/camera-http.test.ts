@@ -290,3 +290,86 @@ it('binds Hub image capabilities to its credential and role, with origin checks 
   expect(hidden.status).toBe(200);
   expect((await fetch(s.displayOrigin + path)).status).toBe(404);
 });
+
+it('opens a Hub camera grid under a lease: images only while it is open, bound to the Hub', async () => {
+  const s = await setup();
+  const action = '/display-api/camera';
+  const post = (base: string, body: unknown, origin = s.displayOrigin) =>
+    fetch(base + action, {
+      method: 'POST',
+      headers: { Origin: origin, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  // Nothing is readable before a grid is opened.
+  const early = `/k/${hubToken}/display-api/camera-grid/entry/image`;
+  expect((await fetch(s.displayOrigin + early)).status).toBe(404);
+  // Actions keep the origin check.
+  expect(
+    (await post(s.hubBase, { action: 'grid' }, 'http://evil.test')).status,
+  ).toBe(403);
+  const opened = await post(s.hubBase, { action: 'grid' });
+  expect(opened.status).toBe(200);
+  const { cameraGrid } = (await opened.json()) as {
+    cameraGrid: { cameras: { id: string; name: string; imageUrl: string }[] };
+  };
+  expect(cameraGrid.cameras).toEqual([
+    {
+      id: 'entry',
+      name: 'Entré',
+      imageUrl: `/k/${hubToken}/display-api/camera-grid/entry/image`,
+    },
+  ]);
+  const path = cameraGrid.cameras[0]!.imageUrl;
+  // Bound to this Hub's credential and role; checked for origin.
+  expect(
+    (await fetch(s.displayOrigin + path.replace(hubToken, 'c'.repeat(32))))
+      .status,
+  ).toBe(404);
+  expect(
+    (await fetch(s.displayOrigin + path.replace(hubToken, deskToken))).status,
+  ).toBe(404);
+  expect(
+    (
+      await fetch(s.displayOrigin + path, {
+        headers: { Origin: 'http://evil.test' },
+      })
+    ).status,
+  ).toBe(403);
+  expect(
+    (
+      await fetch(s.displayOrigin + path, {
+        headers: { 'sec-fetch-site': 'cross-site' },
+      })
+    ).status,
+  ).toBe(403);
+  const good = await fetch(s.displayOrigin + path);
+  expect(good.status).toBe(200);
+  expect(good.headers.get('cache-control')).toBe('private, no-store');
+  expect(good.headers.get('content-security-policy')).toBe(
+    "default-src 'none'; sandbox",
+  );
+  expect(new Uint8Array(await good.arrayBuffer())).toEqual(jpeg);
+  // An unknown camera is not found; the other Hub still has no grid.
+  expect(
+    (await fetch(s.displayOrigin + path.replace('entry', 'other'))).status,
+  ).toBe(404);
+  const deskPath = `/k/${deskToken}/display-api/camera-grid/entry/image`;
+  expect((await fetch(s.displayOrigin + deskPath)).status).toBe(404);
+  // Closing ends it.
+  expect((await post(s.hubBase, { action: 'grid-close' })).status).toBe(200);
+  expect((await fetch(s.displayOrigin + path)).status).toBe(404);
+});
+
+it('refuses a Hub camera grid while previews are off', async () => {
+  const s = await setup();
+  await s.service.updateSettings(
+    { ...s.store.snapshot().settings, enabled: false },
+    s.store.snapshot().generation,
+  );
+  const response = await fetch(s.hubBase + '/display-api/camera', {
+    method: 'POST',
+    headers: { Origin: s.displayOrigin, 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'grid' }),
+  });
+  expect(response.status).toBe(409);
+});
