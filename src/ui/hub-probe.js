@@ -838,7 +838,14 @@
       if (mode === 'track' || mode === 'both') pager.classList.add('moving');
       if (mode === 'near' || mode === 'both')
         for (const page of neighbours) page.style.willChange = 'transform';
-      if (mode !== 'asis') await sleep(1300);
+      if (mode === 'tap') {
+        // A press and release without movement, as at idle after a load:
+        // the pager prepares its neighbours for a swipe.
+        send('pointerdown', from[0], from[1], 1);
+        await sleep(80);
+        send('pointerup', from[0], from[1], 0);
+      }
+      if (mode !== 'asis') await sleep(mode === 'tap' ? 1500 : 1300);
       drain();
       const sample = await sampleFrames(1800, (elapsed) => {
         const t = elapsed - 300;
@@ -998,6 +1005,7 @@
       ],
       ['sidsvep-kall-near', 'dot', () => swipeRun('near', 'swipe-cold-near')],
       ['sidsvep-kall-both', 'dot', () => swipeRun('both', 'swipe-cold-both')],
+      ['sidsvep-kall-tap', 'dot', () => swipeRun('tap', 'swipe-cold-tap')],
       [
         'sidsvep-varm',
         'dot',
