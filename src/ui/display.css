@@ -4314,9 +4314,10 @@ body {
     transform: translateY(14px) scale(0.97);
   }
 }
+/* A filter animated on a tile cost a Hub 50 to 100 ms on the click frame, so
+   the lit pop is the scale alone. */
 @keyframes redesign-lit {
   0% {
-    filter: brightness(1.35);
     transform: scale(0.97);
   }
   55% {
