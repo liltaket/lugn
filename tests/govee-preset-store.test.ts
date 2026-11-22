@@ -233,3 +233,64 @@ it('rejects any unsupported rotation label before saving', async () => {
   expect(s.engine.scenes.size).toBe(0);
   expect(s.adapter.dispatched).toEqual([]);
 });
+
+it('turns a saved Party preset into Musik without losing its lamps or Govee animation', async () => {
+  const s = await fixture();
+  const created = await s.store.create(s.engine, input);
+  const { readFile: read, writeFile: write } = await import('node:fs/promises');
+  const stored = JSON.parse(await read(s.path, 'utf8'));
+  stored.scenes[0].id = 'scene.party';
+  stored.scenes[0].name = 'Party';
+  await write(s.path, JSON.stringify(stored));
+  const reloaded = new ScenePresetStore({
+    filePath: s.path,
+    deviceIds: [target, other],
+  });
+  const scenes = await reloaded.load([]);
+  expect(scenes).toHaveLength(1);
+  expect(scenes[0]).toMatchObject({
+    id: 'scene.music',
+    name: 'Musik',
+    dynamic: 'music',
+    lighting: created.lighting,
+    govee: created.govee,
+  });
+});
+
+it('keeps an existing Musik preset and leaves Party alone beside it', async () => {
+  const s = await fixture();
+  await s.store.create(s.engine, input);
+  const { readFile: read, writeFile: write } = await import('node:fs/promises');
+  const stored = JSON.parse(await read(s.path, 'utf8'));
+  stored.scenes.push({ ...stored.scenes[0], id: 'scene.music', name: 'Musik' });
+  stored.scenes[0].id = 'scene.party';
+  await write(s.path, JSON.stringify(stored));
+  const reloaded = new ScenePresetStore({
+    filePath: s.path,
+    deviceIds: [target, other],
+  });
+  const ids = (await reloaded.load([])).map((scene) => scene.id).sort();
+  expect(ids).toEqual(['scene.music', 'scene.party']);
+});
+
+it('keeps what drives a dynamic scene when its lamps are edited', async () => {
+  const s = await fixture();
+  s.engine.saveSceneDefinition({
+    id: 'scene.music',
+    name: 'Musik',
+    dynamic: 'music',
+    lighting: input.lighting,
+  });
+  const updated = await s.store.update(s.engine, 'scene.music', {
+    name: 'Musik',
+    lighting: { [target]: { power: true, brightness: 30 } },
+    expectedScene: s.engine.scenes.get('scene.music')!,
+  });
+  expect(updated.dynamic).toBe('music');
+  expect(s.engine.scenes.get('scene.music')?.dynamic).toBe('music');
+  const reloaded = new ScenePresetStore({
+    filePath: s.path,
+    deviceIds: [target, other],
+  });
+  expect((await reloaded.load([]))[0]?.dynamic).toBe('music');
+});

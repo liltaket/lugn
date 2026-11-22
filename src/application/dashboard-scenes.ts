@@ -39,6 +39,20 @@ export function withRoomPresets(
       name: 'Filmkväll',
       lighting: movieLighting(targets, ceilingTarget),
     },
+    // The lamps below are only the fallback look. While there is something to
+    // follow, the dynamic controller drives the lamps its roles name.
+    {
+      id: 'scene.music',
+      name: 'Musik',
+      lighting: accentLighting(targets, ceilingTarget, 35, 2400),
+      dynamic: 'music',
+    },
+    {
+      id: 'scene.dynamic',
+      name: 'Dynamisk',
+      lighting: accentLighting(targets, ceilingTarget, 40, 2700),
+      dynamic: 'adaptive',
+    },
   ];
 
   const presetIds = new Set([

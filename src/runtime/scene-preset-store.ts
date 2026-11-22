@@ -23,6 +23,7 @@ export const ScenePresetInputSchema = z
   .strict();
 const StoredSceneSchema = ScenePresetInputSchema.extend({
   id: SceneSchema.shape.id,
+  dynamic: SceneSchema.shape.dynamic,
 });
 export const ScenePresetUpdateSchema = ScenePresetInputSchema.extend({
   expectedScene: StoredSceneSchema,
@@ -111,7 +112,7 @@ export class ScenePresetStore {
       }
       this.data = {
         ...parsed,
-        scenes: parsed.scenes.map((scene) =>
+        scenes: retirePartyScene(parsed.scenes).map((scene) =>
           synchronizeSceneColorTemperature(scene, 2700),
         ),
       };
@@ -177,6 +178,10 @@ export class ScenePresetStore {
         name: parsed.name,
         lighting: parsed.lighting,
         ...(parsed.govee === undefined ? {} : { govee: parsed.govee }),
+        // The editor changes lamp values, never what drives the scene.
+        ...(engine.scenes.get(id)?.dynamic === undefined
+          ? {}
+          : { dynamic: engine.scenes.get(id)!.dynamic! }),
       };
       this.validateTargets(requested);
       this.validateGoveeCapabilities(engine, requested);
@@ -358,6 +363,24 @@ function sameLighting(
             a.rgb.every((channel, index) => channel === b.rgb![index]))
       );
     })
+  );
+}
+
+/**
+ * Party is replaced by Musik, which behaves the same while nothing plays.
+ * A saved Party keeps its lamps and Govee animations, and becomes the Musik
+ * scene in memory; the file is rewritten on the next ordinary save.
+ */
+function retirePartyScene<T extends LightingScene>(scenes: T[]): T[] {
+  if (
+    !scenes.some((scene) => scene.id === 'scene.party') ||
+    scenes.some((scene) => scene.id === 'scene.music')
+  )
+    return scenes;
+  return scenes.map((scene) =>
+    scene.id === 'scene.party'
+      ? { ...scene, id: 'scene.music', name: 'Musik', dynamic: 'music' }
+      : scene,
   );
 }
 

@@ -3445,8 +3445,10 @@ function sceneIcon(sceneId) {
       '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
     'scene.focus_light':
       '<path d="M7 21h11M12.5 21v-4L7 11l4-5"/><circle cx="7" cy="11" r="1.5"/><path d="m11 6 4-3 6 6-3 4Z"/><path d="m15 10 2 2"/>',
-    'scene.party':
-      '<path d="M12 1.5V4"/><circle cx="12" cy="11" r="7"/><path d="M5.5 8.5h13m-13 5h13M12 4c-4 4-4 10 0 14m0-14c4 4 4 10 0 14M3 20l1-1m16 0 1 1m-9 0v2"/>',
+    'scene.music':
+      '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
+    'scene.dynamic':
+      '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/>',
     'scene.movie_light':
       '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/><path d="m10 8 5 2.5-5 2.5Z"/>',
   };

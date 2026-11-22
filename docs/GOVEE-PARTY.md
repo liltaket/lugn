@@ -1,5 +1,10 @@
 # Govee Party and LED 2 rotation — 14 November 2026
 
+> **Party is retired as a separate preset.** A saved `scene.party` now loads as
+> the Musik preset (`scene.music`), keeping these lamps and rotations; it shows
+> them while nothing plays. See [Dynamic lighting](DYNAMIC-LIGHTING.md). The
+> rotation and transport details below still apply.
+
 Initial Party runtime `f5d50fde807a1be872a813f3c194f00b099a433d` was merged into `main`,
 pushed and installed at `/home/bruno/lugn-govee-f5d50fde807a` on BrunoCAM. Both
 user services used that release. All 367 installed source/build hashes matched the
