@@ -633,8 +633,6 @@ impl<'p> App<'p> {
             Ended::Exit(edge) => {
                 let edge = match edge {
                     Exit::Top => "top",
-                    Exit::Left => "left",
-                    Exit::Right => "right",
                 };
                 log!("capture: left the Hub's {edge}, release to {:?}", to.cursor);
                 self.capture_ended();

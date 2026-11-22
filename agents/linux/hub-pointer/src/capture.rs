@@ -21,6 +21,14 @@ const EXIT_INSET: f64 = 48.0;
 const ENTRY_INSET: f64 = 64.0;
 /// Desktop px a pending push may drift back up before it counts as a retreat.
 const BACK_UP_PX: f64 = 4.0;
+/// Hub px the cursor must be pushed up past the Hub's top edge, without
+/// moving down in between, before it leaves: a swipe that brushes the top
+/// stays on the Hub, a deliberate move up leaves.
+const TOP_EXIT_PX: f64 = 32.0;
+/// While the left button is held (a swipe or a drag on the Hub) the top is a
+/// wall too, unless the push up goes on this far: the way out if a release
+/// was ever missed.
+const TOP_EXIT_HELD_PX: f64 = 400.0;
 
 /// An InputCapture zone (one logical monitor) in desktop logical px.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,17 +136,6 @@ impl Mapping {
         let x = self.zone.x as f64 + hub_x * self.hub_width / self.w;
         self.zone.exit_point(x)
     }
-
-    /// Out through the Hub's left edge: the monitor's bottom-left corner.
-    pub fn return_left(&self) -> (f64, f64) {
-        self.zone.exit_point(self.zone.x as f64 + RETURN_INSET)
-    }
-
-    /// Out through the Hub's right edge: just right of the Hub's width.
-    pub fn return_right(&self) -> (f64, f64) {
-        self.zone
-            .exit_point(self.zone.x as f64 + self.hub_width + RETURN_INSET)
-    }
 }
 
 /// How hard a push into the entry corner must be before it enters the Hub.
@@ -188,6 +185,10 @@ struct Active {
     start_x: Option<f64>,
     x: f64,
     y: f64,
+    /// Hub px pushed up past the top edge since the cursor last moved down.
+    top_push: f64,
+    /// The left button is down on the Hub.
+    held: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -205,12 +206,11 @@ pub struct ReleaseTo {
     pub cursor: Option<(f64, f64)>,
 }
 
-/// The Hub edge a shown cursor left through.
+/// The Hub edge a shown cursor left through. The bottom, left and right
+/// edges are walls: a sideways swipe on the Hub never leaves it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exit {
     Top,
-    Left,
-    Right,
 }
 
 /// Why a pending push did not enter the Hub.
@@ -508,6 +508,8 @@ impl Pointer {
                 start_x: p.start_x,
                 x,
                 y,
+                top_push: 0.0,
+                held: false,
             });
             out.msgs.push(AgentMsg::Enter { x, y });
             out.entered = true;
@@ -531,20 +533,39 @@ impl Pointer {
 
     fn active_frame(&mut self, map: Mapping, mut a: Active, f: FrameAcc) -> FrameOutcome {
         let mut out = FrameOutcome::default();
+        // The left button's order against the motion within one frame is
+        // lost, so a frame that presses it counts as held (the top stays a
+        // wall) and one that only releases it as not held. Either change
+        // starts the push up afresh.
+        let left = |down: bool| {
+            f.buttons
+                .iter()
+                .any(|&(button, d)| button == ButtonName::Left && d == down)
+        };
+        let (pressed, released) = (left(true), left(false));
+        if pressed || released {
+            a.top_push = 0.0;
+        }
+        let held = pressed || (a.held && !released);
         if f.dx != 0.0 || f.dy != 0.0 {
-            let nx = a.x + f.dx * self.gain;
-            // The bottom is a wall; the other three edges lead back.
+            // Bottom, left and right are walls; only the top leads back.
+            let nx = (a.x + f.dx * self.gain).clamp(0.0, map.w - 1.0);
             let ny = (a.y + f.dy * self.gain).min(map.h - 1.0);
-            let exit = if ny < 0.0 {
+            // Only motion that is mostly upward pushes towards the exit; any
+            // move down starts over, and sideways frames change nothing.
+            if f.dy > 0.0 {
+                a.top_push = 0.0;
+            } else if ny < 0.0 && -f.dy >= f.dx.abs() {
+                a.top_push += -ny.max(f.dy * self.gain);
+            }
+            let needed = if held { TOP_EXIT_HELD_PX } else { TOP_EXIT_PX };
+            let exit = if ny < 0.0 && a.top_push >= needed {
                 // Anywhere along the top: straight up onto the monitor.
-                Some((Exit::Top, map.return_point(nx.clamp(0.0, map.w - 1.0))))
-            } else if nx < 0.0 {
-                Some((Exit::Left, map.return_left()))
-            } else if nx >= map.w {
-                Some((Exit::Right, map.return_right()))
+                Some((Exit::Top, map.return_point(nx)))
             } else {
                 None
             };
+            let ny = ny.max(0.0);
             if let Some((edge, cursor)) = exit {
                 self.state = State::Idle;
                 out.msgs.push(AgentMsg::Leave);
@@ -557,18 +578,20 @@ impl Pointer {
                 ));
                 return out;
             }
-            let nx = nx.min(map.w - 1.0);
             if (nx, ny) != (a.x, a.y) {
                 (a.x, a.y) = (nx, ny);
                 out.msgs.push(AgentMsg::Move { x: nx, y: ny });
             }
         }
-        self.state = State::Active(a);
 
         let (x, y) = (a.x, a.y);
         for (button, down) in f.buttons {
+            if button == ButtonName::Left {
+                a.held = down;
+            }
             out.msgs.push(AgentMsg::Button { button, down, x, y });
         }
+        self.state = State::Active(a);
 
         // Wheels may report both a discrete notch and a smooth delta for the
         // same motion; the notch wins so a frame never scrolls twice.
@@ -750,7 +773,6 @@ mod tests {
         };
         let narrow = Mapping { zone: tiny, ..m };
         assert_eq!(narrow.return_point(1279.0).0, 299.0);
-        assert_eq!(narrow.return_right(), (299.0, 980.0));
     }
 
     #[test]
@@ -760,8 +782,7 @@ mod tests {
         assert_eq!(exit_y, 980.0);
         let m = map();
         assert_eq!(m.return_point(640.0), (280.0, exit_y));
-        assert_eq!(m.return_left(), (2.0, exit_y));
-        assert_eq!(m.return_right(), (562.0, exit_y));
+        assert_eq!(m.return_point(0.0), (0.0, exit_y));
         // A zone shorter than the inset clamps onto its top row.
         let short = Mapping {
             zone: Zone {
@@ -1006,8 +1027,13 @@ mod tests {
         // Sideways motion in the same frame still counts toward the exit x.
         p.motion(0.0, -114.0);
         assert_eq!(p.frame(now).msgs, [AgentMsg::Move { x: 960.0, y: 0.0 }]);
-        p.motion(-320.0, -0.5);
-        p.button(0x110, true);
+        // Brushing the top is not leaving it, and sliding along it changes
+        // only where the pointer will come back.
+        p.motion(0.0, -31.0);
+        assert_eq!(p.frame(now), FrameOutcome::default());
+        p.motion(-320.0, 0.0);
+        assert_eq!(p.frame(now).msgs, [AgentMsg::Move { x: 640.0, y: 0.0 }]);
+        p.motion(0.0, -1.0);
         let out = p.frame(now);
         assert_eq!(out.msgs, [AgentMsg::Leave]);
         assert_eq!(
@@ -1027,61 +1053,233 @@ mod tests {
     }
 
     #[test]
-    fn leaving_the_left_edge_returns_to_the_corner() {
+    fn left_and_right_are_walls() {
         let mut p = hub();
-        enter(&mut p, Some(7), 0.0);
+        enter(&mut p, Some(7), 280.0);
         let now = Instant::now();
-        p.motion(0.0, 300.0);
-        p.frame(now);
-        // The first column is still inside.
-        assert!(p.frame(now).release.is_none());
-        p.motion(-0.01, 0.0);
+        p.motion(-10000.0, 300.0);
         let out = p.frame(now);
-        assert_eq!(out.msgs, [AgentMsg::Leave]);
+        assert_eq!(out.msgs, [AgentMsg::Move { x: 0.0, y: 364.0 }]);
+        assert!(out.release.is_none());
+        p.motion(-50.0, 0.0);
+        assert_eq!(p.frame(now), FrameOutcome::default());
+        p.motion(10000.0, 0.0);
+        let out = p.frame(now);
         assert_eq!(
-            out.release,
-            Some((
-                ReleaseTo {
-                    activation_id: Some(7),
-                    cursor: Some((2.0, 980.0)),
-                },
-                Ended::Exit(Exit::Left)
-            ))
+            out.msgs,
+            [AgentMsg::Move {
+                x: 1279.0,
+                y: 364.0
+            }]
         );
-        assert!(!p.is_capturing());
+        assert!(out.release.is_none());
+        assert!(p.is_capturing());
     }
 
     #[test]
-    fn leaving_the_right_edge_returns_past_the_hub() {
+    fn a_sideways_swipe_along_the_top_stays() {
         let mut p = hub();
-        enter(&mut p, Some(8), 280.0);
+        enter(&mut p, Some(4), 280.0);
         let now = Instant::now();
-        p.motion(639.0, 0.0);
-        assert_eq!(p.frame(now).msgs, [AgentMsg::Move { x: 1279.0, y: 64.0 }]);
-        // The last column is still inside: a push short of one more px
-        // stays clamped there.
-        p.motion(0.5, 0.0);
-        assert_eq!(p.frame(now), FrameOutcome::default());
-        p.motion(1.0, 0.0);
-        let out = p.frame(now);
-        assert_eq!(out.msgs, [AgentMsg::Leave]);
-        assert_eq!(
-            out.release,
-            Some((
-                ReleaseTo {
-                    activation_id: Some(8),
-                    cursor: Some((562.0, 980.0)),
-                },
-                Ended::Exit(Exit::Right)
-            ))
-        );
-        // Out through the top-left corner counts as the top.
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        // Small upward drift frame after frame, with sideways motion and a
+        // little down in between, never adds up to leaving.
+        for _ in 0..20 {
+            p.motion(30.0, -6.0);
+            assert!(p.frame(now).release.is_none());
+            p.motion(30.0, 1.0);
+            assert!(p.frame(now).release.is_none());
+        }
+        assert!(p.is_capturing());
+        // A deliberate push up leaves, and out through the top-left corner
+        // counts as the top.
         let mut p = hub();
         enter(&mut p, None, 0.0);
-        p.motion(-5.0, -70.0);
+        p.motion(-5.0, -100.0);
         let out = p.frame(now);
         assert_eq!(out.release.map(|r| r.1), Some(Ended::Exit(Exit::Top)));
         assert_eq!(out.release.unwrap().0.cursor, Some((0.0, 980.0)));
+    }
+
+    #[test]
+    fn a_held_button_keeps_the_top_a_wall_unless_pushed_far() {
+        let mut p = hub();
+        enter(&mut p, Some(5), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        p.button(0x110, true);
+        p.frame(now);
+        // A swipe on the Hub that runs up past the top stays.
+        p.motion(-200.0, -120.0);
+        assert!(p.frame(now).release.is_none());
+        assert!(p.is_capturing());
+        // Released: the next push up leaves.
+        p.button(0x110, false);
+        p.frame(now);
+        p.motion(0.0, -40.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+        // Still held, a very long push up leaves anyway (a missed release
+        // must never trap the pointer).
+        let mut p = hub();
+        enter(&mut p, None, 280.0);
+        p.button(0x110, true);
+        p.frame(now);
+        p.motion(0.0, -64.0 - 400.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+    }
+
+    #[test]
+    fn a_held_sideways_swipe_never_reaches_the_held_way_out() {
+        let mut p = hub();
+        enter(&mut p, Some(6), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        p.button(0x110, true);
+        p.frame(now);
+        // Mostly sideways with a steady drift up, far past both thresholds,
+        // into the left wall and on.
+        for _ in 0..100 {
+            p.motion(-10.0, -4.0);
+            assert!(p.frame(now).release.is_none());
+        }
+        assert!(p.is_capturing());
+    }
+
+    #[test]
+    fn sideways_and_empty_frames_neither_add_nor_reset() {
+        let mut p = hub();
+        enter(&mut p, Some(3), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        for step in 0..16 {
+            p.motion(0.0, -2.0);
+            let out = p.frame(now);
+            p.motion(5.0, 0.0);
+            p.frame(now);
+            if step < 15 {
+                assert!(out.release.is_none(), "left after {step}");
+            } else {
+                assert_eq!(out.release.map(|r| r.1), Some(Ended::Exit(Exit::Top)));
+            }
+        }
+    }
+
+    #[test]
+    fn a_left_button_change_starts_the_push_over() {
+        let mut p = hub();
+        enter(&mut p, Some(2), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        p.button(0x110, true);
+        p.frame(now);
+        p.motion(0.0, -120.0);
+        assert!(p.frame(now).release.is_none());
+        // Released: the held push does not carry over.
+        p.button(0x110, false);
+        p.frame(now);
+        p.motion(0.0, -0.5);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -31.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -1.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+    }
+
+    #[test]
+    fn a_frame_with_a_left_press_keeps_the_top_a_wall() {
+        let mut p = hub();
+        enter(&mut p, Some(1), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        // Press and push up in one frame: the press is delivered, no exit.
+        p.button(0x110, true);
+        p.motion(0.0, -40.0);
+        let out = p.frame(now);
+        assert!(out.release.is_none());
+        assert!(out.msgs.iter().any(|m| matches!(
+            m,
+            AgentMsg::Button {
+                button: ButtonName::Left,
+                down: true,
+                ..
+            }
+        )));
+        // Release and push up in one frame: out at once.
+        p.button(0x110, false);
+        p.motion(0.0, -40.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+    }
+
+    #[test]
+    fn any_move_down_starts_the_push_over() {
+        let mut p = hub();
+        enter(&mut p, Some(11), 280.0);
+        let now = Instant::now();
+        p.motion(0.0, -64.0);
+        p.frame(now);
+        p.motion(0.0, -20.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, 0.5);
+        p.frame(now);
+        // 20 + 20 would have left; after the move down it is 20 + 12.
+        p.motion(0.0, -20.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -12.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -1.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+    }
+
+    #[test]
+    fn the_push_is_counted_in_hub_px_past_the_top() {
+        // Gain 2: 17 desktop px is 34 Hub px.
+        let mut p = hub_with_gain(2.0);
+        enter(&mut p, Some(12), 280.0);
+        let now = Instant::now();
+        // Up to the top: 64 Hub px from the entry inset, nothing past it.
+        p.motion(0.0, -32.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -17.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
+        // From 10 Hub px below the top, a 30 Hub px move up passes it by 20
+        // only; 12 more leave.
+        let mut p = hub();
+        enter(&mut p, Some(13), 280.0);
+        p.motion(0.0, -54.0);
+        p.frame(now);
+        p.motion(0.0, -30.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -11.0);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -1.0);
+        assert_eq!(
+            p.frame(now).release.map(|r| r.1),
+            Some(Ended::Exit(Exit::Top))
+        );
     }
 
     #[test]
@@ -1098,6 +1296,8 @@ mod tests {
         p.motion(0.0, -799.0);
         assert!(p.frame(now).release.is_none());
         p.motion(0.0, -0.01);
+        assert!(p.frame(now).release.is_none());
+        p.motion(0.0, -32.0);
         assert!(p.frame(now).release.is_some());
     }
 
