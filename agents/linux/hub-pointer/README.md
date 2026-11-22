@@ -156,8 +156,10 @@ not restart on. The version 1 portal has no way to remember the choice, so the
 dialog appears every time the process starts. Logs go to stderr (the journal
 under systemd).
 
-As a user service, with the unit file in this directory (not installed by
-anything here):
+Run it as a user service, with the unit file in this directory (not installed
+by anything here). The unit restarts the process after a failure; a transient
+`systemd-run` unit does not, so a crash would leave the pointer dead until
+someone noticed:
 
 ```sh
 install -m 755 target/release/lugn-hub-pointer ~/.local/bin/
@@ -194,6 +196,11 @@ and capture must always end quickly when something goes wrong.
   Settings (or `qdbus6 org.kde.KWin /Effects loadEffect shakecursor`). The
   agent does not load it on startup, since it cannot tell a crash from a
   choice.
+- A monitor that disappears (unplugged, off, asleep behind a dock or KVM)
+  makes the compositor send `ZonesChanged` and then stall `GetZones`. The agent
+  drops its zones, stays up without a barrier and asks again every 3 s until
+  the monitor is back (the same applies when it starts with no monitor). Only
+  20 failed attempts in a row end the process, so the unit starts it afresh.
 - If the process dies, its D-Bus connection closes, the portal closes the
   session and kwin gives the pointer back. Every portal call has a timeout,
   and if a Release or Disable gets no answer within 2 s the process exits on
