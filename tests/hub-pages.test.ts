@@ -142,6 +142,7 @@ function setup(count = 3) {
   const timers: Array<{ at: number; fn: () => void; id: number }> = [];
   let timerId = 0;
   const frames: Array<(t: number) => void> = [];
+  const idle: Array<() => void> = [];
   let settled = 0;
   const pageEvents: unknown[] = [];
   Object.assign(window, {
@@ -167,6 +168,8 @@ function setup(count = 3) {
     globalThis: undefined,
     performance: { now: () => now },
     requestAnimationFrame: (fn: (t: number) => void) => frames.push(fn),
+    // Idle callbacks wait until the test lets the main thread go idle.
+    requestIdleCallback: (fn: () => void) => idle.push(fn),
     getComputedStyle: () => ({ overflowY: 'visible' }),
     console,
     Event: FakeEvent,
@@ -184,8 +187,7 @@ function setup(count = 3) {
     current(): string;
     onChange(fn: (page: string, previous: string) => void): () => void;
   };
-  const advance = (ms: number) => {
-    now += ms;
+  const runTimers = () => {
     for (;;) {
       const due = timers
         .filter((t) => t.at <= now)
@@ -194,7 +196,16 @@ function setup(count = 3) {
       timers.splice(timers.indexOf(due), 1);
       due.fn();
     }
+  };
+  const flushIdle = () => {
+    for (const fn of idle.splice(0)) fn();
+  };
+  // Time passes and the main thread goes idle (unless `busy`).
+  const advance = (ms: number, { busy = false } = {}) => {
+    now += ms;
+    runTimers();
     for (const fn of frames.splice(0)) fn(now);
+    if (!busy) flushIdle();
   };
   const pointer = (
     type: string,
@@ -257,6 +268,7 @@ function setup(count = 3) {
     return event;
   };
   return {
+    flushIdle,
     api,
     pager,
     wheel,
@@ -712,8 +724,30 @@ describe('Hub pager', () => {
     expect(seen).toEqual(['home>clock', 'clock>info']);
   });
 
-  it('draws a prepared neighbour again when a press starts', () => {
-    const { api, pages, pointer } = setup();
+  it('leaves the page states alone when a swipe starts before the idle time', () => {
+    const { pages, drag, pointer, advance, flushIdle, finishAnimations } =
+      setup();
+    drag(pages[0]!.button, 800, 200);
+    finishAnimations();
+    // The settle's tidy-up is queued, but the main thread is not idle yet…
+    advance(100, { busy: true });
+    // …when the next swipe starts (which itself readies the page beyond).
+    pointer('pointerdown', pages[1]!.button, 800);
+    advance(16, { busy: true });
+    pointer('pointermove', pages[1]!.button, 700);
+    const during = pages.map(({ page }) => [page.dataset['state'], page.inert]);
+    flushIdle();
+    // The late tidy-up changes nothing mid-drag: Hem is not made a
+    // neighbour (inert, hidden from assistive tech) under the finger.
+    expect(
+      pages.map(({ page }) => [page.dataset['state'], page.inert]),
+    ).toEqual(during);
+    expect(pages[0]!.page.dataset['state']).toBe('active');
+    pointer('pointerup', pages[1]!.button, 700);
+  });
+
+  it('keeps a neighbour drawn in idle time, not when a press starts', () => {
+    const { api, pages, pointer, advance } = setup();
     let prepared = 0;
     (
       api as unknown as {
@@ -721,9 +755,22 @@ describe('Hub pager', () => {
       }
     ).define('clock', { prepare: () => (prepared += 1) });
     expect(prepared).toBe(1);
+    // The press that may start a swipe does no page work.
     pointer('pointerdown', pages[0]!.button, 500);
     pointer('pointerup', pages[0]!.button, 500);
+    expect(prepared).toBe(1);
+    // Soon after load, and then every few seconds while nothing moves.
+    advance(1_500);
     expect(prepared).toBe(2);
+    advance(2_000);
+    expect(prepared).toBe(3);
+    // Not while a swipe is under way.
+    pointer('pointerdown', pages[0]!.button, 800);
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 700);
+    advance(2_000);
+    expect(prepared).toBe(3);
+    pointer('pointerup', pages[0]!.button, 700);
   });
 
   it('goes to a page by id, and refuses unknown ones', () => {
