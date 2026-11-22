@@ -582,15 +582,42 @@
     }
   });
 
-  // A tap on a camera shows it large; a tap on it again, or on the title
-  // button, returns to the grid.
-  stage.addEventListener('click', (event) => {
-    const tile = event.target.closest?.('.cams-tile');
-    if (!tile || !active) return;
-    if (mode === 'focus') setMode('grid');
-    else setMode('focus', tile.dataset.camera || '');
-  });
+  // The round button returns from one camera to all.
   back?.addEventListener('click', () => setMode('grid'));
+
+  // Taps (the quick menu, below, gives them to this function first): in the
+  // grid a tap on a camera shows it large. In the large view a tap goes to the
+  // menu (it opens or closes) and the round button returns. Returns true when
+  // the page has taken the tap.
+  function handleTap(event) {
+    if (!active) return false;
+    const target = event.target;
+    if (menuElement?.contains?.(target)) return false;
+    if (target.closest?.('.cams-back')) return true;
+    const tile = target.closest?.('.cams-tile');
+    if (tile && mode === 'grid') {
+      setMode('focus', tile.dataset.camera || '');
+      return true;
+    }
+    return false;
+  }
+
+  // The same menu as Foto and Musik: the scenes slide up from the bottom
+  // edge on mouse movement or a tap beside the cameras. It is attached once
+  // every script has run (quick-menu.js comes after this one).
+  const menuElement = root.querySelector("[data-view='menu']");
+  function attachMenu() {
+    globalThis.lugnQuickMenu?.attach({
+      id: 'kameror',
+      root,
+      menu: menuElement,
+      handleTap,
+    });
+  }
+  // Deferred scripts run while the document is still `interactive`, before
+  // DOMContentLoaded, so only a finished document attaches at once.
+  if (document.readyState === 'complete') attachMenu();
+  else document.addEventListener('DOMContentLoaded', attachMenu);
 
   // Tapping Hem's small camera view opens this page on that camera. The
   // whole view takes the tap (its name chip lies over the picture), but its
