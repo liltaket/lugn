@@ -637,6 +637,136 @@
     }
   }
 
+  // Which part of a theme change stalls the Hub: the whole palette, only the
+  // page background colors, or only the colors the cards and controls use.
+  async function themeParts() {
+    if (typeof syncArtTheme !== 'function' || typeof root === 'undefined')
+      return [];
+    const css = getComputedStyle(root);
+    const current = {
+      accent: css.getPropertyValue('--art-accent').trim(),
+      deep: css.getPropertyValue('--art-deep').trim(),
+      panel: css.getPropertyValue('--art-panel').trim(),
+      glow: css.getPropertyValue('--art-glow').trim(),
+      glowSoft: css.getPropertyValue('--art-glow-soft').trim(),
+      tint: css.getPropertyValue('--art-tint').trim(),
+      tint2: css.getPropertyValue('--art-tint-2').trim(),
+    };
+    const other = {
+      accent: '#7aa6ff',
+      deep: '#0b1230',
+      panel: '#16204a',
+      glow: 'rgba(122,166,255,0.2)',
+      glowSoft: 'rgba(122,166,255,0.12)',
+      tint: 'rgba(180,200,255,0.08)',
+      tint2: 'rgba(180,200,255,0.12)',
+    };
+    const variants = [
+      ['theme-all', other],
+      [
+        'theme-bg-only',
+        {
+          ...current,
+          deep: other.deep,
+          glow: other.glow,
+          glowSoft: other.glowSoft,
+        },
+      ],
+      [
+        'theme-colors-only',
+        {
+          ...current,
+          accent: other.accent,
+          panel: other.panel,
+          tint: other.tint,
+          tint2: other.tint2,
+        },
+      ],
+    ];
+    const saved = {
+      theme: artTheme,
+      color: root.dataset.artColor,
+      playing: root.dataset.musicPlaying,
+    };
+    const out = [];
+    try {
+      for (const [variant, palette] of variants) {
+        if (aborted) break;
+        // Back to where it was and let the fade finish.
+        artTheme = saved.theme;
+        if (saved.color === undefined) delete root.dataset.artColor;
+        else root.dataset.artColor = saved.color;
+        if (saved.playing === undefined) delete root.dataset.musicPlaying;
+        else root.dataset.musicPlaying = saved.playing;
+        syncArtTheme();
+        await sleep(2000);
+        drain();
+        artTheme = palette;
+        root.dataset.artColor = 'true';
+        root.dataset.musicPlaying = 'true';
+        const frames = sampleFrames(1800, () => {});
+        syncArtTheme();
+        out.push({ variant, ...(await summarise(await frames)) });
+      }
+    } finally {
+      artTheme = saved.theme;
+      if (saved.color === undefined) delete root.dataset.artColor;
+      else root.dataset.artColor = saved.color;
+      if (saved.playing === undefined) delete root.dataset.musicPlaying;
+      else root.dataset.musicPlaying = saved.playing;
+      syncArtTheme();
+      await sleep(2000);
+    }
+    return out;
+  }
+
+  // The worst frame after flipping each attribute on the dashboard root to
+  // a value no rule matches and back: what a page-wide restyle costs here.
+  async function rootAttrs() {
+    if (typeof root === 'undefined') return [];
+    const names = Object.keys(root.dataset).filter((name) => name !== 'fade');
+    const results = [];
+    for (const name of names) {
+      if (aborted) break;
+      const previous = root.dataset[name];
+      await sleep(500);
+      drain();
+      const gaps = [];
+      await new Promise((resolve, reject) => {
+        let last;
+        let step = 0;
+        const frame = (time) => {
+          try {
+            if (step === 0) {
+              last = time;
+              root.dataset[name] = '__probe';
+            } else {
+              gaps.push(time - last);
+              last = time;
+            }
+            step += 1;
+            if (step === 5) root.dataset[name] = previous;
+            if (step > 12) resolve();
+            else requestAnimationFrame(frame);
+          } catch (error) {
+            reject(error);
+          }
+        };
+        requestAnimationFrame(frame);
+      });
+      root.dataset[name] = previous;
+      results.push([name.slice(0, 24), round(Math.max(...gaps))]);
+    }
+    const reports = [];
+    for (let at = 0; at < results.length; at += 10)
+      reports.push({
+        variant: 'root-attrs',
+        part: at / 10,
+        worstGapMs: Object.fromEntries(results.slice(at, at + 10)),
+      });
+    return reports;
+  }
+
   async function bare() {
     const hidden = [
       ...document.querySelectorAll('#hub-pager, #app-root'),
@@ -754,6 +884,8 @@
       ['hover (cachad)', 'dot', () => hoverDot('hover-cached')],
       ['utan timers och ström', 'dot', () => hoverDot('quiet')],
       ['temabyte', 'dot', themeSwap],
+      ['temats delar', 'dot', themeParts],
+      ['rotattribut', 'dot', rootAttrs],
       ['omslag in', 'dot', artIn],
       ['riktigt klick (låtsassvar)', 'press', clickPath],
       ['tryck', 'press', async () => ({ variant: 'both', ...(await press()) })],
