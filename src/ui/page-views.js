@@ -48,6 +48,86 @@
     timeZone: 'Europe/Stockholm',
   });
 
+  // ── Scene dock: Hem's scenes on the other pages ──
+  //
+  // The buttons send exactly what Hem's scene buttons send (runCommand) and
+  // show the state Hem's own buttons show, so the two never disagree.
+
+  const hem = () => (typeof refs === 'object' ? refs : null);
+
+  function dockScenes() {
+    if (typeof getSceneList !== 'function') return [];
+    const scenes = getSceneList(payload()).filter(
+      (scene) => !scene.id.startsWith('scene.custom_'),
+    );
+    // Släck last, as the way out, and at most six in a row.
+    const off = scenes.filter((scene) => scene.id === 'scene.all_off');
+    const rest = scenes.filter((scene) => scene.id !== 'scene.all_off');
+    return [...rest.slice(0, 6 - off.length), ...off];
+  }
+
+  function dockButton(scene) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.scene = scene.id;
+    const icon =
+      typeof sceneIconFor === 'function' ? sceneIconFor(scene.id) : null;
+    if (icon) {
+      // The same fixed pictograms as Hem; scene names stay text.
+      button.insertAdjacentHTML(
+        'beforeend',
+        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${icon.paths}</svg>`,
+      );
+    }
+    const name = document.createElement('span');
+    name.textContent = scene.id === 'scene.all_off' ? 'Släck' : scene.name;
+    button.append(name);
+    button.title = scene.name;
+    return button;
+  }
+
+  const dockKeys = new Map();
+  function drawDock(page) {
+    const dock = view(page, 'dock');
+    if (!dock) return;
+    const scenes = dockScenes();
+    const listKey = scenes
+      .map((scene) => `${scene.id}\u0000${scene.name}`)
+      .join('\u0001');
+    if (dockKeys.get(page) !== listKey) {
+      dockKeys.set(page, listKey);
+      dock.replaceChildren(...scenes.map(dockButton));
+    }
+    const offline = typeof isUnavailable === 'function' && isUnavailable();
+    for (const button of dock.children) {
+      const id = button.dataset.scene;
+      const source =
+        typeof sceneButtons === 'object' ? sceneButtons.get(id) : null;
+      const pressed = source?.getAttribute('aria-pressed') === 'true';
+      const state =
+        typeof pending === 'object' && pending.has(`scene:${id}`)
+          ? 'pending'
+          : (source?.dataset.state ?? 'idle');
+      if (button.getAttribute('aria-pressed') !== String(pressed))
+        button.setAttribute('aria-pressed', String(pressed));
+      if (button.dataset.state !== state) button.dataset.state = state;
+      if (button.disabled !== offline) button.disabled = offline;
+    }
+  }
+
+  function onDockClick(event) {
+    const button = event.target.closest?.('button[data-scene]');
+    if (!button || button.disabled || typeof runCommand !== 'function') return;
+    const sceneId = button.dataset.scene;
+    if (!dockScenes().some((scene) => scene.id === sceneId)) return;
+    void runCommand(`scene:${sceneId}`, { sceneId });
+    const page = button.closest('.hub-page')?.dataset.page;
+    // Pending shows at once; the confirmation follows the next state.
+    window.setTimeout(() => drawDock(page), 0);
+  }
+  for (const page of ['clock', 'music'])
+    view(page, 'dock')?.addEventListener('click', onDockClick);
+
   // ── Klocka: big time, indoor air, presence ──
 
   const AIR = [
@@ -78,6 +158,7 @@
   }
 
   function drawAir() {
+    drawDock('clock');
     const data = payload();
     const environment = data?.environment ?? {};
     const parts = [];
@@ -145,7 +226,7 @@
       startClock();
       drawAir();
       window.clearInterval(airTimer);
-      airTimer = window.setInterval(drawAir, 5000);
+      airTimer = window.setInterval(drawAir, 2000);
     },
     leave() {
       window.clearInterval(airTimer);
@@ -329,6 +410,253 @@
     leave() {
       window.clearInterval(infoTimer);
       infoTimer = 0;
+    },
+  });
+
+  // ── Musik: Hem's music, full screen ──
+  //
+  // Title, artist, source and cover are read from Hem's music card, so the
+  // same rules (pause grace, computer media, retained artwork) apply here.
+
+  const PLAY_PATH = 'M8 5.5v13l11-6.5Z';
+  const PAUSE_PATH = 'M7 5h4v14H7zM13 5h4v14h-4z';
+  let musicTimer = 0;
+  let musicKey = '';
+  let barKey = '';
+  let barAnimation = null;
+  let musicShown = false;
+
+  function clockText(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  function musicState() {
+    const r = hem();
+    const data = payload();
+    const target = typeof musicTarget === 'string' ? musicTarget : '';
+    const device = target ? data?.state?.music?.devices?.[target] : undefined;
+    const active =
+      document.getElementById('app-root')?.dataset.musicVisible === 'true';
+    const artReady =
+      r?.musicArtwork?.dataset.state === 'available' &&
+      r?.musicArtworkImage &&
+      !r.musicArtworkImage.hidden;
+    const volume = device?.observed?.volume;
+    return {
+      active,
+      title: r?.musicTitle?.textContent?.trim() || 'Ingen musik spelar',
+      artist:
+        r?.musicArtist && !r.musicArtist.hidden
+          ? r.musicArtist.textContent.trim()
+          : '',
+      source: active ? r?.musicSource?.textContent?.trim() || '' : '',
+      art: artReady ? r.musicArtworkImage.getAttribute('src') || '' : '',
+      playing:
+        Boolean(target) &&
+        typeof musicPlaybackAction === 'function' &&
+        musicPlaybackAction(data, target) === 'paused',
+      canPlay: Boolean(device) && !r?.musicPlayback?.disabled,
+      volume:
+        typeof volume === 'number' && Number.isFinite(volume)
+          ? `Volym ${Math.round(volume * 100)} %`
+          : '',
+      progress:
+        typeof musicProgress === 'object' && musicProgress
+          ? { ...musicProgress }
+          : null,
+    };
+  }
+
+  function drawMusic() {
+    const state = musicState();
+    const key = JSON.stringify({ ...state, progress: undefined });
+    if (key !== musicKey) {
+      musicKey = key;
+      const root = view('music', 'root');
+      root.dataset.active = String(state.active);
+      root.dataset.playing = String(state.playing);
+      setText(view('music', 'title'), state.title);
+      setText(view('music', 'artist'), state.artist);
+      setText(view('music', 'source'), state.source);
+      setText(view('music', 'volume'), state.volume);
+      view('music', 'presets').hidden = state.active;
+      const play = view('music', 'play');
+      play.disabled = !state.canPlay;
+      play.setAttribute('aria-label', state.playing ? 'Pausa' : 'Spela');
+      view('music', 'play-icon').setAttribute(
+        'd',
+        state.playing ? PAUSE_PATH : PLAY_PATH,
+      );
+      const art = view('music', 'art');
+      if ((art.getAttribute('src') || '') !== state.art) {
+        view('music', 'backdrop').hidden = true;
+        if (state.art) art.setAttribute('src', state.art);
+        else art.removeAttribute('src');
+      }
+      art.hidden = !state.art;
+      view('music', 'cover').dataset.state = state.art
+        ? 'available'
+        : 'missing';
+    }
+    drawProgress(state.progress);
+  }
+
+  // The bar runs as one compositor animation from where playback is to the
+  // end of the track; it is restarted only when the sample changes.
+  function drawProgress(sample) {
+    const box = view('music', 'progress');
+    const bar = view('music', 'bar');
+    if (!sample || !(sample.duration > 0)) {
+      box.hidden = true;
+      barKey = '';
+      barAnimation?.cancel();
+      barAnimation = null;
+      return;
+    }
+    box.hidden = false;
+    const now =
+      typeof estimatedServerNow === 'function'
+        ? estimatedServerNow()
+        : Date.now();
+    const position = Math.min(
+      sample.duration,
+      sample.position +
+        (sample.playing ? Math.max(0, (now - sample.at) / 1000) : 0),
+    );
+    setText(view('music', 'elapsed'), clockText(position));
+    setText(view('music', 'duration'), clockText(sample.duration));
+    const key = JSON.stringify([
+      sample.position,
+      sample.at,
+      sample.duration,
+      sample.playing,
+    ]);
+    if (key === barKey) return;
+    barKey = key;
+    barAnimation?.cancel();
+    barAnimation = null;
+    const from = position / sample.duration;
+    bar.style.transform = `scaleX(${from.toFixed(4)})`;
+    const remaining = (sample.duration - position) * 1000;
+    // Only the shown page animates; a neighbour shows where playback is.
+    if (
+      musicShown &&
+      sample.playing &&
+      remaining > 0 &&
+      typeof bar.animate === 'function'
+    ) {
+      barAnimation = bar.animate(
+        [
+          { transform: `scaleX(${from.toFixed(4)})` },
+          { transform: 'scaleX(1)' },
+        ],
+        { duration: remaining, easing: 'linear', fill: 'forwards' },
+      );
+    }
+  }
+
+  // The backdrop is the loaded cover drawn small, once (same-origin art).
+  view('music', 'art')?.addEventListener('load', () => {
+    const art = view('music', 'art');
+    const canvas = view('music', 'backdrop');
+    const context = canvas?.getContext?.('2d');
+    if (!context || !art.naturalWidth) return;
+    try {
+      const { width, height } = canvas;
+      const scale = Math.max(
+        width / art.naturalWidth,
+        height / art.naturalHeight,
+      );
+      const w = art.naturalWidth * scale;
+      const h = art.naturalHeight * scale;
+      context.clearRect(0, 0, width, height);
+      context.drawImage(art, (width - w) / 2, (height - h) / 2, w, h);
+      canvas.hidden = false;
+    } catch {
+      canvas.hidden = true;
+    }
+  });
+
+  view('music', 'play')?.addEventListener('click', () => {
+    const data = payload();
+    const target = typeof musicTarget === 'string' ? musicTarget : '';
+    const device = target ? data?.state?.music?.devices?.[target] : undefined;
+    if (
+      !device ||
+      hem()?.musicPlayback?.disabled ||
+      typeof runCommand !== 'function' ||
+      typeof musicPlaybackAction !== 'function'
+    )
+      return;
+    void runCommand(`music:${target}`, {
+      target,
+      request: {
+        property: 'playback',
+        value: musicPlaybackAction(data, target),
+      },
+    });
+  });
+
+  view('music', 'presets')?.addEventListener('click', (event) => {
+    const button = event.target.closest?.('button[data-preset]');
+    if (!button || typeof selectMusicPreset !== 'function') return;
+    selectMusicPreset(Number(button.dataset.preset));
+  });
+
+  // Tapping the cover on Hem opens Musik; the buttons on and around it keep
+  // their own actions. The cover itself takes no pointer events (it is drawn
+  // under the card), so a click that reached no control is placed against
+  // the cover's box, above the title.
+  const hemRoot = document.getElementById('app-root');
+  const hemCover = document.getElementById('music-artwork');
+  const HEM_CONTROLS =
+    'button, a, input, select, textarea, label, [role="button"]';
+  hemRoot?.addEventListener('click', (event) => {
+    if (!hemCover || hemRoot.dataset.musicVisible !== 'true') return;
+    if (event.defaultPrevented || event.target.closest?.(HEM_CONTROLS)) return;
+    const cover = hemCover.getBoundingClientRect();
+    const title = document
+      .getElementById('music-now-playing')
+      ?.getBoundingClientRect();
+    const bottom = title && title.top > cover.top ? title.top : cover.bottom;
+    if (
+      event.clientX >= cover.left &&
+      event.clientX <= cover.right &&
+      event.clientY >= cover.top &&
+      event.clientY <= bottom
+    )
+      pagesApi.go('music');
+  });
+
+  function musicTick() {
+    drawMusic();
+    drawDock('music');
+  }
+
+  pagesApi.define('music', {
+    prepare: musicTick,
+    enter() {
+      window.clearInterval(musicTimer);
+      musicShown = true;
+      barKey = '';
+      musicTick();
+      musicTimer = window.setInterval(musicTick, 1000);
+    },
+    leave() {
+      window.clearInterval(musicTimer);
+      musicTimer = 0;
+      musicShown = false;
+      barAnimation?.cancel();
+      barAnimation = null;
+      barKey = '';
+      drawProgress(musicState().progress);
+    },
+    sleep() {
+      // Nothing runs while away: the bar stops with the page.
+      barAnimation?.cancel();
+      barAnimation = null;
+      barKey = '';
     },
   });
 })();

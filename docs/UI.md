@@ -220,9 +220,21 @@ clicks and the pointer bridge responsive while something plays:
 ## Hub pages
 
 The Hub dashboard is the first of several whole-screen pages (`src/ui/pages.js`,
-`pages.css`, `page-views.js`): **Hem** (the dashboard above), **Klocka** (large
-clock, indoor air and presence) and **Info** (connection, stream, revisions,
-memory, screen, browser, and an opt-in swipe probe). A swipe with a finger or
+`pages.css`, `page-views.js`): **Hem** (the dashboard above), **Musik** (Hem's
+music full screen: cover over a soft, enlarged copy of itself, source, title, artist,
+progress with elapsed and total time, play/pause and the reported volume; the
+Spotify DJ and Optical choices when nothing plays), **Klocka** (large clock,
+indoor air and presence) and **Info** (connection, stream, revisions, memory,
+screen, browser, and an opt-in swipe probe). Tapping the cover on Hem opens
+Musik; the controls on and around it keep their own actions.
+
+Musik and Klocka end in a **scene dock**: Hem's scenes (not the custom ones),
+at most six, with Släck last. Its buttons send what Hem's scene buttons send and
+show the state Hem's buttons show (selected, pending, waiting for lamps). Musik
+reads title, artist, source and cover from Hem's music card, so the same pause
+grace, computer media and retained artwork rules apply, and play/pause sends
+Hem's playback command. Its progress bar is one compositor animation from the
+current position to the end of the track, run only while Musik is shown. A swipe with a finger or
 the desk Hub's bridged mouse, a horizontal wheel or trackpad, a vertical wheel
 notch outside scrollable areas and the arrow keys turn the page; small dots at
 the bottom show where you are. A swipe turns at most one page. Taps and

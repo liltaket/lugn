@@ -723,3 +723,18 @@ describe('Hub pager', () => {
     expect(api.go('nope')).toBe(false);
   });
 });
+
+describe('Hub page markup', () => {
+  const html = readFileSync(
+    new URL('../src/ui/display.html', import.meta.url),
+    'utf8',
+  );
+  it('has one dot per page, Hem first and Musik next to it', () => {
+    const pages = [
+      ...html.matchAll(/class="hub-page" data-page="([a-z]+)"/g),
+    ].map((match) => match[1]);
+    expect(pages).toEqual(['home', 'music', 'clock', 'info']);
+    const dots = /<div class="hub-dots"[^>]*>(.*?)<\/div>/.exec(html)?.[1];
+    expect(dots?.match(/<i><\/i>/g)).toHaveLength(pages.length);
+  });
+});
