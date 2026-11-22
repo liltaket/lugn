@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SimulatedLightingAdapter } from '../src/adapters/simulated-lighting.js';
 import {
   DynamicLightingController,
@@ -222,6 +222,65 @@ describe('dynamic lighting controller', () => {
       expect(f.controller.snapshot().heldByUser).toContain('lighting.strip');
     });
 
+    it('keeps a hand adjustment when the music stops and the scene is restored', async () => {
+      const f = await fixture();
+      await f.engine.activateScene('scene.music', user);
+      f.palette.set(true, [[255, 40, 0]]);
+      await f.advance(100);
+      // A person adjusts a lamp the mode does not drive.
+      await f.engine.setLighting(
+        'lighting.desk',
+        { power: true, brightness: 90 },
+        { actor: user },
+      );
+      f.palette.set(false);
+      await f.advance(200);
+      // The accent lamp is back on the scene; the adjusted lamp keeps its value.
+      expect(f.desired('lighting.strip').rgb).toBeUndefined();
+      expect(f.desired('lighting.desk').brightness).toBe(90);
+      expect(
+        f.engine.state.lighting.devices['lighting.desk']!.ownership.brightness,
+      ).toMatchObject({ kind: 'override', actor: user });
+    });
+
+    it('retries the return to the scene when the engine refuses it first', async () => {
+      const f = await fixture();
+      await f.engine.activateScene('scene.music', user);
+      f.palette.set(true, [[255, 40, 0]]);
+      await f.advance(100);
+      const reapply = vi
+        .spyOn(f.engine, 'reapplyScene')
+        .mockRejectedValueOnce(new Error('Automatic lighting is held'));
+      f.palette.set(false);
+      await f.advance(200);
+      expect(reapply).toHaveBeenCalledTimes(1);
+      expect(f.desired('lighting.strip').rgb).toEqual([255, 40, 0]);
+      await f.advance(15_000);
+      expect(reapply).toHaveBeenCalledTimes(2);
+      expect(f.desired('lighting.strip').rgb).toBeUndefined();
+    });
+
+    it('still returns to the scene when the music stopped while the room was empty', async () => {
+      const f = await fixture();
+      await f.engine.activateScene('scene.music', user);
+      f.palette.set(true, [[255, 40, 0]]);
+      await f.advance(100);
+      await f.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'confirmed_empty',
+        personCount: 0,
+      });
+      await f.advance(2000);
+      f.palette.set(false);
+      await f.engine.handlePresence({
+        type: 'presence.changed',
+        presence: 'occupied',
+        personCount: 1,
+      });
+      await f.advance(2000);
+      expect(f.desired('lighting.strip').rgb).toBeUndefined();
+    });
+
     it('starts over when the scene is selected again', async () => {
       const f = await fixture();
       await f.engine.activateScene('scene.music', user);
@@ -272,6 +331,18 @@ describe('dynamic lighting controller', () => {
       f.computer('desktop');
       await f.advance(5000);
       expect(f.desired('lighting.desk').power).toBe(true);
+    });
+
+    it('settles on time even while an idle deadline is also pending', async () => {
+      const f = await fixture();
+      f.computer('idle', { idle: true });
+      await f.engine.activateScene('scene.adaptive', user);
+      await f.advance(100);
+      expect(f.desired('lighting.desk').power).toBe(true);
+      f.computer('video', { idle: true, fullscreen: true });
+      await f.advance(5000);
+      expect(f.desired('lighting.desk').power).toBe(false);
+      expect(f.controller.snapshot().situation).toBe('cinema');
     });
 
     it('ignores a brief full-screen blip', async () => {

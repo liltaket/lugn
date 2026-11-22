@@ -39,6 +39,7 @@ export type DynamicLightingOptions = {
 };
 
 const actor: Actor = { type: 'automation', id: 'lugn.dynamic' };
+const releaseRetryMs = 10_000;
 
 /**
  * Drives lamps for scenes marked `dynamic`. The engine stays authoritative:
@@ -57,7 +58,10 @@ export class DynamicLightingController {
   private idleSince: number | null = null;
   private sceneRevision = -1;
   private ownRevisions = new Set<number>();
+  /** True while lamps may hold values this controller put there. */
+  private driving = false;
   private wake: TimerHandle | undefined;
+  private wakeAt: number | null = null;
   private running = false;
   private rerun = false;
   private disposed = false;
@@ -110,6 +114,8 @@ export class DynamicLightingController {
   private async evaluate(): Promise<void> {
     const { engine, config, clock } = this.options;
     const state = engine.state;
+    // Every pending deadline is requested again below; the earliest one wins.
+    this.clearWake();
     const sceneId = state.lighting.currentScene;
     const kind = sceneId ? engine.scenes.get(sceneId)?.dynamic : undefined;
     if (!kind) {
@@ -121,6 +127,7 @@ export class DynamicLightingController {
       if (!this.ownRevisions.delete(state.lighting.sceneRevision)) {
         this.applied.clear();
         this.lastSentAt.clear();
+        this.driving = false;
         this.committed = null;
         this.candidate = null;
       }
@@ -172,7 +179,7 @@ export class DynamicLightingController {
         }
       }
     }
-    this.armIdleWake(inputs.computer, now);
+    this.armIdleWake(inputs.computer);
 
     this.status = {
       mode: kind,
@@ -204,17 +211,16 @@ export class DynamicLightingController {
 
     if (entries.length > 0 && entries.every(([, v]) => v === 'release')) {
       // Nothing to follow: return to the scene's own look, once.
-      if (this.applied.size === 0) return;
-      this.applied.clear();
-      this.lastSentAt.clear();
-      try {
-        const next = await engine.reapplyScene(actor, 'dynamic-lighting');
-        this.ownRevisions.add(next);
-        this.sceneRevision = next;
-      } catch {
-        // The room engine may refuse (empty room, hold); retry on next change.
+      if (!this.driving) return;
+      if (await this.releaseToScene()) {
+        this.applied.clear();
+        this.lastSentAt.clear();
+        this.driving = false;
+        this.status.heldByUser = [];
+      } else {
+        // The engine refused (for example an OFF hold); keep trying.
+        this.armWake(releaseRetryMs);
       }
-      this.status.heldByUser = [];
       return;
     }
 
@@ -249,6 +255,7 @@ export class DynamicLightingController {
           'target',
         );
         this.applied.set(target, wanted);
+        this.driving = true;
       } catch {
         // Held or unavailable lamps keep their state; the next change retries.
       }
@@ -262,6 +269,68 @@ export class DynamicLightingController {
       }
     }
     this.status.heldByUser = held;
+  }
+
+  /**
+   * The engine can only reapply a whole scene, which would also wipe a lamp a
+   * person adjusted meanwhile. Those adjustments are taken first and put back
+   * right after, still owned by the person who made them.
+   */
+  private async releaseToScene(): Promise<boolean> {
+    const { engine } = this.options;
+    const manual = new Map<string, { values: LightingValues; actor: Actor }>();
+    for (const [target, device] of Object.entries(
+      engine.state.lighting.devices,
+    )) {
+      const values: LightingValues = {};
+      let owner: Actor | undefined;
+      for (const property of [
+        'power',
+        'brightness',
+        'colorTemperature',
+        'rgb',
+      ] as const) {
+        const ownership = device.ownership[property];
+        const desired = device.effectiveDesired[property];
+        if (
+          ownership?.kind === 'override' &&
+          isHumanActor(ownership.actor) &&
+          desired !== undefined
+        ) {
+          (values as Record<string, unknown>)[property] =
+            structuredClone(desired);
+          owner = ownership.actor;
+        }
+      }
+      if (values.rgb !== undefined) delete values.colorTemperature;
+      if (owner) manual.set(target, { values, actor: owner });
+    }
+    let next: number;
+    try {
+      next = await engine.reapplyScene(actor, 'dynamic-lighting');
+    } catch {
+      return false;
+    }
+    this.ownRevisions.add(next);
+    this.sceneRevision = next;
+    for (const [target, { values, actor: owner }] of manual) {
+      try {
+        await engine.setLighting(
+          target,
+          values,
+          {
+            actor: owner,
+            source: 'dynamic-lighting',
+            reason: 'Keeping a manual adjustment',
+          },
+          undefined,
+          'target',
+        );
+      } catch {
+        // The lamp keeps the scene's value; nothing else can be done here.
+      }
+    }
+    return true;
   }
 
   private computerInput(state: RoomState): DynamicComputerInput | null {
@@ -291,36 +360,37 @@ export class DynamicLightingController {
     };
   }
 
-  private armIdleWake(
-    computer: DynamicComputerInput | null,
-    now: number,
-  ): void {
+  private armIdleWake(computer: DynamicComputerInput | null): void {
     if (!computer || computer.idle !== true || computer.idleForMs === null)
       return;
     const remaining = this.options.config.idleAfterMs - computer.idleForMs;
     if (remaining > 0) this.armWake(remaining + 50);
-    void now;
   }
 
+  /** Requests a re-evaluation; the earliest pending request wins. */
   private armWake(delayMs: number): void {
+    const { clock } = this.options;
+    const at = clock.monotonicNow() + Math.max(50, Math.ceil(delayMs));
+    if (this.wakeAt !== null && this.wakeAt <= at) return;
     this.clearWake();
-    this.wake = this.options.clock.setTimeout(
-      () => {
-        this.wake = undefined;
-        this.observe();
-      },
-      Math.max(50, Math.ceil(delayMs)),
-    );
+    this.wakeAt = at;
+    this.wake = clock.setTimeout(() => {
+      this.wake = undefined;
+      this.wakeAt = null;
+      this.observe();
+    }, at - clock.monotonicNow());
   }
 
   private clearWake(): void {
     if (this.wake !== undefined) this.options.clock.clearTimeout(this.wake);
     this.wake = undefined;
+    this.wakeAt = null;
   }
 
   private reset(): void {
     if (this.status.mode === null && this.applied.size === 0) return;
     this.clearWake();
+    this.driving = false;
     this.applied.clear();
     this.lastSentAt.clear();
     this.committed = null;
