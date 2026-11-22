@@ -191,12 +191,26 @@ describe('dynamic lighting controller', () => {
       expect(f.desired('lighting.strip').rgb).toEqual([0, 60, 255]);
 
       f.palette.set(false);
+      await f.advance(8_100); // past the colour grace
       await f.advance(100);
       expect(f.desired('lighting.strip')).toMatchObject({
         colorTemperature: 2700,
       });
       expect(f.desired('lighting.strip').rgb).toBeUndefined();
       expect(f.engine.state.lighting.currentScene).toBe('scene.music');
+    });
+
+    it('keeps the colours through a short artwork gap and releases after the grace', async () => {
+      const f = await fixture();
+      await f.engine.activateScene('scene.music', user);
+      f.palette.set(true, [[255, 40, 0]]);
+      await f.advance(100);
+      expect(f.desired('lighting.strip').rgb).toEqual([255, 40, 0]);
+      f.palette.set(true, []);
+      await f.advance(3000);
+      expect(f.desired('lighting.strip').rgb).toEqual([255, 40, 0]);
+      await f.advance(6000);
+      expect(f.desired('lighting.strip').rgb).toBeUndefined();
     });
 
     it('does not repeat commands for an unchanged palette', async () => {
@@ -240,6 +254,7 @@ describe('dynamic lighting controller', () => {
       );
       const before = f.adapter.dispatched.length;
       f.palette.set(false);
+      await f.advance(8_100); // past the colour grace
       await f.advance(200);
       // The adjusted lamp is never touched, not even for a moment.
       expect(
@@ -266,6 +281,7 @@ describe('dynamic lighting controller', () => {
         { actor: user },
       );
       f.palette.set(false);
+      await f.advance(8_100); // past the colour grace
       await f.advance(200);
       expect(f.desired('lighting.strip').rgb).toEqual([0, 255, 0]);
       expect(f.desired('lighting.strip').brightness).toBe(10);
@@ -278,6 +294,7 @@ describe('dynamic lighting controller', () => {
       await f.advance(100);
       f.controller.dispose();
       f.palette.set(false);
+      await f.advance(8_100); // past the colour grace
       const restarted = new DynamicLightingController({
         clock: f.clock,
         engine: f.engine,
@@ -306,6 +323,7 @@ describe('dynamic lighting controller', () => {
         .spyOn(f.engine, 'releaseAutomaticLighting')
         .mockRejectedValueOnce(new Error('Automatic lighting is held'));
       f.palette.set(false);
+      await f.advance(8_100); // past the colour grace
       await f.advance(200);
       expect(reapply).toHaveBeenCalledTimes(1);
       expect(f.desired('lighting.strip').rgb).toEqual([255, 40, 0]);
@@ -326,6 +344,7 @@ describe('dynamic lighting controller', () => {
       });
       await f.advance(2000);
       f.palette.set(false);
+      await f.advance(8_100); // past the colour grace
       await f.engine.handlePresence({
         type: 'presence.changed',
         presence: 'occupied',
