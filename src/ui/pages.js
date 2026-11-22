@@ -184,8 +184,10 @@
     if (Math.abs(from - to) < 0.5) {
       offset = to;
       write(to);
-      announce();
+      // The snap is complete before anyone hears of the change (changes are
+      // queued in order), so a listener that goes on starts a fresh motion.
       motionEnded();
+      announce();
       return;
     }
     const samples = springSamples(from, to, velocity);
@@ -193,8 +195,10 @@
     offset = to;
     if (typeof track.animate !== 'function') {
       write(to);
-      announce();
+      // The snap is complete before anyone hears of the change (changes are
+      // queued in order), so a listener that goes on starts a fresh motion.
       motionEnded();
+      announce();
       return;
     }
     lift();
@@ -424,6 +428,15 @@
   // fast swipe may reach the release with few or no moves.
   function follow(event) {
     const dx = event.clientX - gesture.x0;
+    // After a resize a held pointer no longer moves the pages but is tracked
+    // to its release: if it moved past the slop in any direction it was not
+    // a tap, and its click is swallowed.
+    if (gesture.cancelled) {
+      const dy = event.clientY - gesture.y0;
+      const slop = gesture.type === 'touch' ? TOUCH_SLOP : MOUSE_SLOP;
+      if (Math.abs(dx) > slop || Math.abs(dy) > slop) gesture.dragging = true;
+      return gesture.dragging;
+    }
     if (!gesture.dragging) {
       const dy = event.clientY - gesture.y0;
       const slop = gesture.type === 'touch' ? TOUCH_SLOP : MOUSE_SLOP;
@@ -434,18 +447,11 @@
       }
       if (Math.abs(dx) <= slop || Math.abs(dx) < Math.abs(dy) * LOCK_RATIO)
         return false;
-      // After a resize a held pointer is still told apart as tap or swipe
-      // (a swipe's click is swallowed), but it no longer moves the pages.
-      if (gesture.cancelled) {
-        gesture.dragging = true;
-        return true;
-      }
       beginDrag(event);
       // Start from the lock point less the slop, so the page neither jumps
       // by the slop nor loses a long first move.
       gesture.x0 = event.clientX - Math.sign(dx) * (Math.abs(dx) - slop);
     }
-    if (gesture.cancelled) return true;
     offset = rubber(gesture.startOffset + (event.clientX - gesture.x0));
     const samples = gesture.samples;
     // Only a change of position counts as motion: a release (or move) where
@@ -477,11 +483,13 @@
       still = Math.max(STILL_MS, spacing * 2.5);
     }
     if (now - last[0] > still) return 0;
-    let first = n >= 2 ? samples[n - 2] : press;
+    // The press counts towards the speed while it is within the window.
+    const points = press ? [press, ...samples] : samples;
+    let first = points[points.length - 2];
     if (!first) return 0;
-    for (let i = n - 3; i >= 0; i -= 1) {
-      if (last[0] - samples[i][0] > VELOCITY_WINDOW_MS) break;
-      first = samples[i];
+    for (let i = points.length - 3; i >= 0; i -= 1) {
+      if (last[0] - points[i][0] > VELOCITY_WINDOW_MS) break;
+      first = points[i];
     }
     // A move and a release in the same instant (the bridge, a stalled
     // thread) count as one frame; and no release throws the pages wildly.

@@ -524,13 +524,45 @@ describe('Hub pager', () => {
     expect(tap.click(tap.pages[0]!.button).defaultPrevented).toBe(false);
   });
 
+  it('swallows the click of a swipe that moved vertically first after a resize', () => {
+    const { api, pages, pointer, click, resize } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    resize(952);
+    pointer('pointermove', pages[0]!.button, 700, 308, 'mouse');
+    pointer('pointerup', pages[0]!.button, 640, 308, 'mouse');
+    expect(click(pages[0]!.button).defaultPrevented).toBe(true);
+    expect(api.current()).toBe('home');
+  });
+
+  it('turns on a quick flick that adds a pixel on release', () => {
+    const { api, pages, pointer, advance } = setup();
+    pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
+    advance(25);
+    pointer('pointermove', pages[0]!.button, 640, 300, 'mouse');
+    advance(16);
+    pointer('pointerup', pages[0]!.button, 639, 300, 'mouse');
+    expect(api.current()).toBe('clock');
+  });
+
+  it('keeps hover hidden while a change listener starts another motion', () => {
+    const { api, pager, wheel, pages, advance } = setup();
+    api.onChange((page) => {
+      if (page === 'clock') api.go('info');
+    });
+    wheel(pages[0]!.button, 1000);
+    advance(200);
+    expect(api.current()).toBe('info');
+    expect(pager.classes.has('paging')).toBe(true);
+  });
+
   it('lowers the layer after a swipe held through a resize is released', () => {
     const { pages, pager, pointer, resize, advance } = setup();
     pointer('pointerdown', pages[0]!.button, 700, 300, 'mouse');
     advance(16);
     pointer('pointermove', pages[0]!.button, 600, 300, 'mouse');
     resize(976);
-    advance(650);
+    advance(100);
+    advance(550);
     pointer('pointerup', pages[0]!.button, 600, 300, 'mouse');
     advance(100);
     advance(500);
