@@ -3413,7 +3413,8 @@ h2 {
     left var(--move),
     width var(--move),
     top var(--move),
-    height var(--move);
+    height var(--move),
+    --fx-panel 1.4s ease;
 }
 #app-root .music-section .music-artwork {
   position: absolute;
@@ -3650,15 +3651,17 @@ h2 {
   left: -100%;
   clip-path: inset(0 50% 0 0);
   transform: rotate(calc(min(var(--progress), 0.5) * 360deg));
-  transition: transform var(--ring-first-time, 1s) linear
-    var(--ring-first-delay, 0s);
+  transition:
+    transform var(--ring-first-time, 1s) linear var(--ring-first-delay, 0s),
+    border-color 1.4s ease;
 }
 #app-root .progress-second::before {
   left: 0;
   clip-path: inset(0 0 0 50%);
   transform: rotate(calc(max(var(--progress) - 0.5, 0) * 360deg));
-  transition: transform var(--ring-second-time, 1s) linear
-    var(--ring-second-delay, 0s);
+  transition:
+    transform var(--ring-second-time, 1s) linear var(--ring-second-delay, 0s),
+    border-color 1.4s ease;
 }
 /* Hidden, not removed, so a returning position keeps animating from where the
    ring was. */
@@ -4096,41 +4099,15 @@ body {
 /* ── Round 5, 2026-11-20: artwork theme, sliding segments, motion ──
    While music plays with known artwork, the whole Hub takes on its colors:
    ground, panels, glass, glow and the accent. Without artwork it rests on the
-   room's own palette. All theme colors are registered so they cross-fade. */
-@property --art-accent {
+   room's own palette. */
+/* The theme colors are plain custom properties: they change once, in one style
+   pass. The background cross-fades on its own layer (opacity, composited) and
+   the few cards that carry a theme color fade it locally, so the cover colors
+   never restyle the whole page frame by frame. */
+@property --fx-panel {
   syntax: '<color>';
-  inherits: true;
-  initial-value: #e7bc78;
-}
-@property --art-deep {
-  syntax: '<color>';
-  inherits: true;
-  initial-value: #141c1b;
-}
-@property --art-panel {
-  syntax: '<color>';
-  inherits: true;
+  inherits: false;
   initial-value: #1c2523;
-}
-@property --art-glow {
-  syntax: '<color>';
-  inherits: true;
-  initial-value: transparent;
-}
-@property --art-glow-soft {
-  syntax: '<color>';
-  inherits: true;
-  initial-value: transparent;
-}
-@property --art-tint {
-  syntax: '<color>';
-  inherits: true;
-  initial-value: rgba(238, 241, 232, 0.055);
-}
-@property --art-tint-2 {
-  syntax: '<color>';
-  inherits: true;
-  initial-value: rgba(238, 241, 232, 0.09);
 }
 #app-root {
   --art-accent: #e7bc78;
@@ -4146,18 +4123,50 @@ body {
   --glass: var(--art-tint);
   --glass-2: var(--art-tint-2);
   --spring: cubic-bezier(0.3, 1.35, 0.45, 1);
-  background:
+  isolation: isolate;
+  /* While the theme fades, the page shows the look it had (held by the script)
+     and the new look fades in over it. */
+  background-image: var(
+    --hold-image,
     radial-gradient(70% 95% at 100% 0%, var(--art-glow), transparent 70%),
-    radial-gradient(75% 85% at 0% 105%, var(--art-glow-soft), transparent),
-    var(--art-deep);
-  transition:
-    --art-accent 1.4s ease,
-    --art-deep 1.4s ease,
-    --art-panel 1.4s ease,
-    --art-glow 1.4s ease,
-    --art-glow-soft 1.4s ease,
-    --art-tint 1.4s ease,
-    --art-tint-2 1.4s ease;
+    radial-gradient(75% 85% at 0% 105%, var(--art-glow-soft), transparent)
+  );
+  background-color: var(--hold-color, var(--art-deep));
+}
+#app-root::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  background-image:
+    radial-gradient(70% 95% at 100% 0%, var(--art-glow), transparent 70%),
+    radial-gradient(75% 85% at 0% 105%, var(--art-glow-soft), transparent);
+  background-color: var(--art-deep);
+}
+/* Two names so a new change restarts the fade without a forced reflow. */
+#app-root[data-fade='a']::before {
+  animation: theme-fade-a 1.4s ease both;
+}
+#app-root[data-fade='b']::before {
+  animation: theme-fade-b 1.4s ease both;
+}
+@keyframes theme-fade-a {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes theme-fade-b {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 #app-root[data-role='desk'] {
   --art-accent: #a4c7d2;
@@ -4175,25 +4184,38 @@ body {
 }
 /* At night the artwork still colors the room, but only as a soft glow. */
 #app-root[data-time='night'][data-themed='true'] {
-  background:
-    radial-gradient(70% 95% at 100% 0%, var(--art-glow-soft), transparent 70%),
-    var(--art-deep);
+  background-image: var(
+    --hold-image,
+    radial-gradient(70% 95% at 100% 0%, var(--art-glow-soft), transparent 70%)
+  );
+}
+#app-root[data-time='night'][data-themed='true']::before {
+  background-image: radial-gradient(
+    70% 95% at 100% 0%,
+    var(--art-glow-soft),
+    transparent 70%
+  );
 }
 #app-root .music-feature::after {
+  --fx-panel: var(--art-panel);
   background: linear-gradient(
     to bottom,
     transparent 0%,
     transparent 40%,
-    var(--art-panel) 82%
+    var(--fx-panel) 82%
   );
   opacity: 0.94;
+  transition: --fx-panel 1.4s ease;
 }
 #app-root .music-section .music-feature,
 #app-root[data-feedback='true'] .music-section .music-feature {
-  background: var(--art-panel);
+  --fx-panel: var(--art-panel);
+  background: var(--fx-panel);
 }
 #app-root .music-section .music-artwork {
-  background: var(--art-panel);
+  --fx-panel: var(--art-panel);
+  background: var(--fx-panel);
+  transition: --fx-panel 1.4s ease;
 }
 
 /* Sliding thumbs: the pressed choice is a pill that moves, not a swap. */
@@ -4213,7 +4235,8 @@ body {
   transform: translateX(0);
   transition:
     transform 0.45s var(--spring),
-    opacity 0.25s ease;
+    opacity 0.25s ease,
+    background-color 1.4s ease;
   z-index: 0;
 }
 #app-root .music-presets::before {
@@ -4667,9 +4690,11 @@ body {
   height: 252px;
   border-radius: 22px;
   overflow: hidden;
+  --fx-panel: var(--art-panel);
   background:
     radial-gradient(80% 90% at 50% 40%, rgba(238, 241, 232, 0.06), transparent),
-    var(--art-panel);
+    var(--fx-panel);
+  transition: --fx-panel 1.4s ease;
 }
 #app-root .camera-frame .camera-blur,
 #app-root .camera-frame .camera-under,
@@ -4982,8 +5007,10 @@ button[data-pointer-pressed]:not(:disabled) {
   overflow: hidden;
   z-index: 3;
   color: var(--ink);
+  --fx-panel: var(--panel);
   background:
-    linear-gradient(var(--print-tint), var(--print-tint)), var(--panel);
+    linear-gradient(var(--print-tint), var(--print-tint)), var(--fx-panel);
+  transition: --fx-panel 1.4s ease;
   box-shadow: inset 0 0 0 1px var(--hair);
   animation: redesign-cam-in 0.5s cubic-bezier(0.2, 0.9, 0.25, 1);
 }
@@ -5277,4 +5304,12 @@ button[data-pointer-pressed]:not(:disabled) {
   font-size: 17px;
   line-height: 22px;
   text-align: center;
+}
+
+/* The blurred copies behind the artwork and the camera are their own layers,
+   so a card that repaints (a theme color fading) does not blur them again. */
+#app-root .music-section .music-artwork::before,
+#app-root .music-section .music-artwork img,
+#app-root .camera-frame .camera-blur {
+  will-change: transform;
 }

@@ -610,7 +610,10 @@ function setClock(afterRender = false) {
   const time = timeFormat.format(now);
   const date = dateFormat.format(now);
   const hour = Number(timeFormat.format(now).split(':')[0]);
-  root.dataset.time = hour >= 23 || hour < 6 ? 'night' : 'day';
+  const period = hour >= 23 || hour < 6 ? 'night' : 'day';
+  if (root.dataset.time === undefined || root.dataset.time === period)
+    root.dataset.time = period;
+  else if (!themeFading) changeTheme(() => (root.dataset.time = period));
   setText(refs.clockTime, time);
   setText(refs.clockDate, date);
   const dateParts = datePartsFormat.formatToParts(now);
@@ -1876,7 +1879,52 @@ function artPalette([r, g, b]) {
   };
 }
 
+// A theme change fades on its own layer instead of restyling the page every
+// frame: the page keeps showing the look it had (held as two inline values)
+// while the new look fades in above it by opacity, then the hold is dropped
+// when that animation ends. The few cards that carry a theme color fade it
+// themselves in CSS. A change that arrives during a fade waits for it, so the
+// visible blend is never cut short.
+let themeFadeTimer;
+let themeFading = false;
+function endThemeFade() {
+  window.clearTimeout(themeFadeTimer);
+  themeFading = false;
+  root.style.removeProperty('--hold-image');
+  root.style.removeProperty('--hold-color');
+  delete root.dataset.fade;
+  // Picks up a change that came in meanwhile.
+  syncArtTheme();
+}
+root.addEventListener?.('animationend', (event) => {
+  if (
+    themeFading &&
+    event.target === root &&
+    event.animationName === `theme-fade-${root.dataset.fade}`
+  )
+    endThemeFade();
+});
+function changeTheme(apply) {
+  const canFade =
+    typeof globalThis.getComputedStyle === 'function' &&
+    !!root.style?.setProperty;
+  if (!canFade) {
+    apply();
+    return;
+  }
+  const look = globalThis.getComputedStyle(root);
+  root.style.setProperty('--hold-image', look.backgroundImage);
+  root.style.setProperty('--hold-color', look.backgroundColor);
+  apply();
+  themeFading = true;
+  root.dataset.fade = root.dataset.fade === 'a' ? 'b' : 'a';
+  // Only a safety net (a hidden page never finishes its animation).
+  window.clearTimeout(themeFadeTimer);
+  themeFadeTimer = window.setTimeout(endThemeFade, 4000);
+}
+
 // The artwork theme applies only while music plays with known artwork.
+let themeSignature = null;
 function syncArtTheme() {
   if (!root.style) return;
   const names = {
@@ -1892,11 +1940,22 @@ function syncArtTheme() {
     !!artTheme &&
     root.dataset.artColor === 'true' &&
     root.dataset.musicPlaying === 'true';
-  for (const [key, property] of Object.entries(names)) {
-    if (active) root.style.setProperty(property, artTheme[key]);
-    else root.style.removeProperty?.(property);
+  const signature = active ? JSON.stringify(artTheme) : '';
+  const apply = () => {
+    for (const [key, property] of Object.entries(names)) {
+      if (active) root.style.setProperty(property, artTheme[key]);
+      else root.style.removeProperty?.(property);
+    }
+    root.dataset.themed = String(active);
+  };
+  // The first sync only sets the theme; later changes fade.
+  if (themeSignature === null || signature === themeSignature) {
+    apply();
+    themeSignature = signature;
+  } else if (!themeFading) {
+    changeTheme(apply);
+    themeSignature = signature;
   }
-  root.dataset.themed = String(active);
 }
 
 function renderEnvironment(environment) {
@@ -3644,13 +3703,20 @@ function paintCameraUnderlay() {
   const canvases = cameraUnderlays();
   if (!canvases) return;
   try {
-    const width = image.naturalWidth;
-    const height = image.naturalHeight;
-    canvases.under.width = width;
-    canvases.under.height = height;
+    // The underlay only shows between two frames and is far larger than the
+    // camera card, so it is kept small; a canvas is resized only when its size
+    // changes, because resizing reallocates the bitmap.
+    const width = Math.min(image.naturalWidth, 640);
+    const height = Math.max(
+      1,
+      Math.round((width * image.naturalHeight) / image.naturalWidth),
+    );
+    const blurHeight = Math.max(1, Math.round((48 * height) / width));
+    if (canvases.under.width !== width) canvases.under.width = width;
+    if (canvases.under.height !== height) canvases.under.height = height;
     canvases.under.getContext('2d')?.drawImage(image, 0, 0, width, height);
-    canvases.blur.width = 48;
-    canvases.blur.height = Math.max(1, Math.round((48 * height) / width));
+    if (canvases.blur.width !== 48) canvases.blur.width = 48;
+    if (canvases.blur.height !== blurHeight) canvases.blur.height = blurHeight;
     canvases.blur
       .getContext('2d')
       ?.drawImage(image, 0, 0, canvases.blur.width, canvases.blur.height);
