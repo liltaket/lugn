@@ -32,6 +32,7 @@ mod keys;
 mod kwin;
 mod portal;
 mod protocol;
+mod recovery;
 mod server;
 mod stats;
 mod stray;
@@ -42,6 +43,7 @@ use config::Config;
 use kwin::{Effects, KwinEvent, Script, approach_for};
 use portal::{Portal, ZoneSet};
 use protocol::{AgentMsg, PageMsg, Perf};
+use recovery::ZoneRecovery;
 use server::{Auth, NewPage, PageConn, PageEvent};
 use stats::{Pings, Rtt};
 use stray::Stray;
@@ -164,7 +166,19 @@ async fn run(config_path: PathBuf) -> Result<()> {
     .context("EI handshake")?;
     log!("ei: handshake ok");
 
-    let zones = portal.zones().await?;
+    // Started with the monitor off or unplugged: wait for it like a later
+    // hotplug instead of failing.
+    let (zones, zones_error) = match portal.zones().await {
+        Ok(zones) if !zones.zones.is_empty() => (zones, None),
+        Ok(zones) => (zones, Some("the portal reports no zones".to_string())),
+        Err(e) => (
+            ZoneSet {
+                id: 0,
+                zones: Vec::new(),
+            },
+            Some(format!("{e:#}")),
+        ),
+    };
     log!("portal: zones {zones:?}");
 
     // Subscribe before anything is enabled so no signal can be missed.
@@ -236,6 +250,11 @@ async fn run(config_path: PathBuf) -> Result<()> {
 
     let mut app = App::new(cfg, &portal, ei, zones, event_tx, effects, script);
     app.load_script();
+    if let Some(why) = zones_error {
+        // The first miss only schedules a retry; it cannot give up yet.
+        let id = app.zones.id;
+        app.zones_missing(id, &why)?;
+    }
     let result = loop {
         let far = Instant::now() + Duration::from_secs(86400);
         let pong_deadline = app
@@ -247,6 +266,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
         let cool_at = app.warm.cool_at;
         let entry_due = app.pointer.pending_deadline();
         let stray_due = app.stray.deadline();
+        let zones_due = app.zone_recovery.deadline();
         let next_ping = app.next_ping;
         let step = tokio::select! {
             _ = sigterm.recv() => break Ok(()),
@@ -268,6 +288,9 @@ async fn run(config_path: PathBuf) -> Result<()> {
             }
             _ = sleep_until(stray_due.unwrap_or(far)), if stray_due.is_some() => {
                 app.on_stray_due().await
+            }
+            _ = sleep_until(zones_due.unwrap_or(far)), if zones_due.is_some() => {
+                app.refresh_zones().await
             }
             Some(event) = event_rx.recv() => app.on_page_event(event).await,
             signal = activated.next() => match signal {
@@ -428,6 +451,8 @@ struct App<'p> {
     rearm_at: Option<Instant>,
     /// Captures the compositor started without announcing them.
     stray: Stray,
+    /// Asks for the zones again while the compositor has none to give.
+    zone_recovery: ZoneRecovery,
     pointer: Pointer,
     coalescer: MoveCoalescer,
     page: Option<Page>,
@@ -472,6 +497,7 @@ impl<'p> App<'p> {
             armed: false,
             rearm_at: None,
             stray: Stray::default(),
+            zone_recovery: ZoneRecovery::default(),
             coalescer: MoveCoalescer::default(),
             page: None,
             next_page_id: 0,
@@ -973,7 +999,8 @@ impl<'p> App<'p> {
     }
 
     async fn sync_arm(&mut self) -> Result<()> {
-        if self.pointer.is_capturing() || self.rearm_at.is_some() {
+        // No zones yet: nothing to put a barrier on, and no point asking.
+        if self.pointer.is_capturing() || self.rearm_at.is_some() || self.zone_recovery.pending() {
             return Ok(());
         }
         match (self.arm_wanted(), self.armed) {
@@ -990,11 +1017,55 @@ impl<'p> App<'p> {
         // closes a session whose call it has to refuse.
         self.portal.forget_barrier();
         self.disarm().await?;
-        self.zones = self.portal.zones().await?;
-        log!("portal: zones {:?}", self.zones);
-        self.pointer.set_zone(leftmost_zone(&self.zones.zones));
-        self.load_script();
-        self.sync_arm().await
+        self.refresh_zones().await
+    }
+
+    /// Asks the portal for the zones again. A monitor that is gone (unplugged
+    /// or asleep) leaves the compositor with nothing to report, and its
+    /// answer can time out; that is not fatal. The agent waits without a
+    /// barrier and retries, and the next `ZonesChanged` also lands here.
+    async fn refresh_zones(&mut self) -> Result<()> {
+        match self.portal.zones().await {
+            Ok(zones) if !zones.zones.is_empty() => {
+                if self.zone_recovery.failures() > 0 {
+                    log!(
+                        "portal: zones are back after {} failed attempts",
+                        self.zone_recovery.failures()
+                    );
+                }
+                self.zone_recovery.recovered();
+                self.zones = zones;
+                log!("portal: zones {:?}", self.zones);
+                self.pointer.set_zone(leftmost_zone(&self.zones.zones));
+                self.load_script();
+                self.sync_arm().await
+            }
+            Ok(zones) => self.zones_missing(zones.id, "the portal reports no zones"),
+            Err(e) => {
+                let id = self.zones.id;
+                self.zones_missing(id, &format!("{e:#}"))
+            }
+        }
+    }
+
+    fn zones_missing(&mut self, id: u32, why: &str) -> Result<()> {
+        // Stale zones must never reach SetPointerBarriers: the portal closes
+        // a session whose call it has to refuse.
+        self.zones = ZoneSet {
+            id,
+            zones: Vec::new(),
+        };
+        self.pointer.set_zone(None);
+        self.armed = false;
+        self.zone_recovery
+            .failed(Instant::now())
+            .map_err(|g| anyhow!("no usable zones after {} attempts: {why}", g.failures))?;
+        log!(
+            "portal: no usable zones ({why}); attempt {}, asking again in {:?}",
+            self.zone_recovery.failures(),
+            recovery::RETRY_AFTER
+        );
+        Ok(())
     }
 
     async fn on_ei(&mut self, event: EiEvent) -> Result<()> {
