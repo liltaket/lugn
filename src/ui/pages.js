@@ -312,7 +312,15 @@
     window.clearTimeout(nearTimer);
     // The new neighbours are prepared when the main thread is idle, not
     // where the end of the motion lands.
-    nearTimer = window.setTimeout(() => whenIdle(syncStates), NEAR_DELAY_MS);
+    // A motion that starts before the idle time comes keeps the states as
+    // they are; its own settle schedules them again.
+    nearTimer = window.setTimeout(
+      () =>
+        whenIdle(() => {
+          if (!moving()) syncStates();
+        }),
+      NEAR_DELAY_MS,
+    );
     if (probe.enabled) probeStop();
   }
 
@@ -328,8 +336,9 @@
   // soon after load (when the first state has arrived) and then every few
   // seconds, in idle time. A swipe then reveals a page that is already laid
   // out, painted and decoded, and its first frame does no page work.
+  let warmTimer = 0;
   function warmNeighbours() {
-    window.setTimeout(warmNeighbours, WARM_EVERY_MS);
+    warmTimer = window.setTimeout(warmNeighbours, WARM_EVERY_MS);
     if (moving() || document.visibilityState === 'hidden') return;
     whenIdle(() => {
       if (moving()) return;
@@ -772,7 +781,8 @@
   pages.forEach((page, i) => setState(page, i === 0 ? 'active' : 'off'));
   syncStates();
   syncDots();
-  window.setTimeout(warmNeighbours, WARM_FIRST_MS);
+  warmTimer = window.setTimeout(warmNeighbours, WARM_FIRST_MS);
+  window.addEventListener('pagehide', () => window.clearTimeout(warmTimer));
 
   // The page modules register their hooks here; later, context switching
   // (music starts, a camera event, idle → photos) calls `go`.

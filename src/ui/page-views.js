@@ -462,7 +462,11 @@
   }
 
   pagesApi.define('info', {
-    prepare: drawInfo,
+    // As a neighbour Info is drawn once; its facts change every second and
+    // are redrawn when it is shown.
+    prepare() {
+      if (!infoKey) drawInfo();
+    },
     enter() {
       window.clearInterval(infoTimer);
       drawInfo();
@@ -874,10 +878,6 @@
       sample.position +
         (sample.playing ? Math.max(0, (now - sample.at) / 1000) : 0),
     );
-    // The elapsed time ticks only on the shown page; a neighbour kept warm
-    // in idle time is not repainted for it.
-    if (musicShown || !view('music', 'elapsed').textContent)
-      setText(view('music', 'elapsed'), clockText(position));
     setText(view('music', 'duration'), clockText(sample.duration));
     const key = JSON.stringify([
       sample.position,
@@ -885,6 +885,11 @@
       sample.duration,
       sample.playing,
     ]);
+    // The elapsed time ticks only on the shown page; a neighbour kept warm
+    // in idle time writes it only when the sample changes (a new track, a
+    // seek), so it is never repainted just for the clock.
+    if (musicShown || key !== barKey)
+      setText(view('music', 'elapsed'), clockText(position));
     if (key === barKey) return;
     barKey = key;
     barAnimation?.cancel();
