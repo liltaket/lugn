@@ -59,14 +59,23 @@ iCloud shared album ──► BrunoCAM (Lugn) ──GET /photo-brain/v1/album─
       "details": { "…": "AlbumPhotoDetails as today" },
       "renditions": [
         { "kind": "jpeg", "url": "https://…", "width": 1536, "height": 2048 },
-        { "kind": "original", "url": "https://…", "width": 3024, "height": 4032, "type": "public.heic" }
+        {
+          "kind": "original",
+          "url": "https://…",
+          "width": 3024,
+          "height": 4032,
+          "type": "public.heic"
+        }
       ]
     }
   ]
 }
 ```
 
-All stills in the album, newest first, no cap. `original` is present when Apple
+`id` is Lugn's own picture id (24 base64url characters, a hash of the album's record
+and its `version`), the same id the Hubs and the people panel use. It changes when
+the picture is edited, so an id never needs a separate version check. `version` is
+informational. All stills in the album, newest first, no cap. `original` is present when Apple
 offers it (HEIC for iPhone pictures). `jpeg` is Apple's 1536 × 2048 rendition.
 Videos are not listed. Coordinates are full precision here (the Hub listing keeps
 its coarser rounding).
@@ -92,7 +101,9 @@ given picture version).
 ```json
 {
   "schema": 1,
-  "people": [ { "id": "p3", "name": "Anna", "confirmed": true, "hidden": false } ],
+  "people": [
+    { "id": "p3", "name": "Anna", "confirmed": true, "hidden": false }
+  ],
   "decided": { "<faceId>": "p3", "<faceId2>": null },
   "previous": { "<faceId>": "p3" },
   "not": { "<faceId>": ["p5"] }
@@ -116,25 +127,44 @@ picture.
   "brain": {
     "version": "0.1.0",
     "models": { "embed": "siglip2-…", "face": "…", "detector": "…" },
-    "faceDim": 512
+    "faceDim": 512,
   },
-  "home": { "lat": 59.2, "lon": 18.0 },          // or null
-  "trips":  [ { "title": "Lesko", "from": "2026-09-11", "to": "2026-09-14", "cc": "PL" } ],
-  "events": [ { "id": "e12", "from": 1763800000000, "to": 1763810000000, "count": 14 } ],
+  "home": { "lat": 59.2, "lon": 18.0 }, // or null
+  "trips": [
+    { "title": "Lesko", "from": "2026-09-11", "to": "2026-09-14", "cc": "PL" },
+  ],
+  "events": [
+    { "id": "e12", "from": 1763800000000, "to": 1763810000000, "count": 14 },
+  ],
   "photos": {
     "<pictureId>": {
       "v": "<picture version>",
-      "scene": [["beach", 0.71], ["sea", 0.12], ["sunset", 0.05]],  // top 3, probabilities
-      "q": { "sharp": 80, "dark": 3, "junk": null },                  // 0-100; junk: "screenshot" | "document" | null
-      "fav": 1,                                                       // optional, from the album
-      "cap": "…",                                                     // optional, from the album
-      "faces": [ { "x": 0.1, "y": 0.2, "w": 0.1, "h": 0.1, "score": 0.93, "front": 0.8, "q": 70, "p": "p3" } ],
-      "trip": 0,                                                      // index into trips, optional
-      "event": "e12",                                                 // optional
-      "cand": [ ["<otherId>", 74, 90, 60, 71] ],                      // [id, base, time, place, look]
-      "du": ["<otherId>"]                                             // near-duplicates (bursts)
-    }
-  }
+      "scene": [
+        ["beach", 0.71],
+        ["sea", 0.12],
+        ["sunset", 0.05],
+      ], // top 3, probabilities
+      "q": { "sharp": 80, "dark": 3, "junk": null }, // 0-100; junk: "screenshot" | "document" | null
+      "fav": 1, // optional, from the album
+      "cap": "…", // optional, from the album
+      "faces": [
+        {
+          "x": 0.1,
+          "y": 0.2,
+          "w": 0.1,
+          "h": 0.1,
+          "score": 0.93,
+          "front": 0.8,
+          "q": 70,
+          "p": "p3",
+        },
+      ],
+      "trip": 0, // index into trips, optional
+      "event": "e12", // optional
+      "cand": [["<otherId>", 74, 90, 60, 71]], // [id, base, time, place, look]
+      "du": ["<otherId>"], // near-duplicates (bursts)
+    },
+  },
 }
 ```
 
@@ -165,15 +195,15 @@ and a picture's neighbours stay sensible when Kuffe is away.
 
 ## Where each job runs
 
-| Job | Where |
-| --- | --- |
-| list the album, display copies (1024 / 640 px) and corner shade | BrunoCAM |
-| full-size originals (HEIC or JPEG) | Kuffe's disk (`store_dir`) |
-| face detection, face embeddings, scene probabilities, quality, duplicates | Kuffe |
-| candidate neighbours, events, trips, home | Kuffe |
-| face grouping into people (anchored on the household's decisions) | Kuffe |
-| the household's decisions (names, confirmations, moves), stable person ids | BrunoCAM |
-| re-ranking candidates by people, choosing groups, naming | BrunoCAM / the Hub |
+| Job                                                                        | Where                      |
+| -------------------------------------------------------------------------- | -------------------------- |
+| list the album, display copies (1024 / 640 px) and corner shade            | BrunoCAM                   |
+| full-size originals (HEIC or JPEG)                                         | Kuffe's disk (`store_dir`) |
+| face detection, face embeddings, scene probabilities, quality, duplicates  | Kuffe                      |
+| candidate neighbours, events, trips, home                                  | Kuffe                      |
+| face grouping into people (anchored on the household's decisions)          | Kuffe                      |
+| the household's decisions (names, confirmations, moves), stable person ids | BrunoCAM                   |
+| re-ranking candidates by people, choosing groups, naming                   | BrunoCAM / the Hub         |
 
 ## Kuffe
 

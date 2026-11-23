@@ -145,6 +145,49 @@ describe('readSharedAlbum', () => {
     expect(album.photos[0]!.url).toContain('/photo.jpg?e=1');
     expect(calls[1]).toContain('p123-ckdatabasews.icloud.com');
   });
+  it('offers the full-size original next to the browser rendition', async () => {
+    const records = photoRecords('a');
+    const master = records[1] as { fields: Record<string, unknown> };
+    master.fields['resOriginalRes'] = {
+      value: { downloadURL: 'https://cvws.icloud-content.com/B/o/${f}?e=2' },
+    };
+    master.fields['resOriginalFileType'] = { value: 'public.heic' };
+    master.fields['resOriginalWidth'] = { value: 4032 };
+    master.fields['resOriginalHeight'] = { value: 3024 };
+    const album = await readSharedAlbum(LINK, albumFetch(records).fetcher);
+    const renditions = album.photos[0]!.renditions!;
+    expect(renditions.map((r) => r.kind)).toEqual(['jpeg', 'original']);
+    expect(renditions[1]).toMatchObject({
+      width: 4032,
+      height: 3024,
+      type: 'public.heic',
+    });
+    expect(renditions[1]!.url).toContain('/photo.jpg?e=2');
+    // The asset's own upright full rendition wins over the master's original.
+    (records[0] as { fields: Record<string, unknown> }).fields[
+      'resJPEGFullRes'
+    ] = { value: { downloadURL: 'https://cvws.icloud-content.com/B/f/${f}' } };
+    (records[0] as { fields: Record<string, unknown> }).fields[
+      'resJPEGFullFileType'
+    ] = { value: 'public.heic' };
+    (records[0] as { fields: Record<string, unknown> }).fields[
+      'resJPEGFullWidth'
+    ] = { value: 3024 };
+    (records[0] as { fields: Record<string, unknown> }).fields[
+      'resJPEGFullHeight'
+    ] = { value: 4032 };
+    const upright = await readSharedAlbum(LINK, albumFetch(records).fetcher);
+    expect(upright.photos[0]!.renditions![1]).toMatchObject({
+      width: 3024,
+      height: 4032,
+    });
+    // A picture without an original still lists its browser rendition.
+    const plain = await readSharedAlbum(
+      LINK,
+      albumFetch(photoRecords('b')).fetcher,
+    );
+    expect(plain.photos[0]!.renditions).toHaveLength(1);
+  });
   it('refuses a partition or download host that is not Apple’s', async () => {
     await expect(
       readSharedAlbum(LINK, albumFetch([], 'https://evil.example').fetcher),
