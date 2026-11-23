@@ -132,7 +132,7 @@ holding it can see the album, so it belongs in `config.json` only.
 "photoFrame": {
   "albumUrl": "https://photos.icloud.com/shared/album/…",
   "refreshMinutes": 30,
-  "maxPhotos": 150,
+  "maxPhotos": 5000,
   "cacheDir": "/optional/path"
 }
 ```
@@ -154,20 +154,22 @@ showing what it has and `photo frame refresh failed` is logged.
   "albumUrl": "https://photos.icloud.com/shared/album/…",
   "intelligence": {
     "enabled": true,
-    "modelsDir": "/optional/path",
     "home": { "latitude": 59.33, "longitude": 18.07 }
   }
 }
 ```
 
-`intelligence` is optional. With the models installed (`npm run photos:models`)
-Lugn looks at each new picture once, on this machine, and finds faces and what
-the picture shows, so the Hubs can show related pictures together and name the
+`intelligence` is optional. The pictures are analysed on Kuffe by the photo
+brain, which reads the album and sends its results to Lugn over the loopback API
+(bearer token only; see [PHOTO-BRAIN.md](PHOTO-BRAIN.md)); Lugn itself runs no
+model. With the results the Hubs show related pictures together and name the
 group; people are named in the control panel under Inställningar → Foton.
-`enabled: false` turns it off; missing models or a missing ONNX runtime leave
-the frame working as before. `home` tells trips from days at home; without it
-home is where most pictures were taken. Models, licences, the files written and
-how pictures are grouped and named are in
+Without them (Kuffe away, or no result yet) pictures are grouped by time and
+place. `enabled: false` ignores the photo brain's results and closes its routes.
+`home` tells trips from days at home; without it home is Kuffe's, else where most
+pictures were taken. `modelsDir` from the old on-device analysis is accepted and
+ignored. `maxPhotos` (1–20000, default 5000) caps the cached pictures, newest
+first. How pictures are grouped and named and which files are written is in
 [PHOTO-INTELLIGENCE.md](PHOTO-INTELLIGENCE.md).
 
 ## Persistence

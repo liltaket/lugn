@@ -13,13 +13,19 @@ import type {
   AlbumListing,
   AlbumPhoto,
   AlbumPhotoDetails,
+  AlbumRendition,
 } from './icloud-shared-album.js';
 import type {
+  BrainState,
   InsightExtras,
   InsightPhoto,
   InsightStatus,
 } from './photo-intel/insight.js';
-import type { MoveTarget, PeopleView } from './photo-intel/people.js';
+import type {
+  MoveTarget,
+  PeopleLabels,
+  PeopleView,
+} from './photo-intel/people.js';
 import type { PhotoExtras, Trip } from './photo-intel/grouping.js';
 
 /** What the Hub gets per photo; no Apple URL or record name ever leaves here. */
@@ -83,7 +89,6 @@ export type CountryLookup = (
   longitude: number,
 ) => string | null;
 
-/** What the intelligence adds: analysis of new pictures and a smarter listing. */
 /** What the household's panel may do with the people the frame found. */
 export type PhotoPeopleApi = {
   status(): InsightStatus;
@@ -97,13 +102,46 @@ export type PhotoPeopleApi = {
   faceCrop(faceId: string): Promise<Uint8Array | null>;
   faceContext(faceId: string): { photoId: string } | null;
 };
-export type PhotoInsightLike = Partial<PhotoPeopleApi> & {
-  start(): Promise<void>;
-  sync(photos: InsightPhoto[]): void;
-  decorate(): InsightExtras;
-  revision(): string;
-  subscribe(listener: () => void): () => void;
-  dispose(): void;
+/** What the intelligence adds: the photo brain's results and a smarter listing. */
+export type PhotoInsightLike = Partial<PhotoPeopleApi> &
+  Partial<{
+    putIntel(bundle: unknown): Promise<{ accepted: number; unknown: number }>;
+    labels(): PeopleLabels;
+    brainState(): BrainState;
+  }> & {
+    start(): Promise<void>;
+    sync(photos: InsightPhoto[]): void;
+    decorate(): InsightExtras;
+    revision(): string;
+    subscribe(listener: () => void): () => void;
+    dispose(): void;
+  };
+
+/** The body of `GET /photo-brain/v1/album` (docs/PHOTO-BRAIN.md). */
+export type BrainAlbum = {
+  schema: 1;
+  title: string;
+  listedAt: number;
+  photos: Array<{
+    id: string;
+    version: string;
+    takenAt: number | null;
+    utcOffsetSeconds: number;
+    latitude: number | null;
+    longitude: number | null;
+    width: number;
+    height: number;
+    details?: AlbumPhotoDetails;
+    renditions: AlbumRendition[];
+  }>;
+};
+
+/** The machine API Kuffe's photo brain uses (bearer token, loopback). */
+export type PhotoBrainApi = {
+  album(): Promise<BrainAlbum>;
+  putIntel(bundle: unknown): Promise<{ accepted: number; unknown: number }>;
+  people(): PeopleLabels;
+  state(): BrainState & { revision: string };
 };
 
 export type PhotoLibraryOptions = {
@@ -118,8 +156,12 @@ export type PhotoLibraryOptions = {
   measure?: (source: Uint8Array) => Promise<Corners>;
   /** Optional: looks at new pictures and groups them. Without it nothing changes. */
   insight?: PhotoInsightLike;
+  /** `photoFrame.intelligence.enabled`: false keeps the album from the photo brain. */
+  brainEnabled?: boolean;
   refreshMs?: number;
   maxPhotos?: number;
+  /** New pictures between two writes of the index during one refresh. */
+  checkpointEvery?: number;
   /** Rest between two new pictures, so a large refresh never hogs the CPU. */
   pauseMs?: number;
   log?: (message: string) => void;
@@ -132,6 +174,8 @@ export type PhotoLibraryOptions = {
 
 type IndexEntry = Omit<PhotoSummary, keyof PhotoExtras> & {
   source: string;
+  /** Full-precision position, for this machine only; a Hub gets `lat`/`lon`. */
+  geo?: [lat: number, lon: number];
   /** Seconds east of UTC where it was taken (for local dates). */
   off?: number;
   details?: AlbumPhotoDetails;
@@ -141,6 +185,11 @@ type IndexFile = { version: 1; photos: IndexEntry[] };
 
 const IMAGE_ID = /^[A-Za-z0-9_-]{24}$/;
 const EMPTY_LISTINGS_BEFORE_CLEAR = 3;
+export const DEFAULT_MAX_PHOTOS = 5000;
+const CHECKPOINT_EVERY = 25;
+/** Apple's download links last about 15 minutes; the brain gets fresh ones. */
+const ALBUM_MAX_AGE_MS = 5 * 60_000;
+const ALBUM_STALE_MS = 15 * 60_000;
 
 const pick = (entry: IndexEntry): Omit<PhotoSummary, keyof PhotoExtras> => ({
   id: entry.id,
@@ -163,17 +212,17 @@ export function photoId(sourceId: string): string {
     .slice(0, 24);
 }
 
-const comparable = (
-  fresh: Pick<
-    IndexEntry,
-    'date' | 'place' | 't' | 'lat' | 'lon' | 'cc' | 'off' | 'details'
-  >,
-) => ({
+type Metadata = Pick<
+  IndexEntry,
+  'date' | 'place' | 't' | 'lat' | 'lon' | 'geo' | 'cc' | 'off' | 'details'
+>;
+const comparable = (fresh: Metadata) => ({
   date: fresh.date ?? null,
   place: fresh.place ?? null,
   t: fresh.t ?? null,
   lat: fresh.lat ?? null,
   lon: fresh.lon ?? null,
+  geo: fresh.geo ?? null,
   cc: fresh.cc ?? null,
   off: fresh.off ?? 0,
   details: fresh.details ?? null,
@@ -207,6 +256,10 @@ export class PhotoLibrary {
   private lastError: string | null = null;
   private emptyListings = 0;
   private readonly listeners = new Set<() => void>();
+  /** The last album listing and when it was read, for the photo brain. */
+  private listing: { value: AlbumListing; at: number } | null = null;
+  private listingInFlight: Promise<AlbumListing> | null = null;
+  private emptyBrainListings = 0;
 
   constructor(private readonly options: PhotoLibraryOptions) {
     this.clock = options.clock ?? systemClock;
@@ -259,8 +312,8 @@ export class PhotoLibrary {
     return this.entries.map((entry) => ({
       id: entry.id,
       t: entry.t ?? null,
-      lat: entry.lat ?? null,
-      lon: entry.lon ?? null,
+      lat: entry.geo?.[0] ?? entry.lat ?? null,
+      lon: entry.geo?.[1] ?? entry.lon ?? null,
       place: entry.place ?? null,
       cc: entry.cc ?? null,
       utcOffsetSeconds: entry.off ?? 0,
@@ -274,6 +327,101 @@ export class PhotoLibrary {
     return insight && typeof insight.peopleView === 'function'
       ? (insight as PhotoPeopleApi)
       : undefined;
+  }
+
+  /**
+   * Kuffe's side of the frame; absent without the intelligence or when it is
+   * switched off.
+   */
+  brainApi(): PhotoBrainApi | undefined {
+    const insight = this.options.insight;
+    if (
+      !insight ||
+      this.options.brainEnabled === false ||
+      !insight.putIntel ||
+      !insight.labels ||
+      !insight.brainState
+    )
+      return undefined;
+    return {
+      album: () => this.albumForBrain(),
+      putIntel: (bundle) => insight.putIntel!(bundle),
+      people: () => insight.labels!(),
+      state: () => ({ revision: this.revision, ...insight.brainState!() }),
+    };
+  }
+
+  /**
+   * The contract's album body: every still in the album, newest first, no
+   * cap, with Apple's download links. A listing older than five minutes is
+   * read again first (one read at a time); never more often.
+   */
+  async albumForBrain(): Promise<BrainAlbum> {
+    let listing = this.listing;
+    if (!listing || this.clock.now() - listing.at > ALBUM_MAX_AGE_MS) {
+      try {
+        await this.listAlbum();
+      } catch (error) {
+        // A listing a few minutes old still has working links.
+        if (!listing || this.clock.now() - listing.at > ALBUM_STALE_MS)
+          throw error;
+      }
+      listing = this.listing ?? listing;
+    }
+    if (!listing) throw new Error('album not listed');
+    const photos = [...listing.value.photos].sort(
+      (a, b) => (b.takenAt ?? 0) - (a.takenAt ?? 0),
+    );
+    return {
+      schema: 1,
+      title: listing.value.title,
+      listedAt: listing.at,
+      photos: photos.map((photo) => ({
+        id: photoId(`${photo.id}:${photo.version}`),
+        version: photo.version,
+        takenAt: photo.takenAt,
+        utcOffsetSeconds: photo.utcOffsetSeconds,
+        latitude: photo.latitude,
+        longitude: photo.longitude,
+        width: photo.width,
+        height: photo.height,
+        ...(photo.details ? { details: photo.details } : {}),
+        renditions:
+          photo.renditions && photo.renditions.length > 0
+            ? photo.renditions
+            : [
+                {
+                  kind: 'jpeg' as const,
+                  url: photo.url,
+                  width: photo.width,
+                  height: photo.height,
+                },
+              ],
+      })),
+    };
+  }
+
+  /** Reads the album; a read already under way is shared. */
+  private listAlbum(): Promise<AlbumListing> {
+    if (this.listingInFlight) return this.listingInFlight;
+    const pending = this.options
+      .list()
+      .then((value) => {
+        // Apple has answered with an empty list for a live album before: the
+        // brain keeps the last real listing until a few in a row say so.
+        const empty =
+          value.photos.length === 0 &&
+          (this.listing?.value.photos.length ?? 0) > 0;
+        this.emptyBrainListings = empty ? this.emptyBrainListings + 1 : 0;
+        if (!empty || this.emptyBrainListings >= EMPTY_LISTINGS_BEFORE_CLEAR)
+          this.listing = { value, at: this.clock.now() };
+        return value;
+      })
+      .finally(() => {
+        this.listingInFlight = null;
+      });
+    this.listingInFlight = pending;
+    return pending;
   }
 
   /** The cached picture itself, for the panel's face crops. */
@@ -377,8 +525,8 @@ export class PhotoLibrary {
   }
 
   private async refreshOnce(): Promise<void> {
-    const listing = await this.options.list();
-    const max = this.options.maxPhotos ?? 150;
+    const listing = await this.listAlbum();
+    const max = this.options.maxPhotos ?? DEFAULT_MAX_PHOTOS;
     if (listing.photos.length === 0 && this.entries.length > 0) {
       // Apple has answered with an empty list for a live album before; only a
       // few in a row are believed.
@@ -398,24 +546,26 @@ export class PhotoLibrary {
     const known = new Map(this.entries.map((entry) => [entry.source, entry]));
     const next: IndexEntry[] = [];
     let changed = false;
-    for (const photo of wanted) {
+    let sinceCheckpoint = 0;
+    for (const [position, photo] of wanted.entries()) {
       if (this.disposed) return;
+      if (
+        sinceCheckpoint >= (this.options.checkpointEvery ?? CHECKPOINT_EVERY)
+      ) {
+        // Thousands of new pictures take hours: what is done so far is kept
+        // (and shown) now, so a restart or a failure does not lose it.
+        sinceCheckpoint = 0;
+        await this.checkpoint(next, wanted.slice(position), known);
+      }
       const key = `${photo.id}:${photo.version}`;
       const existing = known.get(key);
       if (existing) {
         // The picture stays; what is known about it may have been added since.
         const fresh = this.metadata(photo);
-        const before = {
-          date: existing.date ?? null,
-          place: existing.place ?? null,
-          t: existing.t ?? null,
-          lat: existing.lat ?? null,
-          lon: existing.lon ?? null,
-          cc: existing.cc ?? null,
-          off: existing.off ?? 0,
-          details: existing.details ?? null,
-        };
-        if (JSON.stringify(before) !== JSON.stringify(comparable(fresh)))
+        if (
+          JSON.stringify(comparable(existing)) !==
+          JSON.stringify(comparable(fresh))
+        )
           changed = true;
         // Pictures cached before corners were measured get them now, from the
         // copy on disk (no download).
@@ -429,7 +579,13 @@ export class PhotoLibrary {
           }
           if (lu) changed = true;
         }
-        next.push({ ...existing, ...fresh, ...(lu ? { lu } : {}) });
+        const kept: IndexEntry = {
+          ...existing,
+          ...fresh,
+          ...(lu ? { lu } : {}),
+        };
+        if (!fresh.geo) delete kept.geo;
+        next.push(kept);
         continue;
       }
       try {
@@ -451,6 +607,7 @@ export class PhotoLibrary {
           ...(processed.corners ? { lu: processed.corners } : {}),
         });
         changed = true;
+        sinceCheckpoint += 1;
         await this.rest();
       } catch (error) {
         // One bad picture does not stop the others; it is tried again next time.
@@ -471,12 +628,35 @@ export class PhotoLibrary {
     for (const listener of this.listeners) listener();
   }
 
-  private metadata(
-    photo: AlbumPhoto,
-  ): Pick<
-    IndexEntry,
-    'date' | 'place' | 't' | 'lat' | 'lon' | 'cc' | 'off' | 'details'
-  > {
+  /**
+   * Writes and shows what one refresh has done so far: the pictures already
+   * handled, the ones still to come that are cached from before, and those
+   * that may be leaving (only a full pass removes anything).
+   */
+  private async checkpoint(
+    done: IndexEntry[],
+    rest: AlbumPhoto[],
+    known: Map<string, IndexEntry>,
+  ): Promise<void> {
+    const list = [...done];
+    const placed = new Set(done.map((entry) => entry.source));
+    for (const photo of rest) {
+      const entry = known.get(`${photo.id}:${photo.version}`);
+      if (entry && !placed.has(entry.source)) {
+        list.push(entry);
+        placed.add(entry.source);
+      }
+    }
+    for (const entry of this.entries)
+      if (!placed.has(entry.source)) list.push(entry);
+    await this.writeIndex(list);
+    this.entries = list;
+    this.options.insight?.sync(this.insightPhotos());
+    this.updateRevision();
+    for (const listener of this.listeners) listener();
+  }
+
+  private metadata(photo: AlbumPhoto): Metadata {
     const located = photo.latitude !== null && photo.longitude !== null;
     return {
       date: localDate(photo),
@@ -489,6 +669,7 @@ export class PhotoLibrary {
       t: photo.takenAt,
       lat: round2(photo.latitude),
       lon: round2(photo.longitude),
+      ...(located ? { geo: [photo.latitude!, photo.longitude!] } : {}),
       off: photo.utcOffsetSeconds,
       ...(photo.details ? { details: photo.details } : {}),
     };

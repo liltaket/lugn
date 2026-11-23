@@ -1,52 +1,39 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { FakeClock } from '../src/core/clock.js';
 import { parseBinaryPlist, plistNumbers } from '../src/runtime/bplist.js';
 import { extractDetails } from '../src/runtime/icloud-shared-album.js';
 import {
-  PhotoAnalyzer,
-  workerEnvironment,
-  type WorkerHandle,
-} from '../src/runtime/photo-intel/analyzer.js';
-import {
-  AnalysisStore,
-  CLIP_DIM,
-  FACE_DIM,
-  type StoredFace,
-} from '../src/runtime/photo-intel/analysis-store.js';
-import {
-  ALIGN_TEMPLATE,
-  alignedCrop,
-  applySimilarity,
-  decodeYuNet,
-  fitSimilarity,
-  frontalness,
-  nonMaxSuppression,
-  normalize,
-  type DetectedFace,
-} from '../src/runtime/photo-intel/faces.js';
-import {
   affinity,
-  classifyScene,
   findHome,
-  groupPhotos,
-  loadScenes,
+  findTrips,
+  loadSceneNames,
   placeScore,
   timeScore,
+  windowNeighbours,
   type GroupingInput,
 } from '../src/runtime/photo-intel/grouping.js';
-import { PhotoInsight } from '../src/runtime/photo-intel/insight.js';
+import {
+  BRAIN_QUIET_MS,
+  PhotoInsight,
+  withPeople,
+  type InsightPhoto,
+} from '../src/runtime/photo-intel/insight.js';
+import {
+  IntelError,
+  IntelStore,
+  parseBundle,
+  type IntelBundle,
+  type PhotoIntel,
+} from '../src/runtime/photo-intel/intel-store.js';
 import {
   PeopleError,
   PeopleStore,
-  linkFaces,
+  type Face,
   type FaceRef,
 } from '../src/runtime/photo-intel/people.js';
-import type {
-  WorkerReply,
-  WorkerRequest,
-} from '../src/runtime/photo-intel/worker.js';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -161,130 +148,6 @@ describe('what an album record says about a picture', () => {
     });
   });
 });
-
-// ── Faces ──
-
-describe('face detection arithmetic', () => {
-  /** YuNet tensors with one confident face at a known cell of stride 8. */
-  function outputs(size = 640) {
-    const cells = [size / 8, size / 16, size / 32].map((n) => n * n);
-    const make = (width: number) =>
-      cells.map((n) => new Float32Array(n * width));
-    const tensors = {
-      cls: make(1),
-      obj: make(1),
-      bbox: make(4),
-      kps: make(10),
-    };
-    const col = 10;
-    const row = 20;
-    const index = row * (size / 8) + col;
-    tensors.cls[0]![index] = 0.9;
-    tensors.obj[0]![index] = 0.9;
-    // box centre at (col + 0.5, row + 0.5) * 8, 4 cells wide and 5 tall
-    tensors.bbox[0]!.set([0.5, 0.5, Math.log(4), Math.log(5)], index * 4);
-    tensors.kps[0]!.set([0, 0, 1, 0, 0.5, 1, 0, 2, 1, 2], index * 10);
-    return tensors;
-  }
-
-  it('decodes boxes and landmarks like OpenCV does', () => {
-    const [face] = decodeYuNet(outputs());
-    expect(face).toBeDefined();
-    expect(face!.score).toBeCloseTo(0.9);
-    expect(face!.w).toBeCloseTo(32);
-    expect(face!.h).toBeCloseTo(40);
-    expect(face!.x + face!.w / 2).toBeCloseTo(84);
-    expect(face!.y + face!.h / 2).toBeCloseTo(164);
-    expect(face!.landmarks[0]).toEqual({ x: 80, y: 160 });
-    expect(face!.landmarks[2]).toEqual({ x: 84, y: 168 });
-  });
-
-  it('ignores weak detections', () => {
-    const tensors = outputs();
-    tensors.obj[0]!.fill(0.1);
-    expect(decodeYuNet(tensors)).toEqual([]);
-  });
-
-  it('keeps the strongest of overlapping boxes', () => {
-    const base: DetectedFace = {
-      x: 0,
-      y: 0,
-      w: 100,
-      h: 100,
-      score: 0.8,
-      landmarks: Array(5).fill({ x: 0, y: 0 }) as DetectedFace['landmarks'],
-    };
-    const kept = nonMaxSuppression([
-      base,
-      { ...base, x: 5, score: 0.95 },
-      { ...base, x: 400, score: 0.7 },
-    ]);
-    expect(kept.map((f) => f.score)).toEqual([0.95, 0.7]);
-  });
-
-  it('measures how frontal a face is from where the nose sits', () => {
-    const eyes = [
-      { x: 30, y: 40 },
-      { x: 70, y: 40 },
-    ] as const;
-    const face = (noseX: number) =>
-      [
-        eyes[0],
-        eyes[1],
-        { x: noseX, y: 60 },
-        { x: 35, y: 80 },
-        { x: 65, y: 80 },
-      ] as DetectedFace['landmarks'];
-    expect(frontalness(face(50))).toBe(1);
-    expect(frontalness(face(66))).toBeLessThan(0.3);
-    expect(frontalness(face(30))).toBeLessThan(frontalness(face(40)));
-  });
-
-  it('fits the similarity transform that aligns landmarks to the template', () => {
-    // Landmarks that are the template scaled 2x, rotated 30° and moved.
-    const angle = Math.PI / 6;
-    const moved = ALIGN_TEMPLATE.map((p) => ({
-      x: 2 * (p.x * Math.cos(angle) - p.y * Math.sin(angle)) + 90,
-      y: 2 * (p.x * Math.sin(angle) + p.y * Math.cos(angle)) - 40,
-    }));
-    const fit = fitSimilarity(moved, ALIGN_TEMPLATE);
-    moved.forEach((p, i) => {
-      const out = applySimilarity(fit, p);
-      expect(out.x).toBeCloseTo(ALIGN_TEMPLATE[i]!.x, 3);
-      expect(out.y).toBeCloseTo(ALIGN_TEMPLATE[i]!.y, 3);
-    });
-  });
-
-  it('cuts a 112 px planar crop, grey outside the picture', () => {
-    const width = 4;
-    const height = 4;
-    const rgb = new Uint8Array(width * height * 3).fill(200);
-    const points = ALIGN_TEMPLATE.map((p) => ({
-      x: p.x / 28,
-      y: p.y / 28,
-    })) as DetectedFace['landmarks'];
-    const crop = alignedCrop(rgb, width, height, points);
-    expect(crop).toHaveLength(3 * 112 * 112);
-    expect(crop[0 * 112 * 112 + 56 * 112 + 56]).toBeCloseTo(200);
-    const far = alignedCrop(
-      rgb,
-      width,
-      height,
-      points.map((p) => ({
-        x: p.x + 500,
-        y: p.y,
-      })) as DetectedFace['landmarks'],
-    );
-    expect(far[10]).toBe(128);
-  });
-
-  it('normalises vectors', () => {
-    const v = normalize([3, 4]);
-    expect(Math.hypot(v[0]!, v[1]!)).toBeCloseTo(1);
-    expect(normalize([0, 0])).toEqual(new Float32Array([0, 0]));
-  });
-});
-
 // ── Grouping ──
 
 function input(over: Partial<GroupingInput> & { id: string }): GroupingInput {
@@ -301,7 +164,7 @@ function input(over: Partial<GroupingInput> & { id: string }): GroupingInput {
 const HOUR = 3_600_000;
 const T0 = Date.UTC(2026, 8, 12, 12);
 
-describe('which pictures belong together', () => {
+describe('which pictures belong together, by time and place', () => {
   it('scores time and place by how near they are', () => {
     expect(timeScore(10 * 60_000)).toBe(1);
     expect(timeScore(2 * HOUR)).toBeGreaterThan(timeScore(10 * HOUR));
@@ -327,28 +190,18 @@ describe('which pictures belong together', () => {
     expect(affinity(a, b)).toBe(affinity(b, a));
   });
 
-  it('lets people and looks decide what time and place cannot', () => {
-    const one = (v: number[]) => normalize(v);
-    const both = [
-      input({ id: 'a', t: T0, people: ['p1'], embedding: one([1, 0, 0]) }),
-      input({
-        id: 'b',
-        t: T0 + 40 * 24 * HOUR,
-        people: ['p1'],
-        embedding: one([1, 0.1, 0]),
-      }),
-    ];
-    const strangers = [
-      input({ id: 'a', t: T0, people: ['p1'], embedding: one([1, 0, 0]) }),
-      input({
-        id: 'b',
-        t: T0 + 40 * 24 * HOUR,
-        people: ['p2'],
-        embedding: one([0, 1, 0]),
-      }),
-    ];
-    expect(affinity(both[0]!, both[1]!)).toBeGreaterThan(0.5);
-    expect(affinity(strangers[0]!, strangers[1]!)).toBeLessThan(0.1);
+  it('lets shared people decide what time cannot, and strangers stay apart', () => {
+    const later = T0 + 40 * 24 * HOUR;
+    const friends = affinity(
+      input({ id: 'a', t: T0, people: ['p1'] }),
+      input({ id: 'b', t: later, people: ['p1'] }),
+    );
+    const strangers = affinity(
+      input({ id: 'a', t: T0, people: ['p1'] }),
+      input({ id: 'b', t: later, people: ['p2'] }),
+    );
+    expect(friends).toBeGreaterThanOrEqual(0.5);
+    expect(strangers).toBeLessThan(0.1);
   });
 
   it('knows nothing of a picture without any data and scores it zero', () => {
@@ -369,7 +222,30 @@ describe('which pictures belong together', () => {
     ];
     const home = findHome(photos)!;
     expect(home.lat).toBeCloseTo(59.3, 1);
+    expect(home.lon).toBeCloseTo(18.0, 1);
     expect(findHome(photos.slice(0, 3))).toBeNull();
+    // Spread over many places with no centre: no home.
+    const scattered = Array.from({ length: 12 }, (_, i) =>
+      input({ id: `s${i}`, lat: 40 + i * 2, lon: 10 + i }),
+    );
+    expect(findHome(scattered)).toBeNull();
+  });
+
+  it('counts neighbours across grid lines when it looks for home', () => {
+    // Two clusters 10 km apart straddle a quarter-degree line; together they
+    // are home, and the far-away cluster with more pictures of its own is not.
+    const photos = [
+      ...Array.from({ length: 5 }, (_, i) =>
+        input({ id: `a${i}`, lat: 59.24, lon: 18.0 + i * 0.0001 }),
+      ),
+      ...Array.from({ length: 5 }, (_, i) =>
+        input({ id: `b${i}`, lat: 59.26, lon: 18.0 + i * 0.0001 }),
+      ),
+      ...Array.from({ length: 7 }, (_, i) =>
+        input({ id: `c${i}`, lat: 45.0, lon: 9.0 + i * 0.0001 }),
+      ),
+    ];
+    expect(findHome(photos)!.lat).toBeGreaterThan(59);
   });
 
   it('names a trip from consecutive days away from home', () => {
@@ -397,19 +273,15 @@ describe('which pictures belong together', () => {
             cc: 'PL',
           }),
         );
-    const { extras, trips } = groupPhotos(photos, {
-      scenes: null,
-      countryName: (cc) => (cc === 'PL' ? 'Polen' : cc),
-    });
+    const { trips, tripOf } = findTrips(photos, findHome(photos), (cc) =>
+      cc === 'PL' ? 'Polen' : cc,
+    );
     expect(trips).toEqual([
       { title: 'Lesko', from: '2026-09-12', to: '2026-09-14', cc: 'PL' },
     ]);
-    expect(extras.slice(0, 10).every((e) => e.tr === undefined)).toBe(true);
-    expect(extras.slice(10).every((e) => e.tr === 0)).toBe(true);
-    // Strongest neighbours first, and every list names real indexes.
-    const nb = extras[10]!.nb!;
-    expect(nb[0]![1]).toBeGreaterThanOrEqual(nb[nb.length - 1]![1]);
-    for (const [index] of nb) expect(photos[index]).toBeDefined();
+    expect([...tripOf.keys()].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 9 }, (_, i) => 10 + i),
+    );
   });
 
   it('uses the country when no single place carries the trip', () => {
@@ -435,66 +307,54 @@ describe('which pictures belong together', () => {
         }),
       ),
     ];
-    const { trips } = groupPhotos(photos, {
-      scenes: null,
-      countryName: () => 'Italien',
-    });
+    const { trips } = findTrips(photos, findHome(photos), () => 'Italien');
     expect(trips[0]?.title).toBe('Italien');
   });
 
-  it('flags bursts as duplicates and favourites and captions come through', () => {
+  it('compares a picture only with its neighbours in time', () => {
+    // One outing in the morning, then 100 pictures elsewhere, then the same
+    // place again a year later: the year-later picture is out of reach.
     const photos = [
-      input({
-        id: 'a',
-        t: T0,
-        embedding: normalize([1, 0]),
-        details: { favorite: true, caption: 'Midsommar' },
-      }),
-      input({ id: 'b', t: T0 + 2000, embedding: normalize([1, 0.01]) }),
+      input({ id: 'a', t: T0, lat: 59.3, lon: 18 }),
+      input({ id: 'b', t: T0 + 10 * 60_000, lat: 59.3, lon: 18 }),
+      ...Array.from({ length: 100 }, (_, i) =>
+        input({ id: `x${i}`, t: T0 + (i + 1) * HOUR, lat: 41.9, lon: 12.5 }),
+      ),
+      input({ id: 'late', t: T0 + 365 * 24 * HOUR, lat: 59.3, lon: 18 }),
+      input({ id: 'untimed', lat: 59.3, lon: 18 }),
     ];
-    const { extras } = groupPhotos(photos, { scenes: null });
-    expect(extras[0]).toMatchObject({ du: [1], fav: 1, cap: 'Midsommar' });
-    expect(extras[1]?.du).toEqual([0]);
+    const lists = windowNeighbours(photos, {
+      wanted: () => true,
+      excluded: (i) => i === 5,
+      tripOf: new Map(),
+      window: 60,
+    });
+    expect(lists.get(0)?.[0]).toEqual([1, 100]);
+    // Pictures nobody may list never appear, and untimed pictures get none.
+    for (const list of lists.values())
+      expect(list.some(([j]) => j === 5)).toBe(false);
+    expect(lists.has(photos.length - 1)).toBe(false);
+    expect(lists.get(0)!.some(([j]) => j === photos.length - 2)).toBe(false);
+    expect(lists.get(0)!.length).toBeLessThanOrEqual(14);
   });
 
-  it('reads the scene vocabulary and names the best match when sure', () => {
-    const scenes = loadScenes()!;
-    expect(scenes.keys).toContain('beach');
-    expect(scenes.names['beach']).toBe('Stranden');
-    expect(scenes.names['screen']).toBeUndefined();
-    const dim = scenes.vectors[0]!.length;
-    expect(dim).toBe(CLIP_DIM);
-    const beach = scenes.vectors[scenes.keys.indexOf('beach')]!;
-    const guess = classifyScene(beach, scenes)!;
-    expect(guess.key).toBe('beach');
-    expect(guess.p).toBeGreaterThan(0.45);
+  it('reads only the scene names from the shared vocabulary', () => {
+    const names = loadSceneNames();
+    expect(names['beach']).toBe('Stranden');
+    expect(names['screen']).toBeUndefined();
+    expect(loadSceneNames('/definitely/not/here.json')).toEqual({});
   });
 });
 
 // ── People ──
 
-const unit = (seed: number, jitter = 0, index = 0): Float32Array => {
-  const v = new Float32Array(FACE_DIM);
-  // A deterministic direction per identity, plus a little individual noise.
-  let x = seed * 9301 + 49297;
-  for (let i = 0; i < FACE_DIM; i += 1) {
-    x = (x * 233280 + 49297) % 2147483647;
-    v[i] = (x / 2147483647) * 2 - 1;
-  }
-  let y = (index + 1) * 7919;
-  for (let i = 0; i < FACE_DIM; i += 1) {
-    y = (y * 48271) % 2147483647;
-    v[i] = v[i]! + jitter * ((y / 2147483647) * 2 - 1);
-  }
-  return normalize(v);
-};
 const PHOTO = (n: number): string =>
   `photo${String(n).padStart(19, '0')}`.slice(0, 24);
 function face(
   photoNo: number,
-  identity: number,
+  p: string | undefined,
   index = 0,
-  extra: Partial<StoredFace> = {},
+  extra: Partial<Face> = {},
 ): FaceRef {
   return {
     id: `${PHOTO(photoNo)}.${index}`,
@@ -506,56 +366,80 @@ function face(
       h: 0.25,
       score: 0.95,
       front: 0.9,
-      embedding: unit(identity, 0.35, photoNo * 10 + index),
+      quality: 80,
+      ...(p ? { p } : {}),
       ...extra,
     },
   };
 }
+async function peopleStore(path?: string): Promise<PeopleStore> {
+  const store = new PeopleStore(path ?? join(await tempDir(), 'people.json'));
+  await store.load();
+  return store;
+}
+const personOf = (store: PeopleStore, photoNo: number) =>
+  store.peopleByPhoto().get(PHOTO(photoNo))?.[0];
 
 describe('who is who', () => {
-  it('groups faces by identity and leaves singles alone', async () => {
-    const dir = await tempDir();
-    const store = new PeopleStore(join(dir, 'people.json'));
-    await store.load();
-    const faces = [
-      ...[1, 2, 3, 4].map((n) => face(n, 11)),
-      ...[5, 6, 7].map((n) => face(n, 22)),
-      face(8, 33),
-    ];
-    store.regroup(faces);
+  it("gives each of Kuffe's new groups a person and leaves singles and unclear faces alone", async () => {
+    const store = await peopleStore();
+    store.regroup([
+      ...[1, 2, 3, 4].map((n) => face(n, 'n1')),
+      ...[5, 6, 7].map((n) => face(n, 'n2')),
+      face(8, 'n3'),
+      face(9, undefined),
+    ]);
     const view = store.view();
     expect(view.people.map((p) => p.faces).sort()).toEqual([3, 4]);
-    expect(view.unassigned.count).toBe(1);
-    expect(store.peopleByPhoto().get(PHOTO(1))).toHaveLength(1);
+    expect(view.unassigned.count).toBe(2);
+    expect(personOf(store, 1)).toBe(personOf(store, 4));
+    expect(personOf(store, 1)).not.toBe(personOf(store, 5));
     expect(store.peopleByPhoto().has(PHOTO(8))).toBe(false);
+    expect(store.faceCount()).toBe(9);
   });
 
-  it('keeps ids stable when new pictures arrive and never merges what differs', async () => {
-    const dir = await tempDir();
-    const store = new PeopleStore(join(dir, 'people.json'));
-    await store.load();
-    const first = [
-      ...[1, 2, 3].map((n) => face(n, 11)),
-      ...[4, 5, 6].map((n) => face(n, 22)),
-    ];
-    store.regroup(first);
-    const before = store.peopleByPhoto();
-    const ids = new Set([...before.values()].flat());
-    expect(ids.size).toBe(2);
-    store.regroup([...first, face(7, 11), face(8, 22), face(9, 44)]);
-    const after = store.peopleByPhoto();
-    expect(after.get(PHOTO(1))).toEqual(before.get(PHOTO(1)));
-    expect(after.get(PHOTO(7))).toEqual(before.get(PHOTO(1)));
-    expect(after.get(PHOTO(8))).toEqual(before.get(PHOTO(4)));
-    expect(after.has(PHOTO(9))).toBe(false);
+  it('keeps ids stable when Kuffe renumbers its groups, and never merges two groups', async () => {
+    const store = await peopleStore();
+    store.regroup([
+      ...[1, 2, 3].map((n) => face(n, 'n1')),
+      ...[4, 5, 6].map((n) => face(n, 'n2')),
+    ]);
+    const anna = personOf(store, 1)!;
+    const erik = personOf(store, 4)!;
+    // The next bundle calls them the other way round and finds more pictures.
+    store.regroup([
+      ...[1, 2, 3, 7].map((n) => face(n, 'n9')),
+      ...[4, 5, 6, 8].map((n) => face(n, 'n4')),
+      ...[10, 11].map((n) => face(n, 'n5')),
+    ]);
+    expect(personOf(store, 7)).toBe(anna);
+    expect(personOf(store, 8)).toBe(erik);
+    const fresh = personOf(store, 10)!;
+    expect([anna, erik]).not.toContain(fresh);
+    // Two groups that both used to be Anna: only the larger keeps her.
+    store.regroup([
+      ...[1, 2, 3].map((n) => face(n, 'n1')),
+      face(7, 'n2'),
+      face(12, 'n2'),
+    ]);
+    expect(personOf(store, 1)).toBe(anna);
+    expect(personOf(store, 7)).not.toBe(anna);
+    expect(personOf(store, 7)).toBe(personOf(store, 12));
+  });
+
+  it('follows a proposal of a known person, but only one that still exists', async () => {
+    const store = await peopleStore();
+    store.regroup([1, 2].map((n) => face(n, 'n1')));
+    const id = personOf(store, 1)!;
+    store.regroup([face(1, id), face(2, id), face(3, id), face(4, 'p999')]);
+    expect(personOf(store, 3)).toBe(id);
+    expect(store.peopleByPhoto().has(PHOTO(4))).toBe(false);
   });
 
   it('names a person, confirms the group and remembers it across restarts', async () => {
-    const dir = await tempDir();
-    const path = join(dir, 'people.json');
-    const store = new PeopleStore(path);
-    await store.load();
-    const faces = [1, 2, 3].map((n) => face(n, 11));
+    const path = join(await tempDir(), 'people.json');
+    const store = await peopleStore(path);
+    const faces = [1, 2, 3].map((n) => face(n, 'n1'));
     store.regroup(faces);
     const [person] = store.view().people;
     store.rename(person!.id, '  Anna  ');
@@ -565,54 +449,78 @@ describe('who is who', () => {
     expect(
       JSON.parse(await readFile(path, 'utf8')).people[person!.id].name,
     ).toBe('Anna');
-    const again = new PeopleStore(path);
-    await again.load();
-    again.regroup(faces);
+    const again = await peopleStore(path);
+    // Kuffe has not caught up yet: the decided faces stay with Anna anyway.
+    again.regroup([1, 2, 3].map((n) => face(n, 'n7')));
     expect(again.nameOf(person!.id)).toBe('Anna');
-    expect(again.view().people[0]?.faces).toBe(3);
+    expect(again.view().people[0]).toMatchObject({ id: person!.id, faces: 3 });
     // The file is private to the user.
-    expect(
-      (await (await import('node:fs/promises')).stat(path)).mode & 0o777,
-    ).toBe(0o600);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
-  it('moves a face and never lets the automatic grouping put it back', async () => {
-    const dir = await tempDir();
-    const store = new PeopleStore(join(dir, 'people.json'));
-    await store.load();
+  it('moves a face and never lets a proposal put it back', async () => {
+    const store = await peopleStore();
     const faces = [
-      ...[1, 2, 3].map((n) => face(n, 11)),
-      ...[4, 5, 6].map((n) => face(n, 22)),
+      ...[1, 2, 3].map((n) => face(n, 'n1')),
+      ...[4, 5, 6].map((n) => face(n, 'n2')),
     ];
     store.regroup(faces);
-    const [one, two] = store.view().people;
-    const stray = one!.samples[0]!.id;
-    store.moveFace(stray, { person: two!.id });
-    store.regroup(faces);
-    const moved = store.view().people.find((p) => p.id === two!.id)!;
-    expect(moved.samples.some((s) => s.id === stray)).toBe(true);
+    const one = personOf(store, 1)!;
+    const two = personOf(store, 4)!;
+    const stray = `${PHOTO(1)}.0`;
+    store.moveFace(stray, { person: two });
+    // Kuffe still thinks it is the first person: the decision wins.
+    store.regroup([face(1, one), ...faces.slice(1)]);
+    expect(personOf(store, 1)).toBe(two);
     // "Not a person" removes the face from every list.
     store.moveFace(stray, 'none');
-    store.regroup(faces);
+    store.regroup([face(1, one), ...faces.slice(1)]);
     expect(store.view().ignored).toBe(1);
-    expect(store.peopleByPhoto().get(stray.split('.')[0]!)).toBeUndefined();
-    // A new person from one face.
-    const other = two!.samples.find((s) => s.id !== stray)!.id;
+    expect(store.peopleByPhoto().get(PHOTO(1))).toBeUndefined();
+    // A face moved away from somebody is never given back to them automatically.
+    const other = `${PHOTO(4)}.0`;
     store.moveFace(other, 'new');
     expect(store.view().people.length).toBe(3);
+    store.moveFace(other, 'none');
+    store.moveFace(`${PHOTO(5)}.0`, { person: one });
+    store.regroup([...faces.slice(0, 4), face(5, two), face(6, 'n2')]);
+    expect(personOf(store, 5)).toBe(one);
     expect(() => store.moveFace('nope', 'none')).toThrow(PeopleError);
     expect(() => store.moveFace(other, { person: 'p999' })).toThrow(
       PeopleError,
     );
   });
 
+  it('never gives a face automatically to a person it was moved away from', async () => {
+    const path = join(await tempDir(), 'people.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        next: 2,
+        people: { p1: { id: 'p1', name: null, confirmed: false } },
+        faces: {
+          [`${PHOTO(1)}.0`]: { auto: 'p1' },
+          [`${PHOTO(2)}.0`]: { auto: 'p1' },
+          [`${PHOTO(3)}.0`]: { auto: 'p1', not: ['p1'] },
+          [`${PHOTO(4)}.0`]: { not: ['p1'] },
+        },
+      }),
+    );
+    const store = await peopleStore(path);
+    store.regroup([face(1, 'n5'), face(2, 'n5'), face(3, 'n5'), face(4, 'p1')]);
+    expect(personOf(store, 1)).toBe('p1');
+    expect(personOf(store, 2)).toBe('p1');
+    expect(personOf(store, 3)).toBeUndefined();
+    expect(personOf(store, 4)).toBeUndefined();
+    expect(store.view().unassigned.count).toBe(2);
+  });
+
   it('merges two people and hides a stranger', async () => {
-    const dir = await tempDir();
-    const store = new PeopleStore(join(dir, 'people.json'));
-    await store.load();
+    const store = await peopleStore();
     const faces = [
-      ...[1, 2, 3].map((n) => face(n, 11)),
-      ...[4, 5, 6].map((n) => face(n, 22)),
+      ...[1, 2, 3].map((n) => face(n, 'n1')),
+      ...[4, 5, 6].map((n) => face(n, 'n2')),
     ];
     store.regroup(faces);
     const [a, b] = store.view().people;
@@ -628,491 +536,658 @@ describe('who is who', () => {
     expect(store.activeCount()).toBe(0);
   });
 
-  it('only lets clear, front-facing faces start a new person', async () => {
-    const dir = await tempDir();
-    const store = new PeopleStore(join(dir, 'people.json'));
-    await store.load();
-    store.regroup(
-      [1, 2, 3].map((n) => face(n, 11, 0, { score: 0.65, front: 0.1 })),
-    );
+  it('drops people nobody named or confirmed once they have no faces', async () => {
+    const store = await peopleStore();
+    store.regroup([1, 2].map((n) => face(n, 'n1')));
+    const id = personOf(store, 1)!;
+    store.regroup([]);
+    expect(store.person(id)).toBeUndefined();
     expect(store.view().people).toHaveLength(0);
-    expect(store.view().unassigned.count).toBe(3);
   });
 
-  it('links by average agreement', () => {
-    const faces = [face(1, 1), face(2, 1), face(3, 2), face(4, 2)];
-    expect(
-      linkFaces(faces, 0.38)
-        .map((g) => g.length)
-        .sort(),
-    ).toEqual([2, 2]);
-    expect(linkFaces(faces, 0.999).length).toBe(4);
-  });
-});
-
-// ── The analysis queue ──
-
-class FakeWorker implements WorkerHandle {
-  replies: Array<(reply: WorkerReply) => void> = [];
-  exits: Array<(why: string) => void> = [];
-  received: WorkerRequest[] = [];
-  killed = false;
-  constructor(
-    readonly behave: (message: WorkerRequest, worker: FakeWorker) => void,
-  ) {}
-  send(message: WorkerRequest): void {
-    this.received.push(message);
-    queueMicrotask(() => this.behave(message, this));
-  }
-  onReply(handler: (reply: WorkerReply) => void): void {
-    this.replies.push(handler);
-    queueMicrotask(() => handler({ type: 'ready' }));
-  }
-  onExit(handler: (why: string) => void): void {
-    this.exits.push(handler);
-  }
-  kill(): void {
-    this.killed = true;
-  }
-  say(reply: WorkerReply): void {
-    for (const handler of this.replies) handler(reply);
-  }
-}
-const ID = (n: number): string => `img${String(n).padStart(21, '0')}`;
-const okReply = (id: string): WorkerReply => ({
-  type: 'result',
-  id,
-  embedding: unit(1),
-  faces: [],
-  ms: 5,
-});
-const tick = async (n = 20): Promise<void> => {
-  for (let i = 0; i < n; i += 1)
-    await new Promise((resolve) => setTimeout(resolve, 0));
-};
-
-describe('analysing new pictures', () => {
-  function make(
-    behave: (m: WorkerRequest, w: FakeWorker) => void,
-    extra: Record<string, unknown> = {},
-  ) {
-    const workers: FakeWorker[] = [];
-    let changes = 0;
-    const store = new AnalysisStore('/nonexistent/analysis.json', 'm1');
-    const analyzer = new PhotoAnalyzer({
-      store,
-      pathOf: (id) => `/cache/${id}.jpg`,
-      models: async () => ({
-        paths: { clip: 'a', detector: 'b', recognizer: 'c' },
-        reason: null,
-      }),
-      spawn: () => {
-        const worker = new FakeWorker(behave);
-        workers.push(worker);
-        return worker;
-      },
-      pauseMs: 0,
-      onChange: () => {
-        changes += 1;
-      },
-      ...extra,
-    });
-    cleanups.push(() => analyzer.dispose());
-    return { analyzer, store, workers, changes: () => changes };
-  }
-
-  it('analyses each new picture once, in order, and stores the result', async () => {
-    const { analyzer, store, workers, changes } = make((m, w) => {
-      if (m.type === 'analyse') w.say(okReply(m.id));
-    });
-    analyzer.enqueue([ID(1), ID(2), ID(3)]);
-    await tick();
-    expect(store.size).toBe(3);
-    expect(workers).toHaveLength(1);
-    expect(
-      workers[0]!.received.map((m) => (m.type === 'analyse' ? m.id : '')),
-    ).toEqual([ID(1), ID(2), ID(3)]);
-    expect(changes()).toBeGreaterThan(0);
-    expect(analyzer.status()).toMatchObject({
-      state: 'idle',
-      pending: 0,
-      done: 3,
-    });
-    // Already analysed pictures never go back to the worker.
-    analyzer.enqueue([ID(1), ID(2), ID(3)]);
-    await tick();
-    expect(workers[0]!.received).toHaveLength(3);
-  });
-
-  it('skips a picture that cannot be analysed and tries it only twice', async () => {
-    const { analyzer, store, workers } = make((m, w) => {
-      if (m.type === 'analyse')
-        w.say(
-          m.id === ID(2)
-            ? { type: 'error', id: m.id, message: 'broken' }
-            : okReply(m.id),
-        );
-    });
-    analyzer.enqueue([ID(1), ID(2), ID(3)]);
-    await tick();
-    expect(store.has(ID(1)) && store.has(ID(3))).toBe(true);
-    expect(store.has(ID(2))).toBe(false);
-    expect(analyzer.status().failed).toBe(1);
-    analyzer.enqueue([ID(2)]);
-    await tick();
-    expect(analyzer.status().failed).toBe(2);
-    analyzer.enqueue([ID(2)]);
-    await tick();
-    expect(analyzer.status().failed).toBe(2);
-    expect(
-      workers[0]!.received.filter(
-        (m) => m.type === 'analyse' && m.id === ID(2),
-      ),
-    ).toHaveLength(2);
-  });
-
-  it('reports models that are missing and does nothing else', async () => {
-    const analyzer = new PhotoAnalyzer({
-      store: new AnalysisStore('/nonexistent/analysis.json', 'm1'),
-      pathOf: () => '/x',
-      models: async () => ({ paths: null, reason: 'models missing' }),
-      spawn: () => {
-        throw new Error('must not start a worker');
-      },
-      onChange: () => undefined,
-    });
-    cleanups.push(() => analyzer.dispose());
-    analyzer.enqueue([ID(1)]);
-    await tick();
-    expect(analyzer.status()).toMatchObject({
-      state: 'unavailable',
-      reason: 'models missing',
-      pending: 0,
-    });
-  });
-
-  it('replaces a worker that dies mid-picture and backs off after repeated failures', async () => {
-    const { analyzer, workers } = make(
-      (m, w) => {
-        if (m.type === 'analyse') for (const exit of w.exits) exit('exit 137');
-      },
-      { maxConsecutiveFailures: 2, backoffMs: 60_000 },
-    );
-    analyzer.enqueue([ID(1), ID(2), ID(3), ID(4)]);
-    await tick();
-    expect(analyzer.status().state).toBe('backoff');
-    expect(workers.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('forgets queued pictures that left the library', async () => {
-    const gate: Array<() => void> = [];
-    const { analyzer, workers } = make((m, w) => {
-      if (m.type === 'analyse') gate.push(() => w.say(okReply(m.id)));
-    });
-    analyzer.enqueue([ID(1), ID(2), ID(3)]);
-    await tick();
-    analyzer.forget(new Set([ID(1)]));
-    gate.shift()!();
-    await tick();
-    expect(
-      workers[0]!.received.filter((m) => m.type === 'analyse'),
-    ).toHaveLength(1);
-  });
-
-  it('lets an idle worker go', async () => {
-    const { analyzer, workers } = make(
-      (m, w) => {
-        if (m.type === 'analyse') w.say(okReply(m.id));
-      },
-      { idleMs: 5 },
-    );
-    analyzer.enqueue([ID(1)]);
-    await tick();
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(workers[0]!.received.some((m) => m.type === 'stop')).toBe(true);
-  });
-});
-
-describe('the analysis cache', () => {
-  it('survives a restart, forgets removed pictures and starts over for other models', async () => {
-    const dir = await tempDir();
-    const path = join(dir, 'analysis.json');
-    const store = new AnalysisStore(path, 'm1');
-    await store.load();
+  it('tells Kuffe what the household decided, what it chose before and what not', async () => {
+    const store = await peopleStore();
     const faces = [
-      {
-        x: 0.1,
-        y: 0.2,
-        w: 0.3,
-        h: 0.3,
-        score: 0.9,
-        front: 0.8,
-        embedding: unit(5),
-      },
+      ...[1, 2, 3].map((n) => face(n, 'n1')),
+      ...[4, 5].map((n) => face(n, 'n2')),
     ];
-    const clip = (n: number) =>
-      normalize(
-        Array.from({ length: CLIP_DIM }, (_, i) => Math.sin(i * n + 1)),
-      );
-    store.put(ID(1), { embedding: clip(1), faces, at: 5 });
-    store.put(ID(2), { embedding: clip(2), faces: [], at: 6 });
-    await store.save();
-    const again = new AnalysisStore(path, 'm1');
-    await again.load();
-    expect(again.size).toBe(2);
-    expect(again.get(ID(1))?.faces[0]?.embedding[3]).toBeCloseTo(
-      unit(5)[3]!,
-      5,
+    store.regroup(faces);
+    const one = personOf(store, 1)!;
+    const two = personOf(store, 4)!;
+    store.rename(one, 'Anna');
+    store.moveFace(`${PHOTO(4)}.0`, { person: one });
+    store.moveFace(`${PHOTO(5)}.0`, 'none');
+    store.setHidden(two, true);
+    const labels = store.labels();
+    expect(labels.schema).toBe(1);
+    expect(labels.people).toEqual(
+      expect.arrayContaining([
+        { id: one, name: 'Anna', confirmed: true, hidden: false },
+      ]),
     );
-    expect(again.retain(new Set([ID(1)]))).toBe(true);
-    expect(again.has(ID(2))).toBe(false);
-    const other = new AnalysisStore(path, 'm2');
-    await other.load();
-    expect(other.size).toBe(0);
+    expect(labels.decided).toMatchObject({
+      [`${PHOTO(1)}.0`]: one,
+      [`${PHOTO(4)}.0`]: one,
+      [`${PHOTO(5)}.0`]: null,
+    });
+    expect(labels.previous[`${PHOTO(1)}.0`]).toBe(one);
+    expect(labels.not[`${PHOTO(4)}.0`]).toEqual([two]);
+    expect(JSON.stringify(labels)).not.toMatch(/box|embedding/);
   });
 
-  it('shrugs off a damaged file', async () => {
+  it('reads a people file written before the photo brain, decisions intact', async () => {
+    const path = join(await tempDir(), 'people.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        next: 4,
+        people: {
+          p2: { id: 'p2', name: 'Anna', confirmed: true, hidden: false },
+          p3: { id: 'p3', name: null, confirmed: false, hidden: true },
+        },
+        faces: {
+          [`${PHOTO(1)}.0`]: { person: 'p2' },
+          [`${PHOTO(2)}.0`]: { auto: 'p3' },
+          [`${PHOTO(3)}.1`]: { person: null, not: ['p2'] },
+          'not a face': { person: 'p2' },
+        },
+      }),
+    );
+    const store = await peopleStore(path);
+    store.regroup([
+      face(1, undefined),
+      face(2, 'n1'),
+      face(4, 'n1'),
+      face(3, 'p2', 1),
+    ]);
+    expect(personOf(store, 1)).toBe('p2');
+    expect(store.view().people.find((p) => p.id === 'p3')?.faces).toBe(2);
+    expect(store.view().ignored).toBe(1);
+    expect(store.labels().decided).toEqual({
+      [`${PHOTO(1)}.0`]: 'p2',
+      [`${PHOTO(3)}.1`]: null,
+    });
+    // New people continue the numbering.
+    store.moveFace(`${PHOTO(4)}.0`, 'new');
+    expect(store.view().people.some((p) => p.id === 'p4')).toBe(true);
+  });
+
+  it('lets a decision follow its face when Kuffe numbers the faces differently', async () => {
+    const store = await peopleStore();
+    // The old on-device analysis had found two faces; Anna was the second.
+    store.regroup([
+      face(1, 'n1', 0, { x: 0.1 }),
+      face(1, 'n2', 1, { x: 0.6 }),
+      face(2, 'n2', 0, { x: 0.6 }),
+    ]);
+    const anna = personOf(store, 2)!;
+    store.rename(anna, 'Anna');
+    // Kuffe finds a third face first and so numbers the picture again.
+    store.regroup([
+      face(1, undefined, 0, { x: 0.35 }),
+      face(1, undefined, 1, { x: 0.1 }),
+      face(1, undefined, 2, { x: 0.6 }),
+      face(2, undefined, 0, { x: 0.6 }),
+    ]);
+    const view = store.view().people.find((p) => p.id === anna)!;
+    expect(view.samples.map((s) => s.id).sort()).toEqual(
+      [`${PHOTO(1)}.2`, `${PHOTO(2)}.0`].sort(),
+    );
+    expect(store.labels().decided[`${PHOTO(1)}.2`]).toBe(anna);
+    expect(store.labels().decided[`${PHOTO(1)}.1`]).toBeUndefined();
+    // A decision whose face Kuffe does not find is kept but used for nobody.
+    store.regroup([
+      face(1, undefined, 0, { x: 0.1 }),
+      face(1, undefined, 1, { x: 0.35 }),
+      face(2, undefined, 0, { x: 0.6 }),
+    ]);
+    expect(personOf(store, 1)).toBeUndefined();
+    expect(store.labels().decided[`${PHOTO(1)}.1`]).toBeUndefined();
+    store.regroup([
+      face(1, undefined, 0, { x: 0.1 }),
+      face(1, undefined, 1, { x: 0.35 }),
+      face(1, undefined, 2, { x: 0.6 }),
+      face(2, undefined, 0, { x: 0.6 }),
+    ]);
+    expect(personOf(store, 1)).toBe(anna);
+  });
+
+  it('takes the boxes of decisions made before boxes were kept', async () => {
+    const path = join(await tempDir(), 'people.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        next: 2,
+        people: { p1: { id: 'p1', name: 'Erik', confirmed: true } },
+        faces: { [`${PHOTO(1)}.0`]: { person: 'p1' } },
+      }),
+    );
+    const store = await peopleStore(path);
+    expect(store.needsBoxes()).toBe(true);
+    store.adoptBoxes(new Map([[`${PHOTO(1)}.0`, [0.6, 0.3, 0.2, 0.25]]]));
+    expect(store.needsBoxes()).toBe(false);
+    store.regroup([
+      face(1, undefined, 0, { x: 0.1 }),
+      face(1, undefined, 1, { x: 0.6 }),
+    ]);
+    expect(store.labels().decided).toEqual({ [`${PHOTO(1)}.1`]: 'p1' });
+  });
+});
+
+// ── The photo brain's bundle ──
+
+const ID = (n: number): string => `img${String(n).padStart(21, '0')}`;
+const DAY = 24 * HOUR;
+function entry(over: Partial<PhotoIntel> = {}): PhotoIntel {
+  return {
+    v: 'v1',
+    scene: [],
+    q: { sharp: 80, dark: 3, junk: null },
+    faces: [],
+    cand: [],
+    du: [],
+    ...over,
+  };
+}
+function bundle(
+  photos: Record<string, Partial<PhotoIntel>>,
+  extra: Partial<IntelBundle> = {},
+): IntelBundle {
+  return {
+    schema: 1,
+    generatedAt: 1_763_900_000_000,
+    brain: {
+      version: '0.1.0',
+      models: { embed: 'e', face: 'f', detector: 'd' },
+      faceDim: 512,
+    },
+    home: null,
+    trips: [],
+    events: [],
+    photos: Object.fromEntries(
+      Object.entries(photos).map(([id, value]) => [id, entry(value)]),
+    ),
+    ...extra,
+  };
+}
+const brainFace = (p?: string, x = 0.4) => ({
+  x,
+  y: 0.3,
+  w: 0.2,
+  h: 0.25,
+  score: 0.95,
+  front: 0.9,
+  q: 70,
+  ...(p ? { p } : {}),
+});
+
+describe('the intel bundle', () => {
+  it('accepts the contract example and keeps what it says', () => {
+    const parsed = parseBundle({
+      ...bundle({
+        [ID(1)]: {
+          scene: [
+            ['beach', 0.71],
+            ['sea', 0.12],
+          ],
+          fav: 1,
+          cap: 'Midsommar',
+          faces: [brainFace('p3'), brainFace('n7')],
+          trip: 0,
+          event: 'e12',
+          cand: [[ID(2), 74, 90, 60, 71]],
+          du: [ID(2)],
+        },
+      }),
+      home: { lat: 59.2, lon: 18.0 },
+      trips: [
+        { title: 'Lesko', from: '2026-09-11', to: '2026-09-14', cc: 'PL' },
+      ],
+      events: [{ id: 'e12', from: 1, to: 2, count: 14 }],
+      somethingNew: true,
+    });
+    expect(parsed.photos[ID(1)]?.cand[0]).toEqual([ID(2), 74, 90, 60, 71]);
+    expect(parsed.home).toEqual({ lat: 59.2, lon: 18.0 });
+    // Fields this side does not know are dropped, not kept.
+    expect('somethingNew' in parsed).toBe(false);
+  });
+
+  it('refuses what does not fit, with a short list of why', () => {
+    const bad =
+      (photos: Record<string, unknown>, extra = {}) =>
+      () =>
+        parseBundle({ ...bundle({}), photos, ...extra });
+    expect(bad({}, { schema: 2 })).toThrow(IntelError);
+    expect(bad({ 'too-short': entry() })).toThrow(IntelError);
+    expect(
+      bad({ [ID(1)]: { ...entry(), cand: [['../x', 1, 1, 1, 1]] } }),
+    ).toThrow(IntelError);
+    expect(
+      bad({ [ID(1)]: { ...entry(), faces: Array(65).fill(brainFace()) } }),
+    ).toThrow(IntelError);
+    expect(
+      bad({
+        [ID(1)]: {
+          ...entry(),
+          cand: Array(65).fill([ID(2), 50, 50, 50, 50]),
+        },
+      }),
+    ).toThrow(IntelError);
+    expect(bad({ [ID(1)]: { ...entry(), v: 'x'.repeat(300) } })).toThrow(
+      IntelError,
+    );
+    expect(bad({ [ID(1)]: { ...entry(), cap: 'x'.repeat(501) } })).toThrow(
+      IntelError,
+    );
+    expect(
+      bad({ [ID(1)]: { ...entry(), faces: [{ ...brainFace(), x: 2 }] } }),
+    ).toThrow(IntelError);
+    expect(
+      bad({ [ID(1)]: { ...entry(), faces: [{ ...brainFace(), p: 'x1' }] } }),
+    ).toThrow(IntelError);
+    expect(bad({ [ID(1)]: { ...entry(), q: { sharp: 'x' } } })).toThrow(
+      IntelError,
+    );
+    try {
+      bad({ [ID(1)]: { ...entry(), cand: 'nope' } })();
+    } catch (error) {
+      expect((error as IntelError).code).toBe('invalid_bundle');
+      expect((error as IntelError).issues[0]?.path).toContain('cand');
+    }
+    // More than 20000 pictures fails before anything else is looked at.
+    const many: Record<string, null> = {};
+    for (let i = 0; i < 20_001; i += 1) many[`k${i}`] = null;
+    try {
+      bad(many)();
+      expect.unreachable();
+    } catch (error) {
+      expect((error as IntelError).code).toBe('too_many_photos');
+    }
+  });
+
+  it('is kept across a restart, privately, and a damaged file is shrugged off', async () => {
     const dir = await tempDir();
-    const path = join(dir, 'analysis.json');
-    await writeFile(path, '{ not json');
+    const path = join(dir, 'intel.json');
     const warnings: string[] = [];
-    const store = new AnalysisStore(path, 'm1', (m) => warnings.push(m));
+    const store = new IntelStore(path, (m) => warnings.push(m));
     await store.load();
-    expect(store.size).toBe(0);
-    expect(warnings).toHaveLength(1);
+    expect(store.receivedAt()).toBeNull();
+    const result = await store.put(
+      bundle({ [ID(1)]: {}, [ID(2)]: {}, [ID(9)]: {} }),
+      new Set([ID(1), ID(2), ID(3)]),
+      1234,
+    );
+    expect(result).toEqual({ accepted: 2, unknown: 1 });
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    const again = new IntelStore(path);
+    await again.load();
+    expect(again.receivedAt()).toBe(1234);
+    expect(again.has(ID(9))).toBe(true);
+    // A refused bundle leaves the last good one in place.
+    await expect(
+      again.put({ schema: 1 }, new Set(), 5678),
+    ).rejects.toBeInstanceOf(IntelError);
+    expect(again.receivedAt()).toBe(1234);
+    await writeFile(path, '{"version":1,"receivedAt":1,"bundle":{"nope":');
+    await store.load();
+    expect(store.receivedAt()).toBeNull();
+    expect(store.has(ID(1))).toBe(false);
+    expect(warnings.some((w) => w.includes('ignored'))).toBe(true);
   });
 });
 
 // ── Everything together ──
 
+function insightPhoto(
+  n: number,
+  over: Partial<InsightPhoto> = {},
+): InsightPhoto {
+  return {
+    id: ID(n),
+    t: T0 + n * 60_000,
+    lat: 59.3,
+    lon: 18.0,
+    place: 'Stockholm',
+    cc: 'SE',
+    utcOffsetSeconds: 7200,
+    ...over,
+  };
+}
+async function makeInsight(
+  over: Partial<ConstructorParameters<typeof PhotoInsight>[0]> = {},
+) {
+  const dir = await tempDir();
+  const clock = new FakeClock(1_763_900_000_000);
+  const insight = new PhotoInsight({
+    cacheDir: dir,
+    enabled: true,
+    readPhoto: async () => null,
+    scenes: { beach: 'Stranden' },
+    saveDelayMs: 5,
+    clock,
+    ...over,
+  });
+  cleanups.push(() => insight.dispose());
+  await insight.start();
+  return { dir, clock, insight };
+}
+
 describe('the insight service', () => {
-  it('analyses, groups people, decorates the listing and takes corrections', async () => {
-    const dir = await tempDir();
-    const photos = Array.from({ length: 6 }, (_, i) => ({
-      id: ID(i + 1),
-      t: T0 + i * 10 * 60_000,
-      lat: 59.3,
-      lon: 18.0,
-      place: 'Stockholm',
-      cc: 'SE',
-      utcOffsetSeconds: 7200,
-    }));
-    const identities = [11, 11, 11, 22, 22, 22];
-    const insight = new PhotoInsight({
-      cacheDir: dir,
-      modelsDir: join(dir, 'models'),
-      enabled: true,
-      readPhoto: async () => null,
-      scenes: null,
-      pauseMs: 0,
-      saveDelayMs: 5,
-      spawn: () =>
-        new FakeWorker((m, w) => {
-          if (m.type !== 'analyse') return;
-          const n = Number(/(\d+)$/.exec(m.id)![1]) - 1;
-          w.say({
-            type: 'result',
-            id: m.id,
-            embedding: normalize([1, n === 5 ? 0.4 : 0, 0]),
-            faces: [
-              {
-                x: 0.4,
-                y: 0.3,
-                w: 0.2,
-                h: 0.25,
-                score: 0.95,
-                front: 0.9,
-                embedding: unit(identities[n]!, 0.35, n),
-              },
-            ],
-            ms: 3,
-          });
-        }),
-    });
-    cleanups.push(() => insight.dispose());
-    // Models "installed": the analyzer only asks for files that exist.
-    const { MODELS } = await import('../src/runtime/photo-intel/models.js');
-    const { mkdir } = await import('node:fs/promises');
-    await mkdir(join(dir, 'models'));
-    for (const spec of MODELS)
-      await writeFile(join(dir, 'models', spec.file), Buffer.alloc(spec.bytes));
-    await insight.start();
-    let notified = 0;
-    insight.subscribe(() => {
-      notified += 1;
-    });
-    const revisionBefore = insight.revision();
+  it('re-ranks the brain’s candidates with the people decided here', () => {
+    expect(withPeople(0.5, [], ['p1'])).toBe(0.5);
+    expect(withPeople(0.5, ['p1'], ['p2'])).toBeCloseTo(0.4);
+    expect(withPeople(0.5, ['p1', 'p2'], ['p1'])).toBeCloseTo(
+      0.5 + 0.08 + 0.12 * (1 / 2),
+    );
+    expect(withPeople(0.95, ['p1'], ['p1'])).toBe(1);
+  });
+
+  it('builds the listing a Hub reads from the bundle', async () => {
+    const { insight } = await makeInsight();
+    const photos = [1, 2, 3, 4, 5, 6].map((n) => insightPhoto(n));
     insight.sync(photos);
-    await tick(40);
+    let notified = 0;
+    insight.subscribe(() => (notified += 1));
+    const revision = insight.revision();
+    const result = await insight.putIntel(
+      bundle(
+        {
+          [ID(1)]: {
+            scene: [['beach', 0.71]],
+            faces: [brainFace('n1')],
+            trip: 1,
+            cand: [
+              [ID(2), 60, 90, 90, -1],
+              [ID(3), 60, 90, 90, -1],
+              [ID(4), 50, 90, 90, -1],
+              [ID(5), 90, 90, 90, -1],
+              [ID(6), 25, 90, 90, -1],
+              [ID(99), 95, 90, 90, -1],
+            ],
+            du: [ID(3), ID(99)],
+          },
+          [ID(2)]: { scene: [['beach', 0.3]], faces: [brainFace('n1')] },
+          [ID(3)]: { faces: [brainFace('n2')], fav: 1, cap: 'Från Kuffe' },
+          [ID(4)]: { faces: [brainFace('n2')] },
+          [ID(5)]: { q: { sharp: 80, dark: 3, junk: 'screenshot' } },
+          [ID(99)]: {},
+        },
+        {
+          trips: [
+            {
+              title: 'Oanvänd',
+              from: '2026-01-01',
+              to: '2026-01-02',
+              cc: null,
+            },
+            { title: 'Lesko', from: '2026-09-11', to: '2026-09-14', cc: 'PL' },
+          ],
+        },
+      ),
+    );
+    expect(result).toEqual({ accepted: 5, unknown: 1 });
+    expect(notified).toBe(1);
+    expect(insight.revision()).not.toBe(revision);
+    const listing = insight.decorate();
+    expect(listing.ai).toBe(true);
+    expect(listing.scenes).toEqual({ beach: 'Stranden' });
+    expect(listing.people).toHaveLength(2);
+    // Only the trips pictures point at, numbered again from 0.
+    expect(listing.trips).toEqual([
+      { title: 'Lesko', from: '2026-09-11', to: '2026-09-14', cc: 'PL' },
+    ]);
+    const first = listing.extras[0]!;
+    expect(first).toMatchObject({ sc: 'beach', sp: 71, tr: 0 });
+    expect(first.pp).toEqual(listing.extras[1]!.pp);
+    // Same person: raised; known strangers: lowered; below 0.3: dropped;
+    // junk and pictures not in the library: never listed.
+    expect(first.nb).toEqual([
+      [1, Math.round((0.6 + 0.08 + 0.12) * 100)],
+      [2, 48],
+      [3, 40],
+    ]);
+    expect(first.du).toEqual([2]);
+    // A scene the brain is not sure of is not named.
+    expect(listing.extras[1]!.sc).toBeUndefined();
+    expect(listing.extras[2]).toMatchObject({ fav: 1, cap: 'Från Kuffe' });
+    expect(listing.extras[4]).toEqual({ skip: 1 });
+    // The panel's numbers.
     expect(insight.status()).toMatchObject({
       available: true,
-      analysed: 6,
-      faces: 6,
+      brain: { analysed: 5, photos: 6, faces: 4 },
     });
-    expect(notified).toBeGreaterThan(0);
-    expect(insight.revision()).not.toBe(revisionBefore);
-    const decorated = insight.decorate();
-    expect(decorated.ai).toBe(true);
-    expect(decorated.people).toHaveLength(2);
-    expect(decorated.extras[0]?.pp).toHaveLength(1);
-    expect(decorated.extras[0]?.nb?.length).toBeGreaterThan(0);
-    // A name changes what a Hub is told.
-    const view = insight.peopleView();
-    const revision = insight.revision();
-    insight.rename(view.people[0]!.id, 'Anna');
-    expect(insight.revision()).not.toBe(revision);
-    expect(
-      insight.decorate().people.find((p) => p.name === 'Anna'),
-    ).toBeDefined();
-    expect(insight.summary()).toEqual({ people: 2, pending: 0 });
-    // Saved to disk without being asked twice.
+    expect(insight.brainState()).toMatchObject({ pictures: 6, analysed: 5 });
+    expect(insight.summary()).toEqual({ people: 2, pending: 1 });
+  });
+
+  it('lets the household decide, and a decision changes the neighbours at once', async () => {
+    const { insight, dir } = await makeInsight();
+    insight.sync([1, 2].map((n) => insightPhoto(n)));
+    await insight.putIntel(
+      bundle({
+        [ID(1)]: { faces: [brainFace('n1')], cand: [[ID(2), 50, -1, -1, -1]] },
+        [ID(2)]: { faces: [brainFace('n2')] },
+      }),
+    );
+    const known = () => insight.decorate().extras[0]!.nb?.[0]?.[1];
+    // Two different people (each a group of one: nobody yet).
+    expect(known()).toBe(50);
+    insight.moveFace(`${ID(1)}.0`, 'new');
+    const anna = insight.peopleView().people[0]!.id;
+    insight.moveFace(`${ID(2)}.0`, { person: anna });
+    expect(known()).toBe(Math.round((0.5 + 0.08 + 0.12) * 100));
+    insight.rename(anna, 'Anna');
+    expect(insight.decorate().people).toEqual([{ id: anna, name: 'Anna' }]);
+    expect(insight.labels().decided).toEqual({
+      [`${ID(1)}.0`]: anna,
+      [`${ID(2)}.0`]: anna,
+    });
+    // Saved without being asked twice.
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(
-      JSON.parse(await readFile(join(dir, 'people.json'), 'utf8')).people,
-    ).toBeDefined();
+      JSON.parse(await readFile(join(dir, 'people.json'), 'utf8')).people[anna]
+        .name,
+    ).toBe('Anna');
     expect(await insight.faceCrop('not a face')).toBeNull();
-    expect(
-      insight.faceContext(view.people[0]!.samples[0]!.id)?.photoId,
-    ).toBeDefined();
+    expect(await insight.faceCrop(`${ID(1)}.0`)).toBeNull(); // no picture bytes
+    expect(insight.faceContext(`${ID(1)}.0`)).toEqual({ photoId: ID(1) });
   });
 
-  it('works without models: neighbours from time and place alone', async () => {
-    const dir = await tempDir();
-    const insight = new PhotoInsight({
-      cacheDir: dir,
-      modelsDir: join(dir, 'no-models'),
-      enabled: true,
-      readPhoto: async () => null,
-      scenes: null,
+  it('cuts a face crop from the cached picture with the box', async () => {
+    const sharp = (await import('sharp')).default;
+    const picture = await sharp({
+      create: { width: 400, height: 300, channels: 3, background: '#808080' },
+    })
+      .jpeg()
+      .toBuffer();
+    const { insight } = await makeInsight({
+      readPhoto: async (id) => (id === ID(1) ? picture : null),
     });
-    cleanups.push(() => insight.dispose());
-    await insight.start();
-    insight.sync([
-      {
-        id: ID(1),
-        t: T0,
-        lat: 59.3,
-        lon: 18,
-        place: 'Stockholm',
-        cc: 'SE',
-        utcOffsetSeconds: 0,
-      },
-      {
-        id: ID(2),
-        t: T0 + 600_000,
-        lat: 59.3,
-        lon: 18,
-        place: 'Stockholm',
-        cc: 'SE',
-        utcOffsetSeconds: 0,
-      },
-    ]);
-    await tick();
-    const status = insight.status();
-    expect(status.available).toBe(false);
-    expect(status.reason).toContain('models missing');
-    const decorated = insight.decorate();
-    expect(decorated.ai).toBe(false);
-    expect(decorated.extras[0]?.nb?.[0]?.[0]).toBe(1);
+    insight.sync([insightPhoto(1)]);
+    await insight.putIntel(bundle({ [ID(1)]: { faces: [brainFace()] } }));
+    const crop = await insight.faceCrop(`${ID(1)}.0`);
+    const meta = await sharp(crop!).metadata();
+    expect([meta.width, meta.height]).toEqual([112, 112]);
   });
 
-  it('does not analyse when switched off', async () => {
-    const dir = await tempDir();
-    const insight = new PhotoInsight({
-      cacheDir: dir,
-      modelsDir: dir,
-      enabled: false,
-      readPhoto: async () => null,
-      scenes: null,
-      spawn: () => {
-        throw new Error('must not start a worker');
-      },
+  it('groups pictures Kuffe has not seen by time and place alone', async () => {
+    const { insight } = await makeInsight();
+    insight.sync([
+      insightPhoto(1),
+      insightPhoto(2),
+      insightPhoto(3, { t: T0 + 200 * DAY, lat: 41.9, lon: 12.5 }),
+    ]);
+    const before = insight.decorate();
+    expect(before.ai).toBe(false);
+    expect(before.extras[0]?.nb?.[0]?.[0]).toBe(1);
+    expect(before.extras[2]?.nb).toBeUndefined();
+    expect(insight.status().brain.intelAt).toBeNull();
+    expect(insight.summary().pending).toBe(0);
+    // Kuffe has seen one of them: that one follows the bundle, the rest the clock.
+    await insight.putIntel(bundle({ [ID(1)]: { cand: [] } }));
+    const after = insight.decorate();
+    expect(after.ai).toBe(true);
+    expect(after.extras[0]?.nb).toBeUndefined();
+    expect(after.extras[1]?.nb?.[0]?.[0]).toBe(0);
+  });
+
+  it('finds trips among the pictures Kuffe has not seen', async () => {
+    const { insight } = await makeInsight({
+      home: { lat: 59.3, lon: 18.0 },
+      countryName: () => 'Polen',
     });
-    cleanups.push(() => insight.dispose());
-    await insight.start();
-    insight.sync([
-      {
-        id: ID(1),
-        t: T0,
-        lat: null,
-        lon: null,
-        place: null,
-        cc: null,
-        utcOffsetSeconds: 0,
-      },
+    const photos: InsightPhoto[] = [];
+    for (let day = 0; day < 3; day += 1)
+      for (let i = 0; i < 3; i += 1)
+        photos.push(
+          insightPhoto(day * 3 + i + 1, {
+            t: T0 + day * DAY + i * HOUR,
+            lat: 49.4,
+            lon: 22.3,
+            place: 'Lesko',
+            cc: 'PL',
+          }),
+        );
+    insight.sync(photos);
+    const listing = insight.decorate();
+    expect(listing.trips).toEqual([
+      { title: 'Lesko', from: '2026-09-12', to: '2026-09-14', cc: 'PL' },
     ]);
-    await tick();
-    expect(insight.status().available).toBe(false);
-    expect(insight.status().reason).toContain('avstängd');
+    expect(listing.extras.every((extra) => extra.tr === 0)).toBe(true);
   });
-});
 
-describe('fetching the models', () => {
-  it('installs only files that match their checksum, and keeps what is already right', async () => {
-    const { createHash } = await import('node:crypto');
-    const { fetchModels } =
-      await import('../src/runtime/photo-intel/fetch-models.js');
-    const dir = await tempDir();
-    const good = Buffer.from('model bytes');
-    const spec = {
-      key: 'detector' as const,
-      file: 'm.onnx',
-      url: 'https://example.invalid/m.onnx',
-      sha256: createHash('sha256').update(good).digest('hex'),
-      bytes: good.length,
-      license: 'MIT',
-    };
-    let calls = 0;
-    const serve =
-      (body: Buffer, ok = true) =>
-      async () => {
-        calls += 1;
-        return {
-          ok,
-          status: ok ? 200 : 404,
-          arrayBuffer: async () => new Uint8Array(body).buffer,
-        };
-      };
-    await expect(
-      fetchModels(dir, {
-        specs: [spec],
-        fetcher: serve(Buffer.from('tampered!!!')),
+  it('ignores the bundle and keeps it from Kuffe when switched off', async () => {
+    const { insight } = await makeInsight({ enabled: false });
+    insight.sync([insightPhoto(1), insightPhoto(2)]);
+    await insight.putIntel(
+      bundle({
+        [ID(1)]: { scene: [['beach', 0.9]], faces: [brainFace('n1')] },
       }),
-    ).rejects.toThrow(/checksum/);
-    await expect(
-      fetchModels(dir, { specs: [spec], fetcher: serve(good, false) }),
-    ).rejects.toThrow(/404/);
-    expect(
-      await fetchModels(dir, { specs: [spec], fetcher: serve(good) }),
-    ).toEqual({
-      downloaded: ['m.onnx'],
-      kept: [],
-    });
-    expect(await readFile(join(dir, 'm.onnx'))).toEqual(good);
-    calls = 0;
-    expect(
-      await fetchModels(dir, { specs: [spec], fetcher: serve(good) }),
-    ).toEqual({
-      downloaded: [],
-      kept: ['m.onnx'],
-    });
-    expect(calls).toBe(0);
+    );
+    const listing = insight.decorate();
+    expect(listing.ai).toBe(false);
+    expect(listing.extras[0]?.sc).toBeUndefined();
+    expect(insight.status()).toMatchObject({ available: false });
+    expect(insight.status().reason).toContain('avstängd');
+    expect(insight.peopleView().unassigned.count).toBe(0);
   });
-});
 
-describe('the worker process', () => {
-  it("never starts the runtime's telemetry and keeps its memory small", () => {
-    const env = workerEnvironment({
-      clip: 'a',
-      detector: 'b',
-      recognizer: 'c',
-    });
-    expect(env['ORT_DISABLE_TELEMETRY']).toBe('1');
-    expect(env['MALLOC_ARENA_MAX']).toBe('1');
-    expect(JSON.parse(env['LUGN_PHOTO_MODEL_PATHS']!)).toEqual({
-      clip: 'a',
-      detector: 'b',
-      recognizer: 'c',
-    });
+  it('keeps the people as they are until Kuffe has said anything', async () => {
+    const dir = await tempDir();
+    await writeFile(
+      join(dir, 'people.json'),
+      JSON.stringify({
+        version: 1,
+        next: 3,
+        people: { p2: { id: 'p2', name: null, confirmed: false } },
+        faces: { [`${ID(1)}.0`]: { auto: 'p2' } },
+      }),
+    );
+    const { insight } = await makeInsight({ cacheDir: dir });
+    insight.sync([insightPhoto(1)]);
+    expect(insight.labels().people.map((p) => p.id)).toEqual(['p2']);
+    expect(insight.labels().previous).toEqual({ [`${ID(1)}.0`]: 'p2' });
+  });
+
+  it("lets decisions made on this machine follow their faces into Kuffe's numbering", async () => {
+    const dir = await tempDir();
+    await writeFile(
+      join(dir, 'people.json'),
+      JSON.stringify({
+        version: 1,
+        next: 2,
+        people: { p1: { id: 'p1', name: 'Erik', confirmed: true } },
+        faces: { [`${ID(1)}.0`]: { person: 'p1' } },
+      }),
+    );
+    // What the old on-device analysis kept: boxes (and vectors, never read).
+    await writeFile(
+      join(dir, 'analysis.json'),
+      JSON.stringify({
+        version: 1,
+        model: 'old',
+        photos: {
+          [ID(1)]: {
+            e: 'AAAA',
+            f: [
+              { x: 0.6, y: 0.3, w: 0.2, h: 0.25, score: 1, front: 1, e: 'AA' },
+            ],
+            at: 1,
+          },
+        },
+      }),
+    );
+    const { insight } = await makeInsight({ cacheDir: dir });
+    insight.sync([insightPhoto(1)]);
+    await insight.putIntel(
+      bundle({
+        [ID(1)]: {
+          faces: [brainFace(undefined, 0.1), brainFace(undefined, 0.6)],
+        },
+      }),
+    );
+    expect(insight.labels().decided).toEqual({ [`${ID(1)}.1`]: 'p1' });
+    expect(insight.decorate().extras[0]?.pp).toEqual(['p1']);
+  });
+
+  it('tells when Kuffe has gone quiet', async () => {
+    const { insight, clock } = await makeInsight();
+    insight.sync([insightPhoto(1), insightPhoto(2)]);
+    await insight.putIntel(bundle({ [ID(1)]: {} }));
+    expect(insight.status().brain.intelAt).toBe(clock.now());
+    expect(insight.summary().pending).toBe(1);
+    clock.advanceBy(BRAIN_QUIET_MS + 1);
+    expect(insight.summary().pending).toBe(0);
+  });
+
+  it('decorates five thousand pictures quickly, with or without the bundle', async () => {
+    const { insight } = await makeInsight();
+    const n = 5000;
+    const photos = Array.from({ length: n }, (_, i) =>
+      insightPhoto(i + 1, {
+        t: T0 - i * 37 * 60_000,
+        lat: 59.3 + (i % 50) * 0.01,
+        lon: 18.0 + (i % 7) * 0.01,
+      }),
+    );
+    insight.sync(photos);
+    const t0 = performance.now();
+    const fallback = insight.decorate();
+    const fallbackMs = performance.now() - t0;
+    expect(fallback.extras).toHaveLength(n);
+    expect(fallback.extras.filter((e) => e.nb).length).toBeGreaterThan(n * 0.9);
+    // Every picture analysed: 48 candidates and a face each.
+    const entries: Record<string, Partial<PhotoIntel>> = {};
+    for (let i = 0; i < n; i += 1)
+      entries[ID(i + 1)] = {
+        scene: [['beach', 0.5]],
+        faces: [brainFace(`n${i % 40}`)],
+        cand: Array.from({ length: 48 }, (_, k) => [
+          ID(((i + k * 13 + 1) % n) + 1),
+          30 + ((i + k) % 70),
+          -1,
+          -1,
+          -1,
+        ]) as PhotoIntel['cand'],
+        du: [ID(((i + 1) % n) + 1)],
+      };
+    await insight.putIntel(bundle(entries));
+    const t1 = performance.now();
+    const full = insight.decorate();
+    const fullMs = performance.now() - t1;
+    expect(full.ai).toBe(true);
+    expect(full.extras.every((e) => (e.nb?.length ?? 0) <= 14)).toBe(true);
+    console.info(
+      `decorate 5000 pictures: fallback ${fallbackMs.toFixed(0)} ms, bundle ${fullMs.toFixed(0)} ms`,
+    );
+    // Generous bounds for a busy test machine; the target is well under 300 ms.
+    expect(fallbackMs).toBeLessThan(1500);
+    expect(fullMs).toBeLessThan(1500);
+    // The listing is cached until something changes.
+    const t2 = performance.now();
+    insight.decorate();
+    expect(performance.now() - t2).toBeLessThan(5);
   });
 });

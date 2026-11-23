@@ -3,6 +3,7 @@ import { CameraError, type CameraDashboardSnapshot } from '../core/cameras.js';
 import type { CameraMediaProvider } from './camera-media.js';
 import type { PhotoLibrary } from './photo-library.js';
 import { PeopleError } from './photo-intel/people.js';
+import { IntelError } from './photo-intel/intel-store.js';
 import type {
   SensorStreamMessage,
   Stl27lSensorStream,
@@ -27,6 +28,8 @@ import {
   type ServerResponse,
 } from 'node:http';
 import { join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
+import { createGunzip } from 'node:zlib';
 import { z, ZodError } from 'zod';
 import {
   SemanticLightingIdSchema,
@@ -61,6 +64,8 @@ import {
 } from './clerk-auth.js';
 
 const MAX_REQUEST_BYTES = 64 * 1024;
+/** The photo brain's bundle, measured after inflating. */
+const MAX_BRAIN_BUNDLE_BYTES = 64 * 1024 * 1024;
 const UI_SESSION_COOKIE = 'lugn_ui_session';
 const UI_SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;
 const MAX_UI_SESSIONS = 64;
@@ -188,6 +193,11 @@ export class LugnHttpServer {
         return;
       }
 
+      if (url.pathname.startsWith('/photo-brain/')) {
+        await this.handlePhotoBrain(request, response, url.pathname);
+        return;
+      }
+
       if (request.method === 'GET' && url.pathname === '/health') {
         const integrations = this.options.integrations();
         const connected = Object.values(integrations).every(
@@ -271,6 +281,84 @@ export class LugnHttpServer {
         return;
       }
       sendJson(response, 500, { error: 'internal_error' });
+    }
+  }
+
+  /**
+   * The photo brain on Kuffe (docs/PHOTO-BRAIN.md): it reads the album and
+   * the household's decisions and sends back its results. Machine routes
+   * behind the bearer token only; without a configured token they stay shut.
+   */
+  private async handlePhotoBrain(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string,
+  ): Promise<void> {
+    if (!this.options.bearerToken?.trim()) {
+      sendJson(response, 503, { error: 'photo_brain_requires_token' });
+      return;
+    }
+    const routes: Record<string, 'GET' | 'PUT'> = {
+      '/photo-brain/v1/album': 'GET',
+      '/photo-brain/v1/intel': 'PUT',
+      '/photo-brain/v1/people': 'GET',
+      '/photo-brain/v1/state': 'GET',
+    };
+    const method = routes[pathname];
+    if (!method) {
+      sendJson(response, 404, { error: 'not_found' });
+      return;
+    }
+    if (request.method !== method) {
+      response.setHeader('allow', method);
+      sendJson(response, 405, { error: 'method_not_allowed' });
+      return;
+    }
+    const api = this.options.photoLibrary?.brainApi();
+    if (!api) {
+      sendJson(response, 404, { error: 'photo_brain_unavailable' });
+      return;
+    }
+    if (pathname === '/photo-brain/v1/album') {
+      let album: unknown;
+      try {
+        album = await api.album();
+      } catch {
+        sendJson(response, 502, { error: 'album_unavailable' });
+        return;
+      }
+      sendJson(response, 200, album);
+      return;
+    }
+    if (pathname === '/photo-brain/v1/people') {
+      sendJson(response, 200, api.people());
+      return;
+    }
+    if (pathname === '/photo-brain/v1/state') {
+      sendJson(response, 200, api.state());
+      return;
+    }
+    if (!isJsonRequest(request)) {
+      sendJson(response, 415, {
+        error: 'content_type_must_be_application_json',
+      });
+      return;
+    }
+    let body: unknown;
+    try {
+      body = await readBrainBundle(request);
+    } catch (error) {
+      // Whatever is left of a refused body is not read.
+      if (error instanceof HttpRequestError)
+        response.setHeader('connection', 'close');
+      throw error;
+    }
+    try {
+      sendJson(response, 200, await api.putIntel(body));
+    } catch (error) {
+      if (error instanceof IntelError)
+        sendJson(response, 400, { error: error.code, issues: error.issues });
+      else throw error;
     }
   }
 
@@ -1627,6 +1715,53 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   if (byteLength === 0) throw new HttpRequestError(400, 'empty_request_body');
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+  } catch {
+    throw new HttpRequestError(400, 'invalid_json');
+  }
+}
+
+/**
+ * The photo brain's bundle: JSON, optionally gzip, at most 64 MB once
+ * inflated. Inflating stops at the cap, so a small bomb cannot grow past it.
+ */
+async function readBrainBundle(request: IncomingMessage): Promise<unknown> {
+  const encoding = String(request.headers['content-encoding'] ?? 'identity')
+    .trim()
+    .toLowerCase();
+  if (encoding !== 'identity' && encoding !== 'gzip')
+    throw new HttpRequestError(415, 'unsupported_content_encoding');
+  const declared = Number(request.headers['content-length']);
+  if (Number.isFinite(declared) && declared > MAX_BRAIN_BUNDLE_BYTES)
+    throw new HttpRequestError(413, 'request_too_large');
+  const gunzip = encoding === 'gzip' ? createGunzip() : null;
+  if (gunzip) {
+    request.once('error', (error) => gunzip.destroy(error));
+    request.pipe(gunzip);
+  }
+  const decoder = new StringDecoder('utf8');
+  const parts: string[] = [];
+  let byteLength = 0;
+  try {
+    for await (const chunk of gunzip ?? request) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      byteLength += buffer.byteLength;
+      if (byteLength > MAX_BRAIN_BUNDLE_BYTES)
+        throw new HttpRequestError(413, 'request_too_large');
+      parts.push(decoder.write(buffer));
+    }
+  } catch (error) {
+    if (error instanceof HttpRequestError || !gunzip) throw error;
+    throw new HttpRequestError(400, 'invalid_gzip');
+  } finally {
+    if (gunzip) {
+      request.unpipe(gunzip);
+      gunzip.destroy();
+    }
+  }
+  if (byteLength === 0) throw new HttpRequestError(400, 'empty_request_body');
+  parts.push(decoder.end());
+  try {
+    return JSON.parse(parts.join('')) as unknown;
   } catch {
     throw new HttpRequestError(400, 'invalid_json');
   }

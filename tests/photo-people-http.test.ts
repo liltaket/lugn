@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
+import { createContext, runInContext } from 'node:vm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SimulatedLightingAdapter } from '../src/adapters/simulated-lighting.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
@@ -20,19 +22,7 @@ function fakeApi(calls: unknown[][]): PhotoPeopleApi {
     status: () => ({
       available: true,
       reason: null,
-      analyzer: {
-        state: 'idle',
-        reason: null,
-        pending: 0,
-        done: 1,
-        failed: 0,
-        lastMs: 5,
-      },
-      photos: 1,
-      analysed: 1,
-      faces: 1,
-      modelsDir: '/models',
-      missingModels: [],
+      brain: { intelAt: 1_763_900_000_000, analysed: 1, photos: 1, faces: 1 },
     }),
     summary: () => ({ people: 1, pending: 0 }),
     peopleView: () => ({
@@ -153,11 +143,11 @@ describe('the photo people panel API', () => {
     const list = (await (
       await fetch(`${base}/ui/api/photo-people`, { headers })
     ).json()) as {
-      status: { photos: number };
+      status: { brain: { photos: number } };
       people: Array<{ id: string }>;
     };
     expect(list.people[0]?.id).toBe('p1');
-    expect(list.status.photos).toBe(1);
+    expect(list.status.brain.photos).toBe(1);
     const crop = await fetch(`${base}/ui/api/photo-people/faces/${FACE}.jpg`, {
       headers,
     });
@@ -271,5 +261,65 @@ describe('the photo people panel API', () => {
       headers: { Origin: base, Cookie: cookie },
     });
     expect(put.status).toBe(405);
+  });
+});
+
+describe('the panel status chip', () => {
+  type Status = {
+    available: boolean;
+    brain?: { intelAt: number | null; analysed: number; photos: number };
+  } | null;
+  function load(): (status: Status, now?: number) => [string, string] {
+    const noop = () => undefined;
+    const sandbox: Record<string, unknown> = {
+      window: { addEventListener: noop, setTimeout: noop, clearTimeout: noop },
+      document: { addEventListener: noop, getElementById: () => null },
+      Intl,
+      Date,
+    };
+    const context = createContext(sandbox);
+    runInContext(
+      `${readFileSync(new URL('../web/photo-people.js', import.meta.url), 'utf8')}
+globalThis.statusText = statusText;`,
+      context,
+    );
+    return sandbox['statusText'] as (s: Status, n?: number) => [string, string];
+  }
+  const statusText = load();
+  const now = Date.UTC(2026, 10, 23, 12);
+
+  it('says what Kuffe has done, that it is awaited, or that it has gone quiet', () => {
+    expect(statusText(null)).toEqual(['Läser …', 'warn']);
+    expect(statusText({ available: false })[0]).toBe('Bildanalysen är av');
+    expect(
+      statusText(
+        { available: true, brain: { intelAt: null, analysed: 0, photos: 9 } },
+        now,
+      ),
+    ).toEqual(['Väntar på Kuffe', 'warn']);
+    expect(
+      statusText(
+        {
+          available: true,
+          brain: { intelAt: now - 60_000, analysed: 412, photos: 418 },
+        },
+        now,
+      ),
+    ).toEqual(['Kuffe: 412 av 418 bilder analyserade', 'warn']);
+    expect(
+      statusText(
+        { available: true, brain: { intelAt: now, analysed: 1, photos: 1 } },
+        now,
+      ),
+    ).toEqual(['Kuffe: 1 av 1 bild analyserad', 'ok']);
+    const [quiet, tone] = statusText(
+      {
+        available: true,
+        brain: { intelAt: now - 7 * 3_600_000, analysed: 1, photos: 1 },
+      },
+      now,
+    );
+    expect(quiet).toMatch(/^Kuffe har inte hörts av sedan \d/);
+    expect(tone).toBe('warn');
   });
 });
