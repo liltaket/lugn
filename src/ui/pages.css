@@ -194,61 +194,10 @@
   grid-column: 1 / -1;
 }
 
-/* ── Scene dock: Hem's scenes, reachable from the other pages ── */
-.scene-dock {
-  position: absolute;
-  left: 36px;
-  right: 36px;
-  bottom: 18px;
-  display: flex;
-  justify-content: center;
-  gap: 10px;
-}
-.scene-dock button {
-  flex: 1 1 auto;
-  max-width: 190px;
-  min-width: 0;
-  min-height: 64px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 16px 0 10px;
-  border-radius: 32px;
-  border: 1px solid rgba(238, 241, 232, 0.1);
-  background: rgba(238, 241, 232, 0.07);
-  color: #eef1e8;
-  font-size: 16px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.scene-dock button svg {
-  flex: none;
-  width: 24px;
-  height: 24px;
-  stroke-width: 1.6;
-}
-.scene-dock button span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.scene-dock button[aria-pressed='true'] {
-  background: #f0a35f;
-  border-color: #f0a35f;
-  color: #1b1a17;
-}
-.scene-dock button[data-scene='scene.all_off'][aria-pressed='true'] {
-  background: #eef1e8;
-  border-color: #eef1e8;
-}
-.scene-dock button[data-state='pending'],
-.scene-dock button[data-state='awaiting'] {
-  border-style: dashed;
-}
-
 /* ── Musik ──
    The cover's own colour (--music-accent, measured once per cover) tints the
-   controls and the scene dock, so the page reads as one piece with what
-   plays. Everything that moves is opacity or transform. */
+   controls and, through --nb-rgb, the navbar's lit scene, so the page reads
+   as one piece with what plays. Everything that moves is opacity or transform. */
 .music-page {
   --music-accent: #e7bc78;
   --music-on-accent: #1b1a17;
@@ -328,12 +277,7 @@
   gap: 8px;
   min-width: 0;
 }
-.music-page-info,
-.music-page-cover,
-.music-page .scene-dock {
-  transition: opacity 0.45s ease-out;
-}
-/* With the quick menu open the content makes room for it: it lifts a little
+/* With the navbar open the content makes room for it: it lifts a little
    and the cover shrinks towards the top. Transform only. */
 .music-page-info,
 .music-page-cover {
@@ -351,15 +295,13 @@
 /* Until the first state arrives the page shows only its backdrop (and its
    empty controls are neither seen nor reached). */
 .music-page[data-ready='false'] .music-page-info,
-.music-page[data-ready='false'] .music-page-cover,
-.music-page[data-ready='false'] .scene-dock {
+.music-page[data-ready='false'] .music-page-cover {
   opacity: 0;
   visibility: hidden;
 }
 @media (prefers-reduced-motion: reduce) {
   .music-page-info,
   .music-page-cover,
-  .music-page .scene-dock,
   .music-page-volume-track i {
     transition: none;
   }
@@ -507,21 +449,6 @@
 .music-page[data-active='false'] .music-page-controls {
   display: none;
 }
-/* The dock as part of the page: glass over the backdrop, the lit scene in
-   the cover's colour. */
-.music-page .scene-dock button {
-  min-height: 58px;
-  border-color: rgba(255, 255, 255, 0.12);
-  background: rgba(10, 12, 12, 0.32);
-}
-.music-page
-  .scene-dock
-  button[aria-pressed='true']:not([data-scene='scene.all_off']) {
-  background: var(--music-accent);
-  border-color: var(--music-accent);
-  color: var(--music-on-accent);
-}
-
 /* Hem's cover opens Musik (page-views.js): the visible image takes the tap,
    though the card it sits in does not. */
 #music-artwork-image[role='button'] {

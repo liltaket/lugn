@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
-// A very small DOM and clock: just what photos-page.js and quick-menu.js use.
+// A very small DOM and clock: just what photos-page.js and quick-menu.js (the
+// navbar) use.
 type Handler = (event: FakeEvent) => void;
 class FakeEvent {
   target: El | null = null;
@@ -170,17 +171,22 @@ function makeWorld() {
   make('path', 'pause-icon', pause);
   make('b', 'now-title', now_);
   make('span', 'now-artist', now_);
-  const menu = make('div', 'menu', photosRoot);
-  const actions = make('div', undefined, menu);
-  const camera = make('button', undefined, actions, { 'data-qm': 'camera' });
-  camera.hidden = true;
-  const next = make('button', 'next', actions);
-  make('div', 'dock', menu);
-  // Musik: a root with a menu, a play button, a cover and bare space.
+  // The navbar (one for every page): a back button, the scenes and the round
+  // buttons, each hidden until the page it is over asks for it.
+  const nav = new El('nav');
+  nav.style = { setProperty: () => {}, removeProperty: () => {} } as never;
+  const navButton = (name: string) => {
+    const e = make('button', undefined, nav, { 'data-nb': name });
+    e.hidden = true;
+    return e;
+  };
+  const back = navButton('back');
+  const next = navButton('next');
+  const toMusic = navButton('music');
+  const toCameras = navButton('cameras');
+  const dockButton = make('button', undefined, make('div', 'dock', nav));
+  // Musik: a root with a play button, a cover and bare space.
   const musicRoot = new El('div');
-  const musicMenu = make('div', 'menu', musicRoot);
-  make('button', undefined, musicMenu, { 'data-qm': 'camera' }).hidden = true;
-  const dockButton = make('button', undefined, make('div', 'dock', musicMenu));
   const play = make('button', 'play', musicRoot);
   const cover = make('div', 'cover', musicRoot);
   const space = make('div', 'info', musicRoot);
@@ -203,7 +209,8 @@ function makeWorld() {
   const sandbox: Record<string, unknown> = {
     document: {
       querySelector: (selector: string) => docRoots[selector] ?? null,
-      getElementById: (id: string) => (id === 'hub-pager' ? pager : null),
+      getElementById: (id: string) =>
+        id === 'hub-pager' ? pager : id === 'hub-nav' ? nav : null,
       createElement: (tag: string) => new El(tag),
     },
     Image: class extends El {
@@ -268,10 +275,14 @@ function makeWorld() {
     for (const fn of windowListeners.get(event.type) ?? []) fn(event);
   };
   const definitions = new Map<string, Record<string, () => void>>();
+  const went: string[] = [];
   win['lugnPages'] = {
     current: () => currentPage.id,
     ids: () => ['home', 'music', 'kameror', 'clock', 'foto', 'info'],
-    go: () => true,
+    go: (id: string) => {
+      went.push(id);
+      return true;
+    },
     define: (id: string, hooks: Record<string, () => void>) =>
       definitions.set(id, hooks),
   };
@@ -305,10 +316,13 @@ function makeWorld() {
   return {
     stage,
     photosRoot,
-    menu,
+    nav,
+    back,
     next,
+    toMusic,
+    toCameras,
+    went,
     musicRoot,
-    musicMenu,
     play,
     cover,
     space,
@@ -336,6 +350,8 @@ describe('Foto page lifecycle', () => {
     await world.flush();
     // The page is entered and the tap on Nästa bild comes while building.
     world.hooks['enter']!();
+    world.photosRoot.fire('click');
+    expect(world.nav.classes.has('open')).toBe(true);
     world.next.fire('click');
     await world.flush();
     release();
@@ -364,7 +380,7 @@ describe('Foto page lifecycle', () => {
     await world.advance(20_100);
     world.photosRoot.fire('pointermove', { pointerType: 'mouse' });
     await world.advance(100);
-    expect(world.menu.classes.has('open')).toBe(true);
+    expect(world.nav.classes.has('open')).toBe(true);
     release();
     world.decodeGate.current = null;
     await world.advance(100);
@@ -374,9 +390,9 @@ describe('Foto page lifecycle', () => {
       world.photosRoot.fire('pointermove', { pointerType: 'mouse' });
       await world.advance(3_000);
     }
-    expect(world.menu.classes.has('open')).toBe(true);
+    expect(world.nav.classes.has('open')).toBe(true);
     await world.advance(10_000); // the mouse is still: the menu closes
-    expect(world.menu.classes.has('open')).toBe(false);
+    expect(world.nav.classes.has('open')).toBe(false);
     // The show goes on after the menu: another change comes within a show.
     const shown = world.slides().at(-1)!;
     await world.advance(25_000);
@@ -412,24 +428,168 @@ describe('Foto page lifecycle', () => {
   });
 });
 
-describe('Musik quick menu', () => {
+describe('Musik navbar', () => {
   it('opens only on the bare page, not on a press of a control', async () => {
     const world = makeWorld();
     world.currentPage.id = 'music';
     world.play.fire('click');
-    expect(world.musicMenu.classes.has('open')).toBe(false);
+    expect(world.nav.classes.has('open')).toBe(false);
     world.cover.fire('click');
-    expect(world.musicMenu.classes.has('open')).toBe(false);
+    expect(world.nav.classes.has('open')).toBe(false);
     world.space.fire('click');
-    expect(world.musicMenu.classes.has('open')).toBe(true);
-    // Controls and the cover leave an open menu as it is; the bare page closes it.
+    expect(world.nav.classes.has('open')).toBe(true);
+    // Controls and the cover leave an open bar as it is; the bare page closes it.
     world.play.fire('click');
-    expect(world.musicMenu.classes.has('open')).toBe(true);
+    expect(world.nav.classes.has('open')).toBe(true);
     world.cover.fire('click');
-    expect(world.musicMenu.classes.has('open')).toBe(true);
+    expect(world.nav.classes.has('open')).toBe(true);
     world.dockButton.fire('click');
-    expect(world.musicMenu.classes.has('open')).toBe(true);
+    expect(world.nav.classes.has('open')).toBe(true);
     world.space.fire('click');
-    expect(world.musicMenu.classes.has('open')).toBe(false);
+    expect(world.nav.classes.has('open')).toBe(false);
+  });
+});
+
+describe('The navbar', () => {
+  const dispatch = (world: ReturnType<typeof makeWorld>, type: string) =>
+    (world.win['dispatchEvent'] as (e: FakeEvent) => void)(new FakeEvent(type));
+  const moveMouse = async (world: ReturnType<typeof makeWorld>, ms = 200) => {
+    world.photosRoot.fire('pointermove', { pointerType: 'mouse' });
+    await world.advance(ms);
+  };
+  const open = (world: ReturnType<typeof makeWorld>) =>
+    world.nav.classes.has('open');
+
+  it('shows only what the page it is over needs', async () => {
+    const world = makeWorld();
+    world.win['refs'] = { cameraMenu: { hidden: false } };
+    world.hooks['prepare']!();
+    // Foto: the next picture, Musik and Kameror; nothing to go back from.
+    world.photosRoot.fire('click');
+    expect(world.nav.dataset['page']).toBe('foto');
+    expect(world.next.hidden).toBe(false);
+    expect(world.toMusic.hidden).toBe(false);
+    expect(world.toCameras.hidden).toBe(false);
+    expect(world.back.hidden).toBe(true);
+    // Musik: not a button to itself, nor a next picture.
+    world.currentPage.id = 'music';
+    dispatch(world, 'lugn:page');
+    expect(open(world)).toBe(true);
+    expect(world.nav.dataset['page']).toBe('music');
+    expect(world.toMusic.hidden).toBe(true);
+    expect(world.toCameras.hidden).toBe(false);
+    expect(world.next.hidden).toBe(true);
+  });
+
+  it('is the same bar on every page: it stays open when the page changes and goes on Hem', async () => {
+    const world = makeWorld();
+    world.photosRoot.fire('click');
+    expect(world.photosRoot.classes.has('menu-open')).toBe(true);
+    world.currentPage.id = 'music';
+    dispatch(world, 'lugn:page');
+    expect(open(world)).toBe(true);
+    // What the old page moved for the bar moves back, and the new page moves.
+    expect(world.photosRoot.classes.has('menu-open')).toBe(false);
+    expect(world.musicRoot.classes.has('menu-open')).toBe(true);
+    // Hem has no bar.
+    world.currentPage.id = 'home';
+    dispatch(world, 'lugn:page');
+    expect(open(world)).toBe(false);
+    expect(world.musicRoot.classes.has('menu-open')).toBe(false);
+  });
+
+  it('goes to Musik and Kameror from its buttons, and stays', async () => {
+    const world = makeWorld();
+    world.win['refs'] = { cameraMenu: { hidden: false } };
+    world.photosRoot.fire('click');
+    world.toMusic.fire('click');
+    world.toCameras.fire('click');
+    expect(world.went).toEqual(['music', 'kameror']);
+    expect(open(world)).toBe(true);
+  });
+
+  it('gives a page its back button, and presses it', async () => {
+    const world = makeWorld();
+    const attach = (
+      world.win['lugnQuickMenu'] as {
+        attach: (o: unknown) => { setBack: (fn: (() => void) | null) => void };
+      }
+    ).attach;
+    const cameraRoot = new El('div');
+    const camera = attach({ id: 'kameror', root: cameraRoot });
+    world.currentPage.id = 'kameror';
+    cameraRoot.fire('click');
+    expect(open(world)).toBe(true);
+    expect(world.back.hidden).toBe(true);
+    // One camera large: the page gives a way back, shown at once.
+    let pressed = 0;
+    camera.setBack(() => (pressed += 1));
+    expect(world.back.hidden).toBe(false);
+    world.back.fire('click');
+    expect(pressed).toBe(1);
+    // Gone again when the page has nothing to go back from.
+    camera.setBack(null);
+    expect(world.back.hidden).toBe(true);
+  });
+
+  it('opened by the mouse, it goes when the mouse leaves; opened by a tap, it stays', async () => {
+    const world = makeWorld();
+    await moveMouse(world);
+    expect(open(world)).toBe(true);
+    dispatch(world, 'lugn:pointer-leave');
+    await world.advance(500);
+    expect(open(world)).toBe(false);
+    // Opened by a tap, the mouse leaving does not take it.
+    world.photosRoot.fire('click');
+    expect(open(world)).toBe(true);
+    dispatch(world, 'lugn:pointer-leave');
+    await world.advance(2_000);
+    expect(open(world)).toBe(true);
+    await world.advance(7_000);
+    expect(open(world)).toBe(false);
+  });
+
+  it('does not come back when the mouse moves a little after a tap closed it', async () => {
+    const world = makeWorld();
+    await moveMouse(world);
+    expect(open(world)).toBe(true);
+    // A click on the bare page closes it…
+    world.photosRoot.fire('click');
+    expect(open(world)).toBe(false);
+    // …and the mouse fidgeting around afterwards leaves it closed.
+    for (let i = 0; i < 10; i += 1) await moveMouse(world, 400);
+    expect(open(world)).toBe(false);
+    // It returns when the mouse has left and comes back…
+    dispatch(world, 'lugn:pointer-leave');
+    await moveMouse(world);
+    expect(open(world)).toBe(true);
+  });
+
+  it('shows again for a mouse that has rested after a tap closed it', async () => {
+    const world = makeWorld();
+    await moveMouse(world);
+    world.photosRoot.fire('click');
+    expect(open(world)).toBe(false);
+    await moveMouse(world, 6_000);
+    await moveMouse(world);
+    expect(open(world)).toBe(true);
+  });
+
+  it('a mouse that stops closes it after four seconds', async () => {
+    const world = makeWorld();
+    await moveMouse(world);
+    expect(open(world)).toBe(true);
+    await world.advance(3_000);
+    expect(open(world)).toBe(true);
+    await world.advance(1_500);
+    expect(open(world)).toBe(false);
+  });
+
+  it('does not open for a finger or while a button is held (a swipe)', async () => {
+    const world = makeWorld();
+    world.photosRoot.fire('pointermove', { pointerType: 'touch' });
+    world.photosRoot.fire('pointermove', { pointerType: 'mouse', buttons: 1 });
+    await world.advance(300);
+    expect(open(world)).toBe(false);
   });
 });

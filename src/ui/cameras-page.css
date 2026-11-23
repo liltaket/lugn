@@ -88,35 +88,6 @@
 }
 /* A tile waiting for its first picture is a quiet, empty frame (nothing that
    animates). */
-/* The way back from one camera to all: a round button like the menu's. */
-.cams-back {
-  position: absolute;
-  left: 22px;
-  top: 22px;
-  width: 52px;
-  height: 52px;
-  min-height: 0;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  border: 1px solid rgba(238, 241, 232, 0.2);
-  background: rgba(14, 18, 17, 0.62);
-  color: #eef1e8;
-}
-.cams-back[hidden] {
-  display: none;
-}
-.cams-back svg {
-  width: 26px;
-  height: 26px;
-}
-/* One camera large: its name sits to the right of the back button. */
-.cams-page[data-mode='focus'] .cams-name {
-  left: 82px;
-  top: 21px;
-}
 .cams-notice {
   position: absolute;
   inset: 12px 24px 28px;

@@ -28,7 +28,7 @@
     const height = window.innerHeight;
     if (!width || !height) return;
     const zoom = Math.min(height / 600, width / 900);
-    for (const canvas of document.querySelectorAll('.page-canvas')) {
+    for (const canvas of document.querySelectorAll('.page-canvas, .hub-nav')) {
       canvas.style.zoom = String(zoom);
       canvas.style.setProperty('--W', `${width / zoom}px`);
     }
@@ -89,16 +89,18 @@
     return button;
   }
 
-  const dockKeys = new Map();
-  function drawDock(page) {
-    const dock = view(page, 'dock');
+  // The one dock lives in the navbar (quick-menu.js), which draws it while it
+  // is open.
+  const navDock = document.querySelector('#hub-nav [data-view="dock"]');
+  let dockKey = '';
+  function drawDock(dock = navDock) {
     if (!dock) return;
     const scenes = dockScenes();
     const listKey = scenes
       .map((scene) => `${scene.id}\u0000${scene.name}`)
       .join('\u0001');
-    if (dockKeys.get(page) !== listKey) {
-      dockKeys.set(page, listKey);
+    if (dockKey !== listKey) {
+      dockKey = listKey;
       dock.replaceChildren(...scenes.map(dockButton));
     }
     const offline = typeof isUnavailable === 'function' && isUnavailable();
@@ -140,13 +142,10 @@
     const sceneId = button.dataset.scene;
     if (!dockScenes().some((scene) => scene.id === sceneId)) return;
     void runCommand(`scene:${sceneId}`, { sceneId });
-    const page = button.closest('.hub-page')?.dataset.page;
     // Pending shows at once; the confirmation follows the next state.
-    window.setTimeout(() => drawDock(page), 0);
+    window.setTimeout(() => drawDock(), 0);
   }
-  for (const page of ['clock', 'music', 'foto', 'kameror'])
-    view(page, 'dock')?.addEventListener('click', onDockClick);
-  // Foto draws its menu's dock only while the menu is open.
+  navDock?.addEventListener('click', onDockClick);
   globalThis.lugnSceneDock = { draw: drawDock };
 
   // ── Notices: Hem's toast and connection notice on every page ──
@@ -221,7 +220,6 @@
   }
 
   function drawAir() {
-    drawDock('clock');
     const data = payload();
     const environment = data?.environment ?? {};
     const parts = [];
@@ -692,7 +690,9 @@
   let coverRequest = 0;
   let coverUrl = '';
   function resetAccent() {
-    view('music', 'root').style.removeProperty('--music-accent');
+    const root = view('music', 'root');
+    root.style.removeProperty('--music-accent');
+    root.style.removeProperty('--nb-rgb');
   }
 
   function drawCover(url) {
@@ -801,6 +801,8 @@
       if (n > 0) {
         const [ar, ag, ab] = accentFrom(r / n, g / n, b / n);
         root.style.setProperty('--music-accent', `rgb(${ar}, ${ag}, ${ab})`);
+        // The navbar tints its lit scene with the same colour.
+        root.style.setProperty('--nb-rgb', `${ar}, ${ag}, ${ab}`);
       } else resetAccent();
       const wasHidden = canvas.hidden;
       canvas.hidden = false;
@@ -1008,7 +1010,6 @@
 
   function musicTick() {
     drawMusic();
-    drawDock('music');
   }
 
   pagesApi.define('music', {
