@@ -535,3 +535,68 @@ describe('Foto groups', () => {
     expect(world.clockTime.textContent).toBe('old');
   });
 });
+
+describe('Foto corners', () => {
+  const measured = Array.from({ length: 10 }, (_, i) => ({
+    id: `${'abcdefghij'[i]}`.repeat(24),
+    w: 480,
+    h: 640,
+    date: '2026-11-04',
+    place: 'Svedala',
+    t: 1_000 + i,
+    lat: 55.5,
+    lon: 13.4,
+    lu: [10, 90, 50],
+  }));
+
+  it('gives a slide its shade levels and the layers that draw them', async () => {
+    const world = makeWorld({ photos: measured });
+    world.hooks['enter']!();
+    await world.advance(100);
+    const slide = world.slides()[0]!;
+    expect(slide.dataset['tr']).toBe('0');
+    expect(slide.dataset['br']).toBe('2');
+    expect(slide.dataset['bl']).toBe('2');
+    expect(slide.all('.ph-shade')).toHaveLength(3);
+    expect(slide.all('.ph-blur')).toHaveLength(3);
+    // The layers come after the pictures, so the layouts that count children still work.
+    const kinds = slide.children.map((c) =>
+      c.classes.has('ph-cell') ? 'cell' : 'other',
+    );
+    expect(kinds.lastIndexOf('cell')).toBeLessThan(kinds.indexOf('other'));
+  });
+
+  it('lets the blur draw only after the slide has settled, and not while the page is away', async () => {
+    const world = makeWorld({ photos: measured });
+    world.hooks['enter']!();
+    await world.advance(100);
+    expect(world.slides()[0]!.classes.has('settled')).toBe(true);
+    // The next slide fades in over the old one and settles when the fade ends.
+    await world.advance(20_000 + 500);
+    const incoming = world.slides().at(-1)!;
+    expect(incoming.classes.has('lift')).toBe(true);
+    expect(incoming.classes.has('settled')).toBe(false);
+    await world.advance(2_500);
+    expect(world.slides().at(-1)!.classes.has('settled')).toBe(true);
+    world.hooks['leave']!();
+    expect(world.slides().at(-1)!.classes.has('settled')).toBe(false);
+    world.hooks['enter']!();
+    expect(world.slides().at(-1)!.classes.has('settled')).toBe(true);
+  });
+
+  it('marks the page while music plays so the lower left corner is shaded', async () => {
+    const world = makeWorld({ photos: measured });
+    expect(world.photosRoot.classes.has('has-now')).toBe(false);
+    world.hooks['enter']!();
+    await world.advance(100);
+    // Nothing plays in this world: no shade for the widget.
+    expect(world.photosRoot.classes.has('has-now')).toBe(false);
+  });
+
+  it('keeps a slide without measurements working (mid shade)', async () => {
+    const world = makeWorld();
+    world.hooks['enter']!();
+    await world.advance(100);
+    expect(world.slides()[0]!.dataset['tr']).toBe('1');
+  });
+});

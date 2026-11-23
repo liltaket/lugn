@@ -19,7 +19,11 @@ import {
   photoId,
   type PhotoLibraryOptions,
 } from '../src/runtime/photo-library.js';
-import { loadPlaceLookup, processPhoto } from '../src/runtime/photo-frame.js';
+import {
+  loadPlaceLookup,
+  measureCorners,
+  processPhoto,
+} from '../src/runtime/photo-frame.js';
 import sharp from 'sharp';
 
 // A binary plist with lat 55.52987 and lon 13.3773, as Apple stores a location.
@@ -950,5 +954,99 @@ describe('PhotoLibrary with insight', () => {
     const listing = library.snapshot();
     expect(Object.keys(listing).sort()).toEqual(['photos', 'revision']);
     expect(library.peopleApi()).toBeUndefined();
+  });
+});
+
+describe('corner brightness', () => {
+  /** A 200 × 120 picture, dark except for a bright block in one corner. */
+  async function picture(bright: 'tr' | 'br' | 'bl' | 'none') {
+    const width = 200;
+    const height = 120;
+    const raw = Buffer.alloc(width * height * 3, 10);
+    const paint = (x0: number, y0: number) => {
+      for (let y = y0; y < y0 + 40; y += 1)
+        for (let x = x0; x < x0 + 70; x += 1)
+          raw.fill(245, (y * width + x) * 3, (y * width + x) * 3 + 3);
+    };
+    if (bright === 'tr') paint(width - 70, 0);
+    if (bright === 'br') paint(width - 70, height - 40);
+    if (bright === 'bl') paint(0, height - 40);
+    return sharp(raw, { raw: { width, height, channels: 3 } })
+      .jpeg()
+      .toBuffer();
+  }
+
+  it('measures the upper right, lower right and lower left corner on their own', async () => {
+    expect(
+      (await measureCorners(await picture('none'))).every((n) => n < 10),
+    ).toBe(true);
+    const [tr, br, bl] = await measureCorners(await picture('tr'));
+    expect(tr).toBeGreaterThan(80);
+    expect(br).toBeLessThan(15);
+    expect(bl).toBeLessThan(15);
+    expect((await measureCorners(await picture('br')))[1]).toBeGreaterThan(80);
+    expect((await measureCorners(await picture('bl')))[2]).toBeGreaterThan(80);
+  });
+
+  it('is part of every processed picture', async () => {
+    const processed = await processPhoto(await picture('br'));
+    expect(processed.corners).toHaveLength(3);
+    expect(processed.corners![1]).toBeGreaterThan(80);
+  });
+
+  it('is measured afterwards for pictures cached before it existed, without a download', async () => {
+    const jpegBytes = new Uint8Array([255, 216, 255, 217]);
+    const dir = await mkdtemp(join(tmpdir(), 'photo-frame-'));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const photo = {
+      id: 'a',
+      url: 'https://cvws.icloud-content.com/a',
+      version: 'v1',
+      width: 1536,
+      height: 2048,
+      takenAt: 1_000,
+      utcOffsetSeconds: 0,
+      latitude: null,
+      longitude: null,
+    };
+    let downloads = 0;
+    const make = (
+      measure?: (b: Uint8Array) => Promise<[number, number, number]>,
+    ) =>
+      new PhotoLibrary({
+        cacheDir: dir,
+        list: async () => ({ title: 'T', truncated: false, photos: [photo] }),
+        download: async () => {
+          downloads += 1;
+          return jpegBytes;
+        },
+        process: async () => ({
+          main: jpegBytes,
+          backdrop: jpegBytes,
+          width: 450,
+          height: 600,
+        }),
+        place: () => null,
+        setTimer: () => ({}),
+        ...(measure ? { measure } : {}),
+      });
+    const first = make();
+    await first.start();
+    await first.refresh();
+    expect(first.snapshot().photos[0]).not.toHaveProperty('lu');
+    first.dispose();
+    const second = make(async () => [11, 22, 33]);
+    cleanups.push(() => second.dispose());
+    await second.start();
+    await second.refresh();
+    expect(second.snapshot().photos[0]?.lu).toEqual([11, 22, 33]);
+    expect(downloads).toBe(1);
+    // Kept in the index, so a restart does not measure again.
+    const third = make(async () => {
+      throw new Error('must not measure twice');
+    });
+    cleanups.push(() => third.dispose());
+    await third.start();
+    expect(third.snapshot().photos[0]?.lu).toEqual([11, 22, 33]);
   });
 });

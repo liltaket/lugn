@@ -40,7 +40,10 @@ export type PhotoSummary = {
   lon: number | null;
   /** Country code of the nearest populated place, or null. */
   cc: string | null;
+  /** Brightness 0–99 of the upper right, lower right and lower left corner. */
+  lu?: Corners;
 } & PhotoExtras;
+export type Corners = [number, number, number];
 export type PhotoListing = {
   /** Changes when the set of photos changes. */
   revision: string;
@@ -67,6 +70,8 @@ export type ProcessedPhoto = {
   backdrop: Uint8Array;
   width: number;
   height: number;
+  /** Corner brightness; absent when it could not be measured. */
+  corners?: Corners;
 };
 export type PhotoProcessor = (source: Uint8Array) => Promise<ProcessedPhoto>;
 export type PlaceLookup = (
@@ -109,6 +114,8 @@ export type PhotoLibraryOptions = {
   process: PhotoProcessor;
   place: PlaceLookup;
   country?: CountryLookup;
+  /** Measures a cached picture's corners; used for pictures cached before it existed. */
+  measure?: (source: Uint8Array) => Promise<Corners>;
   /** Optional: looks at new pictures and groups them. Without it nothing changes. */
   insight?: PhotoInsightLike;
   refreshMs?: number;
@@ -128,6 +135,7 @@ type IndexEntry = Omit<PhotoSummary, keyof PhotoExtras> & {
   /** Seconds east of UTC where it was taken (for local dates). */
   off?: number;
   details?: AlbumPhotoDetails;
+  lu?: Corners;
 };
 type IndexFile = { version: 1; photos: IndexEntry[] };
 
@@ -144,6 +152,7 @@ const pick = (entry: IndexEntry): Omit<PhotoSummary, keyof PhotoExtras> => ({
   lat: entry.lat ?? null,
   lon: entry.lon ?? null,
   cc: entry.cc ?? null,
+  ...(entry.lu ? { lu: entry.lu } : {}),
 });
 
 export function photoId(sourceId: string): string {
@@ -408,7 +417,19 @@ export class PhotoLibrary {
         };
         if (JSON.stringify(before) !== JSON.stringify(comparable(fresh)))
           changed = true;
-        next.push({ ...existing, ...fresh });
+        // Pictures cached before corners were measured get them now, from the
+        // copy on disk (no download).
+        let lu = existing.lu;
+        if (!lu && this.options.measure) {
+          try {
+            const bytes = await this.read(existing.id, 'main');
+            if (bytes) lu = await this.options.measure(bytes);
+          } catch {
+            /* measured again next time */
+          }
+          if (lu) changed = true;
+        }
+        next.push({ ...existing, ...fresh, ...(lu ? { lu } : {}) });
         continue;
       }
       try {
@@ -427,6 +448,7 @@ export class PhotoLibrary {
           w: processed.width,
           h: processed.height,
           ...this.metadata(photo),
+          ...(processed.corners ? { lu: processed.corners } : {}),
         });
         changed = true;
         await this.rest();

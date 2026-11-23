@@ -40,6 +40,43 @@ export type PhotoFrameConfig = {
   };
 };
 
+/** The share of a picture's width and height that counts as one of its corners. */
+const CORNER_WIDTH = 0.3;
+const CORNER_HEIGHT = 0.25;
+
+/**
+ * How bright the picture is in its upper right, lower right and lower left
+ * corner, 0–99: where a Hub puts the clock, the name and the music widget, so
+ * it can shade each corner as much as that picture needs. Measured once.
+ */
+export async function measureCorners(
+  source: Uint8Array,
+): Promise<[number, number, number]> {
+  const size = 64;
+  const { data } = await sharp(source, {
+    failOn: 'error',
+    limitInputPixels: 40_000_000,
+  })
+    .rotate()
+    .resize(size, size, { fit: 'fill' })
+    .greyscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const cols = Math.round(size * CORNER_WIDTH);
+  const rows = Math.round(size * CORNER_HEIGHT);
+  const mean = (left: number, top: number): number => {
+    let sum = 0;
+    for (let y = top; y < top + rows; y += 1)
+      for (let x = left; x < left + cols; x += 1) sum += data[y * size + x]!;
+    return Math.round((sum / (cols * rows) / 255) * 99);
+  };
+  return [
+    mean(size - cols, 0),
+    mean(size - cols, size - rows),
+    mean(0, size - rows),
+  ];
+}
+
 /** Each picture is scaled once, here, so a Hub never decodes more than it shows. */
 export const processPhoto: PhotoProcessor = async (source) => {
   const image = sharp(source, {
@@ -74,6 +111,7 @@ export const processPhoto: PhotoProcessor = async (source) => {
     backdrop,
     width: main.info.width,
     height: main.info.height,
+    corners: await measureCorners(main.data),
   };
 };
 
@@ -188,6 +226,7 @@ export function createPhotoFrame(
       return readCapped(response, MAX_DOWNLOAD_BYTES);
     },
     process: processPhoto,
+    measure: measureCorners,
     pauseMs: 300,
     ...(options.log ? { log: options.log } : {}),
     place: places.place,

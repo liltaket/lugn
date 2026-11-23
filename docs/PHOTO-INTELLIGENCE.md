@@ -131,6 +131,15 @@ least 45 % sure for the picture and 60 % of the group agrees. When nothing is
 honest to say, no name is shown. Dots under the name show which slide of the
 group is on screen.
 
+## Legibility
+
+The name, the clock and the music widget get a radial shade in their corner,
+as dark as the picture there needs. `photo-frame.ts` measures the brightness
+(0–99) of each picture's upper right, lower right and lower left corner once
+when it is imported (older cached pictures are measured from the copy on disk,
+without a download) and lists it as `lu`. See [UI.md](UI.md) for how a slide
+uses it.
+
 ## The people panel
 
 `/ui/` → Inställningar → **Foton** (Lugn's control panel, not a Hub): every

@@ -161,8 +161,12 @@
     // A group asks for its own preferences (no lone portrait, few singles).
     if (bias)
       for (const option of options) option.weight *= bias(option, queue);
-    let pool = options.filter((option) => option.layout !== previousLayout);
-    if (pool.length === 0) pool = options;
+    // Options a group has ruled out are only used when nothing else is left,
+    // and repeating the last layout is better than using one of those.
+    let live = options.filter((option) => option.weight > 0);
+    if (live.length === 0) live = options;
+    let pool = live.filter((option) => option.layout !== previousLayout);
+    if (pool.length === 0) pool = live;
     let total = 0;
     for (const option of pool) total += option.weight;
     let pick = random() * total;
@@ -331,6 +335,28 @@
       // The strict threshold is enough unless the seed would stand alone.
       if (group.length >= 2) break;
     }
+    // A picture never stands alone with black around it: a seed without
+    // enough company takes the nearest picture in time that has been shown
+    // least, related or not.
+    if (group.length < 2 && library.length > 1) {
+      const DAY = 24 * 60 * 60 * 1000;
+      let best = null;
+      let bestKey = -Infinity;
+      for (const other of library) {
+        if (other === seed || duplicate(seed, other)) continue;
+        const apart =
+          typeof seed.t === 'number' && typeof other.t === 'number'
+            ? Math.min(Math.abs(seed.t - other.t) / DAY, 400)
+            : 400;
+        const key =
+          score(seed, other) * 100 - apart / 4 - (plays.get(other.id) || 0) * 5;
+        if (key > bestKey) {
+          bestKey = key;
+          best = other;
+        }
+      }
+      if (best) group.push(best);
+    }
     // A story reads in time order when it is all one outing.
     const times = group
       .map((photo) => photo.t)
@@ -368,16 +394,18 @@
       const chosen = plan(rest, layout, random, (option, queue) => {
         const count = option.indexes.length;
         let factor = 1;
+        // A portrait on a slide of its own is black on one side: only when
+        // nothing else can be done (the plan falls back to it if every option
+        // has no weight), and a lone landscape fills the screen but is rare.
         if (count === 1)
-          factor *=
-            isLandscape(queue[option.indexes[0]]) && photos.length < 4
+          factor *= isLandscape(queue[option.indexes[0]])
+            ? photos.length < 4
               ? 0.6
-              : isLandscape(queue[option.indexes[0]])
-                ? 0.3
-                : 0.1;
+              : 0.3
+            : 0;
         if (remaining - count === 1) {
           const lone = queue.find((_, i) => !option.indexes.includes(i));
-          factor *= lone && !isLandscape(lone) ? 0.05 : 0.4;
+          factor *= lone && !isLandscape(lone) ? 0 : 0.4;
         }
         return factor;
       });
@@ -576,6 +604,39 @@
     return null;
   }
 
+  // ── Shade in the corners ──
+  //
+  // The clock (upper right), the name (lower right) and the music widget
+  // (lower left) sit on top of the pictures. The server measured how bright
+  // each picture is in those three corners (`lu`: 0-99); a slide gets one
+  // level per corner from the picture that really lies in that corner (which
+  // cell that is depends on the layout), and the stylesheet shades each corner
+  // as much as it needs: 0 dark, 1 mid, 2 bright. Pictures not measured count
+  // as mid. Nothing is computed from pixels here.
+  const CORNER_CELL = {
+    single: [0, 0, 0],
+    duo: [1, 1, 0],
+    pair: [1, 1, 0],
+    trio: [2, 2, 0],
+    mixed: [2, 2, 0],
+    stack3: [0, 0, 2],
+    wide2: [0, 1, 1],
+  };
+  const LEVEL_MID = 31;
+  const LEVEL_BRIGHT = 49;
+
+  /** [upper right, lower right, lower left] levels 0-2 for a slide, or null. */
+  function cornerLevels(layout, photos) {
+    const cells = CORNER_CELL[layout];
+    if (!cells) return null;
+    return cells.map((index, corner) => {
+      const lu = photos[index] && photos[index].lu;
+      const value = Array.isArray(lu) ? lu[corner] : undefined;
+      if (typeof value !== 'number') return 1;
+      return value < LEVEL_MID ? 0 : value < LEVEL_BRIGHT ? 1 : 2;
+    });
+  }
+
   // The menu's veil belongs to the screen's bottom edge: only pictures that
   // reach it get one (not the upper ones of a stack).
   function bottomCell(layout, index) {
@@ -586,6 +647,7 @@
 
   globalThis.lugnPhotos = {
     bottomCell,
+    cornerLevels,
     plan,
     buildGroup,
     rememberGroup,
@@ -853,6 +915,24 @@
       }
       slide.appendChild(element);
     }
+    // Shade for the clock, the name and the music widget, from the picture in
+    // each corner; the blur layers are switched on once the slide has settled.
+    const levels = cornerLevels(layout, photos);
+    if (levels) {
+      slide.dataset.tr = String(levels[0]);
+      slide.dataset.br = String(levels[1]);
+      slide.dataset.bl = String(levels[2]);
+      for (const corner of ['tr', 'br', 'bl']) {
+        const shade = document.createElement('div');
+        shade.className = `ph-shade ${corner}`;
+        slide.appendChild(shade);
+      }
+      for (const corner of ['tr', 'br', 'bl']) {
+        const blur = document.createElement('div');
+        blur.className = `ph-blur ${corner}`;
+        slide.appendChild(blur);
+      }
+    }
     return { slide, images, veils };
   }
 
@@ -1018,7 +1098,10 @@
       // being looked at.
       next.slide.classList.add('in');
       stage.appendChild(next.slide);
-      if (active) startDrift(next.slide);
+      if (active) {
+        startDrift(next.slide);
+        next.slide.classList.add('settled');
+      }
       return;
     }
     fading = true;
@@ -1031,6 +1114,8 @@
       window.clearTimeout(fallback);
       next.slide.removeEventListener('transitionend', onEnd);
       next.slide.classList.remove('lift');
+      // Fully faded in: now the blur layers may draw.
+      if (active) next.slide.classList.add('settled');
       drop(old.el);
       fading = false;
     };
@@ -1182,6 +1267,16 @@
   let menuOpen = false;
   let nowTimer = 0;
 
+  // The small blur behind the corners is the one thing here that costs the Hub
+  // something while it is shown; the Hub can switch it off for good with
+  // localStorage 'lugn.photos.blur' = 'off'.
+  try {
+    if (window.localStorage?.getItem('lugn.photos.blur') === 'off')
+      root.classList.add('no-blur');
+  } catch {
+    /* storage can be unavailable */
+  }
+
   // The time of day, always there: large enough to read across the room,
   // quiet enough not to take over. It redraws once a minute, on the minute,
   // and never while the pager moves.
@@ -1242,6 +1337,9 @@
     const shown =
       document.getElementById('app-root')?.dataset.musicVisible === 'true';
     if (nowBox.hidden === shown) nowBox.hidden = !shown;
+    // The shade in the lower left corner is only there while the widget is.
+    if (shown) root.classList.add('has-now');
+    else root.classList.remove('has-now');
     if (!shown) return;
     const raw = r.musicTitle?.textContent?.trim() || '';
     setText(
@@ -1302,7 +1400,10 @@
     enter() {
       active = true;
       setDriftPlaying(true);
-      if (current) startDrift(current.el);
+      if (current) {
+        startDrift(current.el);
+        if (!fading) current.el.classList.add('settled');
+      }
       drawNow();
       drawClock();
       runClock();
@@ -1319,6 +1420,7 @@
       quickMenu?.close();
       active = false;
       setDriftPlaying(false);
+      if (current) current.el.classList.remove('settled');
       stopClock();
       window.clearInterval(nowTimer);
       nowTimer = 0;

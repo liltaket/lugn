@@ -19,6 +19,10 @@ type Photo = {
   cap?: string;
 };
 type Api = {
+  cornerLevels(
+    layout: string,
+    photos: Array<{ lu?: number[] }>,
+  ): number[] | null;
   buildGroup(library: Photo[], state: unknown, random?: () => number): Photo[];
   rememberGroup(state: unknown, group: Photo[]): void;
   newGroupState(): { plays: Map<string, number>; recent: Array<Set<string>> };
@@ -106,8 +110,10 @@ describe('building a group', () => {
         api.mulberry32(seed),
       );
       const related = group.filter((p) => library.indexOf(p) < 3).length;
-      // A group is either all of the three or one stranger alone.
-      expect(related === group.length || group.length === 1).toBe(true);
+      // A group is either all of the three, or a picture without company
+      // with one partner: never a mix of the three and strangers.
+      expect(related === group.length || group.length === 2).toBe(true);
+      if (related !== group.length) expect(related).toBeLessThanOrEqual(1);
     }
   });
 
@@ -213,7 +219,11 @@ describe('building a group', () => {
     expect(api.buildGroup([], api.newGroupState())).toEqual([]);
     const plain = [portrait('a'), portrait('b'), portrait('c')];
     const group = api.buildGroup(plain, api.newGroupState(), api.mulberry32(3));
-    expect(group).toHaveLength(1);
+    // A picture never stands alone: it gets the nearest partner.
+    expect(group).toHaveLength(2);
+    expect(api.buildGroup([portrait('a')], api.newGroupState())).toHaveLength(
+      1,
+    );
   });
 });
 
@@ -263,6 +273,107 @@ describe('splitting a group over slides', () => {
     ];
     const slides = api.planGroup(group, 'trio', api.mulberry32(2));
     expect(slides[0]!.layout).not.toBe('trio');
+  });
+});
+
+describe('no picture stands alone with black beside it', () => {
+  it('gives an isolated picture a partner instead of a slide of its own', () => {
+    const library = [
+      ...blocks(2, 2),
+      ...Array.from({ length: 6 }, (_, i) =>
+        portrait(`s${i}`, { t: 5_000_000 + i }),
+      ),
+    ];
+    // Only a picture that has no neighbours at all would stand alone.
+    for (let seed = 1; seed <= 60; seed += 1) {
+      const group = api.buildGroup(
+        library,
+        api.newGroupState(),
+        api.mulberry32(seed),
+      );
+      expect(group.length).toBeGreaterThanOrEqual(2);
+      const slides = api.planGroup(group, '', api.mulberry32(seed));
+      for (const slide of slides)
+        if (slide.photos.length === 1)
+          expect(slide.photos[0]!.w).toBeGreaterThan(slide.photos[0]!.h);
+    }
+  });
+
+  it('never shows a portrait on a slide of its own, whatever the mix and the last layout', () => {
+    const shapes = [
+      [1, 0, 0],
+      [3, 2, 0],
+      [2, 1, 0],
+      [4, 1, 0],
+      [1, 3, 0],
+      [5, 1, 0],
+      [2, 4, 0],
+      [4, 2, 0],
+    ];
+    for (const [portraits, landscapes] of shapes) {
+      for (const previous of ['', 'duo', 'trio', 'pair', 'mixed', 'single']) {
+        for (let seed = 1; seed <= 40; seed += 1) {
+          const photos = [
+            ...Array.from({ length: portraits! }, (_, i) => portrait(`p${i}`)),
+            ...Array.from({ length: landscapes! + 0 }, (_, i) =>
+              landscape(`l${i}`),
+            ),
+          ];
+          if (photos.length < 2) continue;
+          for (const slide of api.planGroup(
+            photos,
+            previous,
+            api.mulberry32(seed),
+          ))
+            if (slide.photos.length === 1)
+              expect(slide.photos[0]!.w).toBeGreaterThan(slide.photos[0]!.h);
+        }
+      }
+    }
+    // Pictures with landscapes mixed in, too.
+    for (let seed = 1; seed <= 200; seed += 1) {
+      const rnd = api.mulberry32(seed);
+      const count = 2 + Math.floor(rnd() * 5);
+      const photos = Array.from({ length: count }, (_, i) =>
+        rnd() < 0.5 ? portrait(`p${i}`) : landscape(`l${i}`),
+      );
+      const previous = ['', 'duo', 'trio', 'pair', 'mixed', 'single', 'stack3'][
+        Math.floor(rnd() * 7)
+      ]!;
+      const slides = api.planGroup(photos, previous, rnd);
+      expect(slides.flatMap((s) => s.photos)).toHaveLength(count);
+      for (const slide of slides)
+        if (slide.photos.length === 1)
+          expect(slide.photos[0]!.w).toBeGreaterThan(slide.photos[0]!.h);
+    }
+  });
+});
+
+describe('shade in the corners', () => {
+  const lu = (tr: number, br: number, bl: number) => ({ lu: [tr, br, bl] });
+  it('takes each corner from the picture that lies in it', () => {
+    // Three portraits: the clock and the name are on the third, the music on the first.
+    expect(
+      api.cornerLevels('trio', [lu(5, 5, 90), lu(5, 5, 5), lu(90, 40, 5)]),
+    ).toEqual([2, 1, 2]);
+    expect(api.cornerLevels('duo', [lu(0, 0, 10), lu(60, 60, 0)])).toEqual([
+      2, 2, 0,
+    ]);
+    // A big picture on the right, two small ones stacked on the left.
+    expect(
+      api.cornerLevels('stack3', [lu(5, 5, 0), lu(0, 0, 0), lu(0, 0, 80)]),
+    ).toEqual([0, 0, 2]);
+    // Two panoramas: the clock on the upper, the name and the music on the lower.
+    expect(api.cornerLevels('wide2', [lu(80, 0, 0), lu(0, 20, 60)])).toEqual([
+      2, 0, 2,
+    ]);
+    expect(api.cornerLevels('single', [lu(30, 31, 48)])).toEqual([0, 1, 1]);
+  });
+
+  it('counts a picture that was not measured as mid, and knows no unknown layout', () => {
+    expect(api.cornerLevels('single', [{}])).toEqual([1, 1, 1]);
+    expect(api.cornerLevels('duo', [{ lu: [1] }, {}])).toEqual([1, 1, 1]);
+    expect(api.cornerLevels('nope', [{}])).toBeNull();
   });
 });
 

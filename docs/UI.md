@@ -246,7 +246,14 @@ word (RESA, PLATS, TEMA, DAG, MÅNAD, ÅR, MED, MINNE), the name (`Lesko`,
 people, with dots showing which slide of the group is on screen (see
 [PHOTO-INTELLIGENCE.md](PHOTO-INTELLIGENCE.md)). The time of day is always at
 the upper right, large enough to read across the room (58 px, over a soft
-static floor), redrawn once a minute and never while the pager moves. Without
+shaded corner), redrawn once a minute and never while the pager moves. The
+three corners that carry text (clock upper right, name lower right, music
+widget lower left while music plays) are shaded with a radial gradient, as much
+as the picture in that corner needs: the server measures each picture's corner
+brightness once (`lu`) and a slide gets level 0, 1 or 2 per corner from the
+picture that lies there; mid and bright corners also get a 3 px blur on a smaller
+area right in the corner, switched on only when the slide has settled (not during
+the fade) and off for good with the Hub's localStorage `lugn.photos.blur` = `off`. Without
 neighbour lists from the server (an older server, no analysis) the page plays as
 before: pictures taken close in time and place are played near each other, with
 a quiet caption of place and date. The quick menu (`quick-menu.js`) slides up from the bottom edge when the mouse
