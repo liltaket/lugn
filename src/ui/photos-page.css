@@ -206,9 +206,9 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  /* A long title is cut short with an ellipsis: never more than half the
-     screen, so the caption on the right keeps its room. */
-  max-width: calc(var(--W) / 2 - 36px);
+  /* A long title is cut short with an ellipsis, well before half the screen,
+     so the caption on the right keeps its room. */
+  max-width: calc(var(--W) * 0.36);
   transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .ph-now[hidden] {

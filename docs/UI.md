@@ -278,7 +278,7 @@ closes it also ends the hover: moving the mouse a little afterwards does not
 bring it back until the mouse has left the screen or rested for five seconds.
 The picture stays while it is open. On Foto the music widget (pause, title and
 artist; Hem's own play button is pressed) is there whenever music plays, at the
-lower left (a long title is cut with an ellipsis at half the screen), and is
+lower left (a long title is cut with an ellipsis at about a third of the screen), and is
 lifted over the bar while that is open; the caption sits at
 the lower right. Musik, Klocka and Info have the same bar, and no longer show a
 dock all the time. The picture veil is only on the pictures that reach
@@ -301,7 +301,9 @@ It asks the server for pictures only while it is the shown page; see
 
 The navbar holds a **scene dock**: a few large choices from Hem's scenes (not
 the custom ones, nor Mysljus, Musik and Party): Fokus, Vardagsljus,
-Filmkväll, Dynamisk, Sleep on Bed, at most five, with Släck last. Its buttons send what Hem's scene buttons send and
+Filmkväll, Dynamisk, Sleep on Bed, at most five, with Släck last, drawn as
+pictures only (the name is the button's label and tooltip; a scene without a
+picture shows its name). Its buttons send what Hem's scene buttons send and
 show the state Hem's buttons show (selected, pending, waiting for lamps). Musik
 reads title, artist, source and cover from Hem's music card, so the same pause
 grace, computer media and retained artwork rules apply, and play/pause sends

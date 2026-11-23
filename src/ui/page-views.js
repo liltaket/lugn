@@ -86,16 +86,21 @@
     button.dataset.scene = scene.id;
     const icon =
       typeof sceneIconFor === 'function' ? sceneIconFor(scene.id) : null;
+    const name = scene.id === 'scene.all_off' ? 'Släck' : scene.name;
     if (icon) {
-      // The same fixed pictograms as Hem; scene names stay text.
+      // The same fixed pictograms as Hem; the bar shows only the picture (the
+      // name is the button's label and tooltip).
       button.insertAdjacentHTML(
         'beforeend',
         `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${icon.paths}</svg>`,
       );
+    } else {
+      // A scene without a picture keeps its name, so it is never an empty button.
+      const label = document.createElement('span');
+      label.textContent = name;
+      button.append(label);
     }
-    const name = document.createElement('span');
-    name.textContent = scene.id === 'scene.all_off' ? 'Släck' : scene.name;
-    button.append(name);
+    button.setAttribute('aria-label', name);
     button.title = scene.name;
     return button;
   }
