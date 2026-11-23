@@ -56,12 +56,12 @@ The unit runs at `Nice=15` with `IOSchedulingClass=idle`, `MemoryMax=4G`,
 
 ## Commands
 
-| Command | |
-| --- | --- |
-| `run` | the loop until SIGTERM. Analysis runs in 10-minute slices, each followed by a publish, so progress shows up during a long first run. Lugn or Apple unreachable: back off 30 s, doubling to 30 min. |
-| `once` | one full pass (everything pending), then exit (non-zero if Apple was unreachable). |
-| `status` | counts, stored size, free space, last publish, and Lugn's view when the token is set. |
-| `export-bundle <file>` | the bundle the store would publish, without contacting Lugn (people decisions from the cache). |
+| Command                |                                                                                                                                                                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`                  | the loop until SIGTERM. Analysis runs in 10-minute slices, each followed by a publish, so progress shows up during a long first run. Lugn or Apple unreachable: back off 30 s, doubling to 30 min. |
+| `once`                 | one full pass (everything pending), then exit (non-zero if Apple was unreachable).                                                                                                                 |
+| `status`               | counts, stored size, free space, last publish, and Lugn's view when the token is set.                                                                                                              |
+| `export-bundle <file>` | the bundle the store would publish, without contacting Lugn (people decisions from the cache).                                                                                                     |
 
 SIGTERM is honoured between pictures and inside downloads (checked every 64 KB).
 
@@ -133,7 +133,7 @@ changes (each has a unit test):
   cosine floor per kind, top three; see the doc. Nothing assumes an embedding
   length.
 - **`cand`**: the best 48 per picture with score ≥ 0.30, `[id, base, time,
-  place, look]` in 0-100, -1 when unknown.
+place, look]` in 0-100, -1 when unknown.
 
 Each row (one picture against all) runs in parallel on a rayon pool of
 `threads`. Within a row the cheap terms give an upper bound (the look term
@@ -146,10 +146,10 @@ checks the pruned result against scoring every pair exactly.
 of 3-60 pictures over three years, 70 % at home, 10 % without GPS, 2 % without
 time; Kuffe, release build, `nice`, other jobs running, load ≈ 6):
 
-| pictures | dims | threads | time | dot products |
-| --- | --- | --- | --- | --- |
-| 5000 | 768 | 4 | 1.3 s | 54 % of pairs |
-| 5000 | 512 | 1 | 4.7 s | 58 % of pairs |
+| pictures | dims | threads | time  | dot products  |
+| -------- | ---- | ------- | ----- | ------------- |
+| 5000     | 768  | 4       | 1.3 s | 54 % of pairs |
+| 5000     | 512  | 1       | 4.7 s | 58 % of pairs |
 
 The bound prunes about half the pairs on this library, not most: pairs at home
 far apart in time can still reach 0.30 when they look alike, so their look has
@@ -167,16 +167,16 @@ grouping itself is another module's job; today its stub proposes nothing.
 
 ## Module map
 
-| Module | |
-| --- | --- |
-| `analysis`, `bundle` | the contract (with docs/PHOTO-BRAIN.md) |
-| `infer/` | decoding and the ONNX models (a stub until the inference module lands) |
-| `people/` | grouping faces into people |
-| `config` | `config.toml`, mode check, token from the environment |
-| `client` | Lugn's endpoints and Apple downloads (rustls) |
-| `store`, `disk` | originals, the SQLite index, mount and free-space checks |
-| `cluster/` | home, trips, outings, pair scores, candidates, duplicates, scenes |
-| `places` | nearest place and country from `data/places.tsv` |
-| `localtime` | local days with the picture's offset or Europe/Stockholm |
-| `publish` | building, comparing and gzipping the bundle |
-| `service` | the loop |
+| Module               |                                                                        |
+| -------------------- | ---------------------------------------------------------------------- |
+| `analysis`, `bundle` | the contract (with docs/PHOTO-BRAIN.md)                                |
+| `infer/`             | decoding and the ONNX models (a stub until the inference module lands) |
+| `people/`            | grouping faces into people                                             |
+| `config`             | `config.toml`, mode check, token from the environment                  |
+| `client`             | Lugn's endpoints and Apple downloads (rustls)                          |
+| `store`, `disk`      | originals, the SQLite index, mount and free-space checks               |
+| `cluster/`           | home, trips, outings, pair scores, candidates, duplicates, scenes      |
+| `places`             | nearest place and country from `data/places.tsv`                       |
+| `localtime`          | local days with the picture's offset or Europe/Stockholm               |
+| `publish`            | building, comparing and gzipping the bundle                            |
+| `service`            | the loop                                                               |

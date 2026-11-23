@@ -124,7 +124,9 @@ given picture version).
 ```json
 {
   "schema": 1,
-  "people": [ { "id": "p3", "name": "Anna", "confirmed": true, "hidden": false } ],
+  "people": [
+    { "id": "p3", "name": "Anna", "confirmed": true, "hidden": false }
+  ],
   "decided": { "<faceId>": "p3", "<faceId2>": null },
   "previous": { "<faceId>": "p3" },
   "not": { "<faceId>": ["p5"] }
@@ -220,15 +222,15 @@ and a picture's neighbours stay sensible when Kuffe is away.
 
 ## Where each job runs
 
-| Job | Where |
-| --- | --- |
-| list the album, display copies (1024 / 640 px) and corner shade | BrunoCAM |
-| full-size originals (HEIC or JPEG) | Kuffe's disk (`store_dir`) |
-| face detection, face embeddings, scene probabilities, quality, duplicates | Kuffe |
-| candidate neighbours, events, trips, home | Kuffe |
-| face grouping into people (anchored on the household's decisions) | Kuffe |
-| the household's decisions (names, confirmations, moves), stable person ids | BrunoCAM |
-| re-ranking candidates by people, choosing groups, naming | BrunoCAM / the Hub |
+| Job                                                                        | Where                      |
+| -------------------------------------------------------------------------- | -------------------------- |
+| list the album, display copies (1024 / 640 px) and corner shade            | BrunoCAM                   |
+| full-size originals (HEIC or JPEG)                                         | Kuffe's disk (`store_dir`) |
+| face detection, face embeddings, scene probabilities, quality, duplicates  | Kuffe                      |
+| candidate neighbours, events, trips, home                                  | Kuffe                      |
+| face grouping into people (anchored on the household's decisions)          | Kuffe                      |
+| the household's decisions (names, confirmations, moves), stable person ids | BrunoCAM                   |
+| re-ranking candidates by people, choosing groups, naming                   | BrunoCAM / the Hub         |
 
 ## Kuffe
 

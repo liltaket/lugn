@@ -34,7 +34,7 @@ depends only on the input (not its order, not thread timing).
 
    A **confirmed** person is a trusted anchor: an earlier automatic member only
    counts if it is at least `thresholds.confident()` (= `join + 0.25 × (1 −
-   join)`, 0.55 by default) similar to the pinned faces alone, so earlier
+join)`, 0.55 by default) similar to the pinned faces alone, so earlier
    mistakes cannot drag it.
 
    A member is scored against its person's centroid **without its own share**
@@ -94,26 +94,26 @@ the run is O(faces × people × dim) and small.
 **Speed** (release build on Kuffe, 16 threads, shared with other jobs, all
 faces 512-dimensional; `cargo test --release -- --ignored --nocapture bench_`):
 
-| input | time |
-| --- | --- |
-| 6000 seed faces, 120 people | 0.26 s (0.44 s with 4 threads) |
-| 8000 seed faces (the cap), 160 people | 0.47 s |
-| 25 500 faces: 6000 seeds of 1500 people, 19 500 unclear faces, 50 pinned people | 0.46 s |
+| input                                                                           | time                           |
+| ------------------------------------------------------------------------------- | ------------------------------ |
+| 6000 seed faces, 120 people                                                     | 0.26 s (0.44 s with 4 threads) |
+| 8000 seed faces (the cap), 160 people                                           | 0.47 s                         |
+| 25 500 faces: 6000 seeds of 1500 people, 19 500 unclear faces, 50 pinned people | 0.46 s                         |
 
 The thread count follows rayon (`RAYON_NUM_THREADS`); the service runs niced.
 
 ## Thresholds
 
-| field | default | meaning |
-| --- | --- | --- |
-| `join` | 0.40 | similarity to a person's centroid needed to join it |
-| `keep` | 0.30 | similarity needed to keep an earlier automatic place |
-| `link` | 0.38 | average similarity for faces to form a new group |
-| `margin` | 0.04 | the chosen person must beat the runner-up by this much (and an earlier place may trail the best by at most this much) |
-| `seed_min_score` | 0.75 | detector confidence needed to start a person |
-| `seed_min_front` | 0.30 | frontalness needed to start a person |
-| `seed_min_px` | 40 | shorter face box side, analysed pixels, to start a person |
-| `seed_min_quality` | 30 | face quality (0-100) needed to start a person |
+| field              | default | meaning                                                                                                               |
+| ------------------ | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| `join`             | 0.40    | similarity to a person's centroid needed to join it                                                                   |
+| `keep`             | 0.30    | similarity needed to keep an earlier automatic place                                                                  |
+| `link`             | 0.38    | average similarity for faces to form a new group                                                                      |
+| `margin`           | 0.04    | the chosen person must beat the runner-up by this much (and an earlier place may trail the best by at most this much) |
+| `seed_min_score`   | 0.75    | detector confidence needed to start a person                                                                          |
+| `seed_min_front`   | 0.30    | frontalness needed to start a person                                                                                  |
+| `seed_min_px`      | 40      | shorter face box side, analysed pixels, to start a person                                                             |
+| `seed_min_quality` | 30      | face quality (0-100) needed to start a person                                                                         |
 
 The defaults are the TypeScript (SFace) values and only a starting point: the
 face model on Kuffe is different, so they must be calibrated.
