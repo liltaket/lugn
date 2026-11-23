@@ -539,6 +539,11 @@ impl PictureAnalyzer for Analyzer {
         &self.ids
     }
 
+    /// libheif decodes the iPhone originals (3024 × 4032) this program prefers.
+    fn decodes_heic(&self) -> bool {
+        true
+    }
+
     fn analyse(&mut self, path: &Path) -> Result<PictureAnalysis> {
         let t = Instant::now();
         let picture = decode::decode_file(path)?;
