@@ -187,3 +187,40 @@ and a picture's neighbours stay sensible when Kuffe is away.
 - `db_dir`: its own index, embeddings and the bundle (small; on the SSD).
 - Disk use stays bounded: a few MB per original, and the program reports free space
   and stops downloading below a floor.
+
+## Details both sides rely on
+
+These follow from the implementation in `agents/linux/photo-brain`; keep them in
+step with it.
+
+- **Listing.** `utcOffsetSeconds` is `null` when the record carries no offset; Kuffe
+  then assumes Europe/Stockholm for local dates (`0` means UTC). Kuffe reads these
+  `details` fields: `subtype` (bit 4 = screenshot, gives `q.junk = "screenshot"`),
+  `burst`, `batch` (pictures imported together; a weak same-moment hint when time
+  or GPS is missing), `favorite` and `caption`. An `original` rendition is used
+  when its `type` is `public.heic`/`public.heif` (only if the analyser decodes
+  HEIC) or `public.jpeg`; otherwise the `jpeg` rendition. Downloads must be
+  `https://*.icloud-content.com` (redirects included), at most 64 MB.
+- **Analyser seam.** `PictureAnalyzer::decodes_heic()` (default `false`) tells the
+  brain whether to keep HEIC originals. A face's `px` (shorter side of its box in
+  pixels) uses the listing's size of the stored rendition.
+- **Scene vocabulary** (`data/photo-scenes.json`). `kind` absent: the CLIP file as
+  today, softmax with logit scale 100 (its `scale` is the int8 quantisation of
+  the vectors). `kind: "softmax"`: `scale` is the logit scale (default 100).
+  `kind: "sigmoid"`: `p = sigmoid(scale × cosine + bias)` per label, `scale` and
+  `bias` required. Vectors are base64 of `dim` int8 values or `dim` little-endian
+  f32 values and are normalised on load, so int8 needs no quantisation scale.
+  Kuffe uses the file only when its `model` matches the embedding model (last
+  path segment, case-insensitive) and `dim` equals the embedding length. Labels
+  under a raw-cosine floor (configurable per kind) are not reported; `sv: null`
+  labels compete and can appear in `scene` (the Hub ignores keys without a
+  name). `screen`, `document` or `receipt` at or above a probability threshold, in
+  a picture without faces, give `q.junk = "document"`.
+- **Bundle.** `photos` holds only pictures analysed by the models in `brain`;
+  `cand` and `du` may name listed pictures that have no entry yet. `cand` has no
+  near-duplicates. Events are outings of at least two pictures (a new one after
+  a 4 h pause or a 25 km jump); their id is `e<first capture time in seconds>`.
+  Kuffe sends the bundle only when its content changed (ignoring `generatedAt`),
+  or when `GET /photo-brain/v1/state` says Lugn holds none (`intelAt: null`).
+- **People.** When `GET /photo-brain/v1/people` fails, Kuffe uses the last
+  response it received (cached in `db_dir`) and publishes anyway.
