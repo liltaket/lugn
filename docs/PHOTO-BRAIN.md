@@ -39,6 +39,12 @@ iCloud shared album ──► BrunoCAM (Lugn) ──GET /photo-brain/v1/album─
 
 ## Lugn API (BrunoCAM, bearer token, loopback listener)
 
+All four routes need `Authorization: Bearer <token>` (401 otherwise). Lugn without
+a configured token keeps them shut (`503 photo_brain_requires_token`); a Lugn
+without a photo frame, or with `photoFrame.intelligence.enabled = false`, answers
+`404 photo_brain_unavailable`. Errors are `{ "error": "<code>" }` like the rest of
+the API.
+
 ### `GET /photo-brain/v1/album`
 
 ```json
@@ -75,21 +81,38 @@ iCloud shared album ──► BrunoCAM (Lugn) ──GET /photo-brain/v1/album─
 `id` is Lugn's own picture id (24 base64url characters, a hash of the album's record
 and its `version`), the same id the Hubs and the people panel use. It changes when
 the picture is edited, so an id never needs a separate version check. `version` is
-informational. All stills in the album, newest first, no cap. `original` is present when Apple
-offers it (HEIC for iPhone pictures). `jpeg` is Apple's 1536 × 2048 rendition.
-Videos are not listed. Coordinates are full precision here (the Hub listing keeps
-its coarser rounding).
+informational. All stills in the album, newest first, no cap (the album may hold
+more pictures than Lugn caches, `photoFrame.maxPhotos`). `original` is present when Apple
+offers it (HEIC for iPhone pictures). `jpeg` is Apple's 1536 × 2048 rendition and
+is always there. Videos are not listed. Coordinates are full precision here (the
+Hub listing keeps its coarser rounding). `listedAt` is when Lugn read Apple's
+listing: a listing older than five minutes is read again first (one read at a
+time, never more often). When Apple cannot be reached, a listing up to 15 minutes
+old is still served; older, the answer is `502 album_unavailable`. A single empty
+answer from Apple for an album that had pictures is not believed (three in a row
+are).
 
 ### `PUT /photo-brain/v1/intel`
 
-Body: the bundle below, JSON, optionally `Content-Encoding: gzip`, up to 64 MB
-inflated. Replaced atomically; the Hubs see it at their next listing.
-Response `{ "accepted": <photos>, "unknown": <ids not in the album> }`.
+Body: the bundle below, `Content-Type: application/json`, optionally
+`Content-Encoding: gzip`, up to 64 MB inflated (inflating stops at the cap:
+`413 request_too_large`). Replaced atomically and kept in `intel.json`; the Hubs
+see it at their next listing. Response `{ "accepted": <n>, "unknown": <n> }`:
+how many of the bundle's pictures are in Lugn's library and how many are not
+(those entries are kept, in case the picture arrives later). A bundle that does
+not match schema 1 is refused whole with `400 invalid_bundle` (or
+`too_many_photos`) and up to ten `issues` (`path`, `message`); other refusals are
+`invalid_json`, `invalid_gzip`, `empty_request_body` (400) and
+`unsupported_content_encoding`, `content_type_must_be_application_json` (415).
+The last good bundle stays in place after a refusal.
 
 ### `GET /photo-brain/v1/state`
 
 `{ "revision": "…", "intelAt": <ms|null>, "pictures": <n>, "analysed": <n> }`: what
-Lugn currently holds, so Kuffe can see which pictures lack a result.
+Lugn currently holds, so Kuffe can see whether pictures lack a result. `revision`
+is the Hub listing's revision, `intelAt` when Lugn received the last bundle,
+`pictures` the pictures Lugn caches and `analysed` how many of them the bundle
+covers.
 
 ### `GET /photo-brain/v1/people`
 
@@ -110,15 +133,29 @@ given picture version).
 }
 ```
 
-`decided`: a face a person pinned to somebody (`"p3"`) or declared "not a person"
-(`null`). `previous`: the automatic grouping's earlier choice, kept so people keep
-their ids. `not`: people a face was moved away from.
+`people`: every person Lugn knows, hidden ones included. `decided`: a face a
+person pinned to somebody (`"p3"`) or declared "not a person" (`null`).
+`previous`: the automatic grouping's earlier choice, kept so people keep their
+ids. `not`: people a face was moved away from; Lugn never gives such a face to
+them automatically, whatever the proposal.
+
+Lugn keeps the box of every face a person decided on. When a picture's faces are
+numbered differently in a later bundle (another detector), the decision moves to
+the face whose box overlaps it by half or more; a decision that matches no face
+of its picture is kept but left out of `decided` and `not` until its face is seen
+again.
 
 ## The intel bundle (schema 1)
 
-One document for the whole library. A picture's entry is valid for the `version` it
-was computed from; Lugn ignores an entry whose `version` differs from the cached
-picture.
+One document for the whole library, keyed by Lugn's picture id. The id already
+changes when a picture is edited, so an entry is matched by id alone and `v` is
+informational. Limits (a bundle that breaks one is refused whole): at most 20000
+pictures, 64 faces and 64 `cand` / `du` entries per picture, ids
+`^[A-Za-z0-9_-]{24}$`, scene keys `^[a-z0-9_-]{1,64}$` (at most 8), `v` ≤ 256
+characters, `cap` ≤ 500, trip titles ≤ 120, numbers finite and in range (boxes,
+`score`, `front` and scene probabilities 0-1; `q`, `sharp`, `dark` 0-100; `cand`
+scores -1-100). Fields Lugn does not know are dropped. `scene`, `faces`, `cand`
+and `du` may be left out (empty); `q` left out means a usable picture.
 
 ```jsonc
 {
@@ -189,7 +226,12 @@ people known in both pictures:
 otherwise     → score = base
 ```
 
-and keeps the best 14 as the `nb` list a Hub already reads. So neither the
+and keeps the best 14 with a score of at least 0.3 as the `nb` list a Hub already
+reads (candidates no longer in the library are dropped). A picture whose `q` says
+it is junk (`junk` set, `sharp` < 8 or `dark` > 95) is listed for the Hubs with
+`skip: 1`: it is in no other picture's `nb` and gets none itself, and a Hub should
+never start a group from it. Pictures without an entry are grouped on the Pi by
+time and place, each compared with the 60 nearest in time only. So neither the
 O(n²) pair scoring nor the faces' embeddings ever have to be computed on the Pi,
 and a picture's neighbours stay sensible when Kuffe is away.
 
