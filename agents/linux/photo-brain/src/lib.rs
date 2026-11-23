@@ -9,4 +9,5 @@
 
 pub mod analysis;
 pub mod bundle;
+pub mod infer;
 pub mod people;
