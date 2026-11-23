@@ -781,9 +781,6 @@ export async function startRuntime(
             ? {
                 intelligence: {
                   enabled: config.photoFrame.intelligence.enabled,
-                  ...(config.photoFrame.intelligence.modelsDir
-                    ? { modelsDir: config.photoFrame.intelligence.modelsDir }
-                    : {}),
                   ...(config.photoFrame.intelligence.home
                     ? {
                         home: {

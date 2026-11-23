@@ -1,11 +1,13 @@
-// Foton: who the photo frame has found in the pictures. Lugn groups the faces
-// it sees; here the household names the people, confirms a group or moves a
-// face that landed in the wrong one. app.js owns the session; this module
-// borrows its CSRF token through window.lugnPanel and talks only to Lugn.
-// Everything about a face stays on the machine that runs Lugn.
+// Foton: who the photo frame has found in the pictures. The photo brain on
+// Kuffe finds the faces and proposes who they are; here the household names
+// the people, confirms a group or moves a face that landed in the wrong one.
+// app.js owns the session; this module borrows its CSRF token through
+// window.lugnPanel and talks only to Lugn.
 
 const API = '/ui/api/photo-people';
 const POLL_MS = 4000;
+/** A bundle older than this: Kuffe has gone quiet. */
+const QUIET_MS = 6 * 60 * 60 * 1000;
 
 const el = (id) => document.getElementById(id);
 function node(tag, className = '', text = '') {
@@ -88,7 +90,8 @@ function schedule() {
   window.clearTimeout(pollTimer);
   pollTimer = 0;
   if (!visible() || document.hidden) return;
-  const working = data?.status?.analyzer?.pending > 0;
+  const brain = data?.status?.brain;
+  const working = Boolean(brain?.intelAt) && brain.analysed < brain.photos;
   pollTimer = window.setTimeout(
     () => void load(),
     working ? POLL_MS : POLL_MS * 6,
@@ -97,21 +100,27 @@ function schedule() {
 
 // ── Reading the state ──
 
-function statusText(status) {
+const sinceFormat = new Intl.DateTimeFormat('sv-SE', {
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+function statusText(status, now = Date.now()) {
   if (!status) return ['Läser …', 'warn'];
-  if (!status.available)
+  if (!status.available) return ['Bildanalysen är av', 'warn'];
+  const brain = status.brain;
+  if (!brain?.intelAt) return ['Väntar på Kuffe', 'warn'];
+  if (now - brain.intelAt > QUIET_MS)
     return [
-      status.missingModels?.length ? 'Modellerna saknas' : 'Bildanalysen är av',
+      `Kuffe har inte hörts av sedan ${sinceFormat.format(new Date(brain.intelAt))}`,
       'warn',
     ];
-  const a = status.analyzer;
-  if (a.state === 'backoff') return ['Pausad efter fel', 'warn'];
-  if (a.pending > 0)
-    return [
-      `Analyserar ${a.pending} ${a.pending === 1 ? 'bild' : 'bilder'}`,
-      'warn',
-    ];
-  return [`${status.analysed} av ${status.photos} bilder analyserade`, 'ok'];
+  return [
+    `Kuffe: ${brain.analysed} av ${brain.photos} ${brain.photos === 1 ? 'bild analyserad' : 'bilder analyserade'}`,
+    brain.analysed < brain.photos ? 'warn' : 'ok',
+  ];
 }
 
 function peopleLabel(person) {

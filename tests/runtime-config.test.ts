@@ -649,6 +649,38 @@ describe('runtime configuration cross references', () => {
     );
   });
 
+  it('reads a photo frame of thousands of pictures and an old analysis setting', () => {
+    const album = 'https://photos.icloud.com/shared/album/ABCDEFGH12345678';
+    expect(
+      loadConfig({ ...minimal, photoFrame: { albumUrl: album } }).photoFrame
+        ?.maxPhotos,
+    ).toBe(5000);
+    expect(
+      loadConfig({
+        ...minimal,
+        photoFrame: { albumUrl: album, maxPhotos: 20_000 },
+      }).photoFrame?.maxPhotos,
+    ).toBe(20_000);
+    expect(
+      captureConfigError(() =>
+        loadConfig({
+          ...minimal,
+          photoFrame: { albumUrl: album, maxPhotos: 20_001 },
+        }),
+      ).message,
+    ).toContain('photoFrame.maxPhotos');
+    // A config.json from the on-device analysis still loads.
+    expect(
+      loadConfig({
+        ...minimal,
+        photoFrame: {
+          albumUrl: album,
+          intelligence: { enabled: true, modelsDir: '/var/lib/lugn/models' },
+        },
+      }).photoFrame?.intelligence?.enabled,
+    ).toBe(true);
+  });
+
   it('resolves an optional per-Hub pointer bridge and rejects malformed ones', () => {
     const hub = {
       id: 'desk-hub',
