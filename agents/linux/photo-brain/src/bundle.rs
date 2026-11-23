@@ -96,8 +96,10 @@ pub struct Face {
     pub score: f32,
     pub front: f32,
     pub q: u8,
-    /// Base64 of little-endian f32 values, `faceDim` of them, unit length.
-    pub e: String,
+    /// Kuffe's proposal for who this is: `"p3"` an existing person, `"n7"` a new
+    /// group of faces that agree, absent when the face is too unclear to place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p: Option<String>,
 }
 
 #[cfg(test)]
