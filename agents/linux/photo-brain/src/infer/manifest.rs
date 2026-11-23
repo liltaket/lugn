@@ -198,7 +198,10 @@ mod tests {
 
     #[test]
     fn unknown_choice_is_refused() {
-        let text = DEFAULT_MANIFEST.replace("face = \"sface-2021dec\"", "face = \"no-such-model\"");
+        let text = DEFAULT_MANIFEST.replace(
+            "face = \"auraface-v1-glintr100\"",
+            "face = \"no-such-model\"",
+        );
         assert!(Manifest::parse(&text).is_err());
     }
 }

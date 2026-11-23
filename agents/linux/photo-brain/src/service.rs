@@ -404,6 +404,29 @@ impl Brain {
             .unwrap_or_default()
     }
 
+    /// The grouping's thresholds for the recogniser that made the faces.
+    fn face_thresholds(&self) -> Thresholds {
+        let model = self
+            .analyzer
+            .as_ref()
+            .map(|a| a.model_ids().face.clone())
+            .or_else(|| {
+                self.store
+                    .latest_models()
+                    .ok()
+                    .flatten()
+                    .map(|models| models.face)
+            })
+            .unwrap_or_default();
+        let faces = self.config.faces;
+        Thresholds::for_model(&model).with_overrides(
+            faces.join,
+            faces.keep,
+            faces.link,
+            faces.margin,
+        )
+    }
+
     /// Face proposals; recomputed only when the faces or the decisions changed.
     fn proposals(
         &mut self,
@@ -442,9 +465,10 @@ impl Brain {
             return proposals.clone();
         }
         let labels: Labels = people.labels();
+        let thresholds = self.face_thresholds();
         let proposals = self
             .pool
-            .install(|| people::cluster(&faces, &labels, &Thresholds::default()));
+            .install(|| people::cluster(&faces, &labels, &thresholds));
         self.proposals = Some((fingerprint, proposals.clone()));
         proposals
     }
@@ -674,7 +698,9 @@ impl Brain {
         if truth.len() < 4 {
             out.push_str("too few pinned faces to calibrate\n");
         } else {
-            out.push_str(&people::calibrate(&faces, &truth).to_string());
+            out.push_str(
+                &people::calibrate_with(&faces, &truth, &self.face_thresholds()).to_string(),
+            );
         }
         Ok(out)
     }

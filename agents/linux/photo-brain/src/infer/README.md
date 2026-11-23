@@ -61,8 +61,8 @@ detector settings (`yunet-2026may@1600px-s0.65`).
 | `siglip2-base-patch16-384-fp16`         |    187 MB | Apache-2.0                                                |             | 768-d, same vectors as fp32, slower     |
 | `…-int8` (both sizes)                   | 434/96 MB | Apache-2.0                                                |             | broken by quantisation, comparison only |
 | `yunet-2026may` **use**                 |    0.2 MB | MIT                                                       |     yes     | dynamic H/W                             |
-| `sface-2021dec` **use**                 |     39 MB | Apache-2.0                                                |     yes     | 128-d                                   |
-| `auraface-v1-glintr100`                 |    261 MB | Apache-2.0 (model card)                                   |     yes     | 512-d, recogniser file only             |
+| `sface-2021dec`                         |     39 MB | Apache-2.0                                                |     yes     | 128-d                                   |
+| `auraface-v1-glintr100` **use**         |    261 MB | Apache-2.0 (model card)                                   |     yes     | 512-d, recogniser file only             |
 | `buffalo_l-w600k-r50`                   |    174 MB | **non-commercial research only** (InsightFace pretrained) |   **no**    | 512-d; only when named, never committed |
 
 Sources: SigLIP 2 ONNX exports from `onnx-community/siglip2-{so400m,base}-patch16-384-ONNX`
@@ -256,3 +256,20 @@ medians over five pictures each, ~5 faces per picture. HEIC = 3024 x 4032 / 4032
 - **q4 vs fp16**: the default q4 embedding moves picture-to-picture cosines by up to
   0.1 compared with full precision; thresholds tuned on one must not be reused on the
   other (a different `ModelIds::embed` forces recomputation anyway).
+
+### Which recogniser (measured 2026-11-23 on the household's own pinned faces)
+
+41 pinned faces of 11 people from the album (`lugn-photo-brain calibrate`), faces
+found at full size with YuNet; a small sample, so read it as direction, not as proof.
+
+| recogniser                   | same person p5 | different people p95 | held out, right (of 17) | pairs P / R at the proposed thresholds |
+| ---------------------------- | -------------- | -------------------- | ----------------------- | -------------------------------------- |
+| SFace                        | 0.27           | 0.28                 | 14                      | 1.00 / 0.80                            |
+| AuraFace (default)           | 0.18           | 0.18                 | 16                      | 0.96 / 0.90                            |
+| buffalo_l (research licence) | 0.34           | 0.14                 | 17                      | 1.00 / 0.93                            |
+
+AuraFace is the default because its weights are Apache-2.0 and it clearly beats SFace.
+buffalo_l separates people best (a gap between the two distributions where the others
+have none) but its weights are licensed for non-commercial research; it is only used
+when named in `models.toml`, never downloaded by default. Thresholds per recogniser:
+`Thresholds::for_model`; `[faces]` in the config overrides them.

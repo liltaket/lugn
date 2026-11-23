@@ -12,7 +12,7 @@
 [use]
 embed = "siglip2-so400m-patch16-384-q4"
 detector = "yunet-2026may"
-face = "sface-2021dec"
+face = "auraface-v1-glintr100"
 
 # ONNX Runtime 1.31.1 (C API 31, matching the `ort` feature `api-31`). The
 # official GitHub release asset is the usual source; this takes the identical

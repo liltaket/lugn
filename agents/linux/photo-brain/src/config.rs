@@ -47,6 +47,8 @@ pub struct Config {
     pub scenes: SceneConfig,
     #[serde(default)]
     pub events: EventConfig,
+    #[serde(default)]
+    pub faces: FaceConfig,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
@@ -79,6 +81,17 @@ impl Default for SceneConfig {
             sigmoid_document_p: 0.5,
         }
     }
+}
+
+/// Overrides of the face grouping's thresholds for the recogniser in use
+/// (`Thresholds::for_model` holds the calibrated defaults).
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FaceConfig {
+    pub join: Option<f32>,
+    pub keep: Option<f32>,
+    pub link: Option<f32>,
+    pub margin: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]

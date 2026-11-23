@@ -755,3 +755,18 @@ fn calibration_on_synthetic_people() {
         .collect();
     assert!(calibrate(&faces, &one).proposed.is_none());
 }
+
+#[test]
+fn each_recogniser_has_its_own_calibrated_thresholds() {
+    let sface = Thresholds::for_model("sface-2021dec");
+    let aura = Thresholds::for_model("auraface-v1-glintr100");
+    let buffalo = Thresholds::for_model("buffalo_l-w600k-r50");
+    // A stronger recogniser separates people at a lower cosine.
+    assert!(buffalo.join < aura.join + 0.06 && aura.join < sface.join);
+    for t in [&sface, &aura, &buffalo] {
+        assert!(t.keep <= t.join && t.link <= t.join + 0.05);
+    }
+    assert_eq!(Thresholds::for_model("something-new"), sface);
+    let tuned = aura.with_overrides(Some(0.5), None, None, Some(0.1));
+    assert_eq!((tuned.join, tuned.margin), (0.5, 0.1));
+}

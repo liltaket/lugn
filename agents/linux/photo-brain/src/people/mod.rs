@@ -85,6 +85,49 @@ pub struct Thresholds {
     pub seed_min_quality: f32,
 }
 
+impl Thresholds {
+    /// Starting values for a face recogniser, from `lugn-photo-brain calibrate`
+    /// on one household's 41 pinned faces (11 people, 2026-11-23): each is the
+    /// calibration's proposal nudged towards caution (the sample is small, and
+    /// the proposal is fitted on it). Unknown models get the SFace values.
+    /// `[faces]` in the config overrides any of them.
+    pub fn for_model(face_model: &str) -> Self {
+        let tuned = |join, keep, link| Self {
+            join,
+            keep,
+            link,
+            ..Self::default()
+        };
+        let id = face_model.to_ascii_lowercase();
+        if id.contains("buffalo") || id.contains("w600k") {
+            // same-person p5 0.34, different-person p95 0.14: a wide gap.
+            tuned(0.25, 0.22, 0.25)
+        } else if id.contains("auraface") || id.contains("glintr100") {
+            // same-person p5 0.18, different-person p95 0.18: no gap, so stricter
+            // than the 1 % proposal (0.275 / 0.249 / 0.217).
+            tuned(0.30, 0.27, 0.25)
+        } else {
+            // SFace; proposal 0.382 / 0.337 / 0.333.
+            tuned(0.39, 0.33, 0.35)
+        }
+    }
+
+    /// The thresholds with the config's overrides applied.
+    pub fn with_overrides(
+        mut self,
+        join: Option<f32>,
+        keep: Option<f32>,
+        link: Option<f32>,
+        margin: Option<f32>,
+    ) -> Self {
+        self.join = join.unwrap_or(self.join);
+        self.keep = keep.unwrap_or(self.keep);
+        self.link = link.unwrap_or(self.link);
+        self.margin = margin.unwrap_or(self.margin);
+        self
+    }
+}
+
 impl Default for Thresholds {
     fn default() -> Self {
         // SFace-like starting values; the face model's calibration replaces them.
