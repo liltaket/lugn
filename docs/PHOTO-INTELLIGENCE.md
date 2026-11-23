@@ -68,6 +68,9 @@ then be rebuilt for the new text tower.
 - Results are kept in `analysis.json` next to the pictures, keyed by the
   picture's id, which changes when the picture is edited. A new model version
   starts the cache again once. Nothing is analysed twice.
+- The ONNX runtime contains a Microsoft telemetry client (OneCollector). The worker
+  starts with `ORT_DISABLE_TELEMETRY=1` so it is never started; nothing about a
+  picture or a face goes anywhere.
 - Faces and their decisions are in `people.json` (mode 0600). Faces are not
   sent anywhere: the panel receives small crops and pictures through the signed
   in session only, and a Hub receives person ids and names, never faces.

@@ -48,20 +48,28 @@ export type AnalyzerOptions = {
 
 const MAX_ATTEMPTS_PER_PICTURE = 2;
 
+/** The worker's environment: small memory, and no telemetry from the runtime. */
+export function workerEnvironment(paths: ModelPaths): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    LUGN_PHOTO_MODEL_PATHS: JSON.stringify(paths),
+    // The ONNX runtime ships a Microsoft telemetry client; nothing about a
+    // picture may leave the machine, so it is switched off.
+    ORT_DISABLE_TELEMETRY: '1',
+    // One malloc arena that gives memory back: measured 250 MB resident
+    // instead of 330 MB over forty pictures.
+    MALLOC_ARENA_MAX: '1',
+    MALLOC_TRIM_THRESHOLD_: '65536',
+  };
+}
+
 /** The production worker: a forked, niced child with a small heap. */
 export const forkWorker: SpawnWorker = (paths) => {
   const child: ChildProcess = fork(
     fileURLToPath(new URL('./worker.js', import.meta.url)),
     [],
     {
-      env: {
-        ...process.env,
-        LUGN_PHOTO_MODEL_PATHS: JSON.stringify(paths),
-        // One malloc arena that gives memory back: measured 250 MB resident
-        // instead of 330 MB over forty pictures.
-        MALLOC_ARENA_MAX: '1',
-        MALLOC_TRIM_THRESHOLD_: '65536',
-      },
+      env: workerEnvironment(paths),
       execArgv: ['--max-old-space-size=128'],
       serialization: 'advanced',
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],

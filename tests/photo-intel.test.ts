@@ -6,6 +6,7 @@ import { parseBinaryPlist, plistNumbers } from '../src/runtime/bplist.js';
 import { extractDetails } from '../src/runtime/icloud-shared-album.js';
 import {
   PhotoAnalyzer,
+  workerEnvironment,
   type WorkerHandle,
 } from '../src/runtime/photo-intel/analyzer.js';
 import {
@@ -1096,5 +1097,22 @@ describe('fetching the models', () => {
       kept: ['m.onnx'],
     });
     expect(calls).toBe(0);
+  });
+});
+
+describe('the worker process', () => {
+  it("never starts the runtime's telemetry and keeps its memory small", () => {
+    const env = workerEnvironment({
+      clip: 'a',
+      detector: 'b',
+      recognizer: 'c',
+    });
+    expect(env['ORT_DISABLE_TELEMETRY']).toBe('1');
+    expect(env['MALLOC_ARENA_MAX']).toBe('1');
+    expect(JSON.parse(env['LUGN_PHOTO_MODEL_PATHS']!)).toEqual({
+      clip: 'a',
+      detector: 'b',
+      recognizer: 'c',
+    });
   });
 });

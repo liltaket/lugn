@@ -5,6 +5,11 @@
  * a crash or a memory spike here cannot touch the room controller.
  */
 import { readFile } from 'node:fs/promises';
+
+// Set before the ONNX runtime is loaded (it is imported when the models are):
+// its Microsoft telemetry client stays off, whoever starts this process.
+process.env['ORT_DISABLE_TELEMETRY'] = '1';
+
 import { PhotoInference } from './inference.js';
 import type { ModelPaths } from './models.js';
 
