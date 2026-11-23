@@ -147,6 +147,29 @@ the album link and Apple's addresses never reach a browser. Places come from
 the machine. Apple documents none of this; if it stops working, the cache keeps
 showing what it has and `photo frame refresh failed` is logged.
 
+### Photo analysis
+
+```json
+"photoFrame": {
+  "albumUrl": "https://photos.icloud.com/shared/album/…",
+  "intelligence": {
+    "enabled": true,
+    "modelsDir": "/optional/path",
+    "home": { "latitude": 59.33, "longitude": 18.07 }
+  }
+}
+```
+
+`intelligence` is optional. With the models installed (`npm run photos:models`)
+Lugn looks at each new picture once, on this machine, and finds faces and what
+the picture shows, so the Hubs can show related pictures together and name the
+group; people are named in the control panel under Inställningar → Foton.
+`enabled: false` turns it off; missing models or a missing ONNX runtime leave
+the frame working as before. `home` tells trips from days at home; without it
+home is where most pictures were taken. Models, licences, the files written and
+how pictures are grouped and named are in
+[PHOTO-INTELLIGENCE.md](PHOTO-INTELLIGENCE.md).
+
 ## Persistence
 
 The runtime stores versioned lighting and music intent in

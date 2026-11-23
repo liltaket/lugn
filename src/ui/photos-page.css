@@ -35,11 +35,14 @@
 }
 .ph-slide .ph-cap {
   position: absolute;
+  z-index: 2;
   left: 40px;
-  bottom: 34px;
+  bottom: 30px;
   max-width: 60%;
-  color: #f4f1ec;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  color: #f7f4ee;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.85),
+    0 0 16px rgba(0, 0, 0, 0.6);
   pointer-events: none;
 }
 .ph-cap b {
@@ -56,21 +59,6 @@
     400 19px system-ui,
     sans-serif;
   opacity: 0.75;
-}
-
-/* A readable floor under the caption on full-bleed pictures. */
-.ph-slide::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 180px;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.62));
-  pointer-events: none;
-}
-.ph-single.ph-portrait::after {
-  display: none;
 }
 
 /* single, landscape: the picture fills the screen. */
@@ -281,4 +269,202 @@
 }
 .photos-page.menu-open .ph-slide .ph-cap {
   opacity: 0;
+}
+
+/* The group's name: always bottom right, always built the same way: a small
+   word for what kind of name it is, the name, then the time or the company.
+   It sits above the shade of its corner, never under it. */
+.ph-cap small {
+  display: block;
+  margin-bottom: 6px;
+  font:
+    600 14px/1 system-ui,
+    sans-serif;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #f2c98a;
+}
+.ph-cap b {
+  font:
+    600 40px/1.1 system-ui,
+    sans-serif;
+  letter-spacing: 0;
+}
+.ph-cap span {
+  font:
+    500 22px system-ui,
+    sans-serif;
+  opacity: 0.97;
+}
+.ph-dots {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+  height: 6px;
+}
+.ph-dots u {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f7f4ee;
+  opacity: 0.5;
+  text-decoration: none;
+}
+.ph-dots u.on {
+  opacity: 1;
+}
+
+/* The time of day, upper right. It is outside the slides, so it never fades
+   with them; the slide shades its corner. */
+.ph-clock {
+  position: absolute;
+  z-index: 3;
+  top: 22px;
+  right: 40px;
+  text-align: right;
+  color: #f7f4ee;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.85),
+    0 0 16px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+.ph-clock b {
+  display: block;
+  font:
+    500 60px/1 system-ui,
+    sans-serif;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.ph-clock span {
+  display: block;
+  margin-top: 6px;
+  font:
+    400 19px/1.2 system-ui,
+    sans-serif;
+  opacity: 0.97;
+}
+
+/* Shade in the three corners that carry text (the clock, the name and the
+   music widget), as much as the picture in that corner needs: data-tr, -br and
+   -bl are 0 (dark picture), 1 (mid) or 2 (bright), set from what the server
+   measured. Radial, so it fades into the picture on every side; drawn once, no
+   animation. The one in the lower left is only there while music plays. */
+.ph-shade,
+.ph-blur {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+}
+.ph-shade {
+  opacity: 0;
+}
+.ph-shade.tr {
+  top: 0;
+  right: 0;
+  width: 50%;
+  height: 270px;
+  background: radial-gradient(
+    ellipse 90% 100% at 100% 0%,
+    rgba(0, 0, 0, 0.92) 0%,
+    rgba(0, 0, 0, 0.58) 45%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+.ph-shade.br {
+  bottom: 0;
+  right: 0;
+  width: 62%;
+  height: 350px;
+  background: radial-gradient(
+    ellipse 90% 100% at 100% 100%,
+    rgba(0, 0, 0, 0.94) 0%,
+    rgba(0, 0, 0, 0.6) 45%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+.ph-shade.bl {
+  bottom: 0;
+  left: 0;
+  width: 50%;
+  height: 230px;
+  background: radial-gradient(
+    ellipse 90% 100% at 0% 100%,
+    rgba(0, 0, 0, 0.9) 0%,
+    rgba(0, 0, 0, 0.55) 45%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+.photos-page:not(.has-now) .ph-shade.bl,
+.photos-page:not(.has-now) .ph-blur.bl {
+  display: none;
+}
+.ph-slide[data-tr='0'] .ph-shade.tr,
+.ph-slide[data-br='0'] .ph-shade.br,
+.ph-slide[data-bl='0'] .ph-shade.bl {
+  opacity: 0.28;
+}
+.ph-slide[data-tr='1'] .ph-shade.tr,
+.ph-slide[data-br='1'] .ph-shade.br,
+.ph-slide[data-bl='1'] .ph-shade.bl {
+  opacity: 0.62;
+}
+.ph-slide[data-tr='2'] .ph-shade.tr,
+.ph-slide[data-br='2'] .ph-shade.br,
+.ph-slide[data-bl='2'] .ph-shade.bl {
+  opacity: 1;
+}
+
+/* A small blur right in the corner, much smaller than the shade, only for
+   mid and bright pictures and only once the slide has settled (a blur behind
+   a fading layer would be recomputed on every frame of the fade). */
+.ph-blur {
+  display: none;
+}
+.photos-page:not(.no-blur) .ph-slide.settled .ph-blur {
+  display: block;
+  backdrop-filter: blur(3px);
+}
+.ph-blur.tr {
+  top: 0;
+  right: 0;
+  width: 30%;
+  height: 140px;
+  mask-image: radial-gradient(
+    ellipse 100% 100% at 100% 0%,
+    #000 0%,
+    #000 35%,
+    transparent 100%
+  );
+}
+.ph-blur.br {
+  bottom: 0;
+  right: 0;
+  width: 38%;
+  height: 190px;
+  mask-image: radial-gradient(
+    ellipse 100% 100% at 100% 100%,
+    #000 0%,
+    #000 35%,
+    transparent 100%
+  );
+}
+.ph-blur.bl {
+  bottom: 0;
+  left: 0;
+  width: 30%;
+  height: 120px;
+  mask-image: radial-gradient(
+    ellipse 100% 100% at 0% 100%,
+    #000 0%,
+    #000 35%,
+    transparent 100%
+  );
+}
+.ph-slide[data-tr='0'] .ph-blur.tr,
+.ph-slide[data-br='0'] .ph-blur.br,
+.ph-slide[data-bl='0'] .ph-blur.bl {
+  display: none !important;
 }

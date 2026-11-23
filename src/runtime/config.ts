@@ -523,6 +523,26 @@ const FileConfigSchema = z
         refreshMinutes: z.number().int().min(5).max(1440).default(30),
         maxPhotos: z.number().int().min(1).max(500).default(150),
         cacheDir: z.string().min(1).optional(),
+        /**
+         * Image analysis for the photo frame: groups pictures by what they show
+         * and who is in them, and names the groups. Runs on this machine only,
+         * once per new picture; without the models nothing changes.
+         */
+        intelligence: z
+          .object({
+            enabled: z.boolean().default(true),
+            modelsDir: z.string().min(1).optional(),
+            /** Where home is, so trips away can be told from days at home. */
+            home: z
+              .object({
+                latitude: z.number().min(-90).max(90),
+                longitude: z.number().min(-180).max(180),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -815,6 +835,13 @@ export type RuntimeConfig = {
     refreshMinutes: number;
     maxPhotos: number;
     cacheDir?: string | undefined;
+    intelligence?:
+      | {
+          enabled: boolean;
+          modelsDir?: string | undefined;
+          home?: { latitude: number; longitude: number } | undefined;
+        }
+      | undefined;
   };
   prelight: {
     targets: Record<string, LightingValues>;

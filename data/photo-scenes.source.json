@@ -1,0 +1,262 @@
+{
+  "note": "Scene vocabulary for the photo frame. Input to scripts/build-photo-scenes.mjs, which turns the prompts into data/photo-scenes.json. `sv` is the name shown on a Hub (null: only there so that other pictures are not forced into a scene).",
+  "scenes": [
+    {
+      "key": "beach",
+      "sv": "Stranden",
+      "prompts": [
+        "a photo of a sandy beach",
+        "people on the beach by the sea",
+        "a seaside beach with waves"
+      ]
+    },
+    {
+      "key": "sea",
+      "sv": "Havet",
+      "prompts": [
+        "a photo of the sea and the horizon",
+        "a boat on the water",
+        "a harbour with boats"
+      ]
+    },
+    {
+      "key": "lake",
+      "sv": "Sjön",
+      "prompts": [
+        "a photo of a lake",
+        "a jetty at a calm lake",
+        "a river or a stream in nature"
+      ]
+    },
+    {
+      "key": "forest",
+      "sv": "Skogen",
+      "prompts": [
+        "a photo of a forest",
+        "a path between tall trees",
+        "a walk in the woods"
+      ]
+    },
+    {
+      "key": "mountain",
+      "sv": "Bergen",
+      "prompts": [
+        "a photo of mountains",
+        "a view from a mountain top",
+        "a rocky mountain landscape"
+      ]
+    },
+    {
+      "key": "snow",
+      "sv": "Snön",
+      "prompts": [
+        "a photo of snow",
+        "a snowy winter landscape",
+        "skiing in the snow"
+      ]
+    },
+    {
+      "key": "sunset",
+      "sv": "Solnedgången",
+      "prompts": [
+        "a photo of a sunset",
+        "a colourful sky at sunrise",
+        "the sun setting over the horizon"
+      ]
+    },
+    {
+      "key": "city",
+      "sv": "Staden",
+      "prompts": [
+        "a photo of a city street",
+        "tall buildings in a city",
+        "people walking in a busy town"
+      ]
+    },
+    {
+      "key": "oldtown",
+      "sv": "Gamla stan",
+      "prompts": [
+        "a photo of an old town with historic buildings",
+        "a church or a cathedral",
+        "a castle or a monument"
+      ]
+    },
+    {
+      "key": "night",
+      "sv": "Kvällen",
+      "prompts": [
+        "a photo of a city at night with lights",
+        "a night scene with neon lights",
+        "fireworks in the night sky"
+      ]
+    },
+    {
+      "key": "food",
+      "sv": "Maten",
+      "prompts": [
+        "a photo of a meal on a plate",
+        "food on a table",
+        "a close-up of a dish"
+      ]
+    },
+    {
+      "key": "cafe",
+      "sv": "Fikat",
+      "prompts": [
+        "a photo of coffee and pastry in a cafe",
+        "people sitting in a restaurant",
+        "drinks on a bar table"
+      ]
+    },
+    {
+      "key": "party",
+      "sv": "Festen",
+      "prompts": [
+        "a photo of a party with friends",
+        "people celebrating and laughing together",
+        "friends drinking at a party"
+      ]
+    },
+    {
+      "key": "concert",
+      "sv": "Konserten",
+      "prompts": [
+        "a photo of a concert with stage lights",
+        "a crowd at a music festival",
+        "a band playing on a stage"
+      ]
+    },
+    {
+      "key": "birthday",
+      "sv": "Födelsedagen",
+      "prompts": [
+        "a photo of a birthday cake with candles",
+        "birthday balloons and presents",
+        "a celebration with a cake"
+      ]
+    },
+    {
+      "key": "christmas",
+      "sv": "Julen",
+      "prompts": [
+        "a photo of a christmas tree",
+        "christmas decorations and presents",
+        "a festive holiday table"
+      ]
+    },
+    {
+      "key": "dog",
+      "sv": "Hunden",
+      "prompts": [
+        "a photo of a dog",
+        "a puppy playing outside",
+        "a dog on a walk"
+      ]
+    },
+    {
+      "key": "cat",
+      "sv": "Katten",
+      "prompts": ["a photo of a cat", "a cat sleeping on a sofa", "a kitten"]
+    },
+    {
+      "key": "animal",
+      "sv": "Djuren",
+      "prompts": [
+        "a photo of a wild animal",
+        "birds in nature",
+        "a horse or a cow in a field"
+      ]
+    },
+    {
+      "key": "garden",
+      "sv": "Trädgården",
+      "prompts": [
+        "a photo of a garden with flowers",
+        "a close-up of flowers",
+        "a lawn and plants in a yard"
+      ]
+    },
+    {
+      "key": "hike",
+      "sv": "Vandringen",
+      "prompts": [
+        "a photo of people hiking on a trail",
+        "a hiker with a backpack in nature",
+        "a camping tent outdoors"
+      ]
+    },
+    {
+      "key": "sport",
+      "sv": "Sporten",
+      "prompts": [
+        "a photo of people playing sports",
+        "a bicycle ride",
+        "a running or swimming activity"
+      ]
+    },
+    {
+      "key": "travel",
+      "sv": null,
+      "prompts": [
+        "a photo from a car window on a road trip",
+        "an airport or an aeroplane window",
+        "a train station or a train ride"
+      ]
+    },
+    {
+      "key": "home",
+      "sv": "Hemma",
+      "prompts": [
+        "a photo of a living room at home",
+        "a cosy home interior with a sofa",
+        "a bedroom or a kitchen"
+      ]
+    },
+    {
+      "key": "kids",
+      "sv": "Barnen",
+      "prompts": [
+        "a photo of children playing",
+        "a baby smiling",
+        "a child at a playground"
+      ]
+    },
+    {
+      "key": "selfie",
+      "sv": null,
+      "prompts": [
+        "a selfie of a person",
+        "a close-up portrait of a face",
+        "a person posing for the camera"
+      ]
+    },
+    {
+      "key": "group",
+      "sv": null,
+      "prompts": [
+        "a group photo of several people",
+        "friends standing together smiling",
+        "a family portrait"
+      ]
+    },
+    {
+      "key": "screen",
+      "sv": null,
+      "prompts": [
+        "a screenshot of a phone",
+        "a photo of a document or text",
+        "a photo of a computer screen"
+      ]
+    },
+    {
+      "key": "object",
+      "sv": null,
+      "prompts": [
+        "a close-up photo of an object on a table",
+        "a photo of electronics and tools on a workbench",
+        "a photo of a machine or a vehicle"
+      ]
+    }
+  ]
+}

@@ -128,7 +128,7 @@
    * pictures. Never repeats the previous layout when another one fits, and
    * shows a single picture about every other time.
    */
-  function plan(queue, previousLayout, random = Math.random) {
+  function plan(queue, previousLayout, random = Math.random, bias = null) {
     if (queue.length === 0) return null;
     const first = queue[0];
     const options = [];
@@ -158,8 +158,15 @@
       // A portrait alone, with black around it, only as a last resort.
       if (options.length === 0) add('single', [0], 1);
     }
-    let pool = options.filter((option) => option.layout !== previousLayout);
-    if (pool.length === 0) pool = options;
+    // A group asks for its own preferences (no lone portrait, few singles).
+    if (bias)
+      for (const option of options) option.weight *= bias(option, queue);
+    // Options a group has ruled out are only used when nothing else is left,
+    // and repeating the last layout is better than using one of those.
+    let live = options.filter((option) => option.weight > 0);
+    if (live.length === 0) live = options;
+    let pool = live.filter((option) => option.layout !== previousLayout);
+    if (pool.length === 0) pool = live;
     let total = 0;
     for (const option of pool) total += option.weight;
     let pick = random() * total;
@@ -223,6 +230,413 @@
     return { place, date };
   }
 
+  // ── Groups ──
+  //
+  // The server lists, for each picture, the pictures that belong with it
+  // (`nb`: [index, score 0-100]; time, place, people and what they look like
+  // already weighed in) and the near-duplicates (`du`). A group is a seed
+  // picture plus four to six of its neighbours, chosen at random with the
+  // best-fitting and least-recently-shown most likely, so the same picture is
+  // met in new company each time. Nothing here is computed from pixels.
+  const GROUP_SIZES = [
+    [4, 35],
+    [5, 40],
+    [6, 25],
+  ];
+  const LINK_MIN = 0.42; // how well a newcomer must fit the whole group
+  const LINK_FALLBACK = 0.2; // when the seed would otherwise stand alone
+  const RECENT_GROUPS = 8;
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+  function pickWeighted(items, weightOf, random) {
+    let total = 0;
+    for (const item of items) total += Math.max(0, weightOf(item));
+    if (total <= 0) return items[Math.floor(random() * items.length)];
+    let pick = random() * total;
+    for (const item of items) {
+      pick -= Math.max(0, weightOf(item));
+      if (pick < 0) return item;
+    }
+    return items[items.length - 1];
+  }
+
+  const pairKey = (a, b) =>
+    a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
+
+  function newGroupState() {
+    return { plays: new Map(), recent: [] };
+  }
+
+  /**
+   * Picks the next group of related pictures from `library` (the listing's
+   * photos, in listing order). `state` remembers what was shown: how often
+   * each picture and which pairs, so the next group differs.
+   */
+  function buildGroup(library, state, random = Math.random) {
+    if (library.length === 0) return [];
+    const plays = state.plays;
+    let least = Infinity;
+    for (const photo of library)
+      least = Math.min(least, plays.get(photo.id) || 0);
+    const fresh = (photo, power) =>
+      1 / Math.pow(1 + (plays.get(photo.id) || 0) - least, power);
+    const at = new Map(library.map((photo, i) => [photo.id, i]));
+    const score = (a, b) => {
+      const i = at.get(b.id);
+      const found = (a.nb || []).find((entry) => entry[0] === i);
+      if (found) return found[1] / 100;
+      const j = at.get(a.id);
+      const back = (b.nb || []).find((entry) => entry[0] === j);
+      return back ? back[1] / 100 : 0;
+    };
+    const duplicate = (a, b) =>
+      (a.du || []).includes(at.get(b.id)) ||
+      (b.du || []).includes(at.get(a.id));
+    const recent = new Set();
+    for (const used of state.recent) for (const key of used) recent.add(key);
+
+    // Every round starts from a picture nobody has seen yet this round (a
+    // favourite a little more often), so nothing waits long to be shown.
+    const unseen = library.filter(
+      (photo) => (plays.get(photo.id) || 0) === least,
+    );
+    const seed = pickWeighted(unseen, (photo) => (photo.fav ? 1.8 : 1), random);
+    const size = pickWeighted(GROUP_SIZES, (entry) => entry[1], random)[0];
+    const group = [seed];
+    const members = new Set([seed.id]);
+    for (const threshold of [LINK_MIN, LINK_FALLBACK]) {
+      while (group.length < size) {
+        const candidates = new Map();
+        for (const member of group)
+          for (const entry of member.nb || []) {
+            const other = library[entry[0]];
+            if (other && !members.has(other.id))
+              candidates.set(other.id, other);
+          }
+        const pool = [];
+        for (const other of candidates.values()) {
+          if (group.some((member) => duplicate(member, other))) continue;
+          // How well it fits everyone already there; a stranger to some
+          // member pulls the average down.
+          let fit = 0;
+          for (const member of group) fit += score(member, other);
+          fit /= group.length;
+          if (fit < threshold) continue;
+          let weight = fit * fit * fresh(other, 1.5);
+          for (const member of group)
+            if (recent.has(pairKey(member, other))) weight *= 0.4;
+          pool.push([other, weight]);
+        }
+        if (pool.length === 0) break;
+        const [chosen] = pickWeighted(pool, (entry) => entry[1], random);
+        group.push(chosen);
+        members.add(chosen.id);
+      }
+      // The strict threshold is enough unless the seed would stand alone.
+      if (group.length >= 2) break;
+    }
+    // A picture never stands alone with black around it: a seed without
+    // enough company takes the nearest picture in time that has been shown
+    // least, related or not.
+    if (group.length < 2 && library.length > 1) {
+      const DAY = 24 * 60 * 60 * 1000;
+      let best = null;
+      let bestKey = -Infinity;
+      for (const other of library) {
+        if (other === seed || duplicate(seed, other)) continue;
+        const apart =
+          typeof seed.t === 'number' && typeof other.t === 'number'
+            ? Math.min(Math.abs(seed.t - other.t) / DAY, 400)
+            : 400;
+        const key =
+          score(seed, other) * 100 - apart / 4 - (plays.get(other.id) || 0) * 5;
+        if (key > bestKey) {
+          bestKey = key;
+          best = other;
+        }
+      }
+      if (best) group.push(best);
+    }
+    // A story reads in time order when it is all one outing.
+    const times = group
+      .map((photo) => photo.t)
+      .filter((t) => typeof t === 'number');
+    if (
+      times.length === group.length &&
+      Math.max(...times) - Math.min(...times) <= 3 * WEEK_MS
+    )
+      group.sort((a, b) => a.t - b.t);
+    return group;
+  }
+
+  function rememberGroup(state, group) {
+    for (const photo of group)
+      state.plays.set(photo.id, (state.plays.get(photo.id) || 0) + 1);
+    const used = new Set();
+    for (let i = 0; i < group.length; i += 1)
+      for (let j = i + 1; j < group.length; j += 1)
+        used.add(pairKey(group[i], group[j]));
+    state.recent.push(used);
+    if (state.recent.length > RECENT_GROUPS) state.recent.shift();
+  }
+
+  /**
+   * Splits a group over slides, two or three pictures at a time (five make
+   * 2 + 3, six 3 + 3 or 2 + 2 + 2). Never leaves a portrait alone on its own
+   * slide when it can be avoided, and only shows a single landscape.
+   */
+  function planGroup(photos, previousLayout, random = Math.random) {
+    const slides = [];
+    let rest = photos.slice();
+    let layout = previousLayout;
+    while (rest.length > 0) {
+      const remaining = rest.length;
+      const chosen = plan(rest, layout, random, (option, queue) => {
+        const count = option.indexes.length;
+        let factor = 1;
+        // A portrait on a slide of its own is black on one side: only when
+        // nothing else can be done (the plan falls back to it if every option
+        // has no weight), and a lone landscape fills the screen but is rare.
+        if (count === 1)
+          factor *= isLandscape(queue[option.indexes[0]])
+            ? photos.length < 4
+              ? 0.6
+              : 0.3
+            : 0;
+        if (remaining - count === 1) {
+          const lone = queue.find((_, i) => !option.indexes.includes(i));
+          factor *= lone && !isLandscape(lone) ? 0 : 0.4;
+        }
+        return factor;
+      });
+      slides.push({ layout: chosen.layout, photos: chosen.photos });
+      rest = chosen.rest;
+      layout = chosen.layout;
+    }
+    return slides;
+  }
+
+  // ── Naming a group ──
+  //
+  // Every group is named the same way, in the same place: a small word for
+  // what kind of name it is (RESA, PLATS, TEMA, DAG, MÅNAD, ÅR, MED, MINNE),
+  // the name itself, and the time or the company below. The kind follows what
+  // the pictures really share, strongest first.
+  const PLACE_BOUND_SCENES = new Set([
+    'beach',
+    'sea',
+    'lake',
+    'forest',
+    'mountain',
+    'snow',
+    'city',
+    'oldtown',
+    'sunset',
+    'hike',
+    'garden',
+  ]);
+  const SHORT_MONTHS = [
+    'jan',
+    'feb',
+    'mars',
+    'apr',
+    'maj',
+    'juni',
+    'juli',
+    'aug',
+    'sep',
+    'okt',
+    'nov',
+    'dec',
+  ];
+  const upperFirst = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+  function share(photos, valueOf) {
+    const counts = new Map();
+    for (const photo of photos) {
+      const value = valueOf(photo);
+      if (value !== null && value !== undefined && value !== '')
+        counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    let best = null;
+    for (const entry of counts) if (!best || entry[1] > best[1]) best = entry;
+    return best
+      ? { value: best[0], count: best[1], share: best[1] / photos.length }
+      : null;
+  }
+
+  function dayText(date, thisYear) {
+    const parts = parseDate(date);
+    if (!parts) return '';
+    return `${parts.d} ${MONTHS[parts.m]}${parts.y === thisYear ? '' : ` ${parts.y}`}`;
+  }
+
+  /** "11–14 september", "29 okt – 3 nov", with the year unless it is this year. */
+  function rangeText(from, to, thisYear) {
+    const a = parseDate(from);
+    const b = parseDate(to);
+    if (!a || !b) return '';
+    const year = b.y === thisYear && a.y === b.y ? '' : ` ${b.y}`;
+    if (a.y === b.y && a.m === b.m && a.d === b.d) return dayText(to, thisYear);
+    if (a.y === b.y && a.m === b.m)
+      return `${a.d}–${b.d} ${MONTHS[b.m]}${year}`;
+    const left = a.y === b.y ? '' : ` ${a.y}`;
+    // More than about five weeks: the months say it better than the days.
+    const days =
+      (Date.UTC(b.y, b.m, b.d) - Date.UTC(a.y, a.m, a.d)) / 86_400_000;
+    if (days > 35) return `${MONTHS[a.m]}${left} – ${MONTHS[b.m]}${year}`;
+    return `${a.d} ${SHORT_MONTHS[a.m]}${left} – ${b.d} ${SHORT_MONTHS[b.m]}${year}`;
+  }
+
+  function peopleText(photos, listing) {
+    const names = new Map();
+    for (const person of (listing && listing.people) || [])
+      if (person.name) names.set(person.id, person.name);
+    if (names.size === 0) return '';
+    const counts = new Map();
+    for (const photo of photos)
+      for (const id of photo.pp || [])
+        if (names.has(id)) counts.set(id, (counts.get(id) || 0) + 1);
+    const present = [...counts]
+      .filter((entry) => entry[1] >= Math.max(2, photos.length / 2))
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map((entry) => names.get(entry[0]));
+    if (present.length === 0) return '';
+    return present.length === 1
+      ? present[0]
+      : `${present.slice(0, -1).join(', ')} och ${present[present.length - 1]}`;
+  }
+
+  /**
+   * { kind, title, sub } for a group, or null when the pictures share
+   * nothing worth saying. `listing` is { trips, scenes, people }.
+   */
+  function groupLabel(
+    photos,
+    listing = {},
+    thisYear = new Date().getFullYear(),
+  ) {
+    if (!photos || photos.length === 0) return null;
+    const trips = listing.trips || [];
+    const scenes = listing.scenes || {};
+    const dates = photos.map((p) => parseDate(p.date));
+    const known = dates.filter(Boolean);
+    const first = known[0];
+    const sameDay =
+      known.length === photos.length &&
+      known.every((d) => d.y === first.y && d.m === first.m && d.d === first.d);
+    const sameMonth =
+      known.length === photos.length &&
+      known.every((d) => d.y === first.y && d.m === first.m);
+    const years = new Set(known.map((d) => d.y));
+    const dated =
+      known.length > 0 ? photos.filter((p) => parseDate(p.date)) : [];
+    const sorted = dated.map((p) => p.date).sort();
+    const period = sameDay
+      ? dayText(sorted[0], thisYear)
+      : sameMonth
+        ? `${MONTHS[first.m]}${first.y === thisYear ? '' : ` ${first.y}`}`
+        : sorted.length > 0
+          ? rangeText(sorted[0], sorted[sorted.length - 1], thisYear)
+          : '';
+    const who = peopleText(photos, listing);
+    const withWho = (text) =>
+      who ? (text ? `${text} · med ${who}` : `med ${who}`) : text;
+
+    // 1. Somebody wrote it down.
+    const caption = share(photos, (p) => p.cap);
+    if (caption && caption.share >= 0.5)
+      return { kind: 'Minne', title: caption.value, sub: withWho(period) };
+
+    // 2. A trip: the pictures are from one journey.
+    const trip = share(photos, (p) => (typeof p.tr === 'number' ? p.tr : null));
+    if (trip && trip.share >= 0.8 && trips[trip.value]) {
+      const t = trips[trip.value];
+      return {
+        kind: 'Resa',
+        title: t.title,
+        sub: withWho(
+          sameDay
+            ? dayText(sorted[0], thisYear)
+            : rangeText(t.from, t.to, thisYear),
+        ),
+      };
+    }
+
+    const place = share(photos, (p) => p.place);
+    const samePlace = place && place.share >= 0.6 ? place.value : '';
+    const scene = share(photos, (p) =>
+      p.sc && scenes[p.sc] && (p.sp || 0) >= 45 ? p.sc : null,
+    );
+    const strongScene = scene && scene.share >= 0.6 ? scene.value : '';
+
+    // 3. What it is and where.
+    if (strongScene && samePlace && PLACE_BOUND_SCENES.has(strongScene))
+      return {
+        kind: 'Plats',
+        title: `${scenes[strongScene]} i ${samePlace}`,
+        sub: withWho(period),
+      };
+    // 4. What it is.
+    if (strongScene)
+      return {
+        kind: 'Tema',
+        title: scenes[strongScene],
+        sub: withWho([samePlace, period].filter(Boolean).join(' · ')),
+      };
+    // 5. Where.
+    if (samePlace)
+      return { kind: 'Plats', title: samePlace, sub: withWho(period) };
+    // 6. Who.
+    if (who) return { kind: 'Med', title: who, sub: period };
+    // 7. When.
+    if (sameDay)
+      return { kind: 'Dag', title: dayText(sorted[0], thisYear), sub: '' };
+    if (sameMonth)
+      return {
+        kind: 'Månad',
+        title: upperFirst(`${MONTHS[first.m]} ${first.y}`),
+        sub: '',
+      };
+    if (years.size === 1 && known.length === photos.length)
+      return { kind: 'År', title: String(first.y), sub: '' };
+    return null;
+  }
+
+  // ── Shade in the corners ──
+  //
+  // The clock (upper right), the name (lower right) and the music widget
+  // (lower left) sit on top of the pictures. The server measured how bright
+  // each picture is in those three corners (`lu`: 0-99); a slide gets one
+  // level per corner from the picture that really lies in that corner (which
+  // cell that is depends on the layout), and the stylesheet shades each corner
+  // as much as it needs: 0 dark, 1 mid, 2 bright. Pictures not measured count
+  // as mid. Nothing is computed from pixels here.
+  const CORNER_CELL = {
+    single: [0, 0, 0],
+    duo: [1, 1, 0],
+    pair: [1, 1, 0],
+    trio: [2, 2, 0],
+    mixed: [2, 2, 0],
+    stack3: [0, 0, 2],
+    wide2: [0, 1, 1],
+  };
+  const LEVEL_MID = 31;
+  const LEVEL_BRIGHT = 49;
+
+  /** [upper right, lower right, lower left] levels 0-2 for a slide, or null. */
+  function cornerLevels(layout, photos) {
+    const cells = CORNER_CELL[layout];
+    if (!cells) return null;
+    return cells.map((index, corner) => {
+      const lu = photos[index] && photos[index].lu;
+      const value = Array.isArray(lu) ? lu[corner] : undefined;
+      if (typeof value !== 'number') return 1;
+      return value < LEVEL_MID ? 0 : value < LEVEL_BRIGHT ? 1 : 2;
+    });
+  }
+
   // The menu's veil belongs to the screen's bottom edge: only pictures that
   // reach it get one (not the upper ones of a stack).
   function bottomCell(layout, index) {
@@ -233,7 +647,14 @@
 
   globalThis.lugnPhotos = {
     bottomCell,
+    cornerLevels,
     plan,
+    buildGroup,
+    rememberGroup,
+    newGroupState,
+    planGroup,
+    groupLabel,
+    rangeText,
     caption,
     shuffled,
     mulberry32,
@@ -256,6 +677,12 @@
   let seen = false;
   let library = [];
   let queue = [];
+  // With the server's neighbour lists pictures play in groups; without them
+  // (an older server, no analysis) the queue above plays as it always did.
+  let smart = false;
+  let meta = { trips: [], scenes: {}, people: [] };
+  const groupState = newGroupState();
+  let pendingSlides = [];
   let random = mulberry32((Date.now() ^ 0x9e3779b9) >>> 0);
   let previousLayout = '';
   let current = null; // { el, layout }
@@ -306,6 +733,13 @@
         if (data.revision !== revision) {
           revision = data.revision;
           library = data.photos;
+          smart = library.some((photo) => Array.isArray(photo.nb));
+          meta = {
+            trips: Array.isArray(data.trips) ? data.trips : [],
+            scenes:
+              data.scenes && typeof data.scenes === 'object' ? data.scenes : {},
+            people: Array.isArray(data.people) ? data.people : [],
+          };
           // Removed pictures leave the queue; new ones play next (the first
           // list ever read is simply put in order).
           const known = new Set(library.map((p) => p.id));
@@ -442,21 +876,62 @@
     } else {
       for (const photo of photos) add(photo, '');
     }
-    const text = caption(photos);
-    if (text.place || text.date) {
+    const text = smart
+      ? chosen.label || null
+      : (() => {
+          const quiet = caption(photos);
+          return quiet.place || quiet.date
+            ? { kind: '', title: quiet.place, sub: quiet.date }
+            : null;
+        })();
+    if (text && (text.title || text.sub)) {
       const element = document.createElement('div');
       element.className = 'ph-cap';
-      if (text.place) {
-        const place = document.createElement('b');
-        place.textContent = text.place;
-        element.appendChild(place);
+      if (text.kind) {
+        const kind = document.createElement('small');
+        kind.textContent = text.kind;
+        element.appendChild(kind);
       }
-      if (text.date) {
-        const date = document.createElement('span');
-        date.textContent = text.date;
-        element.appendChild(date);
+      if (text.title) {
+        const title = document.createElement('b');
+        title.textContent = text.title;
+        element.appendChild(title);
+      }
+      if (text.sub) {
+        const sub = document.createElement('span');
+        sub.textContent = text.sub;
+        element.appendChild(sub);
+      }
+      // Where in the group this slide is: one dot per slide.
+      if (smart && chosen.of > 1) {
+        const dots = document.createElement('i');
+        dots.className = 'ph-dots';
+        for (let i = 0; i < chosen.of; i += 1) {
+          const dot = document.createElement('u');
+          if (i === chosen.step) dot.className = 'on';
+          dots.appendChild(dot);
+        }
+        element.appendChild(dots);
       }
       slide.appendChild(element);
+    }
+    // Shade for the clock, the name and the music widget, from the picture in
+    // each corner; the blur layers are switched on once the slide has settled.
+    const levels = cornerLevels(layout, photos);
+    if (levels) {
+      slide.dataset.tr = String(levels[0]);
+      slide.dataset.br = String(levels[1]);
+      slide.dataset.bl = String(levels[2]);
+      for (const corner of ['tr', 'br', 'bl']) {
+        const shade = document.createElement('div');
+        shade.className = `ph-shade ${corner}`;
+        slide.appendChild(shade);
+      }
+      for (const corner of ['tr', 'br', 'bl']) {
+        const blur = document.createElement('div');
+        blur.className = `ph-blur ${corner}`;
+        slide.appendChild(blur);
+      }
     }
     return { slide, images, veils };
   }
@@ -504,6 +979,22 @@
     }
   }
 
+  // The next related group, split over slides; each slide carries the group's
+  // name and its place in the group.
+  function startGroup() {
+    const group = buildGroup(library, groupState, random);
+    if (group.length === 0) return;
+    rememberGroup(groupState, group);
+    const slides = planGroup(group, previousLayout, random);
+    const label = groupLabel(group, meta);
+    slides.forEach((slide, i) => {
+      slide.label = label;
+      slide.step = i;
+      slide.of = slides.length;
+    });
+    pendingSlides = slides;
+  }
+
   // Prepares the next slide off screen. Resolves to null when stale or when a
   // picture failed (its photo is dropped from the queue).
   // One consumer gets a built slide: a second caller while one is being built
@@ -514,10 +1005,16 @@
     const mine = (async () => {
       try {
         if (library.length === 0) await loadList();
-        refill();
-        const chosen = plan(queue, previousLayout, random);
+        let chosen = null;
+        if (smart) {
+          if (pendingSlides.length === 0) startGroup();
+          chosen = pendingSlides.shift() || null;
+        } else {
+          refill();
+          chosen = plan(queue, previousLayout, random);
+          if (chosen) queue = chosen.rest;
+        }
         if (!chosen) return null;
-        queue = chosen.rest;
         const made = await build(chosen);
         if (!(await decodeAll(made.images, token))) {
           drop(made.slide);
@@ -601,7 +1098,10 @@
       // being looked at.
       next.slide.classList.add('in');
       stage.appendChild(next.slide);
-      if (active) startDrift(next.slide);
+      if (active) {
+        startDrift(next.slide);
+        next.slide.classList.add('settled');
+      }
       return;
     }
     fading = true;
@@ -614,6 +1114,8 @@
       window.clearTimeout(fallback);
       next.slide.removeEventListener('transitionend', onEnd);
       next.slide.classList.remove('lift');
+      // Fully faded in: now the blur layers may draw.
+      if (active) next.slide.classList.add('settled');
       drop(old.el);
       fading = false;
     };
@@ -733,6 +1235,7 @@
     failures = 0;
     building = null;
     pendingAdvance = false;
+    pendingSlides = [];
   }
 
   window.addEventListener('lugn:pages-settled', () => {
@@ -764,6 +1267,61 @@
   let menuOpen = false;
   let nowTimer = 0;
 
+  // The small blur behind the corners is the one thing here that costs the Hub
+  // something while it is shown; the Hub can switch it off for good with
+  // localStorage 'lugn.photos.blur' = 'off'.
+  try {
+    if (window.localStorage?.getItem('lugn.photos.blur') === 'off')
+      root.classList.add('no-blur');
+  } catch {
+    /* storage can be unavailable */
+  }
+
+  // The time of day, always there: large enough to read across the room,
+  // quiet enough not to take over. It redraws once a minute, on the minute,
+  // and never while the pager moves.
+  const clockTime = root.querySelector("[data-view='clock-time']");
+  const clockDate = root.querySelector("[data-view='clock-date']");
+  const CLOCK_ZONE = 'Europe/Stockholm';
+  let timeFormat = null;
+  let dateFormat = null;
+  try {
+    timeFormat = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: CLOCK_ZONE,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    dateFormat = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: CLOCK_ZONE,
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+    });
+  } catch {
+    /* no formatter: the clock stays empty rather than wrong */
+  }
+  let clockTimer = 0;
+  function drawClock() {
+    if (!clockTime || !timeFormat || paging()) return;
+    const now = new Date();
+    setText(clockTime, timeFormat.format(now));
+    if (clockDate && dateFormat) setText(clockDate, dateFormat.format(now));
+  }
+  function runClock() {
+    window.clearTimeout(clockTimer);
+    clockTimer = window.setTimeout(
+      () => {
+        drawClock();
+        runClock();
+      },
+      60_000 - (Date.now() % 60_000) + 40,
+    );
+  }
+  function stopClock() {
+    window.clearTimeout(clockTimer);
+    clockTimer = 0;
+  }
+
   const hem = () => (typeof refs === 'object' && refs ? refs : null);
   const setText = (element, value) => {
     if (element && element.textContent !== value) element.textContent = value;
@@ -779,6 +1337,9 @@
     const shown =
       document.getElementById('app-root')?.dataset.musicVisible === 'true';
     if (nowBox.hidden === shown) nowBox.hidden = !shown;
+    // The shade in the lower left corner is only there while the widget is.
+    if (shown) root.classList.add('has-now');
+    else root.classList.remove('has-now');
     if (!shown) return;
     const raw = r.musicTitle?.textContent?.trim() || '';
     setText(
@@ -839,8 +1400,13 @@
     enter() {
       active = true;
       setDriftPlaying(true);
-      if (current) startDrift(current.el);
+      if (current) {
+        startDrift(current.el);
+        if (!fading) current.el.classList.add('settled');
+      }
       drawNow();
+      drawClock();
+      runClock();
       if (!nowTimer) nowTimer = window.setInterval(drawNow, 2000);
       void fillFirst(true).then(() => {
         // A first slide that failed to build is tried again soon.
@@ -854,6 +1420,8 @@
       quickMenu?.close();
       active = false;
       setDriftPlaying(false);
+      if (current) current.el.classList.remove('settled');
+      stopClock();
       window.clearInterval(nowTimer);
       nowTimer = 0;
       window.clearTimeout(showTimer);
@@ -864,6 +1432,7 @@
     sleep() {
       quickMenu?.close();
       active = false;
+      stopClock();
       window.clearInterval(nowTimer);
       nowTimer = 0;
       release();

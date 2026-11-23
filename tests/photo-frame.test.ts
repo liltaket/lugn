@@ -11,6 +11,7 @@ import {
   readCapped,
   readSharedAlbum,
   type AlbumListing,
+  type AlbumPhoto,
   type FetchLike,
 } from '../src/runtime/icloud-shared-album.js';
 import {
@@ -18,7 +19,11 @@ import {
   photoId,
   type PhotoLibraryOptions,
 } from '../src/runtime/photo-library.js';
-import { loadPlaceLookup, processPhoto } from '../src/runtime/photo-frame.js';
+import {
+  loadPlaceLookup,
+  measureCorners,
+  processPhoto,
+} from '../src/runtime/photo-frame.js';
 import sharp from 'sharp';
 
 // A binary plist with lat 55.52987 and lon 13.3773, as Apple stores a location.
@@ -320,6 +325,7 @@ describe('PhotoLibrary', () => {
         t: 1_793_770_126_083,
         lat: 55.5,
         lon: 13.4,
+        cc: null,
       },
     ]);
     expect(revision).not.toBe('');
@@ -734,5 +740,313 @@ describe('photo page planner', () => {
       place: '',
       date: '',
     });
+  });
+});
+
+describe('PhotoLibrary with insight', () => {
+  const jpeg = new Uint8Array([255, 216, 255, 217]);
+  const photo = (
+    id: string,
+    takenAt: number,
+    details?: AlbumPhoto['details'],
+  ): AlbumPhoto => ({
+    id,
+    url: `https://cvws.icloud-content.com/${id}`,
+    version: 'v1',
+    width: 1536,
+    height: 2048,
+    takenAt,
+    utcOffsetSeconds: 3600,
+    latitude: 55.5,
+    longitude: 13.4,
+    ...(details ? { details } : {}),
+  });
+  function fakeInsight() {
+    const seen: string[][] = [];
+    const listeners = new Set<() => void>();
+    let version = 0;
+    return {
+      seen,
+      bump: () => {
+        version += 1;
+        for (const listener of listeners) listener();
+      },
+      insight: {
+        start: async () => undefined,
+        sync: (
+          photos: Array<{ id: string; cc: string | null; details?: unknown }>,
+        ) => {
+          seen.push(photos.map((p) => p.id));
+          lastPhotos = photos;
+        },
+        decorate: () => ({
+          extras: lastPhotos.map((_, i) => ({
+            nb: [[(i + 1) % lastPhotos.length, 90]] as Array<[number, number]>,
+          })),
+          trips: [
+            { title: 'Skåne', from: '2026-11-04', to: '2026-11-05', cc: 'SE' },
+          ],
+          people: [{ id: 'p1', name: 'Anna' }],
+          scenes: { beach: 'Stranden' },
+          ai: true,
+        }),
+        revision: () => String(version),
+        subscribe: (listener: () => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        dispose: () => undefined,
+      },
+    };
+  }
+  let lastPhotos: Array<{ id: string; cc: string | null; details?: unknown }> =
+    [];
+
+  async function setup(
+    listing: AlbumListing,
+    insight?: ReturnType<typeof fakeInsight>['insight'],
+  ) {
+    const dir = await mkdtemp(join(tmpdir(), 'photo-frame-'));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const state = { listing };
+    const library = new PhotoLibrary({
+      cacheDir: dir,
+      list: async () => state.listing,
+      download: async () => jpeg,
+      process: async () => ({
+        main: jpeg,
+        backdrop: jpeg,
+        width: 450,
+        height: 600,
+      }),
+      place: () => 'Svedala',
+      country: () => 'SE',
+      setTimer: () => ({}),
+      ...(insight ? { insight } : {}),
+    });
+    cleanups.push(() => library.dispose());
+    return { dir, library, state };
+  }
+
+  it('adds the neighbours, trips and people to the listing and the country to each picture', async () => {
+    const fake = fakeInsight();
+    const { library } = await setup(
+      {
+        title: 'T',
+        truncated: false,
+        photos: [photo('a', 2_000), photo('b', 1_000)],
+      },
+      fake.insight,
+    );
+    await library.start();
+    await library.refresh();
+    const listing = library.snapshot();
+    expect(listing.photos).toHaveLength(2);
+    expect(listing.photos[0]).toMatchObject({ cc: 'SE', nb: [[1, 90]] });
+    expect(listing.trips).toHaveLength(1);
+    expect(listing.people).toEqual([{ id: 'p1', name: 'Anna' }]);
+    expect(listing.scenes).toEqual({ beach: 'Stranden' });
+    expect(listing.ai).toBe(true);
+    // Nothing private leaves in the listing: no file names, captions as such, or Apple data.
+    expect(JSON.stringify(listing)).not.toMatch(/icloud|filename|IMG_/);
+    expect(fake.seen.at(-1)).toHaveLength(2);
+  });
+
+  it('changes its revision when the insight changes, so the Hubs read the list again', async () => {
+    const fake = fakeInsight();
+    const { library } = await setup(
+      { title: 'T', truncated: false, photos: [photo('a', 1_000)] },
+      fake.insight,
+    );
+    await library.start();
+    await library.refresh();
+    const before = library.snapshot().revision;
+    let notified = 0;
+    library.subscribe(() => {
+      notified += 1;
+    });
+    fake.bump();
+    expect(library.snapshot().revision).not.toBe(before);
+    expect(notified).toBe(1);
+  });
+
+  it('fills in what it has learned about a picture it already has, without downloading it again', async () => {
+    const downloads: string[] = [];
+    const dir = await mkdtemp(join(tmpdir(), 'photo-frame-'));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const state = {
+      listing: {
+        title: 'T',
+        truncated: false,
+        photos: [photo('a', 1_000)],
+      } as AlbumListing,
+    };
+    const make = () =>
+      new PhotoLibrary({
+        cacheDir: dir,
+        list: async () => state.listing,
+        download: async (url) => {
+          downloads.push(url);
+          return jpeg;
+        },
+        process: async () => ({
+          main: jpeg,
+          backdrop: jpeg,
+          width: 450,
+          height: 600,
+        }),
+        place: () => 'Svedala',
+        country: () => 'SE',
+        setTimer: () => ({}),
+      });
+    const first = make();
+    await first.start();
+    await first.refresh();
+    first.dispose();
+    state.listing = {
+      title: 'T',
+      truncated: false,
+      photos: [
+        photo('a', 1_000, {
+          favorite: true,
+          caption: 'Midsommar',
+        } as NonNullable<AlbumPhoto['details']>),
+      ],
+    };
+    const fake = fakeInsight();
+    const second = new PhotoLibrary({
+      cacheDir: dir,
+      list: async () => state.listing,
+      download: async (url) => {
+        downloads.push(url);
+        return jpeg;
+      },
+      process: async () => ({
+        main: jpeg,
+        backdrop: jpeg,
+        width: 450,
+        height: 600,
+      }),
+      place: () => 'Svedala',
+      country: () => 'SE',
+      setTimer: () => ({}),
+      insight: fake.insight,
+    });
+    cleanups.push(() => second.dispose());
+    await second.start();
+    // The first start already hands what is cached to the analysis.
+    expect(fake.seen[0]).toHaveLength(1);
+    await second.refresh();
+    expect(downloads).toHaveLength(1);
+    expect(
+      (lastPhotos[0] as { details?: { caption?: string } }).details?.caption,
+    ).toBe('Midsommar');
+  });
+
+  it('works exactly as before without an insight', async () => {
+    const { library } = await setup({
+      title: 'T',
+      truncated: false,
+      photos: [photo('a', 1_000)],
+    });
+    await library.start();
+    await library.refresh();
+    const listing = library.snapshot();
+    expect(Object.keys(listing).sort()).toEqual(['photos', 'revision']);
+    expect(library.peopleApi()).toBeUndefined();
+  });
+});
+
+describe('corner brightness', () => {
+  /** A 200 × 120 picture, dark except for a bright block in one corner. */
+  async function picture(bright: 'tr' | 'br' | 'bl' | 'none') {
+    const width = 200;
+    const height = 120;
+    const raw = Buffer.alloc(width * height * 3, 10);
+    const paint = (x0: number, y0: number) => {
+      for (let y = y0; y < y0 + 40; y += 1)
+        for (let x = x0; x < x0 + 70; x += 1)
+          raw.fill(245, (y * width + x) * 3, (y * width + x) * 3 + 3);
+    };
+    if (bright === 'tr') paint(width - 70, 0);
+    if (bright === 'br') paint(width - 70, height - 40);
+    if (bright === 'bl') paint(0, height - 40);
+    return sharp(raw, { raw: { width, height, channels: 3 } })
+      .jpeg()
+      .toBuffer();
+  }
+
+  it('measures the upper right, lower right and lower left corner on their own', async () => {
+    expect(
+      (await measureCorners(await picture('none'))).every((n) => n < 10),
+    ).toBe(true);
+    const [tr, br, bl] = await measureCorners(await picture('tr'));
+    expect(tr).toBeGreaterThan(80);
+    expect(br).toBeLessThan(15);
+    expect(bl).toBeLessThan(15);
+    expect((await measureCorners(await picture('br')))[1]).toBeGreaterThan(80);
+    expect((await measureCorners(await picture('bl')))[2]).toBeGreaterThan(80);
+  });
+
+  it('is part of every processed picture', async () => {
+    const processed = await processPhoto(await picture('br'));
+    expect(processed.corners).toHaveLength(3);
+    expect(processed.corners![1]).toBeGreaterThan(80);
+  });
+
+  it('is measured afterwards for pictures cached before it existed, without a download', async () => {
+    const jpegBytes = new Uint8Array([255, 216, 255, 217]);
+    const dir = await mkdtemp(join(tmpdir(), 'photo-frame-'));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const photo = {
+      id: 'a',
+      url: 'https://cvws.icloud-content.com/a',
+      version: 'v1',
+      width: 1536,
+      height: 2048,
+      takenAt: 1_000,
+      utcOffsetSeconds: 0,
+      latitude: null,
+      longitude: null,
+    };
+    let downloads = 0;
+    const make = (
+      measure?: (b: Uint8Array) => Promise<[number, number, number]>,
+    ) =>
+      new PhotoLibrary({
+        cacheDir: dir,
+        list: async () => ({ title: 'T', truncated: false, photos: [photo] }),
+        download: async () => {
+          downloads += 1;
+          return jpegBytes;
+        },
+        process: async () => ({
+          main: jpegBytes,
+          backdrop: jpegBytes,
+          width: 450,
+          height: 600,
+        }),
+        place: () => null,
+        setTimer: () => ({}),
+        ...(measure ? { measure } : {}),
+      });
+    const first = make();
+    await first.start();
+    await first.refresh();
+    expect(first.snapshot().photos[0]).not.toHaveProperty('lu');
+    first.dispose();
+    const second = make(async () => [11, 22, 33]);
+    cleanups.push(() => second.dispose());
+    await second.start();
+    await second.refresh();
+    expect(second.snapshot().photos[0]?.lu).toEqual([11, 22, 33]);
+    expect(downloads).toBe(1);
+    // Kept in the index, so a restart does not measure again.
+    const third = make(async () => {
+      throw new Error('must not measure twice');
+    });
+    cleanups.push(() => third.dispose());
+    await third.start();
+    expect(third.snapshot().photos[0]?.lu).toEqual([11, 22, 33]);
   });
 });

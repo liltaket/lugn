@@ -318,13 +318,24 @@ const server = createServer(async (request, response) => {
         const dir = process.env.LUGN_PREVIEW_PHOTOS;
         if (route === 'display-api/photos') {
           const index = JSON.parse(await readFile(`${dir}/index.json`, 'utf8'));
-          return sendJson(response, 200, {
-            revision: 'preview',
-            photos: index.photos.map((photo) => ({
-              ...photo,
-              source: undefined,
-            })),
-          });
+          // A listing saved from the server (with neighbours, trips, people)
+          // replaces the bare index, to see groups and their names.
+          const listing = process.env.LUGN_PREVIEW_LISTING
+            ? JSON.parse(
+                await readFile(process.env.LUGN_PREVIEW_LISTING, 'utf8'),
+              )
+            : null;
+          return sendJson(
+            response,
+            200,
+            listing ?? {
+              revision: 'preview',
+              photos: index.photos.map((photo) => ({
+                ...photo,
+                source: undefined,
+              })),
+            },
+          );
         }
         const photo =
           /^display-api\/photos\/([A-Za-z0-9_-]{24})(\/backdrop)?$/.exec(route);
