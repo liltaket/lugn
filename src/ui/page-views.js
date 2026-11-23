@@ -58,15 +58,26 @@
 
   const hem = () => (typeof refs === 'object' ? refs : null);
 
+  // The navbar is a quick menu, so it holds few and large choices: not the
+  // soft, movie and music scenes (Hem has them), but Dynamisk, which follows
+  // the music and the situation by itself.
+  const DOCK_HIDDEN = new Set([
+    'scene.soft_light',
+    'scene.movie_light',
+    'scene.music',
+  ]);
+  const DOCK_MAX = 5;
+
   function dockScenes() {
     if (typeof getSceneList !== 'function') return [];
     const scenes = getSceneList(payload()).filter(
-      (scene) => !scene.id.startsWith('scene.custom_'),
+      (scene) =>
+        !scene.id.startsWith('scene.custom_') && !DOCK_HIDDEN.has(scene.id),
     );
-    // Släck last, as the way out, and at most six in a row.
+    // Släck last, as the way out.
     const off = scenes.filter((scene) => scene.id === 'scene.all_off');
     const rest = scenes.filter((scene) => scene.id !== 'scene.all_off');
-    return [...rest.slice(0, 6 - off.length), ...off];
+    return [...rest.slice(0, DOCK_MAX - off.length), ...off];
   }
 
   function dockButton(scene) {

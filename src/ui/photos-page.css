@@ -213,7 +213,7 @@
   display: none;
 }
 .photos-page.menu-open .ph-now {
-  transform: translateY(-62px);
+  transform: translateY(-80px);
 }
 .ph-now .nb-round {
   visibility: visible;

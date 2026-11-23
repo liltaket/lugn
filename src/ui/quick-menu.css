@@ -46,7 +46,7 @@
   background: linear-gradient(
     to top,
     rgba(0, 0, 0, 0.55) 0,
-    rgba(0, 0, 0, 0.12) 190px,
+    rgba(0, 0, 0, 0.12) 220px,
     rgba(0, 0, 0, 0.12) 100%
   );
   opacity: 0;
@@ -60,10 +60,10 @@
   position: absolute;
   left: 28px;
   right: 28px;
-  bottom: 18px;
+  bottom: 20px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   opacity: 0;
   transform: translateY(96px);
   transition:
@@ -90,15 +90,15 @@
 /* The glass every button shares. */
 .nb-round,
 .scene-dock button {
-  min-height: 58px;
-  border-radius: 29px;
+  min-height: 74px;
+  border-radius: 37px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(10, 12, 12, 0.32);
   color: #eef1e8;
 }
 .nb-round {
   flex: none;
-  width: 58px;
+  width: 74px;
   padding: 0;
   display: flex;
   align-items: center;
@@ -108,13 +108,13 @@
   opacity: 0.4;
 }
 .nb-round svg {
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
 }
 .nb-actions {
   flex: none;
   display: flex;
-  gap: 10px;
+  gap: 12px;
 }
 
 /* Hem's scenes, in the middle. */
@@ -123,24 +123,24 @@
   min-width: 0;
   display: flex;
   justify-content: center;
-  gap: 8px;
+  gap: 12px;
 }
 .scene-dock button {
-  flex: 1 1 auto;
-  max-width: 176px;
+  flex: 1 1 0;
+  max-width: 240px;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 0 12px 0 11px;
-  font-size: 15px;
+  gap: 10px;
+  padding: 0 22px 0 20px;
+  font-size: 19px;
   font-weight: 600;
   white-space: nowrap;
 }
 .scene-dock button svg {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 30px;
+  height: 30px;
   stroke-width: 1.6;
 }
 .scene-dock button span {

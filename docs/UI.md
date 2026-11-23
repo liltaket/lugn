@@ -298,8 +298,9 @@ page.
 It asks the server for pictures only while it is the shown page; see
 [Event camera previews](CAMERAS.md#the-camera-grid-page).
 
-The navbar holds a **scene dock**: Hem's scenes (not the custom ones),
-at most six, with Släck last. Its buttons send what Hem's scene buttons send and
+The navbar holds a **scene dock**: a few large choices from Hem's scenes (not
+the custom ones, nor Mysljus, Filmkväll and Musik): Fokus, Vardagsljus,
+Dynamisk, Sleep on Bed, at most five, with Släck last. Its buttons send what Hem's scene buttons send and
 show the state Hem's buttons show (selected, pending, waiting for lamps). Musik
 reads title, artist, source and cover from Hem's music card, so the same pause
 grace, computer media and retained artwork rules apply, and play/pause sends
