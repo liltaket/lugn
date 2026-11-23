@@ -126,21 +126,23 @@
   gap: 12px;
 }
 .scene-dock button {
-  flex: 1 1 0;
+  /* Sized by their words and sharing what is left, so the longest name is
+     never the one that is cut. */
+  flex: 1 1 auto;
   max-width: 240px;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 22px 0 20px;
-  font-size: 19px;
+  gap: 8px;
+  padding: 0 12px 0 13px;
+  font-size: 17px;
   font-weight: 600;
   white-space: nowrap;
 }
 .scene-dock button svg {
   flex: none;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   stroke-width: 1.6;
 }
 .scene-dock button span {

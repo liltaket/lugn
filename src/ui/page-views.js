@@ -59,12 +59,12 @@
   const hem = () => (typeof refs === 'object' ? refs : null);
 
   // The navbar is a quick menu, so it holds few and large choices: not the
-  // soft, movie and music scenes (Hem has them), but Dynamisk, which follows
-  // the music and the situation by itself.
+  // soft, music and party scenes (Hem has them), but Filmkväll and Dynamisk,
+  // which follows the music and the situation by itself.
   const DOCK_HIDDEN = new Set([
     'scene.soft_light',
-    'scene.movie_light',
     'scene.music',
+    'scene.party',
   ]);
   const DOCK_MAX = 5;
 
