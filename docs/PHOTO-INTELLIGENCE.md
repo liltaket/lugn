@@ -72,9 +72,10 @@ then be rebuilt for the new text tower.
   sent anywhere: the panel receives small crops and pictures through the signed
   in session only, and a Hub receives person ids and names, never faces.
 
-Measured on a development machine (one thread): 109 ms per picture, 150 pictures
-in about 16 s. The Raspberry Pi 3B that runs Lugn at home is measured separately
-in the pull request.
+Measured with one thread: 109 ms per picture on a 16-core development machine;
+about 3.4 s per picture and 230 MB resident on the Raspberry Pi 3B that runs
+Lugn (models load in 7 s), so 150 new pictures take about nine minutes at the
+lowest priority while the sensor and the lights keep their share.
 
 ## Grouping
 
