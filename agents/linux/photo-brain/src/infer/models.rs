@@ -253,7 +253,8 @@ mod tests {
             .filter(|(key, d)| key == "runtime" || d.default)
             .map(|(key, _)| key)
             .collect();
-        assert!(keys.contains(&"siglip2-so400m-patch16-384-int8".to_string()));
+        assert!(keys.contains(&"siglip2-so400m-patch16-384-q4".to_string()));
+        assert!(!keys.iter().any(|k| k.ends_with("-int8")));
         assert!(keys.contains(&"auraface-v1-glintr100".to_string()));
         assert!(!keys.iter().any(|k| k.starts_with("buffalo")));
     }

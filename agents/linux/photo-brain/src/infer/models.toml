@@ -10,7 +10,7 @@
 # goes to `../lib/` next to it.
 
 [use]
-embed = "siglip2-so400m-patch16-384-int8"
+embed = "siglip2-so400m-patch16-384-q4"
 detector = "yunet-2026may"
 face = "sface-2021dec"
 
@@ -32,6 +32,78 @@ license = "MIT (Microsoft ONNX Runtime)"
 # SigLIP 2 vision towers. preprocessor_config.json of both: SiglipImageProcessor,
 # size 384 x 384 (squashed, no crop), resample 2 = bilinear, rescale 1/255,
 # mean 0.5, std 0.5. The scene file must come from the same text tower.
+#
+# Precision matters more than usual here (README, "Quantisation"): on 21 test
+# pictures, against the full-precision embedding,
+# - fp16: cosine 1.0000 (same as fp32), but ONNX Runtime's CPU provider makes
+#   fp32 copies of the weights while running: so400m peaks at 2.3 GB RSS;
+# - q4 (4-bit weights, fp32 activations, MatMulNBits): cosine 0.96-0.99,
+#   pairwise-similarity rank correlation 0.98, so400m peaks at 0.67 GB;
+# - int8 (dynamic activation quantisation): cosine 0.35-0.90, rank correlation
+#   0.43 (so400m) / 0.70 (base), scenes ranked wrongly. Kept for comparison
+#   only; never use it.
+# Default: so400m q4 (fits the ~2 GB budget); full precision: so400m fp16;
+# fast: base fp32.
+
+[embed.siglip2-so400m-patch16-384-q4]
+file = "siglip2-so400m-patch16-384-vision-q4.onnx"
+url = "https://huggingface.co/onnx-community/siglip2-so400m-patch16-384-ONNX/resolve/29f74e673c298fd07482d8e20138179282001eb7/onnx/vision_model_q4.onnx"
+sha256 = "982742d76d38c6aea609eea68e2c9c74fbc67e85aaa0ade31744a27358a29cfd"
+bytes = 279689302
+license = "Apache-2.0 (google/siglip2-so400m-patch16-384; ONNX export by onnx-community)"
+default = true
+size = 384
+resize = "squash"
+mean = [0.5, 0.5, 0.5]
+std = [0.5, 0.5, 0.5]
+output = "pooler_output"
+dim = 1152
+scenes = "photo-scenes.json"
+
+[embed.siglip2-so400m-patch16-384-fp16]
+file = "siglip2-so400m-patch16-384-vision-fp16.onnx"
+url = "https://huggingface.co/onnx-community/siglip2-so400m-patch16-384-ONNX/resolve/29f74e673c298fd07482d8e20138179282001eb7/onnx/vision_model_fp16.onnx"
+sha256 = "7a8059233d8076973f8f754b8bf588674baa3ac4982bd605bd1f25986e85096a"
+bytes = 857096382
+license = "Apache-2.0 (google/siglip2-so400m-patch16-384; ONNX export by onnx-community)"
+default = false
+size = 384
+resize = "squash"
+mean = [0.5, 0.5, 0.5]
+std = [0.5, 0.5, 0.5]
+output = "pooler_output"
+dim = 1152
+scenes = "photo-scenes.json"
+
+[embed.siglip2-base-patch16-384-fp32]
+file = "siglip2-base-patch16-384-vision-fp32.onnx"
+url = "https://huggingface.co/onnx-community/siglip2-base-patch16-384-ONNX/resolve/99f5d40afb5331b81eecee4bb02c360fbb9cdf8a/onnx/vision_model.onnx"
+sha256 = "49ae4958b1098ca995e929d646f7be05a69c65e6344beae07d58c6598ffc5210"
+bytes = 372975112
+license = "Apache-2.0 (google/siglip2-base-patch16-384; ONNX export by onnx-community)"
+default = true
+size = 384
+resize = "squash"
+mean = [0.5, 0.5, 0.5]
+std = [0.5, 0.5, 0.5]
+output = "pooler_output"
+dim = 768
+scenes = "photo-scenes.siglip2-base.json"
+
+[embed.siglip2-base-patch16-384-fp16]
+file = "siglip2-base-patch16-384-vision-fp16.onnx"
+url = "https://huggingface.co/onnx-community/siglip2-base-patch16-384-ONNX/resolve/99f5d40afb5331b81eecee4bb02c360fbb9cdf8a/onnx/vision_model_fp16.onnx"
+sha256 = "8ee87a1e594525050f45b5c82a56ef7bdfe328d421dc696b8d28583171954d0c"
+bytes = 186623196
+license = "Apache-2.0 (google/siglip2-base-patch16-384; ONNX export by onnx-community)"
+default = false
+size = 384
+resize = "squash"
+mean = [0.5, 0.5, 0.5]
+std = [0.5, 0.5, 0.5]
+output = "pooler_output"
+dim = 768
+scenes = "photo-scenes.siglip2-base.json"
 
 [embed.siglip2-so400m-patch16-384-int8]
 file = "siglip2-so400m-patch16-384-vision-int8.onnx"
@@ -39,13 +111,13 @@ url = "https://huggingface.co/onnx-community/siglip2-so400m-patch16-384-ONNX/res
 sha256 = "7b015bfdf140d7d13d74c7fc4b00553b65747620c0a8f11d0f7cbd4cad772cc5"
 bytes = 433701623
 license = "Apache-2.0 (google/siglip2-so400m-patch16-384; ONNX export by onnx-community)"
-default = true
+default = false
 size = 384
 resize = "squash"
 mean = [0.5, 0.5, 0.5]
 std = [0.5, 0.5, 0.5]
-dim = 1152
 output = "pooler_output"
+dim = 1152
 scenes = "photo-scenes.json"
 
 [embed.siglip2-base-patch16-384-int8]
@@ -54,13 +126,13 @@ url = "https://huggingface.co/onnx-community/siglip2-base-patch16-384-ONNX/resol
 sha256 = "ef04b4da38291ee770a401b6b86786393490b2aeda799c2a979afeb92ee7a6e9"
 bytes = 95720693
 license = "Apache-2.0 (google/siglip2-base-patch16-384; ONNX export by onnx-community)"
-default = true
+default = false
 size = 384
 resize = "squash"
 mean = [0.5, 0.5, 0.5]
 std = [0.5, 0.5, 0.5]
-dim = 768
 output = "pooler_output"
+dim = 768
 scenes = "photo-scenes.siglip2-base.json"
 
 # ── Face detector ─────────────────────────────────────────────────────────────
