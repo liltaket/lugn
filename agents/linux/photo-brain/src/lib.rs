@@ -9,7 +9,15 @@
 
 pub mod analysis;
 pub mod bundle;
+pub mod client;
 pub mod cluster;
+pub mod config;
+pub mod disk;
+pub mod infer;
 pub mod localtime;
 pub mod people;
 pub mod places;
+pub mod store;
+
+#[cfg(test)]
+mod mockhttp;
