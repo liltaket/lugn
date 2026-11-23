@@ -343,6 +343,9 @@ model; one file per embedding space.
 - `embedIds` must contain the analysis' `ModelIds::embed`, otherwise the file is
   for another model: `photo-scenes.json` is the default so400m one,
   `photo-scenes.siglip2-base.json` the base one (`scenes` in `models.toml` names it).
-- The file written before schema 2 (CLIP, no `schema` key, int8 with `scale` as the
-  divisor) is what `src/runtime/photo-intel` reads; its loader skips schema-2
-  vectors (wrong byte length) and so names no scenes.
+- The Rust brain reads both formats (`encoding: "f16"`, int8, f32). For a `sigmoid`
+  file it reports a softmax over the logits (`scale × cos`; the bias cancels), gated
+  by a per-kind cosine floor (`scenes.sigmoid_min_cosine`, default 0.05, roughly a
+  logit of −10); calibrate the floor on real pictures.
+- Lugn on BrunoCAM no longer reads the vectors at all, only each scene's `key` and
+  `sv` for the names Hubs show.

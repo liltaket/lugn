@@ -5,8 +5,8 @@
 //!   `scale × cosine` and one softmax runs over the whole vocabulary. A file
 //!   without `kind` is the original CLIP file, whose `scale` is the int8
 //!   quantisation of the vectors; its logit scale is CLIP's 100.
-//! - `sigmoid` (SigLIP-like): every label on its own,
-//!   `p = sigmoid(scale × cosine + bias)`; the probabilities are independent.
+//! - `sigmoid` (SigLIP-like): trained with a per-label sigmoid, but reported as
+//!   a softmax over the logits (the raw sigmoid is tiny even when right).
 //!
 //! Either way a label whose raw cosine is below the kind's floor is not
 //! reported, and the best three are returned. Labels with `sv: null` are sink
@@ -31,6 +31,8 @@ pub struct Vocabulary {
     pub dim: usize,
     pub logit_scale: f32,
     pub bias: f32,
+    /// The `ModelIds::embed` values the file says it fits; empty for old files.
+    pub embed_ids: Vec<String>,
     pub keys: Vec<String>,
     /// Swedish display name; `None` for a sink category.
     pub names: Vec<Option<String>>,
@@ -52,6 +54,12 @@ struct File {
     scale: Option<f32>,
     #[serde(default)]
     bias: Option<f32>,
+    /// `f16` (little-endian halves), `int8` (any scale) or absent (int8, or f32).
+    #[serde(default)]
+    encoding: Option<String>,
+    /// The `ModelIds::embed` values this file fits (schema 2).
+    #[serde(default, rename = "embedIds")]
+    embed_ids: Vec<String>,
     scenes: Vec<Scene>,
 }
 
@@ -61,6 +69,24 @@ struct Scene {
     #[serde(default)]
     sv: Option<String>,
     vector: String,
+}
+
+/// IEEE 754 half precision to single.
+fn f16_to_f32(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exp = i32::from((bits >> 10) & 0x1f);
+    let frac = f32::from(bits & 0x03ff);
+    match exp {
+        0 => sign * frac * 2f32.powi(-24),
+        31 => {
+            if frac == 0.0 {
+                sign * f32::INFINITY
+            } else {
+                f32::NAN
+            }
+        }
+        _ => sign * (1.0 + frac / 1024.0) * 2f32.powi(exp - 15),
+    }
 }
 
 /// CLIP's logit scale.
@@ -88,6 +114,7 @@ impl Vocabulary {
             dim: file.dim,
             logit_scale,
             bias,
+            embed_ids: file.embed_ids,
             keys: Vec::new(),
             names: Vec::new(),
             vectors: Vec::new(),
@@ -97,8 +124,18 @@ impl Vocabulary {
             let Ok(bytes) = b64.decode(scene.vector.as_bytes()) else {
                 continue;
             };
-            // int8 (any quantisation scale: the vector is normalised) or f32 LE.
-            let mut v: Vec<f32> = if bytes.len() == file.dim {
+            // f16 LE (schema 2), int8 (any quantisation scale: the vector is
+            // normalised) or f32 LE.
+            let mut v: Vec<f32> = if file.encoding.as_deref() == Some("f16")
+                && bytes.len() == 2 * file.dim
+            {
+                bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| f16_to_f32(u16::from_le_bytes(*c)))
+                    .collect()
+            } else if bytes.len() == file.dim {
                 bytes.iter().map(|&b| f32::from(b as i8)).collect()
             } else if bytes.len() == 4 * file.dim {
                 bytes
@@ -125,9 +162,18 @@ impl Vocabulary {
         Ok(vocabulary)
     }
 
-    /// Whether the text vectors belong to the embedding model `embed`: the
-    /// last path segment of one is contained in the other, ignoring case.
+    /// Whether the text vectors belong to the embedding model `embed`. A file
+    /// that lists the ids it fits (`embedIds`) must list this one; an older
+    /// file matches when the last path segment of one name is contained in the
+    /// other, ignoring case.
     pub fn matches_model(&self, embed: &str, embed_dim: usize) -> bool {
+        if !self.embed_ids.is_empty() {
+            return embed_dim == self.dim
+                && self
+                    .embed_ids
+                    .iter()
+                    .any(|id| id.eq_ignore_ascii_case(embed));
+        }
         let tail = |s: &str| s.rsplit('/').next().unwrap_or(s).to_ascii_lowercase();
         let (a, b) = (tail(&self.model), tail(embed));
         embed_dim == self.dim
@@ -154,10 +200,18 @@ impl Vocabulary {
                 let total: f32 = odds.iter().sum();
                 odds.iter().map(|o| o / total).collect()
             }
-            Kind::Sigmoid => cosines
-                .iter()
-                .map(|c| 1.0 / (1.0 + (-(self.logit_scale * c + self.bias)).exp()))
-                .collect(),
+            // SigLIP's own per-label sigmoid is small even when right (a clear
+            // beach is about 0.01), so it is useless as a confidence. What is
+            // reported is "which of these": a softmax over the logits (the
+            // bias cancels). Whether it is any of them at all is the cosine
+            // floor's job.
+            Kind::Sigmoid => {
+                let logits: Vec<f32> = cosines.iter().map(|c| self.logit_scale * c).collect();
+                let top = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let odds: Vec<f32> = logits.iter().map(|l| (l - top).exp()).collect();
+                let total: f32 = odds.iter().sum();
+                odds.iter().map(|o| o / total).collect()
+            }
         };
         let mut ranked: Vec<usize> = (0..self.keys.len())
             .filter(|&i| cosines[i] >= min_cosine)
@@ -252,7 +306,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn sigmoid_probabilities_are_independent_and_sinks_are_kept() {
+    fn a_sigmoid_file_reports_which_of_these_and_keeps_sinks() {
         let file = axis_file(
             &[
                 ("beach", Some("Stranden")),
@@ -273,10 +327,43 @@ pub(crate) mod tests {
             scene.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(),
             vec!["beach", "other", "sea"]
         );
+        // A softmax over all labels: a share of one, not tiny sigmoid values.
         let sum: f32 = scene.iter().map(|s| s.1).sum();
-        assert!(sum > 1.0, "independent probabilities: {sum}");
-        let expected = 1.0 / (1.0 + (-(100.0 * e[0] - 10.0)).exp());
-        assert!((scene[0].1 - expected).abs() < 1e-5);
+        assert!(sum > 0.9 && sum <= 1.0 + 1e-5, "softmax shares: {sum}");
+        assert!(scene[0].1 > scene[1].1 && scene[1].1 > scene[2].1);
+    }
+
+    #[test]
+    fn half_floats_decode_and_embed_ids_decide_the_match() {
+        // 1.0 = 0x3C00, 0.5 = 0x3800, 0 = 0, -2.0 = 0xC000, smallest subnormal.
+        assert_eq!(f16_to_f32(0x3c00), 1.0);
+        assert_eq!(f16_to_f32(0x3800), 0.5);
+        assert_eq!(f16_to_f32(0x0000), 0.0);
+        assert_eq!(f16_to_f32(0xc000), -2.0);
+        assert_eq!(f16_to_f32(0x0001), 2f32.powi(-24));
+        assert_eq!(f16_to_f32(0x7c00), f32::INFINITY);
+        assert!(f16_to_f32(0x7e00).is_nan());
+
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let half = |x: u16| x.to_le_bytes();
+        // Two labels along axes 0 and 1 of a 2-dim space, as f16.
+        let beach: Vec<u8> = [half(0x3c00), half(0)].concat();
+        let sea: Vec<u8> = [half(0), half(0x3c00)].concat();
+        let file = format!(
+            r#"{{"schema":2,"model":"google/siglip2-x","embedIds":["siglip2-x-q4"],"dim":2,
+               "kind":"sigmoid","scale":100.0,"bias":-10.0,"encoding":"f16",
+               "scenes":[{{"key":"beach","sv":"Stranden","vector":"{}"}},
+                         {{"key":"sea","sv":"Havet","vector":"{}"}}]}}"#,
+            b64.encode(beach),
+            b64.encode(sea)
+        );
+        let v = Vocabulary::parse(&file).unwrap();
+        assert_eq!(v.keys, vec!["beach", "sea"]);
+        assert_eq!(v.classify(&[1.0, 0.0], 0.05)[0].0, "beach");
+        assert!(v.matches_model("SigLIP2-X-q4", 2));
+        // Another model of the same dimension is not this vocabulary.
+        assert!(!v.matches_model("siglip2-x-fp16", 2));
+        assert!(!v.matches_model("siglip2-x-q4", 3));
     }
 
     #[test]
