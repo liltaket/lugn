@@ -771,10 +771,30 @@ export async function startRuntime(
       const { createPhotoFrame } = await import('./photo-frame.js');
       photoLibrary = createPhotoFrame(
         {
-          ...config.photoFrame,
+          albumUrl: config.photoFrame.albumUrl,
+          refreshMinutes: config.photoFrame.refreshMinutes,
+          maxPhotos: config.photoFrame.maxPhotos,
           cacheDir:
             config.photoFrame.cacheDir ??
             join(dirname(lightingIntentPath), 'photo-frame'),
+          ...(config.photoFrame.intelligence
+            ? {
+                intelligence: {
+                  enabled: config.photoFrame.intelligence.enabled,
+                  ...(config.photoFrame.intelligence.modelsDir
+                    ? { modelsDir: config.photoFrame.intelligence.modelsDir }
+                    : {}),
+                  ...(config.photoFrame.intelligence.home
+                    ? {
+                        home: {
+                          lat: config.photoFrame.intelligence.home.latitude,
+                          lon: config.photoFrame.intelligence.home.longitude,
+                        },
+                      }
+                    : {}),
+                },
+              }
+            : {}),
         },
         {
           warn: (message) => console.warn(`[lugn] ${message}`),
@@ -1166,6 +1186,7 @@ export async function startRuntime(
     ...(artwork ? { artworkProvider: artwork } : {}),
     ...(cameraService && cameraMedia ? { cameraService, cameraMedia } : {}),
     ...(presenceSensorStream ? { presenceSensorStream } : {}),
+    ...(photoLibrary ? { photoLibrary } : {}),
     experience,
     musicObservationTrustProvider: musicObservationTrust,
     webAssetsDirectory: join(dirname(fileURLToPath(import.meta.url)), '../web'),

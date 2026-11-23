@@ -139,7 +139,12 @@ class El {
   }
 }
 
-function makeWorld() {
+type Fixture = {
+  photos?: Array<Record<string, unknown>>;
+  listing?: Record<string, unknown>;
+};
+
+function makeWorld(fixture: Fixture = {}) {
   const timers: Array<{
     id: number;
     due: number;
@@ -165,6 +170,8 @@ function makeWorld() {
   };
   const stage = make('div', 'stage', photosRoot);
   make('div', 'notice', photosRoot).hidden = true;
+  const clockTime = make('b', 'clock-time', photosRoot);
+  const clockDate = make('span', 'clock-date', photosRoot);
   const now_ = make('div', 'now', photosRoot);
   now_.hidden = true;
   const pause = make('button', 'pause', now_);
@@ -194,16 +201,18 @@ function makeWorld() {
     ".hub-page[data-page='foto'] [data-view='root']": photosRoot,
     ".hub-page[data-page='music'] [data-view='root']": musicRoot,
   };
-  const photos = Array.from({ length: 8 }, (_, i) => ({
-    id: `${'abcdefgh'[i]}`.repeat(24),
-    w: 1024,
-    h: 768,
-    date: '2026-11-04',
-    place: 'Svedala',
-    t: 1_000 + i,
-    lat: 55.5,
-    lon: 13.4,
-  }));
+  const photos =
+    fixture.photos ??
+    Array.from({ length: 8 }, (_, i) => ({
+      id: `${'abcdefgh'[i]}`.repeat(24),
+      w: 1024,
+      h: 768,
+      date: '2026-11-04',
+      place: 'Svedala',
+      t: 1_000 + i,
+      lat: 55.5,
+      lon: 13.4,
+    }));
   const fetches: string[] = [];
   const decodeGate = { current: null as Promise<void> | null };
   const sandbox: Record<string, unknown> = {
@@ -227,7 +236,7 @@ function makeWorld() {
       return {
         status: 200,
         ok: true,
-        json: async () => ({ revision: 'r1', photos }),
+        json: async () => ({ revision: 'r1', photos, ...fixture.listing }),
       };
     },
     performance: { now: () => now },
@@ -315,6 +324,8 @@ function makeWorld() {
   };
   return {
     stage,
+    clockTime,
+    clockDate,
     photosRoot,
     nav,
     back,
@@ -591,5 +602,161 @@ describe('The navbar', () => {
     world.photosRoot.fire('pointermove', { pointerType: 'mouse', buttons: 1 });
     await world.advance(300);
     expect(open(world)).toBe(false);
+  });
+});
+
+describe('Foto groups', () => {
+  // Ten pictures from one trip, every one a neighbour of the others.
+  const related = Array.from({ length: 10 }, (_, i) => ({
+    id: `${'abcdefghij'[i]}`.repeat(24),
+    w: 480,
+    h: 640,
+    date: '2026-11-0' + (4 + (i % 2)),
+    place: 'Svedala',
+    t: 1_000 + i,
+    lat: 55.5,
+    lon: 13.4,
+    cc: 'SE',
+    tr: 0,
+    nb: Array.from({ length: 10 }, (_, j) => [j, 80]).filter(([j]) => j !== i),
+  }));
+  const listing = {
+    trips: [{ title: 'Skåne', from: '2026-11-04', to: '2026-11-05', cc: 'SE' }],
+    scenes: {},
+    people: [],
+  };
+
+  it('names the group and shows where in it a slide is', async () => {
+    const world = makeWorld({ photos: related, listing });
+    world.hooks['enter']!();
+    await world.advance(100);
+    const slide = world.slides()[0]!;
+    const caption = slide.all('.ph-cap')[0]!;
+    expect(caption.all('small')[0]!.textContent).toBe('Resa');
+    expect(caption.all('b')[0]!.textContent).toBe('Skåne');
+    expect(caption.all('span')[0]!.textContent).toBe('4–5 november');
+    // Ten portraits make several slides of one group; dots say which one.
+    const dots = caption.all('u');
+    expect(dots.length).toBeGreaterThanOrEqual(2);
+    expect(dots.filter((d) => d.classes.has('on'))).toHaveLength(1);
+    expect(dots[0]!.classes.has('on')).toBe(true);
+  });
+
+  it('plays a whole group over its slides before the next group begins', async () => {
+    const world = makeWorld({ photos: related, listing });
+    world.hooks['enter']!();
+    await world.advance(100);
+    const ofFirst = world.slides()[0]!.all('u').length;
+    const seen = [
+      world
+        .slides()[0]!
+        .all('u')
+        .filter((d) => d.classes.has('on')).length,
+    ];
+    expect(ofFirst).toBeGreaterThanOrEqual(2);
+    await world.advance(21_000);
+    const second = world.slides().at(-1)!;
+    const position = second.all('u').findIndex((d) => d.classes.has('on'));
+    expect(position).toBe(1);
+    void seen;
+  });
+
+  it('keeps the old caption and queue when the server lists no neighbours', async () => {
+    const world = makeWorld();
+    world.hooks['enter']!();
+    await world.advance(100);
+    const caption = world.slides()[0]!.all('.ph-cap')[0]!;
+    expect(caption.all('small')).toHaveLength(0);
+    expect(caption.all('b')[0]!.textContent).toBe('Svedala');
+    expect(world.slides()[0]!.all('u')).toHaveLength(0);
+  });
+
+  it('shows the time of day, and stops redrawing when the page is left', async () => {
+    const world = makeWorld();
+    world.hooks['enter']!();
+    await world.advance(100);
+    expect(world.clockTime.textContent).toMatch(/^\d{2}[:.]\d{2}$/);
+    expect(world.clockDate.textContent.length).toBeGreaterThan(5);
+    world.clockTime.textContent = '';
+    world.hooks['leave']!();
+    await world.advance(120_000);
+    expect(world.clockTime.textContent).toBe('');
+    world.hooks['enter']!();
+    expect(world.clockTime.textContent).not.toBe('');
+  });
+
+  it('does not touch the clock while the pager moves', async () => {
+    const world = makeWorld();
+    world.hooks['enter']!();
+    await world.advance(100);
+    world.clockTime.textContent = 'old';
+    world.pager.classes.add('paging');
+    await world.advance(125_000);
+    expect(world.clockTime.textContent).toBe('old');
+  });
+});
+
+describe('Foto corners', () => {
+  const measured = Array.from({ length: 10 }, (_, i) => ({
+    id: `${'abcdefghij'[i]}`.repeat(24),
+    w: 480,
+    h: 640,
+    date: '2026-11-04',
+    place: 'Svedala',
+    t: 1_000 + i,
+    lat: 55.5,
+    lon: 13.4,
+    lu: [10, 90, 50],
+  }));
+
+  it('gives a slide its shade levels and the layers that draw them', async () => {
+    const world = makeWorld({ photos: measured });
+    world.hooks['enter']!();
+    await world.advance(100);
+    const slide = world.slides()[0]!;
+    expect(slide.dataset['tr']).toBe('0');
+    expect(slide.dataset['br']).toBe('2');
+    expect(slide.dataset['bl']).toBe('2');
+    expect(slide.all('.ph-shade')).toHaveLength(3);
+    expect(slide.all('.ph-blur')).toHaveLength(3);
+    // The layers come after the pictures, so the layouts that count children still work.
+    const kinds = slide.children.map((c) =>
+      c.classes.has('ph-cell') ? 'cell' : 'other',
+    );
+    expect(kinds.lastIndexOf('cell')).toBeLessThan(kinds.indexOf('other'));
+  });
+
+  it('lets the blur draw only after the slide has settled, and not while the page is away', async () => {
+    const world = makeWorld({ photos: measured });
+    world.hooks['enter']!();
+    await world.advance(100);
+    expect(world.slides()[0]!.classes.has('settled')).toBe(true);
+    // The next slide fades in over the old one and settles when the fade ends.
+    await world.advance(20_000 + 500);
+    const incoming = world.slides().at(-1)!;
+    expect(incoming.classes.has('lift')).toBe(true);
+    expect(incoming.classes.has('settled')).toBe(false);
+    await world.advance(2_500);
+    expect(world.slides().at(-1)!.classes.has('settled')).toBe(true);
+    world.hooks['leave']!();
+    expect(world.slides().at(-1)!.classes.has('settled')).toBe(false);
+    world.hooks['enter']!();
+    expect(world.slides().at(-1)!.classes.has('settled')).toBe(true);
+  });
+
+  it('marks the page while music plays so the lower left corner is shaded', async () => {
+    const world = makeWorld({ photos: measured });
+    expect(world.photosRoot.classes.has('has-now')).toBe(false);
+    world.hooks['enter']!();
+    await world.advance(100);
+    // Nothing plays in this world: no shade for the widget.
+    expect(world.photosRoot.classes.has('has-now')).toBe(false);
+  });
+
+  it('keeps a slide without measurements working (mid shade)', async () => {
+    const world = makeWorld();
+    world.hooks['enter']!();
+    await world.advance(100);
+    expect(world.slides()[0]!.dataset['tr']).toBe('1');
   });
 });

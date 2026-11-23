@@ -54,6 +54,7 @@
     <script type="module" src="/ui/presence.js"></script>
     <script type="module" src="/ui/display-power.js"></script>
     <script type="module" src="/ui/optical-switch.js"></script>
+    <script type="module" src="/ui/photo-people.js"></script>
   </head>
   <body>
     <!--
@@ -453,7 +454,7 @@
         <div class="system-alert" id="system-alert" role="status" hidden></div>
         <nav
           class="settings-index"
-          data-pages="installningar musikautomatik intelligens kameror narvaro datorer anslutningar system"
+          data-pages="installningar musikautomatik intelligens kameror narvaro foton datorer anslutningar system"
           aria-label="Inställningar"
         >
           <h2 class="settings-group-title">Rummet</h2>
@@ -559,6 +560,28 @@
                 ><span
                   class="settings-row-value"
                   id="settings-value-narvaro"
+                ></span
+              ></a>
+            </li>
+            <li>
+              <a class="settings-row" href="#foton" data-settings-page="foton"
+                ><span class="settings-row-icon" data-hue="violet"
+                  ><svg
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                    focusable="false"
+                  >
+                    <rect x="3" y="5" width="18" height="14" rx="2" />
+                    <circle cx="9" cy="10.5" r="1.6" />
+                    <path d="m21 16-5-5-7 8" /></svg></span
+                ><span class="settings-row-text"
+                  ><span class="settings-row-label">Foton</span
+                  ><span class="settings-row-detail"
+                    >Personer och grupper i fotoramen</span
+                  ></span
+                ><span
+                  class="settings-row-value"
+                  id="settings-value-foton"
                 ></span
               ></a>
             </li>
@@ -988,6 +1011,76 @@
             </div>
             <p id="settings-status" role="status" aria-live="polite"></p>
           </form>
+        </section>
+
+        <section
+          class="photo-people-section"
+          id="photo-people-section"
+          data-pages="foton"
+          aria-labelledby="photo-people-title"
+          hidden
+        >
+          <div class="section-heading">
+            <div>
+              <h2 id="photo-people-title">Foton och personer</h2>
+              <p>
+                Fotoramen känner igen återkommande ansikten så att bilder med
+                samma personer visas tillsammans. Allt sker på Lugns egen dator;
+                inga ansikten eller bilder lämnar huset. Namnge en person,
+                bekräfta att en grupp stämmer eller flytta ett ansikte som
+                hamnat fel.
+              </p>
+            </div>
+            <span class="state-chip" id="photo-people-state" data-tone="warn"
+              >Läser …</span
+            >
+          </div>
+          <p class="field-help" id="photo-people-reason" hidden></p>
+          <p class="pp-note" id="photo-people-note" role="status" hidden></p>
+          <div class="pp-list" id="photo-people-list"></div>
+          <p class="empty-note" id="photo-people-empty" hidden>
+            Inga ansikten hittade ännu. Nya bilder analyseras en i taget när de
+            kommer till albumet.
+          </p>
+          <div class="pp-block" id="photo-people-unassigned" hidden>
+            <h3>
+              Ansikten utan person (<span id="photo-people-unassigned-count"
+                >0</span
+              >)
+            </h3>
+            <p class="field-help">
+              Ansikten som ännu inte liknar någon annan. Tryck på ett ansikte
+              för att ge det en person, eller låt det vara.
+            </p>
+            <div class="pp-faces" id="photo-people-unassigned-faces"></div>
+          </div>
+          <details class="pp-block" id="photo-people-hidden" hidden>
+            <summary>
+              Dolda personer (<span id="photo-people-hidden-count">0</span>)
+            </summary>
+            <div class="pp-list" id="photo-people-hidden-list"></div>
+          </details>
+          <dialog class="pp-dialog" id="photo-people-face">
+            <div class="pp-photo">
+              <img id="photo-people-face-photo" alt="" />
+              <span class="pp-frame" id="photo-people-face-frame"></span>
+            </div>
+            <div class="pp-dialog-side">
+              <p class="pp-who" id="photo-people-face-who"></p>
+              <select
+                class="pp-select"
+                id="photo-people-face-move"
+                aria-label="Flytta ansiktet"
+              ></select>
+              <button
+                class="button button-quiet"
+                id="photo-people-face-close"
+                type="button"
+              >
+                Stäng
+              </button>
+            </div>
+          </dialog>
         </section>
 
         <section

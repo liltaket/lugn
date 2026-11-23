@@ -1,6 +1,8 @@
 import type { CameraDashboardService } from '../application/camera-dashboard.js';
 import { CameraError, type CameraDashboardSnapshot } from '../core/cameras.js';
 import type { CameraMediaProvider } from './camera-media.js';
+import type { PhotoLibrary } from './photo-library.js';
+import { PeopleError } from './photo-intel/people.js';
 import type {
   SensorStreamMessage,
   Stl27lSensorStream,
@@ -95,6 +97,8 @@ export type LugnHttpServerOptions = {
   musicObservationTrustProvider?: () => Record<string, boolean>;
   scenePresetStore?: ScenePresetStore;
   volumeSettingsStore?: MusicVolumeSettingsStore;
+  /** The photo frame's library; its people panel lives under `/ui/api/photo-people`. */
+  photoLibrary?: PhotoLibrary;
   webAssetsDirectory?: string;
   trustedOrigins?: string[];
   clerk?: {
@@ -270,6 +274,156 @@ export class LugnHttpServer {
     }
   }
 
+  /**
+   * The photo frame's people panel: who the faces are, names, confirmations
+   * and corrections. Faces never leave this machine; the panel gets small
+   * crops and the pictures through the signed-in session only.
+   */
+  private async handlePhotoPeople(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string,
+    session: { csrfToken: string },
+  ): Promise<boolean> {
+    const api = this.options.photoLibrary?.peopleApi();
+    if (!api) {
+      sendJson(response, 404, { error: 'photo_people_unavailable' });
+      return true;
+    }
+    const reply = (): void =>
+      sendJson(response, 200, {
+        status: api.status(),
+        ...api.peopleView(),
+      });
+    if (request.method === 'GET') {
+      if (
+        (request.headers.origin && !this.isSameOrigin(request)) ||
+        request.headers['sec-fetch-site'] === 'cross-site'
+      ) {
+        sendJson(response, 403, { error: 'same_origin_required' });
+        return true;
+      }
+      if (pathname === '/ui/api/photo-people') {
+        reply();
+        return true;
+      }
+      const face =
+        /^\/ui\/api\/photo-people\/faces\/([A-Za-z0-9_-]{24}\.\d{1,2})\.jpg$/.exec(
+          pathname,
+        );
+      const photo =
+        /^\/ui\/api\/photo-people\/photos\/([A-Za-z0-9_-]{24})\.jpg$/.exec(
+          pathname,
+        );
+      let body: Uint8Array | null = null;
+      if (face) body = await api.faceCrop(face[1]!);
+      else if (photo)
+        body = await this.options.photoLibrary!.readMain(photo[1]!);
+      if (!body) {
+        sendJson(response, 404, { error: 'not_found' });
+        return true;
+      }
+      response.writeHead(200, {
+        'content-type': 'image/jpeg',
+        'content-length': body.byteLength,
+        'cache-control': 'private, max-age=3600',
+        'x-content-type-options': 'nosniff',
+        'cross-origin-resource-policy': 'same-origin',
+        'content-security-policy': "default-src 'none'; sandbox",
+      });
+      response.end(body);
+      return true;
+    }
+    if (request.method !== 'POST') {
+      sendJson(response, 405, { error: 'method_not_allowed' });
+      return true;
+    }
+    if (!this.isSameOrigin(request)) {
+      sendJson(response, 403, { error: 'same_origin_required' });
+      return true;
+    }
+    const csrf = request.headers['x-lugn-csrf'];
+    if (
+      typeof csrf !== 'string' ||
+      !this.constantTimeEqual(csrf, session.csrfToken)
+    ) {
+      sendJson(response, 403, { error: 'csrf_failed' });
+      return true;
+    }
+    if (!isJsonRequest(request)) {
+      sendJson(response, 415, {
+        error: 'content_type_must_be_application_json',
+      });
+      return true;
+    }
+    const body = await readJsonBody(request);
+    if (this.getUiSession(request)?.csrfToken !== session.csrfToken) {
+      sendJson(response, 401, { error: 'unauthorized' });
+      return true;
+    }
+    const personId = z.string().regex(/^p\d{1,6}$/);
+    try {
+      const person = /^\/ui\/api\/photo-people\/people\/(p\d{1,6})$/.exec(
+        pathname,
+      );
+      const face =
+        /^\/ui\/api\/photo-people\/faces\/([A-Za-z0-9_-]{24}\.\d{1,2})$/.exec(
+          pathname,
+        );
+      if (person) {
+        const input = z
+          .object({
+            name: z.string().max(80).nullable().optional(),
+            confirm: z.literal(true).optional(),
+            hidden: z.boolean().optional(),
+          })
+          .strict()
+          .parse(body);
+        if (input.name !== undefined) api.rename(person[1]!, input.name);
+        if (input.confirm) api.confirm(person[1]!);
+        if (input.hidden !== undefined) api.setHidden(person[1]!, input.hidden);
+      } else if (pathname === '/ui/api/photo-people/merge') {
+        const input = z
+          .object({ from: personId, into: personId })
+          .strict()
+          .parse(body);
+        api.merge(input.from, input.into);
+      } else if (face) {
+        const input = z
+          .union([
+            z.object({ person: personId }).strict(),
+            z.object({ new: z.literal(true) }).strict(),
+            z.object({ none: z.literal(true) }).strict(),
+          ])
+          .parse(body);
+        api.moveFace(
+          face[1]!,
+          'person' in input
+            ? { person: input.person }
+            : 'new' in input
+              ? 'new'
+              : 'none',
+        );
+      } else {
+        sendJson(response, 404, { error: 'not_found' });
+        return true;
+      }
+      reply();
+    } catch (error) {
+      if (error instanceof PeopleError)
+        sendJson(response, error.code === 'not_found' ? 404 : 400, {
+          error: error.code,
+        });
+      else if (error instanceof ZodError)
+        sendJson(response, 400, {
+          error: 'invalid_request',
+          issues: safeIssues(error),
+        });
+      else throw error;
+    }
+    return true;
+  }
+
   private serveUiAsset(pathname: string, response: ServerResponse): boolean {
     const assets: Record<string, { name: string; contentType: string }> = {
       '/ui/': { name: 'index.html', contentType: 'text/html; charset=utf-8' },
@@ -283,6 +437,10 @@ export class LugnHttpServer {
       },
       '/ui/presence.js': {
         name: 'presence.js',
+        contentType: 'text/javascript; charset=utf-8',
+      },
+      '/ui/photo-people.js': {
+        name: 'photo-people.js',
         contentType: 'text/javascript; charset=utf-8',
       },
       '/ui/display-power.js': {
@@ -539,6 +697,11 @@ export class LugnHttpServer {
       sendJson(response, 401, { error: 'unauthorized' });
       return true;
     }
+    if (
+      pathname === '/ui/api/photo-people' ||
+      pathname.startsWith('/ui/api/photo-people/')
+    )
+      return this.handlePhotoPeople(request, response, pathname, session);
     const cameraImage =
       /^\/ui\/api\/cameras\/([A-Za-z0-9_-]{16,80})\/([A-Za-z0-9][A-Za-z0-9._-]{0,79})\/image$/.exec(
         pathname,
@@ -1124,6 +1287,7 @@ export class LugnHttpServer {
     musicSettingsDefaults: MusicVolumeSettings;
     musicSettingsEnabled: boolean;
     presenceSensorEnabled: boolean;
+    photoPeople?: { people: number; pending: number };
     musicVolumePolicies: ReturnType<
       LugnEngine['getMusicVolumePolicySnapshots']
     >;
@@ -1160,6 +1324,9 @@ export class LugnHttpServer {
       musicSettingsDefaults: structuredClone(defaultMusicVolumeSettings),
       musicSettingsEnabled: this.options.volumeSettingsStore !== undefined,
       presenceSensorEnabled: this.options.presenceSensorStream !== undefined,
+      ...(this.options.photoLibrary?.peopleApi()
+        ? { photoPeople: this.options.photoLibrary.peopleApi()!.summary() }
+        : {}),
       musicVolumePolicies: this.options.engine.getMusicVolumePolicySnapshots(),
       scenes: [...this.options.engine.scenes.values()].map((scene) =>
         this.uiScene(scene),

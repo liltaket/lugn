@@ -642,6 +642,7 @@ a.hero-chip:hover {
 .cameras-section,
 .music-settings-section,
 .presence-section,
+.photo-people-section,
 .computer-section,
 .lights-section,
 .routines-section,
@@ -3069,4 +3070,187 @@ details[open] > summary::before {
 #presence-action-status[data-tone='good'],
 #feedback-status[data-tone='good'] {
   color: var(--good);
+}
+
+/* ---------- Foton: people the photo frame found ---------- */
+
+.pp-note {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  color: var(--ink-muted);
+  font-size: 0.9375rem;
+}
+
+.pp-note[data-tone='ok'] {
+  border-color: rgb(143 240 196 / 0.4);
+  color: var(--good);
+}
+
+.pp-note[data-tone='warn'] {
+  border-color: rgb(242 211 140 / 0.45);
+  color: var(--warn);
+}
+
+.photo-people-section[data-busy] {
+  cursor: progress;
+}
+
+.photo-people-section[data-busy] .pp-person,
+.photo-people-section[data-busy] .pp-block {
+  opacity: 0.7;
+}
+
+.pp-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.pp-person {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.pp-person[data-state='confirmed'] {
+  border-color: rgb(143 240 196 / 0.28);
+}
+
+.pp-person[data-state='hidden'] {
+  opacity: 0.7;
+}
+
+.pp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pp-head input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pp-meta {
+  margin: 0;
+  color: var(--ink-subtle);
+  font-size: 0.875rem;
+}
+
+.pp-faces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pp-face {
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--raised-strong);
+  cursor: pointer;
+}
+
+.pp-face img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pp-face:hover {
+  border-color: var(--accent);
+}
+
+.pp-actions {
+  align-items: center;
+}
+
+.pp-select {
+  min-height: 36px;
+  max-width: 100%;
+}
+
+.pp-block {
+  margin-top: 28px;
+}
+
+.pp-block h3,
+.pp-block summary {
+  margin: 0 0 8px;
+  font-size: 1.0625rem;
+  cursor: default;
+}
+
+.pp-block summary {
+  cursor: pointer;
+}
+
+.pp-dialog {
+  width: min(92vw, 760px);
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--ink);
+}
+
+.pp-dialog::backdrop {
+  background: rgb(3 6 9 / 0.72);
+}
+
+.pp-dialog[open] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+}
+
+.pp-photo {
+  position: relative;
+  min-height: 200px;
+  background: #000;
+}
+
+.pp-photo img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 80vh;
+  object-fit: contain;
+}
+
+.pp-frame {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / 0.35);
+  pointer-events: none;
+}
+
+.pp-dialog-side {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 18px;
+}
+
+.pp-who {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.25rem;
+}
+
+@media (max-width: 639px) {
+  .pp-dialog[open] {
+    grid-template-columns: 1fr;
+  }
 }
