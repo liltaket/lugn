@@ -217,3 +217,68 @@ and a picture's neighbours stay sensible when Kuffe is away.
 - `db_dir`: its own index, embeddings and the bundle (small; on the SSD).
 - Disk use stays bounded: a few MB per original, and the program reports free space
   and stops downloading below a floor.
+
+## Inference (`agents/linux/photo-brain/src/infer/`)
+
+One picture in, one `PictureAnalysis` out (`src/analysis.rs`); details, numbers and
+known weaknesses in `src/infer/README.md`.
+
+- Decoding: HEIC through libheif (the container's `irot`/`imir` applied, the EXIF
+  orientation ignored), JPEG/PNG with the EXIF orientation applied once. Analysis runs
+  on the full-size upright picture; face boxes are fractions of it, so a face's size
+  in pixels is `w × width` and `h × height` of the original.
+- Models come from `models.toml` (compiled in; a copy in the models directory wins),
+  pinned by URL commit and SHA-256. ONNX Runtime 1.31.1 is loaded at run time from
+  `../lib/` next to the models directory (or `ORT_DYLIB_PATH`); telemetry is off
+  (`ORT_DISABLE_TELEMETRY=1`, set by the program and in the unit).
+- `ModelIds`: `embed` and `face` are `models.toml` keys
+  (`siglip2-so400m-patch16-384-q4`, `sface-2021dec`, …); `detector` also carries the
+  settings that change which faces are found (`yunet-2026may@1600px-s0.65`). Any
+  change means recompute.
+
+### Scene vocabulary (`data/photo-scenes*.json`, schema 2)
+
+Built offline from `data/photo-scenes.source.json` by
+`agents/linux/photo-brain/scripts/build-scenes.sh` with the text tower of the same
+model; one file per embedding space.
+
+```jsonc
+{
+  "schema": 2,
+  "model": "google/siglip2-so400m-patch16-384",
+  // the ModelIds::embed values this file fits
+  "embedIds": [
+    "siglip2-so400m-patch16-384-q4",
+    "siglip2-so400m-patch16-384-fp16",
+  ],
+  "dim": 1152,
+  "kind": "sigmoid", // or "softmax" (CLIP-style)
+  "scale": 109.855, // logit scale (already exp'ed)
+  "bias": -15.932, // logit bias (0 for softmax files)
+  // base64 of little-endian IEEE half floats; or "int8" with "quant" (value = byte / quant)
+  "encoding": "f16",
+  "scenes": [
+    { "key": "beach", "sv": "Stranden", "vector": "…" },
+    { "key": "receipt", "sv": null, "junk": "document", "vector": "…" },
+  ],
+}
+```
+
+- `logit = scale × cos(picture, vector) + bias` (vectors are unit length after
+  decoding; normalise once more to undo f16 rounding).
+- `kind: "sigmoid"` (SigLIP): `sigmoid(logit)` is that scene's own probability,
+  independent of the other scenes. With these short prompts it is small even when
+  right (a clear beach ≈ 0.01, a receipt ≈ 0.3–0.5; logits −1 … −12): use the rank,
+  and for "is it this scene at all" a threshold on the logit. A softmax over all
+  scenes' logits (temperature 1, i.e. using `scale` as is) gives a sensible "which of
+  these" distribution (a clear beach 0.98, an ambiguous room 0.4) for the bundle's
+  top-3.
+- `kind: "softmax"` (CLIP): softmax over `scale × cos`, as before.
+- `sv: null` is a sink (ordinary content, never a Hub title); `junk`
+  (`"screenshot"` | `"document"`) feeds the bundle's `q.junk`.
+- `embedIds` must contain the analysis' `ModelIds::embed`, otherwise the file is
+  for another model: `photo-scenes.json` is the default so400m one,
+  `photo-scenes.siglip2-base.json` the base one (`scenes` in `models.toml` names it).
+- The file written before schema 2 (CLIP, no `schema` key, int8 with `scale` as the
+  divisor) is what `src/runtime/photo-intel` reads; its loader skips schema-2
+  vectors (wrong byte length) and so names no scenes.
