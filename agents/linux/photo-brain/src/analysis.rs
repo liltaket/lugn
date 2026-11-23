@@ -64,4 +64,12 @@ pub trait PictureAnalyzer {
 
     /// Decodes the file (HEIC or JPEG, EXIF orientation applied) and analyses it.
     fn analyse(&mut self, path: &Path) -> anyhow::Result<PictureAnalysis>;
+
+    /// Whether [`analyse`](Self::analyse) can read HEIC (libheif available).
+    /// When it can, the brain keeps Apple's full-size HEIC original; otherwise
+    /// the JPEG (the original when Apple serves a JPEG original, else the
+    /// 1536 × 2048 rendition). Files are named `.heic` or `.jpg` accordingly.
+    fn decodes_heic(&self) -> bool {
+        false
+    }
 }
