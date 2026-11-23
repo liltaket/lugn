@@ -126,27 +126,26 @@ impl Vocabulary {
             };
             // f16 LE (schema 2), int8 (any quantisation scale: the vector is
             // normalised) or f32 LE.
-            let mut v: Vec<f32> = if file.encoding.as_deref() == Some("f16")
-                && bytes.len() == 2 * file.dim
-            {
-                bytes
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|c| f16_to_f32(u16::from_le_bytes(*c)))
-                    .collect()
-            } else if bytes.len() == file.dim {
-                bytes.iter().map(|&b| f32::from(b as i8)).collect()
-            } else if bytes.len() == 4 * file.dim {
-                bytes
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|c| f32::from_le_bytes(*c))
-                    .collect()
-            } else {
-                continue;
-            };
+            let mut v: Vec<f32> =
+                if file.encoding.as_deref() == Some("f16") && bytes.len() == 2 * file.dim {
+                    bytes
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|c| f16_to_f32(u16::from_le_bytes(*c)))
+                        .collect()
+                } else if bytes.len() == file.dim {
+                    bytes.iter().map(|&b| f32::from(b as i8)).collect()
+                } else if bytes.len() == 4 * file.dim {
+                    bytes
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| f32::from_le_bytes(*c))
+                        .collect()
+                } else {
+                    continue;
+                };
             let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
             if !(norm > 0.0 && norm.is_finite()) {
                 continue;
