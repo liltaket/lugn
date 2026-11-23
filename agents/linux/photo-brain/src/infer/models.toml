@@ -1,0 +1,194 @@
+# Models of Kuffe's photo brain (see src/infer/README.md).
+#
+# This file is compiled into the program as the default. A copy named
+# `models.toml` in the models directory wins over it, so switching a model is a
+# file change: edit `[use]` (or add an entry) there and restart. Every entry is
+# pinned to a commit and a SHA-256; `infer::models::ensure` downloads what is
+# missing and refuses a file whose hash differs.
+#
+# Paths (`file`) are relative to the models directory; the ONNX Runtime library
+# goes to `../lib/` next to it.
+
+[use]
+embed = "siglip2-so400m-patch16-384-q4"
+detector = "yunet-2026may"
+face = "sface-2021dec"
+
+# ONNX Runtime 1.31.1 (C API 31, matching the `ort` feature `api-31`). The
+# official GitHub release asset is the usual source; this takes the identical
+# library from the official PyPI wheel instead (pinned by PyPI's own SHA-256),
+# because only the one `.so` is needed and the wheel is a stable, signed
+# artefact. The library has no Python dependency (ldd: libc, libstdc++, libm).
+[runtime]
+file = "../lib/libonnxruntime.so.1.31.1"
+url = "https://files.pythonhosted.org/packages/eb/27/c6a823bac55b2977bea2027c3ec9393a2c1002cb9a09eb40354563e02730/onnxruntime-1.31.1-cp312-cp312-manylinux_2_28_x86_64.whl"
+archive_sha256 = "1f3dea47f2f0e5117c2404cea7d21fd253ae7836a3bf167a501cdfbb2600d536"
+member = "onnxruntime/capi/libonnxruntime.so.1.31.1"
+sha256 = "fc44112fbe06d7d689c57e11d3862031f64711007e4ee020f8eed5185fd2c1d3"
+bytes = 29352200
+license = "MIT (Microsoft ONNX Runtime)"
+
+# ── Picture embedding ─────────────────────────────────────────────────────────
+# SigLIP 2 vision towers. preprocessor_config.json of both: SiglipImageProcessor,
+# size 384 x 384 (squashed, no crop), resample 2 = bilinear, rescale 1/255,
+# mean 0.5, std 0.5. The scene file must come from the same text tower.
+#
+# Precision matters more than usual here (README, "Quantisation"): on 21 test
+# pictures, against the full-precision embedding,
+# - fp16: cosine 1.0000 (same as fp32), but ONNX Runtime's CPU provider makes
+#   fp32 copies of the weights while running: so400m peaks at 2.3 GB RSS;
+# - q4 (4-bit weights, fp32 activations, MatMulNBits): cosine 0.96-0.99,
+#   pairwise-similarity rank correlation 0.98, so400m peaks at 0.67 GB;
+# - int8 (dynamic activation quantisation): cosine 0.35-0.90, rank correlation
+#   0.43 (so400m) / 0.70 (base), scenes ranked wrongly. Kept for comparison
+#   only; never use it.
+# Default: so400m q4 (fits the ~2 GB budget); full precision: so400m fp16;
+# fast: base fp32.
+
+[embed.siglip2-so400m-patch16-384-q4]
+file = "siglip2-so400m-patch16-384-vision-q4.onnx"
+url = "https://huggingface.co/onnx-community/siglip2-so400m-patch16-384-ONNX/resolve/29f74e673c298fd07482d8e20138179282001eb7/onnx/vision_model_q4.onnx"
+sha256 = "982742d76d38c6aea609eea68e2c9c74fbc67e85aaa0ade31744a27358a29cfd"
+bytes = 279689302
+license = "Apache-2.0 (google/siglip2-so400m-patch16-384; ONNX export by onnx-community)"
+default = true
+size = 384
+resize = "squash"
+mean = [0.5, 0.5, 0.5]
+std = [0.5, 0.5, 0.5]
+output = "pooler_output"
+dim = 1152
+scenes = "photo-scenes.json"
+
+[embed.siglip2-so400m-patch16-384-fp16]
+file = "siglip2-so400m-patch16-384-vision-fp16.onnx"
+url = "https://huggingface.co/onnx-community/siglip2-so400m-patch16-384-ONNX/resolve/29f74e673c298fd07482d8e20138179282001eb7/onnx/vision_model_fp16.onnx"
+sha256 = "7a8059233d8076973f8f754b8bf588674baa3ac4982bd605bd1f25986e85096a"
+bytes = 857096382
+license = "Apache-2.0 (google/siglip2-so400m-patch16-384; ONNX export by onnx-community)"
+default = false
+size = 384
+resize = "squash"
+mean = [0.5, 0.5, 0.5]
+std = [0.5, 0.5, 0.5]
+output = "pooler_output"
+dim = 1152
+scenes = "photo-scenes.json"
+
+[embed.siglip2-base-patch16-384-fp32]
+file = "siglip2-base-patch16-384-vision-fp32.onnx"
+url = "https://huggingface.co/onnx-community/siglip2-base-patch16-384-ONNX/resolve/99f5d40afb5331b81eecee4bb02c360fbb9cdf8a/onnx/vision_model.onnx"
+sha256 = "49ae4958b1098ca995e929d646f7be05a69c65e6344beae07d58c6598ffc5210"
+bytes = 372975112
+license = "Apache-2.0 (google/siglip2-base-patch16-384; ONNX export by onnx-community)"
+default = true
+size = 384
+resize = "squash"
+mean = [0.5, 0.5, 0.5]
+std = [0.5, 0.5, 0.5]
+output = "pooler_output"
+dim = 768
+scenes = "photo-scenes.siglip2-base.json"
+
+[embed.siglip2-base-patch16-384-fp16]
+file = "siglip2-base-patch16-384-vision-fp16.onnx"
+url = "https://huggingface.co/onnx-community/siglip2-base-patch16-384-ONNX/resolve/99f5d40afb5331b81eecee4bb02c360fbb9cdf8a/onnx/vision_model_fp16.onnx"
+sha256 = "8ee87a1e594525050f45b5c82a56ef7bdfe328d421dc696b8d28583171954d0c"
+bytes = 186623196
+license = "Apache-2.0 (google/siglip2-base-patch16-384; ONNX export by onnx-community)"
+default = false
+size = 384
+resize = "squash"
+mean = [0.5, 0.5, 0.5]
+std = [0.5, 0.5, 0.5]
+output = "pooler_output"
+dim = 768
+scenes = "photo-scenes.siglip2-base.json"
+
+[embed.siglip2-so400m-patch16-384-int8]
+file = "siglip2-so400m-patch16-384-vision-int8.onnx"
+url = "https://huggingface.co/onnx-community/siglip2-so400m-patch16-384-ONNX/resolve/29f74e673c298fd07482d8e20138179282001eb7/onnx/vision_model_int8.onnx"
+sha256 = "7b015bfdf140d7d13d74c7fc4b00553b65747620c0a8f11d0f7cbd4cad772cc5"
+bytes = 433701623
+license = "Apache-2.0 (google/siglip2-so400m-patch16-384; ONNX export by onnx-community)"
+default = false
+size = 384
+resize = "squash"
+mean = [0.5, 0.5, 0.5]
+std = [0.5, 0.5, 0.5]
+output = "pooler_output"
+dim = 1152
+scenes = "photo-scenes.json"
+
+[embed.siglip2-base-patch16-384-int8]
+file = "siglip2-base-patch16-384-vision-int8.onnx"
+url = "https://huggingface.co/onnx-community/siglip2-base-patch16-384-ONNX/resolve/99f5d40afb5331b81eecee4bb02c360fbb9cdf8a/onnx/vision_model_int8.onnx"
+sha256 = "ef04b4da38291ee770a401b6b86786393490b2aeda799c2a979afeb92ee7a6e9"
+bytes = 95720693
+license = "Apache-2.0 (google/siglip2-base-patch16-384; ONNX export by onnx-community)"
+default = false
+size = 384
+resize = "squash"
+mean = [0.5, 0.5, 0.5]
+std = [0.5, 0.5, 0.5]
+output = "pooler_output"
+dim = 768
+scenes = "photo-scenes.siglip2-base.json"
+
+# ── Face detector ─────────────────────────────────────────────────────────────
+# YuNet re-export with symbolic height/width (the 2023mar file is fixed at
+# 1 x 3 x 640 x 640). Input BGR 0-255, H and W multiples of 32.
+
+[detector.yunet-2026may]
+file = "yunet-2026may.onnx"
+url = "https://github.com/opencv/opencv_zoo/raw/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_detection_yunet/face_detection_yunet_2026may.onnx"
+sha256 = "ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0"
+bytes = 229738
+license = "MIT (YuNet, Shiqi Yu; OpenCV Zoo)"
+default = true
+
+# ── Face recognisers ──────────────────────────────────────────────────────────
+# All take a 112 x 112 crop aligned to the ArcFace 5-point template. `order` is
+# the channel order of the input tensor; the value fed is (pixel - mean) / std.
+
+[face.sface-2021dec]
+file = "sface-2021dec.onnx"
+url = "https://github.com/opencv/opencv_zoo/raw/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+sha256 = "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
+bytes = 38696353
+license = "Apache-2.0 (SFace, Zhong et al.; OpenCV Zoo)"
+default = true
+order = "rgb"
+mean = 0.0
+std = 1.0
+dim = 128
+
+[face.auraface-v1-glintr100]
+file = "auraface-v1-glintr100.onnx"
+url = "https://huggingface.co/fal/AuraFace-v1/resolve/af6d057c9b0ec4071d4c49c80e3539258798b609/glintr100.onnx"
+sha256 = "a7933ea5330113b01c9b60351d8f4c33003f145d8470ac5f0e52ee2effe25c60"
+bytes = 260694151
+license = "Apache-2.0 (fal/AuraFace-v1 model card); recogniser file only"
+default = true
+order = "rgb"
+mean = 127.5
+std = 127.5
+dim = 512
+
+# InsightFace buffalo_l recogniser. The pretrained weights are released for
+# NON-COMMERCIAL RESEARCH ONLY. Never downloaded unless asked for by name
+# (`ensure(dir, &Which::Only(vec!["buffalo_l-w600k-r50".into()]))`), never
+# committed; for the household's private comparison only.
+[face.buffalo_l-w600k-r50]
+file = "buffalo_l-w600k_r50.onnx"
+url = "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
+archive_sha256 = "80ffe37d8a5940d59a7384c201a2a38d4741f2f3c51eef46ebb28218a7b0ca2f"
+member = "w600k_r50.onnx"
+sha256 = "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43"
+bytes = 174383860
+license = "InsightFace pretrained models: non-commercial research use only"
+default = false
+order = "rgb"
+mean = 127.5
+std = 127.5
+dim = 512

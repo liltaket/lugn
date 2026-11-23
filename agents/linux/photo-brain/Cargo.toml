@@ -27,7 +27,17 @@ rayon = "1.12"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
 rusqlite = { version = "0.43", features = ["bundled"] }
 signal-hook = "0.4"
-toml = "0.9"
+
+# infer/ (decoding, preprocessing, ONNX models):
+fast_image_resize = { version = "5", features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+libheif-rs = { version = "3", default-features = false, features = ["v1_21"] }
+# Loads the system's/fetched libonnxruntime at run time: no build-time download.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-31"] }
+sha2 = "0.10"
+toml = "1"
+ureq = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"
