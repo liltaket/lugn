@@ -9,4 +9,7 @@
 
 pub mod analysis;
 pub mod bundle;
+pub mod cluster;
+pub mod localtime;
 pub mod people;
+pub mod places;
