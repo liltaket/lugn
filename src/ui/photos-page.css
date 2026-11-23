@@ -196,8 +196,8 @@
 }
 
 /* The music widget: there whenever something plays, at the lower left, and
-   lifted over the quick menu while that is open. It sits outside the menu, so
-   it stays when the menu goes. */
+   lifted over the navbar while that is open. It sits outside the bar, so it
+   stays when the bar goes. */
 .ph-now {
   z-index: 2;
   position: absolute;
@@ -213,9 +213,9 @@
   display: none;
 }
 .photos-page.menu-open .ph-now {
-  transform: translateY(-84px);
+  transform: translateY(-62px);
 }
-.ph-now .qm-round {
+.ph-now .nb-round {
   visibility: visible;
   pointer-events: auto;
   background: rgba(20, 24, 23, 0.55);

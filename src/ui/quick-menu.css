@@ -1,18 +1,45 @@
-/* The quick menu (quick-menu.js): a dock of scenes and a few round buttons that
-   slide up from the bottom edge. Only opacity and position change; while it is
-   closed nothing in it is visible or can be pressed, and empty parts of it let
-   a tap through to the page. */
-.qm {
+/* The navbar (quick-menu.js): one bar over the pager, so it stays where it is
+   while the pages move under it. A back button, Hem's scenes and a few round
+   buttons slide up from the bottom edge, all in the same glass; only opacity
+   and position change. While it is closed nothing in it is visible or can be
+   pressed, and empty parts of it let a tap through to the page.
+
+   It takes its colour from the page it is over (--nb-rgb: three numbers of an
+   rgb() colour, set per page below, and by Musik from the cover). The lit
+   scene is that colour in glass, not a solid fill, so it sits quietly in the
+   page's own palette. */
+.hub-nav {
+  --W: 1024px;
+  --nb-rgb: 226, 184, 126;
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  width: var(--W);
+  height: 600px;
+  z-index: 20;
   pointer-events: none;
+  color: #eef1e8;
+  font-family: system-ui, sans-serif;
 }
+.hub-nav[data-page='music'] {
+  --nb-rgb: 231, 188, 120;
+}
+.hub-nav[data-page='clock'] {
+  --nb-rgb: 214, 178, 132;
+}
+.hub-nav[data-page='foto'] {
+  --nb-rgb: 238, 241, 232;
+}
+.hub-nav[data-page='kameror'] {
+  --nb-rgb: 140, 192, 170;
+}
+.hub-nav[data-page='info'] {
+  --nb-rgb: 170, 188, 184;
+}
+
 /* A very thin dimming over the whole page and, along the bottom edge, a short
    dark floor so the buttons read over any picture. */
-.qm {
-  z-index: 1;
-}
-.qm::before {
+.hub-nav::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -25,70 +52,124 @@
   opacity: 0;
   transition: opacity 240ms ease-out;
 }
-.qm.open::before {
+.hub-nav.open::before {
   opacity: 1;
 }
-.qm .scene-dock,
-.music-page .qm .scene-dock,
-.qm-actions {
+
+.hub-nav-bar {
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   opacity: 0;
   transform: translateY(96px);
   transition:
     transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
     opacity 200ms ease-out;
 }
-.qm.open .scene-dock,
-.music-page .qm.open .scene-dock,
-.qm.open .qm-actions {
+.hub-nav.open .hub-nav-bar {
   opacity: 1;
   transform: none;
 }
-.qm .scene-dock {
-  pointer-events: none;
-}
-.qm button {
+.hub-nav button {
   pointer-events: auto;
   visibility: hidden;
   transition: visibility 0s linear 260ms;
 }
-.qm.open button {
+.hub-nav.open button {
   visibility: visible;
   transition: none;
 }
-.qm button[hidden] {
+.hub-nav button[hidden] {
   display: none;
 }
-.qm-actions {
-  position: absolute;
-  right: 36px;
-  bottom: 100px;
-  display: flex;
-  gap: 10px;
-  pointer-events: none;
+
+/* The glass every button shares. */
+.nb-round,
+.scene-dock button {
+  min-height: 58px;
+  border-radius: 29px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(10, 12, 12, 0.32);
+  color: #eef1e8;
 }
-.qm-round {
+.nb-round {
   flex: none;
-  width: 56px;
-  height: 56px;
+  width: 58px;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  border: 1px solid rgba(238, 241, 232, 0.18);
-  background: rgba(20, 24, 23, 0.72);
-  color: #eef1e8;
 }
-.qm-round:disabled {
+.nb-round:disabled {
   opacity: 0.4;
 }
-.qm-round svg {
+.nb-round svg {
   width: 26px;
   height: 26px;
 }
+.nb-actions {
+  flex: none;
+  display: flex;
+  gap: 10px;
+}
+
+/* Hem's scenes, in the middle. */
+.scene-dock {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+.scene-dock button {
+  flex: 1 1 auto;
+  max-width: 176px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px 0 11px;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.scene-dock button svg {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  stroke-width: 1.6;
+}
+.scene-dock button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The lit scene: the page's colour in glass, with its icon in full colour. */
+.scene-dock button[aria-pressed='true'] {
+  background: rgba(var(--nb-rgb), 0.2);
+  border-color: rgba(var(--nb-rgb), 0.5);
+}
+.scene-dock button[aria-pressed='true'] svg {
+  color: rgb(var(--nb-rgb));
+}
+.scene-dock button[data-scene='scene.all_off'][aria-pressed='true'] {
+  background: rgba(238, 241, 232, 0.14);
+  border-color: rgba(238, 241, 232, 0.4);
+}
+.scene-dock button[data-scene='scene.all_off'][aria-pressed='true'] svg {
+  color: inherit;
+}
+.scene-dock button[data-state='pending'],
+.scene-dock button[data-state='awaiting'] {
+  border-style: dashed;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .qm::before,
-  .qm .scene-dock,
-  .qm-actions {
+  .hub-nav::before,
+  .hub-nav-bar {
     transition: none;
   }
 }

@@ -229,7 +229,7 @@ Spotify DJ and Optical choices when nothing plays), **Klocka** (large clock,
 indoor air and presence) and **Info** (connection, stream, revisions, memory,
 screen, browser, and an opt-in swipe probe). Tapping the cover on Hem opens
 Musik; the controls on and around it keep their own actions. Musik has no
-permanent dock: its scene dock is the hidden quick menu, and while that is open
+permanent dock: its scenes are in the navbar (below), and while that is open
 the content lifts and the cover shrinks to make room (transform only). **Foto** (right after
 Musik; the order is Hem, Musik, Foto, Kameror, Klocka, Info) is a picture frame over a public iCloud shared album (see
 CONFIGURATION.md): one to three pictures at a time in changing layouts (a
@@ -256,19 +256,31 @@ area right in the corner, switched on only when the slide has settled (not durin
 the fade) and off for good with the Hub's localStorage `lugn.photos.blur` = `off`. Without
 neighbour lists from the server (an older server, no analysis) the page plays as
 before: pictures taken close in time and place are played near each other, with
-a quiet caption of place and date. The quick menu (`quick-menu.js`) slides up from the bottom edge when the mouse
-moves over the page (a real mouse, or the Hub's bridged one, which
-`pointer-bridge.js` announces as the window event `lugn:pointer-move`) or the
-page is tapped: Hem's scenes (the dock of the other pages), a camera button
-(to the Kameror page) and, on Foto, a button for the next picture. A soft
-veil, drawn from each picture's own bottom edge (no blur is computed), a short
-dark floor and a very thin dimming of the whole page make the buttons readable. It closes four seconds after the mouse
-stops, eight after a tap, on a tap beside it or when the page is left. The
-picture stays while it is open. On Foto the music widget (pause, title and
+a quiet caption of place and date. The **navbar** (`quick-menu.js`, `#hub-nav`) is one bar over the pager on every page
+after Hem (Hem has none). It does not move with the pages: it stays open when
+a swipe or one of its buttons changes page, and takes the new page's context.
+It slides up from the bottom edge when the mouse moves over the page (a real
+mouse, or the Hub's bridged one, which `pointer-bridge.js` announces as the
+window event `lugn:pointer-move`) or the page is tapped. In one row it has a
+back button (only where the page has a level to go back from), Hem's scenes and
+round buttons for what the page does not already show: Musik (not on Musik),
+Kameror (not on Kameror, nor where Hem has no cameras) and, on Foto, the next
+picture. A soft veil, drawn from each picture's own bottom edge (no blur is
+computed), a short dark floor and a very thin dimming of the whole page make
+the buttons readable. The buttons are glass; the lit scene is the page's own
+colour in glass (Musik: the cover's), not a solid fill.
+
+How it opens decides how it closes. Opened by the mouse, it goes when the mouse
+leaves the screen (a real mouse's `mouseleave`, or the bridge's
+`lugn:pointer-leave`) or has been still for four seconds. Opened by a tap it
+goes after eight seconds, a tap beside it or when Hem is shown. A tap that
+closes it also ends the hover: moving the mouse a little afterwards does not
+bring it back until the mouse has left the screen or rested for five seconds.
+The picture stays while it is open. On Foto the music widget (pause, title and
 artist; Hem's own play button is pressed) is there whenever music plays, at the
-lower left, and is lifted over the menu while that is open; the caption sits at
-the lower right. Musik and Klocka have the same menu without the music controls, and no
-longer show their dock all the time. The veil is only on the pictures that reach
+lower left, and is lifted over the bar while that is open; the caption sits at
+the lower right. Musik, Klocka and Info have the same bar, and no longer show a
+dock all the time. The picture veil is only on the pictures that reach
 the bottom edge of the screen (not on the upper ones of a stack). Each picture
 drifts and swells about ten percent over the time it is shown (one transform
 animation per picture; paused while the page is away; off with the Hub's
@@ -278,12 +290,15 @@ moving, and the page releases its pictures when it is two pages away.
 
 **Kameror** (after Musik) shows every camera at once in a grid; a tap shows
 one large, and tapping the small camera view on Hem opens the page on that
-camera. It has the same quick menu as Foto and Musik (Hem's scenes slide up
+camera. It has the same navbar as the other pages (Hem's scenes slide up
 from the bottom edge on mouse movement, or on a tap beside the cameras, or on
-the large camera). It asks the server for pictures only while it is the shown page; see
+the large camera). A tap on a camera shows it large and brings the navbar up with
+a back button that returns to all cameras; there is no other back button on the
+page.
+It asks the server for pictures only while it is the shown page; see
 [Event camera previews](CAMERAS.md#the-camera-grid-page).
 
-Musik and Klocka end in a **scene dock**: Hem's scenes (not the custom ones),
+The navbar holds a **scene dock**: Hem's scenes (not the custom ones),
 at most six, with Släck last. Its buttons send what Hem's scene buttons send and
 show the state Hem's buttons show (selected, pending, waiting for lamps). Musik
 reads title, artist, source and cover from Hem's music card, so the same pause

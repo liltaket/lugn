@@ -1250,12 +1250,10 @@
 
   // ── Quick menu and the music widget ──
   //
-  // The quick menu (quick-menu.js) slides up with Hem's scenes, a camera button
-  // and a button for the next picture. The picture stays while it is open. The
-  // music widget (pause, title, artist) is there whenever something plays and
-  // is lifted over the menu while it is open.
-  const menuElement = root.querySelector("[data-view='menu']");
-  const nextButton = root.querySelector("[data-view='next']");
+  // The navbar (quick-menu.js) slides up over the page with Hem's scenes, the
+  // Musik and Kameror buttons and a button for the next picture. The picture
+  // stays while it is open. The music widget (pause, title, artist) is there
+  // whenever something plays and is lifted over the bar while it is open.
   const pauseButton = root.querySelector("[data-view='pause']");
   const nowBox = root.querySelector("[data-view='now']");
   const nowTitle = root.querySelector("[data-view='now-title']");
@@ -1365,20 +1363,19 @@
   const quickMenu = globalThis.lugnQuickMenu?.attach({
     id: 'foto',
     root,
-    menu: menuElement,
-    // The page's own controls: pause (always there while music plays) and the
-    // next picture.
+    // The page's own control on the picture: pause (always there while music
+    // plays).
     handleTap(event) {
       if (pauseButton?.contains(event.target)) {
         if (!pauseButton.disabled) hem()?.musicPlayback?.click();
         window.setTimeout(drawNow, 0);
         return true;
       }
-      if (nextButton?.contains(event.target)) {
-        void advance(true);
-        return true;
-      }
       return false;
+    },
+    // The navbar's button for the next picture.
+    actions: {
+      next: () => void advance(true),
     },
   });
   quickMenu?.onOpen(() => {

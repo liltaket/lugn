@@ -933,6 +933,10 @@
   function endCapture() {
     cancelPress();
     hideCursor();
+    // Pages that show something while the mouse is over them (the navbar) go
+    // with it.
+    if (typeof Event === 'function')
+      window.dispatchEvent?.(new Event('lugn:pointer-leave'));
     warmUntil = 0;
     moveStamp = 0;
     stopMeasuring();

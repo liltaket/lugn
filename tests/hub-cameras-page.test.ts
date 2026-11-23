@@ -186,7 +186,6 @@ type Hooks = { enter(): void; leave(): void; sleep(): void };
 type MenuOptions = {
   id: string;
   root: El;
-  menu: El;
   handleTap(event: { target: El }): boolean;
 };
 
@@ -198,8 +197,6 @@ function setup(count = 5) {
     root: new El('div'),
     stage: new El('div'),
     notice: new El('div'),
-    menu: new El('div'),
-    back: new El('button'),
   };
   views['root']!.style['--W'] = '1024';
   const pager = new El('div');
@@ -278,7 +275,11 @@ function setup(count = 5) {
     }
   }
   const hooks: { current?: Hooks } = {};
-  const menu: { options?: MenuOptions } = {};
+  const menu: {
+    options?: MenuOptions;
+    back: (() => void) | null;
+    shown: number;
+  } = { back: null, shown: 0 };
   const context = createContext({
     document,
     window,
@@ -301,8 +302,16 @@ function setup(count = 5) {
     globalThis: undefined,
   });
   context['globalThis'] = context;
+  // The navbar (quick-menu.js): the page gives it a way back while one camera
+  // is large, and may ask it to show.
   context['lugnQuickMenu'] = {
-    attach: (options: MenuOptions) => (menu.options = options),
+    attach: (options: MenuOptions) => {
+      menu.options = options;
+      return {
+        setBack: (fn: (() => void) | null) => (menu.back = fn),
+        show: () => (menu.shown += 1),
+      };
+    },
   };
   context['lugnPages'] = {
     go: vi.fn(() => true),
@@ -449,7 +458,7 @@ describe('camera grid page', () => {
     expect(s.revoked.length).toBeGreaterThan(0);
   });
 
-  it('shows one camera large when tapped, faster and alone; the round button returns', async () => {
+  it("shows one camera large when tapped, faster and alone; the navbar's back button returns", async () => {
     const s = setup();
     s.hooks.enter();
     await s.flush(0);
@@ -462,20 +471,24 @@ describe('camera grid page', () => {
     expect(shown).toHaveLength(1);
     expect(shown[0]!.dataset['camera']).toBe('north');
     expect(shown[0]!.attrs.get('aria-label')).toContain('tillbaka');
-    expect(s.views['back']!.hidden).toBe(false);
+    // The navbar comes up with its way back.
+    expect(s.menu.back).toBeTypeOf('function');
+    expect(s.menu.shown).toBe(1);
     // Only that camera is asked for, one at a time.
     await s.flush(0);
     expect(s.fetches.every((f) => f.url.includes('/north/'))).toBe(true);
-    s.views['back']!.fire('click');
+    s.menu.back!();
     await s.flush(0);
     expect(s.tiles().filter((t) => !t.hidden)).toHaveLength(5);
-    expect(s.views['back']!.hidden).toBe(true);
+    // In the grid there is nothing to go back from.
+    expect(s.menu.back).toBeNull();
   });
 
-  it("shares the quick menu of Foto and Musik: taps on cameras are the page's, the rest the menu's", async () => {
+  it("shares the navbar of Foto and Musik: taps on cameras are the page's, the rest the bar's", async () => {
     const s = setup();
     expect(s.menu.options?.id).toBe('kameror');
-    expect(s.menu.options?.menu).toBe(s.views['menu']);
+    // Without a large camera there is no way back to give.
+    expect(s.menu.back).toBeNull();
     // Not before the page is shown.
     expect(s.menu.options!.handleTap({ target: s.views['stage']! })).toBe(
       false,
@@ -483,21 +496,14 @@ describe('camera grid page', () => {
     s.hooks.enter();
     await s.flush(0);
     const tap = s.menu.options!.handleTap;
-    // The menu's own buttons are never taken.
-    const dockButton = new El('button');
-    s.views['menu']!.append(dockButton);
-    expect(tap({ target: dockButton })).toBe(false);
-    // Empty space beside the cameras opens or closes the menu.
+    // Empty space beside the cameras opens or closes the bar.
     expect(tap({ target: s.views['stage']! })).toBe(false);
     // A camera in the grid is taken (and shown large)…
     expect(tap({ target: s.tiles()[0]! })).toBe(true);
     await s.flush(0);
-    // …and a tap on the large camera is the menu's (it opens or closes).
+    // …and a tap on the large camera is the bar's (it opens or closes).
     expect(tap({ target: s.tiles()[0]! })).toBe(false);
     expect(s.tiles().filter((t) => !t.hidden)).toHaveLength(1);
-    // The round button is the page's own.
-    const round = s.views['back']!;
-    round.className = 'cams-back';
-    expect(tap({ target: round })).toBe(true);
+    expect(s.menu.back).toBeTypeOf('function');
   });
 });
