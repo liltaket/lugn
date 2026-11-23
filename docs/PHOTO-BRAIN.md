@@ -5,7 +5,8 @@ desktop. A Rust program, `lugn-photo-brain` (`agents/linux/photo-brain`, next to
 Linux agent and the Hub pointer bridge), keeps the album's full-size pictures on a
 big disk, runs stronger models over them and does every pairwise and global
 calculation. BrunoCAM only keeps the small display copies, the household's
-decisions about who is who, and serves the Hubs. It never runs a model.
+decisions about who is who, and serves the Hubs. It never runs a model and never
+compares faces.
 
 Without Kuffe nothing breaks: BrunoCAM keeps serving the last result it received
 (`intel.json`), and pictures that have no result yet are grouped by time and place
@@ -81,6 +82,27 @@ Response `{ "accepted": <photos>, "unknown": <ids not in the album> }`.
 `{ "revision": "…", "intelAt": <ms|null>, "pictures": <n>, "analysed": <n> }`: what
 Lugn currently holds, so Kuffe can see which pictures lack a result.
 
+### `GET /photo-brain/v1/people`
+
+The household's decisions, so Kuffe's face grouping can anchor on them. Faces are
+named `<pictureId>.<index>` (the index is the face's position in that picture's
+`faces` array in the bundle, so the order Kuffe publishes never changes for a
+given picture version).
+
+```json
+{
+  "schema": 1,
+  "people": [ { "id": "p3", "name": "Anna", "confirmed": true, "hidden": false } ],
+  "decided": { "<faceId>": "p3", "<faceId2>": null },
+  "previous": { "<faceId>": "p3" },
+  "not": { "<faceId>": ["p5"] }
+}
+```
+
+`decided`: a face a person pinned to somebody (`"p3"`) or declared "not a person"
+(`null`). `previous`: the automatic grouping's earlier choice, kept so people keep
+their ids. `not`: people a face was moved away from.
+
 ## The intel bundle (schema 1)
 
 One document for the whole library. A picture's entry is valid for the `version` it
@@ -106,7 +128,7 @@ picture.
       "q": { "sharp": 80, "dark": 3, "junk": null },                  // 0-100; junk: "screenshot" | "document" | null
       "fav": 1,                                                       // optional, from the album
       "cap": "…",                                                     // optional, from the album
-      "faces": [ { "x": 0.1, "y": 0.2, "w": 0.1, "h": 0.1, "score": 0.93, "front": 0.8, "q": 70, "e": "<base64 little-endian f32, faceDim values, unit length>" } ],
+      "faces": [ { "x": 0.1, "y": 0.2, "w": 0.1, "h": 0.1, "score": 0.93, "front": 0.8, "q": 70, "p": "p3" } ],
       "trip": 0,                                                      // index into trips, optional
       "event": "e12",                                                 // optional
       "cand": [ ["<otherId>", 74, 90, 60, 71] ],                      // [id, base, time, place, look]
@@ -115,6 +137,14 @@ picture.
   }
 }
 ```
+
+A face's `p` is Kuffe's proposal for who it is: `"p3"` an existing person (anchored on
+the household's decisions), `"n7"` a new group of faces that agree (the same `n7` on
+several faces), or absent when the face is too unclear to place. Lugn gives each new
+group a stable person id (remembering which earlier person most of its faces had) and
+always lets the household's decisions override a proposal. **No face embedding ever
+leaves Kuffe.** Face crops for the people panel are cut on BrunoCAM from the display
+copies with the box.
 
 `cand` is each picture's best candidates (about 48, score ≥ 30, best first). The
 numbers are 0-100; `time`, `place` and `look` are -1 when unknown. `base` is the
@@ -141,7 +171,8 @@ and a picture's neighbours stay sensible when Kuffe is away.
 | full-size originals (HEIC or JPEG) | Kuffe's disk (`store_dir`) |
 | face detection, face embeddings, scene probabilities, quality, duplicates | Kuffe |
 | candidate neighbours, events, trips, home | Kuffe |
-| people clustering with the household's decisions, names | BrunoCAM |
+| face grouping into people (anchored on the household's decisions) | Kuffe |
+| the household's decisions (names, confirmations, moves), stable person ids | BrunoCAM |
 | re-ranking candidates by people, choosing groups, naming | BrunoCAM / the Hub |
 
 ## Kuffe
