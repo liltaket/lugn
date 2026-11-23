@@ -298,8 +298,18 @@
 
     // Every round starts from a picture nobody has seen yet this round (a
     // favourite a little more often), so nothing waits long to be shown.
+    // Screenshots, documents and unusable frames (`skip`) are never shown,
+    // unless the whole library is like that.
+    const usable = (photo) => !photo.skip;
+    const anyUsable = library.some(usable);
+    let leastUsable = Infinity;
+    for (const photo of library)
+      if (usable(photo) || !anyUsable)
+        leastUsable = Math.min(leastUsable, plays.get(photo.id) || 0);
+    least = leastUsable;
     const unseen = library.filter(
-      (photo) => (plays.get(photo.id) || 0) === least,
+      (photo) =>
+        (usable(photo) || !anyUsable) && (plays.get(photo.id) || 0) === least,
     );
     const seed = pickWeighted(unseen, (photo) => (photo.fav ? 1.8 : 1), random);
     const size = pickWeighted(GROUP_SIZES, (entry) => entry[1], random)[0];
@@ -314,7 +324,11 @@
         for (const member of group)
           for (const entry of member.nb || []) {
             const other = library[entry[0]];
-            if (other && !members.has(other.id))
+            if (
+              other &&
+              !members.has(other.id) &&
+              (usable(other) || !anyUsable)
+            )
               candidates.set(other.id, other);
           }
         const pool = [];
@@ -359,6 +373,7 @@
       let bestKey = -Infinity;
       for (const other of library) {
         if (other === seed || duplicate(seed, other)) continue;
+        if (!usable(other) && anyUsable) continue;
         const apart =
           typeof seed.t === 'number' && typeof other.t === 'number'
             ? Math.min(Math.abs(seed.t - other.t) / DAY, 400)

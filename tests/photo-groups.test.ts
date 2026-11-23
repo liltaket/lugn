@@ -117,6 +117,23 @@ describe('building a group', () => {
     }
   });
 
+  it('never shows a picture the server marked to skip', () => {
+    const library = blocks(12, 12, 85);
+    for (const index of [2, 5])
+      (library[index] as Photo & { skip?: 1 }).skip = 1;
+    for (let seed = 1; seed <= 60; seed += 1) {
+      const state = api.newGroupState();
+      const group = api.buildGroup(library, state, api.mulberry32(seed));
+      expect(group.some((p) => (p as Photo & { skip?: 1 }).skip)).toBe(false);
+    }
+    // A library of nothing but skipped pictures still shows something.
+    const only = blocks(4, 4, 85);
+    for (const p of only) (p as Photo & { skip?: 1 }).skip = 1;
+    expect(
+      api.buildGroup(only, api.newGroupState(), api.mulberry32(1)).length,
+    ).toBeGreaterThan(0);
+  });
+
   it('does not grow a full group out of loosely related pictures', () => {
     // Every picture knows the others only a little (score 25, below the
     // strict link): a seed may get a partner or two, never a collage of six.
