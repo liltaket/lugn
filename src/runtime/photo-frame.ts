@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import {
@@ -9,9 +9,11 @@ import {
 } from './icloud-shared-album.js';
 import {
   PhotoLibrary,
+  type CountryLookup,
   type PhotoProcessor,
   type PlaceLookup,
 } from './photo-library.js';
+import { PhotoInsight } from './photo-intel/insight.js';
 
 // The sensor shares this machine: one libvips thread, no operation cache.
 sharp.concurrency(1);
@@ -30,6 +32,12 @@ export type PhotoFrameConfig = {
   cacheDir: string;
   refreshMinutes: number;
   maxPhotos: number;
+  /** Image analysis and smarter grouping; absent means the defaults. */
+  intelligence?: {
+    enabled: boolean;
+    modelsDir?: string;
+    home?: { lat: number; lon: number };
+  };
 };
 
 /** Each picture is scaled once, here, so a Hub never decodes more than it shows. */
@@ -69,28 +77,50 @@ export const processPhoto: PhotoProcessor = async (source) => {
   };
 };
 
-export function loadPlaceLookup(path: string): PlaceLookup {
-  const rows: Array<{ name: string; lat: number; lon: number }> = [];
+type PlaceRow = { name: string; lat: number; lon: number; country: string };
+
+export function loadPlaces(path: string): {
+  place: PlaceLookup;
+  country: CountryLookup;
+} {
+  const rows: PlaceRow[] = [];
   for (const line of readFileSync(path, 'utf8').split('\n')) {
     if (!line || line.startsWith('#')) continue;
-    const [name, lat, lon] = line.split('\t');
+    const [name, lat, lon, country] = line.split('\t');
     const latitude = Number(lat);
     const longitude = Number(lon);
     if (name && Number.isFinite(latitude) && Number.isFinite(longitude))
-      rows.push({ name, lat: latitude, lon: longitude });
+      rows.push({
+        name,
+        lat: latitude,
+        lon: longitude,
+        country: /^[A-Z]{2}$/.test(country?.trim() ?? '')
+          ? country!.trim()
+          : '',
+      });
   }
-  return (latitude, longitude) => {
+  const nearest = (latitude: number, longitude: number): PlaceRow | null => {
     const scale = Math.cos((latitude * Math.PI) / 180);
-    let best: { name: string; distance: number } | null = null;
+    let best: { row: PlaceRow; distance: number } | null = null;
     for (const row of rows) {
       const dy = (row.lat - latitude) * 111.32;
       const dx = (row.lon - longitude) * 111.32 * scale;
       const distance = Math.hypot(dx, dy);
-      if (!best || distance < best.distance)
-        best = { name: row.name, distance };
+      if (!best || distance < best.distance) best = { row, distance };
     }
-    return best && best.distance <= MAX_PLACE_DISTANCE_KM ? best.name : null;
+    return best && best.distance <= MAX_PLACE_DISTANCE_KM ? best.row : null;
   };
+  return {
+    place: (latitude, longitude) => nearest(latitude, longitude)?.name ?? null,
+    country: (latitude, longitude) => {
+      const near = nearest(latitude, longitude);
+      return near ? near.country || null : null;
+    },
+  };
+}
+
+export function loadPlaceLookup(path: string): PlaceLookup {
+  return loadPlaces(path).place;
 }
 
 function findPlacesFile(): string | undefined {
@@ -120,15 +150,31 @@ export function createPhotoFrame(
   const fetcher: FetchLike =
     options.fetch ?? ((input, init) => fetch(input, init));
   const placesFile = findPlacesFile();
-  const place = placesFile
-    ? loadPlaceLookup(placesFile)
-    : () => {
-        options.warn?.(
-          'photo frame: data/places.tsv not found; no place names',
-        );
-        return null;
+  const places = placesFile
+    ? loadPlaces(placesFile)
+    : {
+        place: () => {
+          options.warn?.(
+            'photo frame: data/places.tsv not found; no place names',
+          );
+          return null;
+        },
+        country: () => null,
       };
-  return new PhotoLibrary({
+  const intelligence = config.intelligence ?? { enabled: true };
+  const holder: { library?: PhotoLibrary } = {};
+  const insight = new PhotoInsight({
+    cacheDir: config.cacheDir,
+    modelsDir:
+      intelligence.modelsDir ?? join(dirname(config.cacheDir), 'photo-models'),
+    enabled: intelligence.enabled,
+    ...(intelligence.home ? { home: intelligence.home } : {}),
+    readPhoto: async (id) => (await holder.library?.readMain(id)) ?? null,
+    ...(options.log ? { log: options.log } : {}),
+    ...(options.warn ? { warn: options.warn } : {}),
+  });
+  const library = new PhotoLibrary({
+    insight,
     cacheDir: config.cacheDir,
     refreshMs: config.refreshMinutes * 60_000,
     maxPhotos: config.maxPhotos,
@@ -144,7 +190,10 @@ export function createPhotoFrame(
     process: processPhoto,
     pauseMs: 300,
     ...(options.log ? { log: options.log } : {}),
-    place,
+    place: places.place,
+    country: places.country,
     ...(options.warn ? { warn: options.warn } : {}),
   });
+  holder.library = library;
+  return library;
 }

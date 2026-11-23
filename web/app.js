@@ -3542,10 +3542,13 @@ function renderSettingsIndex(data) {
     musikautomatik: 'music-settings-section',
     kameror: 'cameras-section',
     narvaro: 'presence-section',
+    foton: 'photo-people-section',
     datorer: 'computer-section',
   };
   const presenceSection = document.getElementById('presence-section');
   if (presenceSection) presenceSection.hidden = !data.presenceSensorEnabled;
+  const photoSection = document.getElementById('photo-people-section');
+  if (photoSection) photoSection.hidden = !data.photoPeople;
   const presenceLabels = {
     occupied: 'Upptaget',
     confirmed_empty: 'Tomt',
@@ -3558,6 +3561,7 @@ function renderSettingsIndex(data) {
     narvaro: exitPendingStatus()
       ? 'Släcker snart'
       : (presenceLabels[data.state?.presence?.state] ?? 'Okänt'),
+    foton: photoPeopleValue(data.photoPeople),
     datorer: String(Object.keys(data.state?.computer?.devices ?? {}).length),
     anslutningar: healthChip.textContent,
   };
@@ -3567,6 +3571,14 @@ function renderSettingsIndex(data) {
     const section = sections[page] && document.getElementById(sections[page]);
     element.closest('li').hidden = section ? section.hidden : false;
   }
+}
+
+function photoPeopleValue(info) {
+  if (!info) return '';
+  if (info.pending > 0) return `Analyserar ${info.pending}`;
+  return info.people > 0
+    ? `${info.people} ${info.people === 1 ? 'person' : 'personer'}`
+    : 'Inga ännu';
 }
 
 function renderHeroClock() {
@@ -3831,6 +3843,7 @@ function initializeLugn2() {
     intelligens: 'Intelligens',
     kameror: 'Kameror',
     narvaro: 'Närvaro',
+    foton: 'Foton',
     datorer: 'Datorer',
     anslutningar: 'Anslutningar',
     system: 'System',
@@ -3842,6 +3855,7 @@ function initializeLugn2() {
     'intelligens',
     'kameror',
     'narvaro',
+    'foton',
     'datorer',
     'anslutningar',
     'system',

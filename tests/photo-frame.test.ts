@@ -11,6 +11,7 @@ import {
   readCapped,
   readSharedAlbum,
   type AlbumListing,
+  type AlbumPhoto,
   type FetchLike,
 } from '../src/runtime/icloud-shared-album.js';
 import {
@@ -320,6 +321,7 @@ describe('PhotoLibrary', () => {
         t: 1_793_770_126_083,
         lat: 55.5,
         lon: 13.4,
+        cc: null,
       },
     ]);
     expect(revision).not.toBe('');
@@ -734,5 +736,219 @@ describe('photo page planner', () => {
       place: '',
       date: '',
     });
+  });
+});
+
+describe('PhotoLibrary with insight', () => {
+  const jpeg = new Uint8Array([255, 216, 255, 217]);
+  const photo = (
+    id: string,
+    takenAt: number,
+    details?: AlbumPhoto['details'],
+  ): AlbumPhoto => ({
+    id,
+    url: `https://cvws.icloud-content.com/${id}`,
+    version: 'v1',
+    width: 1536,
+    height: 2048,
+    takenAt,
+    utcOffsetSeconds: 3600,
+    latitude: 55.5,
+    longitude: 13.4,
+    ...(details ? { details } : {}),
+  });
+  function fakeInsight() {
+    const seen: string[][] = [];
+    const listeners = new Set<() => void>();
+    let version = 0;
+    return {
+      seen,
+      bump: () => {
+        version += 1;
+        for (const listener of listeners) listener();
+      },
+      insight: {
+        start: async () => undefined,
+        sync: (
+          photos: Array<{ id: string; cc: string | null; details?: unknown }>,
+        ) => {
+          seen.push(photos.map((p) => p.id));
+          lastPhotos = photos;
+        },
+        decorate: () => ({
+          extras: lastPhotos.map((_, i) => ({
+            nb: [[(i + 1) % lastPhotos.length, 90]] as Array<[number, number]>,
+          })),
+          trips: [
+            { title: 'Skåne', from: '2026-11-04', to: '2026-11-05', cc: 'SE' },
+          ],
+          people: [{ id: 'p1', name: 'Anna' }],
+          scenes: { beach: 'Stranden' },
+          ai: true,
+        }),
+        revision: () => String(version),
+        subscribe: (listener: () => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        dispose: () => undefined,
+      },
+    };
+  }
+  let lastPhotos: Array<{ id: string; cc: string | null; details?: unknown }> =
+    [];
+
+  async function setup(
+    listing: AlbumListing,
+    insight?: ReturnType<typeof fakeInsight>['insight'],
+  ) {
+    const dir = await mkdtemp(join(tmpdir(), 'photo-frame-'));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const state = { listing };
+    const library = new PhotoLibrary({
+      cacheDir: dir,
+      list: async () => state.listing,
+      download: async () => jpeg,
+      process: async () => ({
+        main: jpeg,
+        backdrop: jpeg,
+        width: 450,
+        height: 600,
+      }),
+      place: () => 'Svedala',
+      country: () => 'SE',
+      setTimer: () => ({}),
+      ...(insight ? { insight } : {}),
+    });
+    cleanups.push(() => library.dispose());
+    return { dir, library, state };
+  }
+
+  it('adds the neighbours, trips and people to the listing and the country to each picture', async () => {
+    const fake = fakeInsight();
+    const { library } = await setup(
+      {
+        title: 'T',
+        truncated: false,
+        photos: [photo('a', 2_000), photo('b', 1_000)],
+      },
+      fake.insight,
+    );
+    await library.start();
+    await library.refresh();
+    const listing = library.snapshot();
+    expect(listing.photos).toHaveLength(2);
+    expect(listing.photos[0]).toMatchObject({ cc: 'SE', nb: [[1, 90]] });
+    expect(listing.trips).toHaveLength(1);
+    expect(listing.people).toEqual([{ id: 'p1', name: 'Anna' }]);
+    expect(listing.scenes).toEqual({ beach: 'Stranden' });
+    expect(listing.ai).toBe(true);
+    // Nothing private leaves in the listing: no file names, captions as such, or Apple data.
+    expect(JSON.stringify(listing)).not.toMatch(/icloud|filename|IMG_/);
+    expect(fake.seen.at(-1)).toHaveLength(2);
+  });
+
+  it('changes its revision when the insight changes, so the Hubs read the list again', async () => {
+    const fake = fakeInsight();
+    const { library } = await setup(
+      { title: 'T', truncated: false, photos: [photo('a', 1_000)] },
+      fake.insight,
+    );
+    await library.start();
+    await library.refresh();
+    const before = library.snapshot().revision;
+    let notified = 0;
+    library.subscribe(() => {
+      notified += 1;
+    });
+    fake.bump();
+    expect(library.snapshot().revision).not.toBe(before);
+    expect(notified).toBe(1);
+  });
+
+  it('fills in what it has learned about a picture it already has, without downloading it again', async () => {
+    const downloads: string[] = [];
+    const dir = await mkdtemp(join(tmpdir(), 'photo-frame-'));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const state = {
+      listing: {
+        title: 'T',
+        truncated: false,
+        photos: [photo('a', 1_000)],
+      } as AlbumListing,
+    };
+    const make = () =>
+      new PhotoLibrary({
+        cacheDir: dir,
+        list: async () => state.listing,
+        download: async (url) => {
+          downloads.push(url);
+          return jpeg;
+        },
+        process: async () => ({
+          main: jpeg,
+          backdrop: jpeg,
+          width: 450,
+          height: 600,
+        }),
+        place: () => 'Svedala',
+        country: () => 'SE',
+        setTimer: () => ({}),
+      });
+    const first = make();
+    await first.start();
+    await first.refresh();
+    first.dispose();
+    state.listing = {
+      title: 'T',
+      truncated: false,
+      photos: [
+        photo('a', 1_000, {
+          favorite: true,
+          caption: 'Midsommar',
+        } as NonNullable<AlbumPhoto['details']>),
+      ],
+    };
+    const fake = fakeInsight();
+    const second = new PhotoLibrary({
+      cacheDir: dir,
+      list: async () => state.listing,
+      download: async (url) => {
+        downloads.push(url);
+        return jpeg;
+      },
+      process: async () => ({
+        main: jpeg,
+        backdrop: jpeg,
+        width: 450,
+        height: 600,
+      }),
+      place: () => 'Svedala',
+      country: () => 'SE',
+      setTimer: () => ({}),
+      insight: fake.insight,
+    });
+    cleanups.push(() => second.dispose());
+    await second.start();
+    // The first start already hands what is cached to the analysis.
+    expect(fake.seen[0]).toHaveLength(1);
+    await second.refresh();
+    expect(downloads).toHaveLength(1);
+    expect(
+      (lastPhotos[0] as { details?: { caption?: string } }).details?.caption,
+    ).toBe('Midsommar');
+  });
+
+  it('works exactly as before without an insight', async () => {
+    const { library } = await setup({
+      title: 'T',
+      truncated: false,
+      photos: [photo('a', 1_000)],
+    });
+    await library.start();
+    await library.refresh();
+    const listing = library.snapshot();
+    expect(Object.keys(listing).sort()).toEqual(['photos', 'revision']);
+    expect(library.peopleApi()).toBeUndefined();
   });
 });

@@ -10,6 +10,36 @@
  * is read. The older `sharedalbum/#B…` streams are rejected with a clear
  * error. Every host Apple names in a response is checked before it is used.
  */
+import { parseBinaryPlist, plistNumbers, type PlistValue } from './bplist.js';
+
+export type AlbumPhotoDetails = {
+  /** Original file name, e.g. `IMG_9347.HEIC`. */
+  filename: string | null;
+  /** A caption or description somebody wrote in Photos. */
+  caption: string | null;
+  keywords: string[];
+  favorite: boolean;
+  /** Apple's asset subtype flags: 1 panorama, 2 HDR, 4 screenshot, 8 live, 16 depth. */
+  subtype: number;
+  burst: boolean;
+  /** When the picture was added to the album, ms since the epoch. */
+  addedAt: number | null;
+  /** Pictures added in one go share a batch. */
+  batch: string | null;
+  /** The camera, e.g. `iPhone 14 Pro Max`. */
+  device: string | null;
+  lens: 'front' | 'ultrawide' | 'wide' | 'tele' | null;
+  /** ISO speed, exposure brightness value (EV, dark is negative) and flash fired. */
+  iso: number | null;
+  brightness: number | null;
+  flash: boolean | null;
+  /** Metres above sea level, compass heading in degrees, speed in m/s. */
+  altitude: number | null;
+  heading: number | null;
+  speed: number | null;
+  /** How many faces the phone itself found. */
+  deviceFaces: number;
+};
 export type AlbumPhoto = {
   /** Stable CPLAsset record name. */
   id: string;
@@ -25,6 +55,8 @@ export type AlbumPhoto = {
   utcOffsetSeconds: number;
   latitude: number | null;
   longitude: number | null;
+  /** What the record says beyond time and place; absent when it could not be read. */
+  details?: AlbumPhotoDetails;
 };
 export type AlbumListing = {
   title: string;
@@ -203,88 +235,99 @@ function decodeLocation(
 
 /**
  * The location blob is a tiny `bplist00` dictionary of short ASCII keys and
- * doubles. Only that shape is read; anything else yields an empty map.
+ * doubles. Only its numbers are read; anything else yields an empty map.
  */
 export function parseBinaryPlistReals(data: Buffer): Map<string, number> {
-  const out = new Map<string, number>();
-  // Every read is checked against the buffer, and the dictionary size against
-  // the object count, so a hostile blob ends in a thrown error, never a loop.
-  const byte = (at: number): number => {
-    if (!Number.isInteger(at) || at < 0 || at >= data.length)
-      throw new RangeError('bplist out of range');
-    return data[at]!;
+  return plistNumbers(data, 4096);
+}
+
+const text = (input: unknown): string | null => {
+  if (typeof input !== 'string' || input === '') return null;
+  const bytes = Buffer.from(input, 'base64');
+  if (bytes.length === 0 || bytes.length > 8192) return null;
+  // Text fields are UTF-8, or a property list holding the string.
+  const parsed = parseBinaryPlist(bytes, { maxBytes: 8192, maxDepth: 2 });
+  const raw = typeof parsed === 'string' ? parsed : bytes.toString('utf8');
+  const clean = raw.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  return clean === '' ? null : clean.slice(0, 300);
+};
+
+const dict = (input: PlistValue | undefined): Record<string, PlistValue> =>
+  input && typeof input === 'object' && !Array.isArray(input)
+    ? (input as Record<string, PlistValue>)
+    : {};
+const numeric = (input: PlistValue | undefined): number | null =>
+  typeof input === 'number' && Number.isFinite(input) ? input : null;
+
+function lensOf(
+  model: unknown,
+  equivalent: number | null,
+): AlbumPhotoDetails['lens'] {
+  if (typeof model === 'string' && /front/i.test(model)) return 'front';
+  if (equivalent === null || equivalent <= 0) return null;
+  if (equivalent < 20) return 'ultrawide';
+  if (equivalent > 45) return 'tele';
+  return 'wide';
+}
+
+/**
+ * Everything beyond time and place that an album record says about a picture:
+ * the phone's own image properties (camera, lens, exposure, compass heading,
+ * altitude), what somebody wrote or marked in Photos, and how many faces the
+ * phone found.
+ */
+export function extractDetails(
+  asset: CloudRecord,
+  master: CloudRecord,
+): AlbumPhotoDetails {
+  const blob = value(master, 'mediaMetaDataEnc');
+  const properties = dict(
+    typeof blob === 'string'
+      ? parseBinaryPlist(Buffer.from(blob, 'base64'), {
+          maxBytes: 64 * 1024,
+          maxDepth: 6,
+        })
+      : undefined,
+  );
+  const tiff = dict(properties['{TIFF}']);
+  const exif = dict(properties['{Exif}']);
+  const gps = dict(properties['{GPS}']);
+  const regions = dict(dict(properties['{ExifAux}'])['Regions']);
+  const faceList = regions['RegionList'];
+  const keywords = parseBinaryPlist(
+    Buffer.from(String(value(asset, 'keywordsEnc') ?? ''), 'base64'),
+    { maxBytes: 8192, maxDepth: 2 },
+  );
+  const iso = Array.isArray(exif['ISOSpeedRatings'])
+    ? numeric(exif['ISOSpeedRatings'][0])
+    : null;
+  const flash = numeric(exif['Flash']);
+  const device = typeof tiff['Model'] === 'string' ? tiff['Model'].trim() : '';
+  const altitude = numeric(gps['Altitude']);
+  const below = numeric(gps['AltitudeRef']) === 1;
+  const subtype = num(value(asset, 'assetSubtypeV2'));
+  return {
+    filename: text(value(master, 'filenameEnc')),
+    caption:
+      text(value(asset, 'captionEnc')) ?? text(value(asset, 'extendedDescEnc')),
+    keywords: Array.isArray(keywords)
+      ? keywords.filter((k): k is string => typeof k === 'string').slice(0, 20)
+      : [],
+    favorite: num(value(asset, 'isFavorite')) === 1,
+    subtype,
+    burst: num(value(asset, 'burstFlags')) > 0,
+    addedAt: num(value(asset, 'addedDate')) || null,
+    batch: String(value(asset, 'assetBatchId') ?? '') || null,
+    device: device === '' ? null : device.slice(0, 60),
+    lens: lensOf(exif['LensModel'], numeric(exif['FocalLenIn35mmFilm'])),
+    iso,
+    brightness: numeric(exif['BrightnessValue']),
+    flash: flash === null ? null : (flash & 1) === 1,
+    altitude: altitude === null ? null : below ? -altitude : altitude,
+    heading: numeric(gps['ImgDirection']),
+    speed: numeric(gps['Speed']),
+    deviceFaces: Array.isArray(faceList) ? Math.min(faceList.length, 20) : 0,
   };
-  const readUInt = (at: number, size: number): number => {
-    if (size < 1 || size > 4) throw new RangeError('bplist integer size');
-    let n = 0;
-    for (let i = 0; i < size; i += 1) n = n * 256 + byte(at + i);
-    return n;
-  };
-  try {
-    if (
-      data.length < 40 ||
-      data.length > 4096 ||
-      data.subarray(0, 8).toString('latin1') !== 'bplist00'
-    )
-      return out;
-    const trailer = data.subarray(data.length - 32);
-    const offsetSize = trailer[6]!;
-    const refSize = trailer[7]!;
-    const objectCount = Number(trailer.readBigUInt64BE(8));
-    const topObject = Number(trailer.readBigUInt64BE(16));
-    const tableOffset = Number(trailer.readBigUInt64BE(24));
-    if (
-      objectCount < 1 ||
-      objectCount > 64 ||
-      topObject >= objectCount ||
-      offsetSize < 1 ||
-      offsetSize > 4 ||
-      refSize < 1 ||
-      refSize > 2 ||
-      tableOffset + objectCount * offsetSize > data.length - 32
-    )
-      return out;
-    const offsetOf = (index: number): number => {
-      if (index < 0 || index >= objectCount)
-        throw new RangeError('bplist object index');
-      return readUInt(tableOffset + index * offsetSize, offsetSize);
-    };
-    const lengthAndStart = (at: number): { length: number; start: number } => {
-      const nibble = byte(at) & 0x0f;
-      if (nibble !== 0x0f) return { length: nibble, start: at + 1 };
-      const sizeLog = byte(at + 1) & 0x0f;
-      if (sizeLog > 2) throw new RangeError('bplist length size');
-      const sizeBytes = 1 << sizeLog;
-      return {
-        length: readUInt(at + 2, sizeBytes),
-        start: at + 2 + sizeBytes,
-      };
-    };
-    const top = offsetOf(topObject);
-    if ((byte(top) & 0xf0) !== 0xd0) return out;
-    const { length: count, start } = lengthAndStart(top);
-    if (count > objectCount) return out;
-    for (let i = 0; i < count; i += 1) {
-      const keyAt = offsetOf(readUInt(start + i * refSize, refSize));
-      const valueAt = offsetOf(
-        readUInt(start + (count + i) * refSize, refSize),
-      );
-      if ((byte(keyAt) & 0xf0) !== 0x50) continue;
-      const key = lengthAndStart(keyAt);
-      if (key.length > 32 || key.start + key.length > data.length) continue;
-      const name = data
-        .subarray(key.start, key.start + key.length)
-        .toString('latin1');
-      const marker = byte(valueAt);
-      if (marker === 0x23 && valueAt + 9 <= data.length)
-        out.set(name, data.readDoubleBE(valueAt + 1));
-      else if (marker === 0x22 && valueAt + 5 <= data.length)
-        out.set(name, data.readFloatBE(valueAt + 1));
-    }
-  } catch {
-    out.clear();
-  }
-  return out;
 }
 
 function pickRendition(
@@ -444,6 +487,7 @@ export async function readSharedAlbum(
       utcOffsetSeconds: num(value(asset, 'timeZoneOffset')),
       latitude: location?.latitude ?? null,
       longitude: location?.longitude ?? null,
+      details: extractDetails(asset, master),
     });
   }
   const title = (

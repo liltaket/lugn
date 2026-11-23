@@ -9,7 +9,18 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { systemClock, type Clock } from '../core/clock.js';
-import type { AlbumListing, AlbumPhoto } from './icloud-shared-album.js';
+import type {
+  AlbumListing,
+  AlbumPhoto,
+  AlbumPhotoDetails,
+} from './icloud-shared-album.js';
+import type {
+  InsightExtras,
+  InsightPhoto,
+  InsightStatus,
+} from './photo-intel/insight.js';
+import type { MoveTarget, PeopleView } from './photo-intel/people.js';
+import type { PhotoExtras, Trip } from './photo-intel/grouping.js';
 
 /** What the Hub gets per photo; no Apple URL or record name ever leaves here. */
 export type PhotoSummary = {
@@ -27,11 +38,21 @@ export type PhotoSummary = {
   /** Position rounded to about a kilometre, or null; the page groups by it. */
   lat: number | null;
   lon: number | null;
-};
+  /** Country code of the nearest populated place, or null. */
+  cc: string | null;
+} & PhotoExtras;
 export type PhotoListing = {
   /** Changes when the set of photos changes. */
   revision: string;
   photos: PhotoSummary[];
+  /** Trips found in the dates and places; pictures point at them by index. */
+  trips?: Trip[];
+  /** People who are in at least one picture (a name only once someone gave one). */
+  people?: Array<{ id: string; name: string | null }>;
+  /** Scene key → the name a Hub shows for it. */
+  scenes?: Record<string, string>;
+  /** The pictures have been looked at by the models (neighbours are real). */
+  ai?: boolean;
 };
 export type PhotoVariant = 'main' | 'backdrop';
 export type PhotoStatus = {
@@ -52,6 +73,33 @@ export type PlaceLookup = (
   latitude: number,
   longitude: number,
 ) => string | null;
+export type CountryLookup = (
+  latitude: number,
+  longitude: number,
+) => string | null;
+
+/** What the intelligence adds: analysis of new pictures and a smarter listing. */
+/** What the household's panel may do with the people the frame found. */
+export type PhotoPeopleApi = {
+  status(): InsightStatus;
+  summary(): { people: number; pending: number };
+  peopleView(): PeopleView;
+  rename(personId: string, name: string | null): void;
+  confirm(personId: string): void;
+  setHidden(personId: string, hidden: boolean): void;
+  moveFace(faceId: string, target: MoveTarget): void;
+  merge(fromId: string, intoId: string): void;
+  faceCrop(faceId: string): Promise<Uint8Array | null>;
+  faceContext(faceId: string): { photoId: string } | null;
+};
+export type PhotoInsightLike = Partial<PhotoPeopleApi> & {
+  start(): Promise<void>;
+  sync(photos: InsightPhoto[]): void;
+  decorate(): InsightExtras;
+  revision(): string;
+  subscribe(listener: () => void): () => void;
+  dispose(): void;
+};
 
 export type PhotoLibraryOptions = {
   cacheDir: string;
@@ -60,6 +108,9 @@ export type PhotoLibraryOptions = {
   download: (url: string) => Promise<Uint8Array>;
   process: PhotoProcessor;
   place: PlaceLookup;
+  country?: CountryLookup;
+  /** Optional: looks at new pictures and groups them. Without it nothing changes. */
+  insight?: PhotoInsightLike;
   refreshMs?: number;
   maxPhotos?: number;
   /** Rest between two new pictures, so a large refresh never hogs the CPU. */
@@ -72,13 +123,18 @@ export type PhotoLibraryOptions = {
   clearTimer?: (handle: unknown) => void;
 };
 
-type IndexEntry = PhotoSummary & { source: string };
+type IndexEntry = Omit<PhotoSummary, keyof PhotoExtras> & {
+  source: string;
+  /** Seconds east of UTC where it was taken (for local dates). */
+  off?: number;
+  details?: AlbumPhotoDetails;
+};
 type IndexFile = { version: 1; photos: IndexEntry[] };
 
 const IMAGE_ID = /^[A-Za-z0-9_-]{24}$/;
 const EMPTY_LISTINGS_BEFORE_CLEAR = 3;
 
-const pick = (entry: PhotoSummary): PhotoSummary => ({
+const pick = (entry: IndexEntry): Omit<PhotoSummary, keyof PhotoExtras> => ({
   id: entry.id,
   w: entry.w,
   h: entry.h,
@@ -87,6 +143,7 @@ const pick = (entry: PhotoSummary): PhotoSummary => ({
   t: entry.t ?? null,
   lat: entry.lat ?? null,
   lon: entry.lon ?? null,
+  cc: entry.cc ?? null,
 });
 
 export function photoId(sourceId: string): string {
@@ -96,6 +153,22 @@ export function photoId(sourceId: string): string {
     .digest('base64url')
     .slice(0, 24);
 }
+
+const comparable = (
+  fresh: Pick<
+    IndexEntry,
+    'date' | 'place' | 't' | 'lat' | 'lon' | 'cc' | 'off' | 'details'
+  >,
+) => ({
+  date: fresh.date ?? null,
+  place: fresh.place ?? null,
+  t: fresh.t ?? null,
+  lat: fresh.lat ?? null,
+  lon: fresh.lon ?? null,
+  cc: fresh.cc ?? null,
+  off: fresh.off ?? 0,
+  details: fresh.details ?? null,
+});
 
 const round2 = (value: number | null): number | null =>
   value === null ? null : Math.round(value * 100) / 100;
@@ -120,6 +193,7 @@ export class PhotoLibrary {
   private timer: unknown;
   private running = false;
   private disposed = false;
+  private unsubscribeInsight: (() => void) | undefined;
   private lastRefreshAt: number | null = null;
   private lastError: string | null = null;
   private emptyListings = 0;
@@ -148,8 +222,54 @@ export class PhotoLibrary {
         `photo frame cache unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+    await this.startInsight();
     // The first refresh runs in the background; startup never waits for Apple.
     this.schedule(0);
+  }
+
+  private async startInsight(): Promise<void> {
+    const insight = this.options.insight;
+    if (!insight) return;
+    try {
+      await insight.start();
+      this.unsubscribeInsight = insight.subscribe(() => {
+        this.updateRevision();
+        for (const listener of this.listeners) listener();
+      });
+      insight.sync(this.insightPhotos());
+      this.updateRevision();
+    } catch (error) {
+      // The analysis is an extra; the frame works without it.
+      this.options.warn?.(
+        `photo analysis unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private insightPhotos(): InsightPhoto[] {
+    return this.entries.map((entry) => ({
+      id: entry.id,
+      t: entry.t ?? null,
+      lat: entry.lat ?? null,
+      lon: entry.lon ?? null,
+      place: entry.place ?? null,
+      cc: entry.cc ?? null,
+      utcOffsetSeconds: entry.off ?? 0,
+      details: entry.details,
+    }));
+  }
+
+  /** The people panel's operations; absent when the frame runs without insight. */
+  peopleApi(): PhotoPeopleApi | undefined {
+    const insight = this.options.insight;
+    return insight && typeof insight.peopleView === 'function'
+      ? (insight as PhotoPeopleApi)
+      : undefined;
+  }
+
+  /** The cached picture itself, for the panel's face crops. */
+  async readMain(id: string): Promise<Uint8Array | null> {
+    return this.read(id, 'main');
   }
 
   dispose(): void {
@@ -159,6 +279,8 @@ export class PhotoLibrary {
         this.timer as Parameters<typeof clearTimeout>[0],
       );
     this.listeners.clear();
+    this.unsubscribeInsight?.();
+    this.options.insight?.dispose();
   }
 
   subscribe(listener: () => void): () => void {
@@ -176,9 +298,27 @@ export class PhotoLibrary {
   }
 
   snapshot(): PhotoListing {
+    const insight = this.options.insight;
+    if (!insight)
+      return {
+        revision: this.revision,
+        photos: this.entries.map((entry) => pick(entry)),
+      };
+    // The extras are computed for the entries as they were last synced.
+    const extras = insight.decorate();
+    const aligned = extras.extras.length === this.entries.length;
     return {
       revision: this.revision,
-      photos: this.entries.map((entry) => pick(entry)),
+      photos: this.entries.map((entry, index) => ({
+        ...pick(entry),
+        ...(aligned ? extras.extras[index] : {}),
+      })),
+      ...(aligned && extras.trips.length > 0 ? { trips: extras.trips } : {}),
+      ...(aligned && extras.people.length > 0 ? { people: extras.people } : {}),
+      ...(aligned && Object.keys(extras.scenes).length > 0
+        ? { scenes: extras.scenes }
+        : {}),
+      ai: aligned && extras.ai,
     };
   }
 
@@ -256,14 +396,17 @@ export class PhotoLibrary {
       if (existing) {
         // The picture stays; what is known about it may have been added since.
         const fresh = this.metadata(photo);
-        const before = pick(existing);
-        if (
-          fresh.date !== before.date ||
-          fresh.place !== before.place ||
-          fresh.t !== before.t ||
-          fresh.lat !== before.lat ||
-          fresh.lon !== before.lon
-        )
+        const before = {
+          date: existing.date ?? null,
+          place: existing.place ?? null,
+          t: existing.t ?? null,
+          lat: existing.lat ?? null,
+          lon: existing.lon ?? null,
+          cc: existing.cc ?? null,
+          off: existing.off ?? 0,
+          details: existing.details ?? null,
+        };
+        if (JSON.stringify(before) !== JSON.stringify(comparable(fresh)))
           changed = true;
         next.push({ ...existing, ...fresh });
         continue;
@@ -300,6 +443,7 @@ export class PhotoLibrary {
     if (!changed && next.length === this.entries.length) return;
     await this.writeIndex(next);
     this.entries = next;
+    this.options.insight?.sync(this.insightPhotos());
     this.updateRevision();
     await this.sweep();
     for (const listener of this.listeners) listener();
@@ -307,16 +451,24 @@ export class PhotoLibrary {
 
   private metadata(
     photo: AlbumPhoto,
-  ): Pick<PhotoSummary, 'date' | 'place' | 't' | 'lat' | 'lon'> {
+  ): Pick<
+    IndexEntry,
+    'date' | 'place' | 't' | 'lat' | 'lon' | 'cc' | 'off' | 'details'
+  > {
     const located = photo.latitude !== null && photo.longitude !== null;
     return {
       date: localDate(photo),
       place: located
         ? this.options.place(photo.latitude!, photo.longitude!)
         : null,
+      cc: located
+        ? (this.options.country?.(photo.latitude!, photo.longitude!) ?? null)
+        : null,
       t: photo.takenAt,
       lat: round2(photo.latitude),
       lon: round2(photo.longitude),
+      off: photo.utcOffsetSeconds,
+      ...(photo.details ? { details: photo.details } : {}),
     };
   }
 
@@ -361,6 +513,7 @@ export class PhotoLibrary {
   private updateRevision(): void {
     this.revision = createHash('sha256')
       .update(this.entries.map((entry) => entry.id).join(','))
+      .update(this.options.insight?.revision() ?? '')
       .digest('base64url')
       .slice(0, 12);
   }

@@ -236,10 +236,20 @@ CONFIGURATION.md): one to three pictures at a time in changing layouts (a
 landscape full screen, two portraits, a portrait with a landscape, three
 portraits, a landscape with two portraits, three landscapes, two panoramas; a
 portrait never stands alone with black around it unless nothing else is left).
-Pictures taken within a few hours of each other and in the same area are played
-near each other, but the groups are shuffled and some pictures wander, so no
-group is fixed. Newly added pictures play next, each with a
-quiet caption of the place and date the picture was taken. The quick menu (`quick-menu.js`) slides up from the bottom edge when the mouse
+When the server has looked at the pictures (or at least at their times and
+places) they play in related groups of four to six, split over two or three
+slides (2 + 3, 3 + 3, …): pictures from one outing, place, or the same people,
+drawn again each round so the same picture meets new company. A group has one
+name, always at the lower right and always built the same way: a small kind
+word (RESA, PLATS, TEMA, DAG, MÅNAD, ÅR, MED, MINNE), the name (`Lesko`,
+`Stranden i Marstrand`, `November 2026`) and a line below with the time or the
+people, with dots showing which slide of the group is on screen (see
+[PHOTO-INTELLIGENCE.md](PHOTO-INTELLIGENCE.md)). The time of day is always at
+the upper right, large enough to read across the room (58 px, over a soft
+static floor), redrawn once a minute and never while the pager moves. Without
+neighbour lists from the server (an older server, no analysis) the page plays as
+before: pictures taken close in time and place are played near each other, with
+a quiet caption of place and date. The quick menu (`quick-menu.js`) slides up from the bottom edge when the mouse
 moves over the page (a real mouse, or the Hub's bridged one, which
 `pointer-bridge.js` announces as the window event `lugn:pointer-move`) or the
 page is tapped: Hem's scenes (the dock of the other pages), a camera button

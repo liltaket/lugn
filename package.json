@@ -25,7 +25,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run && bash tests/install-user-service.test.sh && bash tests/install-govee-effects-service.test.sh",
-    "bench:lighting": "tsc -p tsconfig.bench.json && node dist-bench/bench/lighting-latency.js"
+    "bench:lighting": "tsc -p tsconfig.bench.json && node dist-bench/bench/lighting-latency.js",
+    "photos:models": "npm run build --silent && node dist/runtime/photo-intel/fetch-models.js"
   },
   "engines": {
     "node": ">=22"
@@ -50,5 +51,8 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.1",
     "vitest": "^4.1.11"
+  },
+  "optionalDependencies": {
+    "onnxruntime-node": "^1.31.1"
   }
 }

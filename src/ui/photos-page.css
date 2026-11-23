@@ -39,7 +39,9 @@
   bottom: 34px;
   max-width: 60%;
   color: #f4f1ec;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.75),
+    0 0 14px rgba(0, 0, 0, 0.5);
   pointer-events: none;
 }
 .ph-cap b {
@@ -65,8 +67,8 @@
   left: 0;
   right: 0;
   bottom: 0;
-  height: 180px;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.62));
+  height: 220px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.72));
   pointer-events: none;
 }
 .ph-single.ph-portrait::after {
@@ -281,4 +283,79 @@
 }
 .photos-page.menu-open .ph-slide .ph-cap {
   opacity: 0;
+}
+
+/* The group's name: always bottom right, always built the same way: a small
+   word for what kind of name it is, the name, then the time or the company. */
+.ph-cap small {
+  display: block;
+  margin-bottom: 6px;
+  font:
+    600 13px/1 system-ui,
+    sans-serif;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+.ph-cap b {
+  font-size: 32px;
+}
+.ph-dots {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+  height: 6px;
+}
+.ph-dots u {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f4f1ec;
+  opacity: 0.35;
+  text-decoration: none;
+}
+.ph-dots u.on {
+  opacity: 0.95;
+}
+
+/* The time of day, top right over a soft, static floor so it reads on any
+   picture. It is outside the slides, so it never fades with them. */
+.photos-page::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 150px;
+  z-index: 1;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.5));
+  pointer-events: none;
+}
+.ph-clock {
+  position: absolute;
+  z-index: 2;
+  top: 24px;
+  right: 40px;
+  text-align: right;
+  color: #f4f1ec;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+}
+.ph-clock b {
+  display: block;
+  font:
+    300 58px/1 system-ui,
+    sans-serif;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.ph-clock span {
+  display: block;
+  margin-top: 6px;
+  font:
+    400 18px/1.2 system-ui,
+    sans-serif;
+  opacity: 0.8;
 }
