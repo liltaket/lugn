@@ -58,15 +58,26 @@
 
   const hem = () => (typeof refs === 'object' ? refs : null);
 
+  // The navbar is a quick menu, so it holds few and large choices: not the
+  // soft, music and party scenes (Hem has them), but Filmkväll and Dynamisk,
+  // which follows the music and the situation by itself.
+  const DOCK_HIDDEN = new Set([
+    'scene.soft_light',
+    'scene.music',
+    'scene.party',
+  ]);
+  const DOCK_MAX = 5;
+
   function dockScenes() {
     if (typeof getSceneList !== 'function') return [];
     const scenes = getSceneList(payload()).filter(
-      (scene) => !scene.id.startsWith('scene.custom_'),
+      (scene) =>
+        !scene.id.startsWith('scene.custom_') && !DOCK_HIDDEN.has(scene.id),
     );
-    // Släck last, as the way out, and at most six in a row.
+    // Släck last, as the way out.
     const off = scenes.filter((scene) => scene.id === 'scene.all_off');
     const rest = scenes.filter((scene) => scene.id !== 'scene.all_off');
-    return [...rest.slice(0, 6 - off.length), ...off];
+    return [...rest.slice(0, DOCK_MAX - off.length), ...off];
   }
 
   function dockButton(scene) {
@@ -75,16 +86,21 @@
     button.dataset.scene = scene.id;
     const icon =
       typeof sceneIconFor === 'function' ? sceneIconFor(scene.id) : null;
+    const name = scene.id === 'scene.all_off' ? 'Släck' : scene.name;
     if (icon) {
-      // The same fixed pictograms as Hem; scene names stay text.
+      // The same fixed pictograms as Hem; the bar shows only the picture (the
+      // name is the button's label and tooltip).
       button.insertAdjacentHTML(
         'beforeend',
         `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${icon.paths}</svg>`,
       );
+    } else {
+      // A scene without a picture keeps its name, so it is never an empty button.
+      const label = document.createElement('span');
+      label.textContent = name;
+      button.append(label);
     }
-    const name = document.createElement('span');
-    name.textContent = scene.id === 'scene.all_off' ? 'Släck' : scene.name;
-    button.append(name);
+    button.setAttribute('aria-label', name);
     button.title = scene.name;
     return button;
   }
