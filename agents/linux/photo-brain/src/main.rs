@@ -18,6 +18,8 @@ commands:
   once                 one full pass (everything pending), then exit
   status               counts, free space, last publish
   export-bundle <file> write the bundle the store would publish (no network)
+  calibrate            how well the face model separates the pinned people
+                       (decisions from Lugn when the token is set, else the cache)
 
 The bearer token comes from LUGN_PHOTO_BRAIN_TOKEN.";
 
@@ -99,6 +101,14 @@ fn real_main() -> Result<ExitCode> {
             };
             let mut brain = Brain::new(config, token, DownloadRules::apple(), no_models, stop)?;
             print!("{}", brain.status(ask_lugn)?);
+        }
+        "calibrate" => {
+            let (token, online) = match Token::from_env() {
+                Ok(token) => (token, true),
+                Err(_) => (Token::new("unset".into())?, false),
+            };
+            let mut brain = Brain::new(config, token, DownloadRules::apple(), no_models, stop)?;
+            print!("{}", brain.calibration(online)?);
         }
         "export-bundle" => {
             let [file] = rest.as_slice() else {

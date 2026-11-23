@@ -643,6 +643,42 @@ impl Brain {
         Ok(bundle.photos.len())
     }
 
+    /// How well the face model separates the people the household has pinned:
+    /// the report of [`people::calibrate`], for `calibrate`. Uses the cached
+    /// decisions unless `online`.
+    pub fn calibration(&mut self, online: bool) -> Result<String> {
+        let models = self
+            .store
+            .latest_models()?
+            .context("nothing has been analysed yet")?;
+        let entries = self.store.library(Some(&models))?;
+        let people = self.labels(online);
+        let faces = publish::face_records(&entries);
+        let known: std::collections::HashSet<&str> = faces.iter().map(|f| f.id.as_str()).collect();
+        let truth: HashMap<FaceId, String> = people
+            .decided
+            .iter()
+            .filter_map(|(face, person)| Some((face.clone(), person.clone()?)))
+            .filter(|(face, _)| known.contains(face.as_str()))
+            .collect();
+        let pinned = people.decided.values().filter(|p| p.is_some()).count();
+        let mut out = format!(
+            "face model {} ({} dims), {} faces in {} pictures; {} pinned faces in the decisions, {} of them match a face found now\n\n",
+            models.face,
+            models.face_dim,
+            faces.len(),
+            entries.iter().filter(|e| e.analysis.is_some()).count(),
+            pinned,
+            truth.len()
+        );
+        if truth.len() < 4 {
+            out.push_str("too few pinned faces to calibrate\n");
+        } else {
+            out.push_str(&people::calibrate(&faces, &truth).to_string());
+        }
+        Ok(out)
+    }
+
     /// Human-readable state for `status`.
     pub fn status(&mut self, ask_lugn: bool) -> Result<String> {
         let models = self.store.latest_models()?;
