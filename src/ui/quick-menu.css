@@ -46,7 +46,7 @@
   background: linear-gradient(
     to top,
     rgba(0, 0, 0, 0.55) 0,
-    rgba(0, 0, 0, 0.12) 220px,
+    rgba(0, 0, 0, 0.12) 270px,
     rgba(0, 0, 0, 0.12) 100%
   );
   opacity: 0;
@@ -61,11 +61,13 @@
   left: 28px;
   right: 28px;
   bottom: 20px;
+  /* Two rows: what changes with the page (a little above), and the scenes,
+     which are the same on every page and never move. */
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 12px;
   opacity: 0;
-  transform: translateY(96px);
+  transform: translateY(170px);
   transition:
     transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
     opacity 200ms ease-out;
@@ -111,15 +113,33 @@
   width: 32px;
   height: 32px;
 }
+/* The row above the scenes: the back button at the left, the page's buttons at
+   the right. Its height is fixed, so a page with fewer buttons moves nothing. */
+.nb-context {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  min-height: 56px;
+}
+.nb-context .nb-round {
+  width: 56px;
+  min-height: 56px;
+  border-radius: 28px;
+}
+.nb-context .nb-round svg {
+  width: 28px;
+  height: 28px;
+}
 .nb-actions {
   flex: none;
   display: flex;
   gap: 12px;
+  margin-left: auto;
 }
 
-/* Hem's scenes, in the middle. */
+/* Hem's scenes, along the bottom edge. */
 .scene-dock {
-  flex: 1 1 auto;
+  flex: none;
   min-width: 0;
   display: flex;
   justify-content: center;

@@ -261,9 +261,11 @@ after Hem (Hem has none). It does not move with the pages: it stays open when
 a swipe or one of its buttons changes page, and takes the new page's context.
 It slides up from the bottom edge when the mouse moves over the page (a real
 mouse, or the Hub's bridged one, which `pointer-bridge.js` announces as the
-window event `lugn:pointer-move`) or the page is tapped. In one row it has a
-back button (only where the page has a level to go back from), Hem's scenes and
-round buttons for what the page does not already show: Musik (not on Musik),
+window event `lugn:pointer-move`) or the page is tapped. In two rows: the
+scenes along the bottom edge, the same on every page and never moving, and a
+row of small round buttons a little above them for what changes with the page:
+a back button at the left (only where the page has a level to go back from) and,
+at the right, buttons for what the page does not already show: Musik (not on Musik),
 Kameror (not on Kameror, nor where Hem has no cameras) and, on Foto, the next
 picture. A soft veil, drawn from each picture's own bottom edge (no blur is
 computed), a short dark floor and a very thin dimming of the whole page make
