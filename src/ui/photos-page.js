@@ -245,6 +245,7 @@
   ];
   const LINK_MIN = 0.42; // how well a newcomer must fit the whole group
   const LINK_FALLBACK = 0.2; // when the seed would otherwise stand alone
+  const FALLBACK_SIZE = 3; // ...and then only a small group, never a collage
   const RECENT_GROUPS = 8;
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -305,7 +306,10 @@
     const group = [seed];
     const members = new Set([seed.id]);
     for (const threshold of [LINK_MIN, LINK_FALLBACK]) {
-      while (group.length < size) {
+      // The relaxed pass exists so a picture without company still gets some;
+      // it never grows a full group out of loosely related pictures.
+      const limit = threshold === LINK_MIN ? size : FALLBACK_SIZE;
+      while (group.length < limit) {
         const candidates = new Map();
         for (const member of group)
           for (const entry of member.nb || []) {
@@ -317,11 +321,22 @@
         for (const other of candidates.values()) {
           if (group.some((member) => duplicate(member, other))) continue;
           // How well it fits everyone already there; a stranger to some
-          // member pulls the average down.
+          // member pulls the average down, and too many strangers rule a
+          // picture out however well the rest of the group knows it.
           let fit = 0;
-          for (const member of group) fit += score(member, other);
+          let strangers = 0;
+          for (const member of group) {
+            const pair = score(member, other);
+            fit += pair;
+            if (pair <= 0) strangers += 1;
+          }
           fit /= group.length;
           if (fit < threshold) continue;
+          if (
+            threshold === LINK_MIN &&
+            strangers > Math.floor(group.length / 3)
+          )
+            continue;
           let weight = fit * fit * fresh(other, 1.5);
           for (const member of group)
             if (recent.has(pairKey(member, other))) weight *= 0.4;

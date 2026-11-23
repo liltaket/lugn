@@ -117,6 +117,42 @@ describe('building a group', () => {
     }
   });
 
+  it('does not grow a full group out of loosely related pictures', () => {
+    // Every picture knows the others only a little (score 25, below the
+    // strict link): a seed may get a partner or two, never a collage of six.
+    const library = blocks(12, 12, 25);
+    for (let seed = 1; seed <= 40; seed += 1) {
+      const group = api.buildGroup(
+        library,
+        api.newGroupState(),
+        api.mulberry32(seed),
+      );
+      expect(group.length).toBeGreaterThanOrEqual(2);
+      expect(group.length).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it('keeps out a picture that is a stranger to most of the group', () => {
+    // 0..4 know each other well; 5 knows only picture 0.
+    const library = blocks(5, 5, 90);
+    library.push(portrait('z', { t: 1_000_100 }));
+    library[0]!.nb!.push([5, 90]);
+    library[5]!.nb = [[0, 90]];
+    for (let seed = 1; seed <= 80; seed += 1) {
+      const group = api.buildGroup(
+        library,
+        api.newGroupState(),
+        api.mulberry32(seed),
+      );
+      const ids = group.map((p) => library.indexOf(p));
+      // Fits the seed at 90 but the other three at 0 (average 22): not in.
+      if (ids.includes(5) && ids.length >= 4) {
+        // Only reachable when 5 itself is the seed or joined an early pair.
+        expect(ids.filter((i) => i < 5).length).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
   it('asks the whole group, not just the seed: a newcomer must fit everyone', () => {
     // 0 is close to 1 and 2, but 1 and 2 are strangers to each other.
     const library = [portrait('a'), portrait('b'), portrait('c')];

@@ -1,0 +1,27 @@
+[package]
+name = "lugn-photo-brain"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+license-file = "../../../LICENSE"
+description = "Kuffe's photo brain: stores the album's full-size pictures, runs the models and clusters, and hands BrunoCAM the result (docs/PHOTO-BRAIN.md)"
+
+[lib]
+name = "photo_brain"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lugn-photo-brain"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1
