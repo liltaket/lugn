@@ -17,6 +17,8 @@ pub mod infer;
 pub mod localtime;
 pub mod people;
 pub mod places;
+pub mod publish;
+pub mod service;
 pub mod store;
 
 #[cfg(test)]
