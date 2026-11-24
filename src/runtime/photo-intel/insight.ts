@@ -27,6 +27,9 @@ import {
   type MoveTarget,
   type PeopleLabels,
   type PeopleView,
+  type ReviewPerson,
+  type ReviewPhoto,
+  type ReviewView,
 } from './people.js';
 
 /** A cached picture as the intelligence sees it. */
@@ -401,6 +404,20 @@ export class PhotoInsight {
     this.people.merge(fromId, intoId);
     this.changed();
   }
+  setFaceBox(faceId: string, box: number[] | null): void {
+    this.people.setFaceBox(faceId, box);
+    this.changed();
+  }
+  skipPhoto(photoId: string, skip: boolean): void {
+    this.people.skipPhoto(photoId, skip);
+    this.changed();
+  }
+  review(): ReviewView {
+    return this.people.review();
+  }
+  photoReview(photoId: string): { people: ReviewPerson[]; photo: ReviewPhoto } {
+    return this.people.photoReview(photoId);
+  }
 
   /** A square crop of one face for the panel; null if it is not known. */
   async faceCrop(faceId: string): Promise<Uint8Array | null> {
@@ -414,7 +431,7 @@ export class PhotoInsight {
       const width = meta.width ?? 0;
       const height = meta.height ?? 0;
       if (width <= 0 || height <= 0) return null;
-      const { x, y, w, h } = ref.face;
+      const { x, y, w, h } = this.people.faceBox(faceId) ?? ref.face;
       const side = Math.max(w * width, h * height) * (1 + 2 * CROP_MARGIN);
       const cx = (x + w / 2) * width;
       const cy = (y + h / 2) * height;

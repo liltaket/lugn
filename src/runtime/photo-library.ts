@@ -25,6 +25,9 @@ import type {
   MoveTarget,
   PeopleLabels,
   PeopleView,
+  ReviewPerson,
+  ReviewPhoto,
+  ReviewView,
 } from './photo-intel/people.js';
 import type { PhotoExtras, Trip } from './photo-intel/grouping.js';
 
@@ -99,6 +102,10 @@ export type PhotoPeopleApi = {
   setHidden(personId: string, hidden: boolean): void;
   moveFace(faceId: string, target: MoveTarget): void;
   merge(fromId: string, intoId: string): void;
+  setFaceBox(faceId: string, box: number[] | null): void;
+  skipPhoto(photoId: string, skip: boolean): void;
+  review(): ReviewView;
+  photoReview(photoId: string): { people: ReviewPerson[]; photo: ReviewPhoto };
   faceCrop(faceId: string): Promise<Uint8Array | null>;
   faceContext(faceId: string): { photoId: string } | null;
 };

@@ -676,6 +676,205 @@ describe('who is who', () => {
   });
 });
 
+// ── Reviewing faces picture by picture ──
+
+/** A picture with `count` faces side by side, none of them proposed. */
+const crowd = (photoNo: number, count: number, p?: string): FaceRef[] =>
+  Array.from({ length: count }, (_, i) =>
+    face(photoNo, p, i, { x: 0.05 + i * 0.12, w: 0.1 }),
+  );
+
+describe('reviewing faces picture by picture', () => {
+  it('lists the pictures with faces nobody placed, a crowd first and faces left to right', async () => {
+    const store = await peopleStore();
+    store.regroup([
+      ...crowd(1, 2),
+      ...crowd(2, 5),
+      ...[3, 4, 5].map((n) => face(n, 'n1')),
+    ]);
+    const review = store.review();
+    expect(review.photos.map((p) => p.id)).toEqual([PHOTO(2), PHOTO(1)]);
+    const xs = review.photos[0]!.faces.map((f) => f.x);
+    expect(xs).toEqual([...xs].sort((a, b) => a - b));
+    expect(review.photos[0]!.faces.every((f) => f.state === 'open')).toBe(true);
+    // A picture whose faces all have somebody is not waiting for anybody.
+    expect(review.photos.some((p) => p.id === PHOTO(3))).toBe(false);
+    // ...but it can be opened to look at, and shows who each face is.
+    const opened = store.photoReview(PHOTO(3));
+    expect(opened.photo.faces[0]).toMatchObject({
+      state: 'person',
+      auto: true,
+      moved: false,
+    });
+    expect(opened.people).toHaveLength(1);
+    expect(opened.people[0]?.sample).toBe(`${PHOTO(3)}.0`);
+    expect(() => store.photoReview(PHOTO(9))).toThrow(PeopleError);
+    expect(() => store.photoReview('nope')).toThrow(PeopleError);
+  });
+
+  it('says that none of a picture’s faces matter, keeps decided faces, and takes it back', async () => {
+    const path = join(await tempDir(), 'people.json');
+    const store = await peopleStore(path);
+    const faces = [...crowd(1, 6), ...[2, 3, 4].map((n) => face(n, 'n1'))];
+    store.regroup(faces);
+    const anna = personOf(store, 2)!;
+    store.moveFace(`${PHOTO(1)}.2`, { person: anna });
+    store.skipPhoto(PHOTO(1), true);
+    // The face somebody placed stays; the other five do not count.
+    const view = store.view();
+    expect(view.ignored).toBe(5);
+    expect(view.unassigned.count).toBe(0);
+    expect(view.skippedPhotos).toEqual([PHOTO(1)]);
+    expect(store.peopleByPhoto().get(PHOTO(1))).toEqual([anna]);
+    expect(store.review().photos).toEqual([]);
+    expect(store.photoReview(PHOTO(1)).photo).toMatchObject({ skipped: true });
+    // Kuffe is told the five are no example of anybody.
+    const decided = store.labels().decided;
+    expect(decided[`${PHOTO(1)}.0`]).toBeNull();
+    expect(decided[`${PHOTO(1)}.2`]).toBe(anna);
+    // It survives Kuffe sending the same faces again, and a restart.
+    store.regroup(faces);
+    await store.save();
+    const again = await peopleStore(path);
+    again.regroup(faces);
+    expect(again.view().ignored).toBe(5);
+    expect(again.review().photos).toEqual([]);
+    // Taking it back reopens exactly those faces.
+    again.skipPhoto(PHOTO(1), false);
+    expect(again.view().ignored).toBe(0);
+    expect(
+      again.review().photos[0]?.faces.filter((f) => f.state === 'open'),
+    ).toHaveLength(5);
+    expect(() => again.skipPhoto(PHOTO(9), true)).toThrow(PeopleError);
+  });
+
+  it('moves a box onto the real face and trusts nobody’s idea of the old one', async () => {
+    const path = join(await tempDir(), 'people.json');
+    const store = await peopleStore(path);
+    const faces = [...[1, 2, 3].map((n) => face(n, 'n1')), ...crowd(4, 2)];
+    store.regroup(faces);
+    const anna = personOf(store, 1)!;
+    const arm = `${PHOTO(1)}.0`;
+    // The detector put the box on an arm and called it Anna.
+    store.setFaceBox(arm, [0.7, 0.1, 0.15, 0.2]);
+    expect(personOf(store, 1)).toBeUndefined();
+    expect(store.photoReview(PHOTO(1)).photo.faces[0]).toMatchObject({
+      state: 'open',
+      moved: true,
+      x: 0.7,
+      y: 0.1,
+      w: 0.15,
+      h: 0.2,
+    });
+    expect(store.faceBox(arm)).toEqual({ x: 0.7, y: 0.1, w: 0.15, h: 0.2 });
+    expect(store.review().photos.map((p) => p.id)).toContain(PHOTO(1));
+    // Kuffe proposes Anna again for the arm; the moved box ignores that.
+    store.regroup(faces);
+    expect(personOf(store, 1)).toBeUndefined();
+    // The household says who is there; Kuffe is not told the arm is Anna.
+    store.moveFace(arm, { person: anna });
+    expect(personOf(store, 1)).toBe(anna);
+    expect(store.labels().decided[arm]).toBeNull();
+    expect(
+      store.view().people.find((p) => p.id === anna)?.samples[0],
+    ).toMatchObject({ x: 0.7 });
+    // Boxes are kept inside the picture, and a sliver is not a box.
+    store.setFaceBox(arm, [0.9, -1, 0.5, 2]);
+    expect(store.faceBox(arm)).toEqual({ x: 0.9, y: 0, w: 0.1, h: 1 });
+    expect(() => store.setFaceBox(arm, [0.5, 0.5, 0.001, 0.2])).toThrow(
+      PeopleError,
+    );
+    expect(() => store.setFaceBox(arm, [0.5, 0.5, Number.NaN, 0.2])).toThrow(
+      PeopleError,
+    );
+    expect(() => store.setFaceBox(arm, [0.5, 0.5, 0.2])).toThrow(PeopleError);
+    expect(() => store.setFaceBox('nope', null)).toThrow(PeopleError);
+    // It is remembered across a restart, and giving the box back restores the detector's.
+    store.setFaceBox(arm, [0.7, 0.1, 0.15, 0.2]);
+    await store.save();
+    const again = await peopleStore(path);
+    again.regroup(faces);
+    expect(again.faceBox(arm)).toEqual({ x: 0.7, y: 0.1, w: 0.15, h: 0.2 });
+    expect(personOf(again, 1)).toBe(anna);
+    again.setFaceBox(arm, null);
+    expect(again.faceBox(arm)).toEqual({ x: 0.4, y: 0.3, w: 0.2, h: 0.25 });
+    expect(again.labels().decided[arm]).toBe(anna);
+  });
+
+  it('puts a moved face with a person without an explicit decision back to the detector’s proposal when the box is given back', async () => {
+    const store = await peopleStore();
+    const faces = [1, 2, 3].map((n) => face(n, 'n1'));
+    store.regroup(faces);
+    const anna = personOf(store, 1)!;
+    store.setFaceBox(`${PHOTO(1)}.0`, [0.1, 0.1, 0.2, 0.2]);
+    expect(personOf(store, 1)).toBeUndefined();
+    store.setFaceBox(`${PHOTO(1)}.0`, null);
+    expect(personOf(store, 1)).toBe(anna);
+  });
+
+  it('files a face under a name, and takes a decision back', async () => {
+    const store = await peopleStore();
+    const faces = [...[1, 2, 3].map((n) => face(n, 'n1')), ...crowd(4, 3)];
+    store.regroup(faces);
+    const first = personOf(store, 1)!;
+    store.rename(first, 'Anna');
+    // An existing name is the same person, whatever the case.
+    store.moveFace(`${PHOTO(4)}.0`, { named: ' anna ' });
+    expect(personOf(store, 4)).toBe(first);
+    // A new name is a new, confirmed person.
+    store.moveFace(`${PHOTO(4)}.1`, { named: 'Erik' });
+    const erik = store.view().people.find((p) => p.name === 'Erik')!;
+    expect(erik).toMatchObject({ confirmed: true, faces: 1 });
+    // Nothing is filed under somebody who is hidden, just because of a name.
+    store.setHidden(erik.id, true);
+    store.moveFace(`${PHOTO(4)}.1`, { named: 'Erik' });
+    expect(
+      store.view().people.filter((p) => p.name === 'Erik' && !p.hidden),
+    ).toHaveLength(1);
+    const filed = store.photoReview(PHOTO(4)).photo.faces[1]!.person;
+    expect(filed).not.toBe(erik.id);
+    expect(filed).not.toBe(first);
+    expect(() => store.moveFace(`${PHOTO(4)}.2`, { named: '  ' })).toThrow(
+      PeopleError,
+    );
+    // "Open" says nobody looked: the face is as it was before the decision.
+    store.moveFace(`${PHOTO(4)}.1`, 'open');
+    expect(store.review().photos[0]?.faces[1]).toMatchObject({ state: 'open' });
+    store.moveFace(`${PHOTO(1)}.0`, 'none');
+    expect(store.view().ignored).toBe(1);
+    store.moveFace(`${PHOTO(1)}.0`, 'open');
+    expect(store.view().ignored).toBe(0);
+    expect(personOf(store, 1)).toBe(first);
+  });
+
+  it('keeps a moved box with its face when Kuffe numbers the faces differently', async () => {
+    const store = await peopleStore();
+    store.regroup([
+      face(1, undefined, 0, { x: 0.1 }),
+      face(1, undefined, 1, { x: 0.6 }),
+    ]);
+    store.moveFace(`${PHOTO(1)}.1`, 'new');
+    store.setFaceBox(`${PHOTO(1)}.1`, [0.62, 0.32, 0.2, 0.25]);
+    // The detector now lists the right-hand face first.
+    store.regroup([
+      face(1, undefined, 0, { x: 0.6 }),
+      face(1, undefined, 1, { x: 0.1 }),
+    ]);
+    expect(store.faceBox(`${PHOTO(1)}.0`)).toEqual({
+      x: 0.62,
+      y: 0.32,
+      w: 0.2,
+      h: 0.25,
+    });
+    expect(store.faceBox(`${PHOTO(1)}.1`)).toEqual({
+      x: 0.1,
+      y: 0.3,
+      w: 0.2,
+      h: 0.25,
+    });
+  });
+});
+
 // ── The photo brain's bundle ──
 
 const ID = (n: number): string => `img${String(n).padStart(21, '0')}`;

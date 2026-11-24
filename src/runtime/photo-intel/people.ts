@@ -52,12 +52,20 @@ type FaceDecision = {
    * when the faces of a picture are numbered differently (another detector).
    */
   box?: Box;
+  /**
+   * Where the household says the face really is, when the detector's box sat
+   * on an arm or a shoulder. The detector's own box stays in `box`: that is
+   * what a decision follows.
+   */
+  moved?: Box;
 };
 type PeopleFile = {
   version: 1;
   next: number;
   people: Record<string, PersonRecord>;
   faces: Record<string, FaceDecision>;
+  /** Pictures whose faces nobody cares about (a crowd, a street). */
+  skipped?: string[];
 };
 
 /** The household's decisions, for the photo brain to anchor on. */
@@ -72,6 +80,9 @@ export type PeopleLabels = {
 const PERSON_ID = /^p\d{1,6}$/;
 const NEW_GROUP = /^n\d{1,6}$/;
 const FACE_ID = /^[A-Za-z0-9_-]{24}\.\d{1,2}$/;
+const PHOTO_ID = /^[A-Za-z0-9_-]{24}$/;
+/** The smallest box a household may draw, as a fraction of the picture. */
+const MIN_BOX = 0.01;
 const MAX_NAME = 40;
 /** How much a decided face's box must overlap a face to be that face. */
 const SAME_FACE_IOU = 0.5;
@@ -85,13 +96,13 @@ export type FaceSample = {
   w: number;
   h: number;
 };
-const sampleOf = (face: FaceRef): FaceSample => ({
+const sampleOf = (face: FaceRef, moved?: Box): FaceSample => ({
   id: face.id,
   photoId: face.photoId,
-  x: face.face.x,
-  y: face.face.y,
-  w: face.face.w,
-  h: face.face.h,
+  x: moved ? moved[0] : face.face.x,
+  y: moved ? moved[1] : face.face.y,
+  w: moved ? moved[2] : face.face.w,
+  h: moved ? moved[3] : face.face.h,
 });
 
 export type PeopleView = {
@@ -107,9 +118,42 @@ export type PeopleView = {
     samples: FaceSample[];
   };
   ignored: number;
+  /** Pictures marked "none of these faces matter", most recent decisions last. */
+  skippedPhotos: string[];
 };
 
-export type MoveTarget = { person: string } | 'new' | 'none';
+/** One face in its picture, as the review shows it. */
+export type ReviewFace = FaceSample & {
+  /** `open`: nobody and nothing has placed it; `ignored`: it does not matter. */
+  state: 'open' | 'person' | 'ignored';
+  person: string | null;
+  /** The person is only the photo brain's proposal, not a household decision. */
+  auto: boolean;
+  /** The household moved the box from where the detector put it. */
+  moved: boolean;
+};
+export type ReviewPhoto = {
+  id: string;
+  /** Marked: none of this picture's faces matter. */
+  skipped: boolean;
+  /** Left to right. */
+  faces: ReviewFace[];
+};
+export type ReviewPerson = {
+  id: string;
+  name: string | null;
+  faces: number;
+  /** A face that shows them, for a thumbnail; null without faces. */
+  sample: string | null;
+};
+export type ReviewView = { people: ReviewPerson[]; photos: ReviewPhoto[] };
+
+/**
+ * Where a face goes. `open` takes the household's decision back; `named` is
+ * the person with that name (a new one if nobody has it).
+ */
+export type MoveTarget =
+  { person: string } | { named: string } | 'new' | 'none' | 'open';
 
 export class PeopleError extends Error {
   constructor(
@@ -140,7 +184,9 @@ function overlap(a: Box, b: Box): number {
 }
 const isHuman = (decision: FaceDecision | undefined): boolean =>
   decision !== undefined &&
-  (decision.person !== undefined || Boolean(decision.not?.length));
+  (decision.person !== undefined ||
+    Boolean(decision.not?.length) ||
+    decision.moved !== undefined);
 const numeric = (a: string, b: string): number =>
   a.localeCompare(b, 'en', { numeric: true });
 
@@ -155,6 +201,8 @@ export class PeopleStore {
   private byId = new Map<string, FaceRef>();
   /** Human decisions that sit on a face they were not made for (kept, not used). */
   private dormant = new Set<string>();
+  /** Pictures whose faces nobody cares about, unless a face was decided. */
+  private skipped = new Set<string>();
 
   constructor(
     private readonly path: string,
@@ -164,6 +212,7 @@ export class PeopleStore {
   async load(): Promise<void> {
     this.people.clear();
     this.decisions.clear();
+    this.skipped.clear();
     try {
       const parsed = JSON.parse(
         await readFile(this.path, 'utf8'),
@@ -196,8 +245,13 @@ export class PeopleStore {
           );
         const box = cleanBox(decision.box);
         if (box) kept.box = box;
+        const moved = cleanBox(decision.moved);
+        if (moved) kept.moved = moved;
         this.decisions.set(face, kept);
       }
+      for (const photo of parsed.skipped ?? [])
+        if (typeof photo === 'string' && PHOTO_ID.test(photo))
+          this.skipped.add(photo);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
         this.warn(
@@ -215,9 +269,13 @@ export class PeopleStore {
       faces: Object.fromEntries(
         [...this.decisions].filter(
           ([, d]) =>
-            d.person !== undefined || d.auto !== undefined || d.not?.length,
+            d.person !== undefined ||
+            d.auto !== undefined ||
+            d.not?.length ||
+            d.moved !== undefined,
         ),
       ),
+      ...(this.skipped.size > 0 ? { skipped: [...this.skipped] } : {}),
     };
     await mkdir(dirname(this.path), { recursive: true });
     const temporary = join(dirname(this.path), `.people.${process.pid}.tmp`);
@@ -282,6 +340,7 @@ export class PeopleStore {
         this.people.has(decision.person)
       )
         assignment.set(face.id, decision.person);
+      else if (this.skipped.has(face.photoId)) continue;
       else open.push(face);
     }
 
@@ -290,6 +349,9 @@ export class PeopleStore {
     for (const face of open) {
       const proposal = face.face.p;
       if (!proposal) continue;
+      // The proposal is about the box the detector drew; the household moved it.
+      if (!this.dormant.has(face.id) && this.decisions.get(face.id)?.moved)
+        continue;
       if (PERSON_ID.test(proposal)) {
         if (this.people.has(proposal) && !blocked(face, proposal))
           assignment.set(face.id, proposal);
@@ -393,12 +455,13 @@ export class PeopleStore {
     }
     for (const [from, to] of moves) {
       // The human part moves; the automatic memory stays with each face id.
-      const { person, not, box, auto } = this.decisions.get(from)!;
+      const { person, not, box, auto, moved } = this.decisions.get(from)!;
       const target = this.decisions.get(to)?.auto;
       this.decisions.set(to, {
         ...(person !== undefined ? { person } : {}),
         ...(not?.length ? { not } : {}),
         ...(box ? { box } : {}),
+        ...(moved ? { moved } : {}),
         ...(target ? { auto: target } : {}),
       });
       if (auto) this.decisions.set(from, { auto });
@@ -442,6 +505,18 @@ export class PeopleStore {
       if (decision.person !== undefined) decided[id] = decision.person;
       if (decision.auto) previous[id] = decision.auto;
       if (decision.not?.length) not[id] = [...decision.not];
+    }
+    // The detector's box on a face the household moved describes the wrong
+    // place (an arm, say), so it is no example of anybody; and a picture whose
+    // faces do not matter is no example either.
+    for (const face of this.faces) {
+      if (this.dormant.has(face.id)) continue;
+      const decision = this.decisions.get(face.id);
+      if (
+        decision?.moved ||
+        (decision?.person === undefined && this.skipped.has(face.photoId))
+      )
+        decided[face.id] = null;
     }
     return {
       schema: 1,
@@ -492,10 +567,7 @@ export class PeopleStore {
     const unassigned: FaceRef[] = [];
     let ignored = 0;
     for (const face of this.faces) {
-      if (
-        !this.dormant.has(face.id) &&
-        this.decisions.get(face.id)?.person === null
-      ) {
+      if (this.isIgnored(face)) {
         ignored += 1;
         continue;
       }
@@ -516,7 +588,7 @@ export class PeopleStore {
           ...person,
           faces: list.length,
           photos: new Set(list.map((f) => f.photoId)).size,
-          samples: [...list].sort(best).slice(0, 24).map(sampleOf),
+          samples: [...list].sort(best).slice(0, 24).map(this.sample),
         };
       })
       .sort(
@@ -529,14 +601,139 @@ export class PeopleStore {
       people,
       unassigned: {
         count: unassigned.length,
-        samples: [...unassigned].sort(best).slice(0, 60).map(sampleOf),
+        samples: [...unassigned].sort(best).slice(0, 60).map(this.sample),
       },
       ignored,
+      skippedPhotos: this.skippedPhotos(),
     };
+  }
+
+  /** A face as the panel shows it: where the household says it is. */
+  private readonly sample = (face: FaceRef): FaceSample =>
+    sampleOf(face, this.movedBox(face.id));
+
+  private movedBox(faceId: string): Box | undefined {
+    return this.dormant.has(faceId)
+      ? undefined
+      : this.decisions.get(faceId)?.moved;
+  }
+
+  /** The face is not wanted: said so, or its picture was marked and it was not decided. */
+  private isIgnored(face: FaceRef): boolean {
+    const decision = this.dormant.has(face.id)
+      ? undefined
+      : this.decisions.get(face.id);
+    return (
+      decision?.person === null ||
+      (decision?.person === undefined && this.skipped.has(face.photoId))
+    );
+  }
+
+  private skippedPhotos(): string[] {
+    const here = new Set(this.faces.map((f) => f.photoId));
+    return [...this.skipped].filter((id) => here.has(id)).slice(-60);
   }
 
   faceRef(faceId: string): FaceRef | undefined {
     return this.byId.get(faceId);
+  }
+
+  /** Where a face is: the household's box if it moved it, else the detector's. */
+  faceBox(
+    faceId: string,
+  ): { x: number; y: number; w: number; h: number } | undefined {
+    const ref = this.byId.get(faceId);
+    if (!ref) return undefined;
+    const moved = this.movedBox(faceId);
+    return moved
+      ? { x: moved[0], y: moved[1], w: moved[2], h: moved[3] }
+      : { x: ref.face.x, y: ref.face.y, w: ref.face.w, h: ref.face.h };
+  }
+
+  // ── Review: every face of a picture, in its picture ──
+
+  /** Pictures with a face nobody has placed, those with the most of them first. */
+  review(): ReviewView {
+    const byPhoto = new Map<string, FaceRef[]>();
+    for (const face of this.faces) {
+      const list = byPhoto.get(face.photoId) ?? [];
+      list.push(face);
+      byPhoto.set(face.photoId, list);
+    }
+    const photos: Array<{ photo: ReviewPhoto; open: number }> = [];
+    for (const [id, list] of byPhoto) {
+      const photo = this.reviewPhoto(id, list);
+      const open = photo.faces.filter((f) => f.state === 'open').length;
+      if (open > 0) photos.push({ photo, open });
+    }
+    photos.sort(
+      (a, b) => b.open - a.open || a.photo.id.localeCompare(b.photo.id),
+    );
+    return {
+      people: this.reviewPeople(),
+      photos: photos.map((p) => p.photo),
+    };
+  }
+
+  /** One picture with all its faces, for a face opened from the panel. */
+  photoReview(photoId: string): { people: ReviewPerson[]; photo: ReviewPhoto } {
+    const list = this.faces.filter((f) => f.photoId === photoId);
+    if (!PHOTO_ID.test(photoId) || list.length === 0)
+      throw new PeopleError('not_found', 'No such picture.');
+    return {
+      people: this.reviewPeople(),
+      photo: this.reviewPhoto(photoId, list),
+    };
+  }
+
+  private reviewPhoto(id: string, list: FaceRef[]): ReviewPhoto {
+    const faces = list
+      .map((ref): ReviewFace => {
+        const ignored = this.isIgnored(ref);
+        const person = ignored ? null : (this.assignment.get(ref.id) ?? null);
+        const decision = this.dormant.has(ref.id)
+          ? undefined
+          : this.decisions.get(ref.id);
+        return {
+          ...this.sample(ref),
+          state: ignored ? 'ignored' : person ? 'person' : 'open',
+          person,
+          auto: person !== null && decision?.person === undefined,
+          moved: decision?.moved !== undefined,
+        };
+      })
+      .sort(
+        (a, b) => a.x + a.w / 2 - (b.x + b.w / 2) || (a.id < b.id ? -1 : 1),
+      );
+    return { id, skipped: this.skipped.has(id), faces };
+  }
+
+  private reviewPeople(): ReviewPerson[] {
+    const counts = new Map<string, number>();
+    const best = new Map<string, { id: string; weight: number }>();
+    for (const face of this.faces) {
+      const person = this.assignment.get(face.id);
+      if (!person || this.isIgnored(face)) continue;
+      counts.set(person, (counts.get(person) ?? 0) + 1);
+      const weight =
+        face.face.score * (0.5 + 0.5 * face.face.front) * face.face.w;
+      if (weight > (best.get(person)?.weight ?? -1))
+        best.set(person, { id: face.id, weight });
+    }
+    return [...this.people.values()]
+      .filter((p) => !p.hidden && (p.name !== null || counts.has(p.id)))
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        faces: counts.get(p.id) ?? 0,
+        sample: best.get(p.id)?.id ?? null,
+      }))
+      .sort(
+        (a, b) =>
+          Number(b.name !== null) - Number(a.name !== null) ||
+          b.faces - a.faces ||
+          numeric(a.id, b.id),
+      );
   }
 
   // ── Corrections (every one is a human decision and is kept) ──
@@ -570,11 +767,25 @@ export class PeopleStore {
   moveFace(faceId: string, target: MoveTarget): { person: string | null } {
     if (!FACE_ID.test(faceId) || !this.byId.has(faceId))
       throw new PeopleError('not_found', 'No such face.');
+    if (target === 'open') {
+      // Takes the household's decision back, and with it the people the face
+      // was moved away from: the proposal and the grouping decide again, as
+      // if nobody had looked.
+      const decision = this.claim(faceId);
+      delete decision.person;
+      delete decision.not;
+      this.decisions.set(faceId, decision);
+      this.dirty = true;
+      this.regroup(this.faces);
+      return { person: this.assignment.get(faceId) ?? null };
+    }
     const before = this.assignment.get(faceId);
     let person: string | null;
     if (target === 'none') person = null;
     else if (target === 'new') {
       person = this.createPerson().id;
+    } else if ('named' in target) {
+      person = this.personNamed(target.named).id;
     } else {
       this.require(target.person);
       person = target.person;
@@ -591,6 +802,61 @@ export class PeopleStore {
     else this.assignment.delete(faceId);
     this.dirty = true;
     return { person };
+  }
+
+  /**
+   * Somebody who is called this (any case, and not hidden: a hidden person is
+   * out of sight, so nothing is filed under them by accident), or a new,
+   * confirmed person who is.
+   */
+  private personNamed(input: string): PersonRecord {
+    const name = cleanName(input);
+    if (!name) throw new PeopleError('invalid', 'Give the person a name.');
+    for (const person of this.people.values())
+      if (
+        !person.hidden &&
+        person.name?.toLocaleLowerCase('sv') === name.toLocaleLowerCase('sv')
+      )
+        return person;
+    const person = this.createPerson();
+    person.name = name;
+    person.confirmed = true;
+    return person;
+  }
+
+  /**
+   * Moves a face's box to where the face really is (the detector put it on an
+   * arm), or gives it back to the detector with `null`. The detector's idea of
+   * who it is described the old place, so the face is left for the household
+   * to place unless they already had.
+   */
+  setFaceBox(faceId: string, input: number[] | null): void {
+    if (!FACE_ID.test(faceId) || !this.byId.has(faceId))
+      throw new PeopleError('not_found', 'No such face.');
+    const moved = input === null ? null : clampBox(input);
+    if (input !== null && !moved)
+      throw new PeopleError('invalid', 'That is not a box.');
+    const decision = this.claim(faceId);
+    if (moved) decision.moved = moved;
+    else delete decision.moved;
+    this.decisions.set(faceId, decision);
+    this.dirty = true;
+    if (moved && decision.person === undefined) this.assignment.delete(faceId);
+    else if (!moved) this.regroup(this.faces);
+  }
+
+  /** "None of this picture's faces matter" (and the way back). */
+  skipPhoto(photoId: string, skip: boolean): void {
+    if (
+      !PHOTO_ID.test(photoId) ||
+      !this.faces.some((f) => f.photoId === photoId)
+    )
+      throw new PeopleError('not_found', 'No such picture.');
+    if (skip === this.skipped.has(photoId)) return;
+    if (skip) this.skipped.add(photoId);
+    else this.skipped.delete(photoId);
+    this.dirty = true;
+    this.regroup(this.faces);
   }
 
   merge(fromId: string, intoId: string): PersonRecord {
@@ -651,6 +917,20 @@ function cleanName(input: unknown): string | null {
   if (typeof input !== 'string') return null;
   const name = input.replace(/\s+/g, ' ').trim().slice(0, MAX_NAME);
   return name === '' ? null : name;
+}
+
+/** A box the household drew: kept inside the picture, and big enough to be one. */
+function clampBox(input: ArrayLike<number>): Box | undefined {
+  if (input.length !== 4) return undefined;
+  const [x0, y0, w0, h0] = Array.from(input, Number);
+  if (![x0, y0, w0, h0].every((n) => Number.isFinite(n))) return undefined;
+  const x = Math.min(Math.max(x0!, 0), 1);
+  const y = Math.min(Math.max(y0!, 0), 1);
+  const w = Math.min(w0!, 1 - x);
+  const h = Math.min(h0!, 1 - y);
+  if (w < MIN_BOX || h < MIN_BOX) return undefined;
+  const r = (n: number): number => Math.round(n * 10000) / 10000;
+  return [r(x), r(y), r(w), r(h)];
 }
 
 function cleanBox(input: unknown): Box | undefined {
