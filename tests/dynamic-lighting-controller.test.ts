@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SimulatedLightingAdapter } from '../src/adapters/simulated-lighting.js';
 import {
   DynamicLightingController,
+  type GameCoverSource,
   type PaletteSource,
 } from '../src/application/dynamic-lighting.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
@@ -61,6 +62,22 @@ class FakePalette implements PaletteSource {
   }
 }
 
+class FakeGameCovers implements GameCoverSource {
+  covers = new Map<string, readonly Rgb[]>();
+  private readonly listeners = new Set<() => void>();
+  current(appId: string) {
+    return this.covers.get(appId) ?? [];
+  }
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  set(appId: string, palette: readonly Rgb[]) {
+    this.covers.set(appId, palette);
+    for (const listener of this.listeners) listener();
+  }
+}
+
 async function fixture(over: { settleMs?: number } = {}) {
   const clock = new FakeClock(Date.parse('2026-11-22T19:00:00Z'));
   const adapter = new SimulatedLightingAdapter(clock);
@@ -81,6 +98,7 @@ async function fixture(over: { settleMs?: number } = {}) {
     personCount: 1,
   });
   const palette = new FakePalette();
+  const games = new FakeGameCovers();
   const decisions: string[] = [];
   const listed: { blockers: Array<{ app: string; reason: string }> | null } = {
     blockers: null,
@@ -89,6 +107,7 @@ async function fixture(over: { settleMs?: number } = {}) {
     clock,
     engine,
     palette,
+    gameCover: games,
     config: DynamicLightingConfigSchema.parse({
       targets: {
         'lighting.ceiling': 'main',
@@ -144,6 +163,7 @@ async function fixture(over: { settleMs?: number } = {}) {
     clock,
     engine,
     palette,
+    games,
     controller,
     decisions,
     computer,
@@ -561,6 +581,75 @@ describe('dynamic lighting controller', () => {
       });
       await f.advance(2000);
       expect(f.desired('lighting.strip').rgb).toEqual([0, 60, 255]);
+    });
+
+    describe('game cover', () => {
+      const playing = {
+        activeApplication: { id: 'cs2', resourceClass: 'steam_app_730' },
+      };
+
+      it('dims the room for a full-screen game and colours the accent lamp with its cover', async () => {
+        const f = await fixture();
+        f.computer('gaming', { ...playing, fullscreen: true });
+        await f.engine.activateScene('scene.adaptive', user);
+        await f.advance(5000);
+        expect(f.desired('lighting.strip').rgb).toBeUndefined();
+        expect(f.desired('lighting.ceiling').power).toBe(false);
+
+        f.games.set('730', [[240, 120, 20]]);
+        await f.advance(1500);
+        expect(f.desired('lighting.strip')).toMatchObject({
+          power: true,
+          brightness: 6,
+          rgb: [240, 120, 20],
+        });
+        expect(f.controller.snapshot().evidence).toContain(
+          'Accent lamps carry the colours of the game cover',
+        );
+      });
+
+      it('lets the game cover win over background music', async () => {
+        const f = await fixture();
+        f.computer('gaming', { ...playing, fullscreen: true });
+        f.palette.set(true, [[0, 60, 255]]);
+        await f.engine.activateScene('scene.adaptive', user);
+        await f.advance(100);
+        f.games.set('730', [[240, 120, 20]]);
+        await f.advance(1500);
+        expect(f.desired('lighting.strip').rgb).toEqual([240, 120, 20]);
+      });
+
+      it('keeps the cover through a short alt-tab and drops it afterwards', async () => {
+        const f = await fixture();
+        f.computer('gaming', { ...playing, fullscreen: true });
+        await f.engine.activateScene('scene.adaptive', user);
+        f.games.set('730', [[240, 120, 20]]);
+        await f.advance(5000);
+        f.computer('desktop', {
+          activeApplication: { id: 'firefox', resourceClass: 'firefox' },
+        });
+        await f.advance(2000);
+        expect(f.desired('lighting.strip').rgb).toEqual([240, 120, 20]);
+        for (let i = 0; i < 7; i++) await f.advance(2000);
+        expect(f.desired('lighting.strip').rgb).toBeUndefined();
+      });
+
+      it('ignores a game that is not a Steam game, and a Musik scene', async () => {
+        const f = await fixture();
+        f.games.set('730', [[240, 120, 20]]);
+        f.computer('gaming', {
+          activeApplication: { id: 'x', resourceClass: 'lutris' },
+          fullscreen: true,
+        });
+        await f.engine.activateScene('scene.adaptive', user);
+        await f.advance(5000);
+        expect(f.desired('lighting.strip').rgb).toBeUndefined();
+
+        f.computer('gaming', { ...playing, fullscreen: true });
+        await f.engine.activateScene('scene.music', user);
+        await f.advance(5000);
+        expect(f.desired('lighting.strip').rgb).toBeUndefined();
+      });
     });
   });
 });

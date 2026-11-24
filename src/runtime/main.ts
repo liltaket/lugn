@@ -14,6 +14,7 @@ import { IntelligenceSettingsStore } from './intelligence-settings-store.js';
 import { IntelligenceApi } from './intelligence-api.js';
 import { createComputerIntelligenceRuntime } from './computer-intelligence-runtime.js';
 import { ArtworkPaletteService } from './artwork-palette-service.js';
+import { SteamCoverPaletteService } from './steam-cover-palette-service.js';
 import { DynamicLightingController } from '../application/dynamic-lighting.js';
 import { CompositeMusicAdapter } from '../adapters/composite-music.js';
 import { HomeAssistantMusicAdapter } from '../adapters/home-assistant-music.js';
@@ -715,6 +716,10 @@ export async function startRuntime(
         observationTrusted: (target) => isMusicObservationTrusted(target),
       })
     : undefined;
+  // A game's cover colours the adaptive mode's accent lamps (public Steam CDN).
+  const gameCoverPalette = config.dynamicLighting?.gameCovers
+    ? new SteamCoverPaletteService()
+    : undefined;
   const dynamicLighting =
     config.dynamicLighting && artworkPalette
       ? new DynamicLightingController({
@@ -722,6 +727,7 @@ export async function startRuntime(
           engine,
           config: config.dynamicLighting,
           palette: artworkPalette,
+          ...(gameCoverPalette ? { gameCover: gameCoverPalette } : {}),
           idleBlockers: (id) => {
             const snapshot = displayAdapters.get(id)?.getSnapshot();
             if (!snapshot?.fresh) return null;
@@ -1338,6 +1344,7 @@ export async function startRuntime(
     photoLibrary?.dispose();
     dynamicLighting?.dispose();
     artworkPalette?.dispose();
+    gameCoverPalette?.dispose();
     cameraMedia?.dispose();
     cameraService?.dispose();
     artwork?.dispose();
@@ -1386,6 +1393,7 @@ export async function startRuntime(
       photoLibrary?.dispose();
       dynamicLighting?.dispose();
       artworkPalette?.dispose();
+      gameCoverPalette?.dispose();
       cameraMedia?.dispose();
       cameraService?.dispose();
       artwork?.dispose();

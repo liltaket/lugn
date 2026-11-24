@@ -6,6 +6,7 @@ import {
   blockersShowVideo,
   planDynamicLighting,
   sameDynamicValues,
+  steamAppIdFromResourceClass,
   type DynamicComputerInput,
   type DynamicInputs,
   type DynamicLightingConfig,
@@ -18,6 +19,12 @@ import type { LugnEngine } from './lugn-engine.js';
 /** Supplies what is playing and the colours of its artwork, without blocking. */
 export type PaletteSource = {
   current(state: RoomState): { playing: boolean; palette: readonly Rgb[] };
+  subscribe(listener: () => void): () => void;
+};
+
+/** Supplies the colours of a game's cover without blocking; empty until known. */
+export type GameCoverSource = {
+  current(appId: string): readonly Rgb[];
   subscribe(listener: () => void): () => void;
 };
 
@@ -44,6 +51,8 @@ export type DynamicLightingOptions = {
   engine: LugnEngine;
   config: DynamicLightingConfig;
   palette: PaletteSource;
+  /** Cover colours of the running game; without it games do not colour the lamps. */
+  gameCover?: GameCoverSource;
   /** Receives one line each time the controller's decision changes. */
   onDecision?: (message: string) => void;
 };
@@ -73,6 +82,11 @@ export class DynamicLightingController {
     palette: readonly Rgb[];
     at: number;
   } | null = null;
+  private lastGame: {
+    appId: string;
+    palette: readonly Rgb[];
+    at: number;
+  } | null = null;
   private sceneRevision = -1;
   /** Lamps that may still hold a value this controller put there. */
   private readonly driven = new Set<string>();
@@ -96,6 +110,8 @@ export class DynamicLightingController {
       options.engine.stream.subscribe(() => this.observe()),
       options.palette.subscribe(() => this.observe()),
     );
+    if (options.gameCover)
+      this.unsubscribe.push(options.gameCover.subscribe(() => this.observe()));
     this.observe();
   }
 
@@ -146,6 +162,7 @@ export class DynamicLightingController {
       this.committed = null;
       this.candidate = null;
       this.lastMusic = null;
+      this.lastGame = null;
       this.sceneRevision = state.lighting.sceneRevision;
     }
 
@@ -154,13 +171,26 @@ export class DynamicLightingController {
       this.options.palette.current(state),
       clock.monotonicNow(),
     );
+    const computer = this.computerInput(state);
+    // Only the adaptive mode follows a game; Musik is about the music alone.
+    const game =
+      kind === 'adaptive'
+        ? this.gameWithGrace(
+            computer?.activity === 'gaming'
+              ? (computer.steamAppId ?? null)
+              : null,
+            clock.monotonicNow(),
+          )
+        : [];
     const inputs: DynamicInputs = {
       roomOccupied:
         state.presence.state === 'occupied' &&
         state.presence.home.state !== 'away',
-      computer: this.computerInput(state),
-      palette: music.palette,
+      computer,
+      // The game on screen outranks background music for the accent colours.
+      palette: game.length > 0 ? game : music.palette,
       musicPlaying: music.playing,
+      ...(game.length > 0 ? { gameCover: true } : {}),
     };
     const raw = planDynamicLighting(kind, inputs, config);
 
@@ -231,6 +261,31 @@ export class DynamicLightingController {
     }
     this.lastMusic = null;
     return music;
+  }
+
+  /**
+   * The cover colours of the focused Steam game. Alt-tabbing out of the game
+   * for a few seconds keeps them, so the lamps do not blink to white and back.
+   */
+  private gameWithGrace(appId: string | null, now: number): readonly Rgb[] {
+    const source = this.options.gameCover;
+    if (!source || !this.options.config.gameCovers) return [];
+    if (appId) {
+      const palette = source.current(appId);
+      if (palette.length > 0) {
+        this.lastGame = { appId, palette, at: now };
+        return palette;
+      }
+    }
+    const last = this.lastGame;
+    if (last && (appId === null || appId === last.appId)) {
+      if (now - last.at < paletteGraceMs) {
+        this.armWake(paletteGraceMs - (now - last.at) + 50);
+        return last.palette;
+      }
+    }
+    this.lastGame = null;
+    return [];
   }
 
   private async apply(
@@ -397,6 +452,12 @@ export class DynamicLightingController {
       idle,
       fullscreen: observation.observed.fullscreen,
       activity,
+      steamAppId:
+        activity === 'gaming'
+          ? steamAppIdFromResourceClass(
+              observation.observed.activeApplication?.resourceClass,
+            )
+          : null,
       idleForMs:
         this.idleSince === null ? null : clock.monotonicNow() - this.idleSince,
     };
@@ -438,6 +499,7 @@ export class DynamicLightingController {
     this.committed = null;
     this.candidate = null;
     this.lastMusic = null;
+    this.lastGame = null;
     this.idleSince = null;
     this.sceneRevision = -1;
     this.lastLogged = '';

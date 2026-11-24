@@ -43,6 +43,11 @@ export const DynamicLightingConfigSchema = z
     musicBrightness: z.number().int().min(10).max(100).default(70),
     /** Lowest spacing between two commands to the same lamp. */
     minChangeIntervalMs: z.number().int().min(1_000).max(60_000).default(5_000),
+    /**
+     * Let a Steam game's cover colour the accent lamps in the adaptive mode.
+     * Lugn fetches the public cover image from Steam's CDN, once per game.
+     */
+    gameCovers: z.boolean().default(true),
   })
   .strict();
 export type DynamicLightingConfig = z.infer<typeof DynamicLightingConfigSchema>;
@@ -58,7 +63,17 @@ export type DynamicComputerInput = {
   activity: ComputerActivityClass;
   /** How long the computer has reported idle, or null if it is not idle. */
   idleForMs: number | null;
+  /** Steam app id of the focused game window, when the agent reports one. */
+  steamAppId?: string | null;
 };
+
+/** `steam_app_620` is how Steam games (Proton and native) name their window class. */
+export function steamAppIdFromResourceClass(
+  resourceClass: string | null | undefined,
+): string | null {
+  const match = /^steam_app_(\d{1,10})$/.exec(resourceClass ?? '');
+  return match && Number(match[1]) > 0 ? match[1]! : null;
+}
 
 /**
  * True when PowerDevil lists an application holding the machine awake for
@@ -85,6 +100,8 @@ export type DynamicInputs = {
   /** Vivid artwork colours of the playing track; empty when none are known. */
   palette: readonly Rgb[];
   musicPlaying: boolean;
+  /** True when `palette` is the colours of the running game's cover, not of the music. */
+  gameCover?: boolean;
 };
 
 /** A lamp setting, or `release` to hand the lamp back to the scene's own look. */
@@ -99,6 +116,7 @@ export type DynamicPlan = {
 };
 
 const ARTWORK_EVIDENCE = 'Accent lamps carry the artwork colours';
+const GAME_COVER_EVIDENCE = 'Accent lamps carry the colours of the game cover';
 
 export function classifySituation(
   inputs: DynamicInputs,
@@ -252,7 +270,8 @@ export function adaptivePlan(
       targets: Object.fromEntries(roles.map(([target]) => [target, 'release'])),
     };
   const colours = inputs.palette;
-  const following = inputs.musicPlaying && colours.length > 0;
+  const following =
+    (inputs.musicPlaying || inputs.gameCover === true) && colours.length > 0;
   const accentBrightness =
     situation === 'cinema'
       ? config.cinemaBrightness
@@ -290,8 +309,12 @@ export function adaptivePlan(
     situation,
     reason,
     evidence: [
-      ...evidence.filter((line) => line !== ARTWORK_EVIDENCE),
-      ...(following ? [ARTWORK_EVIDENCE] : []),
+      ...evidence.filter(
+        (line) => line !== ARTWORK_EVIDENCE && line !== GAME_COVER_EVIDENCE,
+      ),
+      ...(following
+        ? [inputs.gameCover === true ? GAME_COVER_EVIDENCE : ARTWORK_EVIDENCE]
+        : []),
     ],
     targets,
   };
