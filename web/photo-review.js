@@ -113,7 +113,7 @@ export function createReview({ call, onChange, onClose }) {
       finder: false,
       pick: 0,
       choices: [],
-      inflight: 0,
+      pending: new Map(),
       chain: Promise.resolve(),
       decided: 0,
       done: false,
@@ -203,6 +203,8 @@ export function createReview({ call, onChange, onClose }) {
 
   function onKey(event) {
     if (!state || event.defaultPrevented || !dialog().open) return;
+    // A key held down is not a decision per face.
+    if (event.repeat) return;
     if (state.finder) return;
     const target = event.target;
     // A button or a field that has the focus keeps Space and Enter.
@@ -280,6 +282,8 @@ export function createReview({ call, onChange, onClose }) {
     person: face.person,
     auto: face.auto,
     label: face.label ?? null,
+    // Ignored because the whole picture is, not because somebody said so.
+    viaPhoto: Boolean(photoOf(state.at.photoId)?.skipped),
   });
 
   function decide(choice) {
@@ -392,32 +396,40 @@ export function createReview({ call, onChange, onClose }) {
 
   // ── Talking to Lugn ──
 
-  /** One request at a time, in order; the last answer is the truth. */
+  /**
+   * One request at a time, in order. A picture takes its answer from the last
+   * request made in it: an earlier answer would undo what was chosen since.
+   */
   function post(path, body, photoId) {
     const mine = state;
-    mine.inflight += 1;
+    mine.pending.set(photoId, (mine.pending.get(photoId) ?? 0) + 1);
+    const settle = () =>
+      mine.pending.set(photoId, (mine.pending.get(photoId) ?? 1) - 1);
     mine.chain = mine.chain.then(async () => {
+      let reply = null;
       try {
-        const reply = await call(path, body);
-        mine.inflight -= 1;
-        onChange(reply);
-        if (state === mine && mine.inflight === 0 && reply.review)
-          apply(reply.review);
+        reply = await call(path, body);
       } catch {
-        mine.inflight -= 1;
+        settle();
         if (state !== mine) return;
         note('Ändringen gick inte att spara. Bilden läses om.', 'warn');
         try {
-          apply(await call(`/photos/${photoId}.json`));
+          apply(await call(`/photos/${photoId}.json`), true);
         } catch {
           /* the note above says it */
         }
+        return;
       }
+      settle();
+      onChange(reply);
+      if (state === mine && reply.review)
+        apply(reply.review, mine.pending.get(photoId) === 0);
     });
   }
 
-  function apply(review) {
-    state.photos.set(review.photo.id, review.photo);
+  /** The picture is only taken over when nothing newer is on its way for it. */
+  function apply(review, picture) {
+    if (picture) state.photos.set(review.photo.id, review.photo);
     state.people = review.people;
     keepSlots();
     if (state.drag) state.stale = true;

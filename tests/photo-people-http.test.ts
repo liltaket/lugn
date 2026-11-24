@@ -189,6 +189,19 @@ describe('the photo people panel API', () => {
     expect(Array.from(new Uint8Array(await crop.arrayBuffer()))).toEqual(
       Array.from(JPEG),
     );
+    // A crop is checked each time (its box can be moved); an unchanged one is not sent again.
+    expect(crop.headers.get('cache-control')).toBe('private, no-cache');
+    const etag = crop.headers.get('etag')!;
+    expect(etag).toMatch(/^"[\w-]+"$/);
+    const again = await fetch(`${base}/ui/api/photo-people/faces/${FACE}.jpg`, {
+      headers: { ...headers, 'If-None-Match': etag },
+    });
+    expect(again.status).toBe(304);
+    const picture = await fetch(
+      `${base}/ui/api/photo-people/photos/${PHOTO}.jpg`,
+      { headers },
+    );
+    expect(picture.headers.get('cache-control')).toBe('private, max-age=3600');
     expect(
       (
         await fetch(

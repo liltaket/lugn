@@ -240,8 +240,9 @@ export function guess(choice, people = []) {
  * proposed is not a decision, so it goes back to nobody having looked.
  */
 export function undoBody(before) {
-  if (before.state === 'ignored') return { none: true };
-  if (before.state === 'person' && !before.auto)
+  if (before.state === 'ignored' && !before.viaPhoto) return { none: true };
+  // A person who is not known yet (a guess before the answer) has no id to go back to.
+  if (before.state === 'person' && !before.auto && before.person)
     return { person: before.person };
   return { open: true };
 }

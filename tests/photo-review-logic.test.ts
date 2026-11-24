@@ -347,5 +347,18 @@ describe('deciding and taking it back', () => {
     expect(
       logic.undoBody({ state: 'open', person: null, auto: false }),
     ).toEqual({ open: true });
+    // Ignored because the whole picture is: back to what the picture says.
+    expect(
+      logic.undoBody({
+        state: 'ignored',
+        person: null,
+        auto: false,
+        viaPhoto: true,
+      } as never),
+    ).toEqual({ open: true });
+    // A guess before the answer has no person to go back to.
+    expect(
+      logic.undoBody({ state: 'person', person: null, auto: false }),
+    ).toEqual({ open: true });
   });
 });

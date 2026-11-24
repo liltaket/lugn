@@ -18,7 +18,12 @@ import {
   type MusicVolumeSettingsStore,
   MusicVolumeSettingsError,
 } from './music-volume-settings-store.js';
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 
 import { readFileSync } from 'node:fs';
 import {
@@ -429,13 +434,27 @@ export class LugnHttpServer {
         sendJson(response, 404, { error: 'not_found' });
         return true;
       }
-      response.writeHead(200, {
-        'content-type': 'image/jpeg',
-        'content-length': body.byteLength,
-        'cache-control': 'private, max-age=3600',
+      const headers: Record<string, string | number> = {
         'x-content-type-options': 'nosniff',
         'cross-origin-resource-policy': 'same-origin',
         'content-security-policy': "default-src 'none'; sandbox",
+      };
+      if (face) {
+        // A face crop changes when the household moves its box, so it is
+        // checked each time (a small answer on the home network) rather than kept.
+        const tag = `"${createHash('sha1').update(body).digest('base64url')}"`;
+        headers['etag'] = tag;
+        headers['cache-control'] = 'private, no-cache';
+        if (request.headers['if-none-match'] === tag) {
+          response.writeHead(304, headers);
+          response.end();
+          return true;
+        }
+      } else headers['cache-control'] = 'private, max-age=3600';
+      response.writeHead(200, {
+        ...headers,
+        'content-type': 'image/jpeg',
+        'content-length': body.byteLength,
       });
       response.end(body);
       return true;
