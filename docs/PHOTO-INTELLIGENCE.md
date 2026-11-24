@@ -157,6 +157,45 @@ picture whose box overlaps by half or more, and is kept unused while no face
 matches. Decisions made before boxes were kept take their boxes once from the
 old `analysis.json`, if it is still there.
 
+### Reviewing faces
+
+"Granska med tangentbordet" (under "Ansikten utan person") walks through every
+picture that has a face nobody has placed, a crowd first, one picture at a time
+with all its faces drawn over it. Pressing a face in a person's card opens the
+same view on that picture. Everything can be done from the keyboard:
+
+| Key      | Does                                                             |
+| -------- | ---------------------------------------------------------------- |
+| `1`–`9`  | the face is that person (the numbers stay put for the whole run) |
+| `/`, `⏎` | type a name: finds a person, or makes a new one with that name   |
+| `N`      | a new, unnamed person                                            |
+| `X`      | this face does not matter                                        |
+| `A`      | none of this picture's faces matter (pressed again: they do)     |
+| `S`, `␣` | skip to the next face nobody has placed                          |
+| `←` `→`  | the previous / next face in the picture; `↑` `↓` the picture     |
+| `Z`      | undo, as far back as the run goes                                |
+| `R`      | give a moved box back to the detector                            |
+
+With the mouse, a box is dragged onto the real face when the detector put it on
+an arm, and a corner resizes it. A moved box is the household's: the detector's
+idea of who it was is dropped (the face waits to be placed, unless somebody had
+already placed it), the picture and the panel use the moved box, and Kuffe is told
+that the detector's own box is not an example of anybody, since it sits in the
+wrong place. A box can be given back with `R`. Nothing is recomputed from a moved
+box; it is a decision, not a new detection.
+
+"None of this picture's faces matter" is kept per picture, not as a decision per
+face, so it also covers faces Kuffe finds later and can be undone: faces the
+household placed on somebody in that picture stay theirs, everything else in it
+is left out of people, of the groups of pictures, and (as "not a person") of what
+Kuffe anchors on. The pictures are listed under "Bilder där ansiktena inte spelar
+roll" in the panel, where tapping one opens it to take them back.
+
+The review reads `GET /ui/api/photo-people/review` (the pictures waiting, and the
+people with a thumbnail) and `GET …/photos/<id>.json` (one picture). Each
+correction (`POST …/faces/<id>` with `person`, `named`, `new`, `none`, `open` or
+`box`; `POST …/photos/<id>` with `skip`) answers with the picture it was made in.
+
 ## Operations
 
 - `photoFrame.intelligence`: `enabled` (default true) and `home`
