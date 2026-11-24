@@ -634,6 +634,26 @@ describe('dynamic lighting controller', () => {
         expect(f.desired('lighting.strip').rgb).toBeUndefined();
       });
 
+      it('counts the alt-tab grace from the moment the game is lost, not from the last heartbeat', async () => {
+        const f = await fixture();
+        f.computer('gaming', { ...playing, fullscreen: true });
+        await f.engine.activateScene('scene.adaptive', user);
+        f.games.set('730', [[240, 120, 20]]);
+        await f.advance(1500);
+        // Steady play: the agent only repeats the state every 30 s.
+        for (let i = 0; i < 4; i++) {
+          await f.advance(30_000);
+          f.computer('gaming', { ...playing, fullscreen: true });
+          await f.advance(100);
+        }
+        await f.advance(29_000);
+        f.computer('desktop', {
+          activeApplication: { id: 'firefox', resourceClass: 'firefox' },
+        });
+        await f.advance(1500);
+        expect(f.desired('lighting.strip').rgb).toEqual([240, 120, 20]);
+      });
+
       it('ignores a game that is not a Steam game, and a Musik scene', async () => {
         const f = await fixture();
         f.games.set('730', [[240, 120, 20]]);

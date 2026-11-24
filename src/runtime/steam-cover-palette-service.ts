@@ -68,16 +68,26 @@ export class SteamCoverPaletteService implements GameCoverSource {
   private async load(appId: string): Promise<void> {
     this.loading.add(appId);
     try {
+      let decoded = false;
       for (const image of IMAGES) {
         const asset = await this.fetchImage(`${CDN}/${appId}/${image}`);
         if (!asset) continue;
-        // A decoded cover without colour (monochrome) is remembered as "none".
-        this.remember(appId, paletteFromArtwork(asset));
+        decoded = true;
+        const palette = paletteFromArtwork(asset);
+        // A grey or dark portrait cover may still sit next to a colourful header.
+        if (palette.length === 0) continue;
+        this.remember(appId, palette);
         this.failedAt.delete(appId);
         this.notify();
         return;
       }
-      this.failedAt.set(appId, this.clock.monotonicNow());
+      if (decoded) {
+        // Every image was real but without colour: remembered as "none".
+        this.remember(appId, []);
+        this.failedAt.delete(appId);
+      } else {
+        this.failedAt.set(appId, this.clock.monotonicNow());
+      }
     } catch {
       this.failedAt.set(appId, this.clock.monotonicNow());
     } finally {

@@ -130,9 +130,12 @@ the cover colours at the desk level.
 
 - The game is recognised by the window class `steam_app_<id>` that the desktop
   agent already reports, together with the `gaming` activity. Games started
-  outside Steam have no cover and keep the plain dim warm white.
+  outside Steam have no cover: the accent lamps follow the music if any plays,
+  otherwise they keep the plain dim warm white (also while a cover is loading
+  or unavailable).
 - Lugn fetches the cover once per game from Steam's public CDN
-  (`library_600x900.jpg`, else `header.jpg`; JPEG only, at most 2 MB, 8 s
+  (`library_600x900.jpg`, else `header.jpg` when the portrait cover is missing or
+  has no colour; JPEG only, at most 2 MB, 8 s
   timeout) and remembers up to 32 games. The app id is digits only and goes
   into a fixed URL. This is the only outbound request the lighting modes make;
   set `"gameCovers": false` to switch it off.

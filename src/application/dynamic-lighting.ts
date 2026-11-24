@@ -85,7 +85,8 @@ export class DynamicLightingController {
   private lastGame: {
     appId: string;
     palette: readonly Rgb[];
-    at: number;
+    /** When the game was first missing (alt-tab); null while it is focused. */
+    lostAt: number | null;
   } | null = null;
   private sceneRevision = -1;
   /** Lamps that may still hold a value this controller put there. */
@@ -273,14 +274,17 @@ export class DynamicLightingController {
     if (appId) {
       const palette = source.current(appId);
       if (palette.length > 0) {
-        this.lastGame = { appId, palette, at: now };
+        this.lastGame = { appId, palette, lostAt: null };
         return palette;
       }
     }
     const last = this.lastGame;
     if (last && (appId === null || appId === last.appId)) {
-      if (now - last.at < paletteGraceMs) {
-        this.armWake(paletteGraceMs - (now - last.at) + 50);
+      // The grace runs from the moment the game was lost, not from the last
+      // heartbeat that still showed it.
+      last.lostAt ??= now;
+      if (now - last.lostAt < paletteGraceMs) {
+        this.armWake(paletteGraceMs - (now - last.lostAt) + 50);
         return last.palette;
       }
     }

@@ -111,8 +111,22 @@ describe('steam cover palette', () => {
     f.service.current('5');
     await flush();
     expect(f.service.current('5')).toEqual([]);
+    const asked = f.urls.length;
     f.service.current('5');
     await flush();
-    expect(f.urls).toHaveLength(1);
+    expect(f.urls).toHaveLength(asked);
+  });
+
+  it('uses the colourful header when the portrait cover has no colour', async () => {
+    const grey = Buffer.alloc(32 * 32 * 4, 128);
+    const f = fixture({
+      'library_600x900.jpg': {
+        body: jpeg.encode({ data: grey, width: 32, height: 32 }, 90).data,
+      },
+      'header.jpg': { body: orangeJpeg() },
+    });
+    f.service.current('7');
+    await flush();
+    expect(f.service.current('7')).toHaveLength(1);
   });
 });
