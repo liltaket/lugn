@@ -5,6 +5,7 @@ import {
   classifySituation,
   planDynamicLighting,
   sameDynamicValues,
+  steamAppIdFromResourceClass,
   type DynamicComputerInput,
   type DynamicInputs,
 } from '../src/core/dynamic-lighting.js';
@@ -295,5 +296,63 @@ describe('video from idle blockers', () => {
     expect(plan.reason).toBe('artwork_colours_dimmed');
     for (const target of Object.values(plan.targets))
       expect(target).toMatchObject({ brightness: config.cinemaBrightness });
+  });
+});
+
+describe('game cover', () => {
+  const game = (over: Partial<DynamicInputs> = {}) =>
+    planDynamicLighting(
+      'adaptive',
+      inputs({
+        computer: computer({ fullscreen: true, activity: 'gaming' }),
+        palette: [[200, 30, 30]],
+        gameCover: true,
+        ...over,
+      }),
+      config,
+    );
+
+  it('keeps the cinema room and dims the cover colours on the accent lamps', () => {
+    const plan = game();
+    expect(plan.situation).toBe('cinema');
+    expect(plan.targets['lighting.ceiling']).toEqual({ power: false });
+    expect(plan.targets['lighting.desk']).toEqual({ power: false });
+    for (const lamp of ['lighting.strip_a', 'lighting.strip_b'])
+      expect(plan.targets[lamp]).toEqual({
+        power: true,
+        brightness: config.cinemaBrightness,
+        rgb: [200, 30, 30],
+      });
+    expect(plan.evidence).toContain(
+      'Accent lamps carry the colours of the game cover',
+    );
+    // White-only decoration never takes a colour.
+    expect(plan.targets['lighting.under_bed']).not.toHaveProperty('rgb');
+  });
+
+  it('falls back to dim warm white while the cover is unknown', () => {
+    const plan = game({ palette: [], gameCover: false });
+    expect(plan.targets['lighting.strip_a']).toEqual({
+      power: true,
+      brightness: config.cinemaBrightness,
+      colorTemperature: 2200,
+    });
+  });
+
+  it('does not colour the Musik scene', () => {
+    const plan = planDynamicLighting(
+      'music',
+      inputs({ palette: [[200, 30, 30]], gameCover: true }),
+      config,
+    );
+    expect(plan.reason).toBe('nothing_to_follow');
+  });
+
+  it('reads the Steam app id from the window class', () => {
+    expect(steamAppIdFromResourceClass('steam_app_620')).toBe('620');
+    expect(steamAppIdFromResourceClass('steam_app_0')).toBeNull();
+    expect(steamAppIdFromResourceClass('steam_app_12/../x')).toBeNull();
+    expect(steamAppIdFromResourceClass('steam')).toBeNull();
+    expect(steamAppIdFromResourceClass(null)).toBeNull();
   });
 });

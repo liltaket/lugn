@@ -5,10 +5,10 @@ ordinary scenes with a `dynamic` marker. The scene's own lamp values stay its
 **fallback look**, and the room returns to that look whenever there is nothing
 to follow.
 
-| Preset   | `dynamic`  | Follows                                                                   |
-| -------- | ---------- | ------------------------------------------------------------------------- |
-| Musik    | `music`    | The artwork of the track that is playing.                                 |
-| Dynamisk | `adaptive` | The computer (full screen, idle, locked), the room and the music colours. |
+| Preset   | `dynamic`  | Follows                                                                                              |
+| -------- | ---------- | ---------------------------------------------------------------------------------------------------- |
+| Musik    | `music`    | The artwork of the track that is playing.                                                            |
+| Dynamisk | `adaptive` | The computer (full screen, idle, locked), the room, the music colours and the cover of a Steam game. |
 
 Musik replaces the former Party preset. While nothing plays it shows its own
 scene definition, so give it the animations you want for that case in the preset
@@ -63,6 +63,7 @@ Optional tuning (defaults shown):
 | `cinemaBrightness`    | `6`      | Accent brightness during full-screen video or games.    |
 | `musicBrightness`     | `70`     | Accent brightness when the music colours lead.          |
 | `minChangeIntervalMs` | `5000`   | Shortest spacing between two commands to one lamp.      |
+| `gameCovers`          | `true`   | Let a Steam game's cover colour the accent lamps.       |
 
 Every target must also be a mapped light in `homeAssistant.entities`, and
 `computerDeviceId` must be listed in `mqtt.computers`.
@@ -118,6 +119,33 @@ sensor says only whether the room is occupied and by how many people. A nearby
 position (at the desk or on the sofa) would need the finer network and
 placement work that is not in place, so the computer's activity stands in for it.
 
+## Game covers in Dynamisk
+
+While a Steam game is the focused window, the accent lamps take the colours of
+its cover, the same way they follow album art, and the room keeps the
+situation's own dimming. A full-screen game is `cinema`: main, desk and front
+lights off, decoration dim and warm, the bias light low, and the accent lamps
+in the cover's colours at `cinemaBrightness`. A game in a window is `desk`, with
+the cover colours at the desk level.
+
+- The game is recognised by the window class `steam_app_<id>` that the desktop
+  agent already reports, together with the `gaming` activity. Games started
+  outside Steam have no cover: the accent lamps follow the music if any plays,
+  otherwise they keep the plain dim warm white (also while a cover is loading
+  or unavailable).
+- Lugn fetches the cover once per game from Steam's public CDN
+  (`library_600x900.jpg`, else `header.jpg` when the portrait cover is missing or
+  has no colour; JPEG only, at most 2 MB, 8 s
+  timeout) and remembers up to 32 games. The app id is digits only and goes
+  into a fixed URL. This is the only outbound request the lighting modes make;
+  set `"gameCovers": false` to switch it off.
+- Colours are chosen exactly as for album art (one dominant colour shared by all
+  accent lamps). A failed lookup is retried after two minutes.
+- The game cover wins over background music while the game is focused. Musik
+  never follows games.
+- Alt-tabbing out of the game for under 8 s keeps the colours; after that the
+  lamps follow the music or fall back to white as before.
+
 ## Safety and manual control
 
 - Every change is an ordinary automatic lighting command through the room
@@ -138,8 +166,9 @@ Behavior is covered by deterministic tests against the real room engine with
 simulated lamps, a simulated computer and a fake artwork source: situation
 classification, per-role plans, settle and hysteresis, hand override, scene
 reselection, release to the scene, artwork decoding and the Party migration.
-These are software tests. No lamp has yet been observed following artwork or
-dimming for a film, and the thresholds above are starting values.
+These are software tests, and the Steam cover fetch is tested against a fake
+transport, never the real CDN. No lamp has yet been observed following artwork,
+a game cover or dimming for a film, and the thresholds above are starting values.
 
 ## Where to explore next
 
