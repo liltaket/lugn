@@ -666,6 +666,22 @@
     drawVolume(state.volume, state.canVolume);
     drawProgress(state.progress);
     drawSeek(state.progress, state.canSeek && state.active, state.title);
+    drawLyrics(state);
+  }
+
+  // The lyrics (lyrics-view.js) follow the same track and position as the
+  // controls beside them.
+  function drawLyrics(state) {
+    globalThis.lugnLyrics?.draw({
+      target: currentTarget(),
+      shown: musicShown,
+      ready: state.ready,
+      active: state.active,
+      title: state.title,
+      artist: state.artist,
+      progress: state.progress,
+      serverNow,
+    });
   }
 
   // Hem's choices in Hem's order, disabled and busy as there.
@@ -1429,12 +1445,15 @@
       barAnimation = null;
       barKey = '';
       drawProgress(musicState().progress);
+      drawLyrics(musicState());
     },
     sleep() {
       // Nothing runs while away: the bar stops with the page.
       barAnimation?.cancel();
       barAnimation = null;
       barKey = '';
+      globalThis.lugnLyrics?.sleep();
     },
   });
+  globalThis.lugnLyrics?.onToggle(drawMusic);
 })();

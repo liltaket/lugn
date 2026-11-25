@@ -47,6 +47,7 @@
   const buttons = {
     back: button('back'),
     next: button('next'),
+    lyrics: button('lyrics'),
     music: button('music'),
     cameras: button('cameras'),
   };
@@ -85,6 +86,11 @@
     hide(buttons.back, !controller.back);
     hide(buttons.next, !controller.actions?.next);
     hide(buttons.music, controller.id === 'music');
+    // Musik's own switch between the cover and the lyrics.
+    const lyrics = controller.id === 'music' ? globalThis.lugnLyrics : null;
+    hide(buttons.lyrics, !lyrics);
+    if (lyrics)
+      buttons.lyrics?.setAttribute('aria-pressed', String(lyrics.shown()));
     hide(buttons.cameras, controller.id === 'kameror' || !cameras);
     // A page may tint the selected scene with its own colour (Musik: the
     // cover's), as the three numbers of an rgb() colour.
@@ -236,7 +242,10 @@
     if (name === 'back') controller?.back?.();
     else if (name === 'next') controller?.actions?.next?.();
     else if (name === 'music') pagesApi.go('music');
-    else if (name === 'cameras') openCameras();
+    else if (name === 'lyrics') {
+      globalThis.lugnLyrics?.toggle();
+      drawContext();
+    } else if (name === 'cameras') openCameras();
     // A press keeps the bar a while longer (a scene button is the dock's own).
     if (open) arm(keepMs());
   });

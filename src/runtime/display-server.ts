@@ -42,6 +42,7 @@ import type {
 } from '../application/music-automation.js';
 import type { StateEventStream } from '../core/event-stream.js';
 import type { ArtworkProvider } from '../core/artwork.js';
+import type { LyricsProvider, LyricsTrack } from '../core/lyrics.js';
 import {
   PrinterLightUnavailableError,
   type PrinterActivityProvider,
@@ -184,6 +185,8 @@ export type LugnDisplayServerOptions = {
     MusicPlaybackPolicySnapshot
   >;
   artworkProvider?: ArtworkProvider;
+  /** Timed lyrics for the Hubs' music page, asked for only when shown. */
+  lyrics?: LyricsProvider;
   experience?: ExperienceApi;
   cameraService?: CameraDashboardService;
   cameraMedia?: CameraMediaProvider;
@@ -230,6 +233,8 @@ function displayResourceCategory(
     case '/pages.css':
     case '/pages.js':
     case '/page-views.js':
+    case '/lyrics-view.css':
+    case '/lyrics-view.js':
     case '/cameras-page.css':
     case '/cameras-page.js':
     case '/hub-probe.js':
@@ -256,6 +261,7 @@ export class LugnDisplayServer {
 
   private readonly computerNowPlaying: ComputerNowPlayingSelector;
   private unsubscribeComputerObservations: (() => void) | undefined;
+  private readonly computerTracks = new Map<string, LyricsTrack>();
 
   constructor(private readonly options: LugnDisplayServerOptions) {
     this.computerNowPlaying =
@@ -699,6 +705,39 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'GET' &&
+        hubRequest.route.startsWith('/display-api/lyrics/')
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        const target = hubRequest.route.slice('/display-api/lyrics/'.length);
+        const state = this.options.stateProvider();
+        if (
+          !this.options.lyrics ||
+          !Object.hasOwn(state.music.devices, target)
+        ) {
+          sendJson(response, 404, { error: 'lyrics_unavailable' });
+          return;
+        }
+        const track = this.lyricsTrack(state, target);
+        sendJson(
+          response,
+          200,
+          track
+            ? {
+                ...(await this.options.lyrics.lookup(track)),
+                track: { title: track.title, artist: track.artist },
+              }
+            : { status: 'none' },
+        );
+        return;
+      }
+      if (
+        request.method === 'GET' &&
         hubRequest.route === '/display-api/state'
       ) {
         const sourceAddress = request.socket.remoteAddress ?? 'unknown';
@@ -887,6 +926,47 @@ export class LugnDisplayServer {
     }
     current.count += 1;
     return current.count <= PROBE_REPORTS_PER_MINUTE;
+  }
+
+  /**
+   * The track the page shows for a player: behind a computer input the
+   * computer's media, otherwise the player's own. The page never names it, so
+   * a Hub cannot have anything else looked up.
+   */
+  private lyricsTrack(
+    state: RoomState,
+    target: string,
+  ): LyricsTrack | undefined {
+    const computer = this.computerNowPlaying.snapshot(state)[target];
+    if (computer) {
+      // A paused computer reports no media; the page keeps showing the last.
+      if (computer.status === 'playing' && computer.title && computer.artist) {
+        const track = {
+          title: computer.title,
+          artist: computer.artist,
+          ...(computer.durationSeconds === undefined
+            ? {}
+            : { durationSeconds: computer.durationSeconds }),
+        };
+        this.computerTracks.set(target, track);
+        return track;
+      }
+      return computer.status === 'idle'
+        ? this.computerTracks.get(target)
+        : undefined;
+    }
+    const observed = state.music.devices[target]?.observed;
+    const title = observed?.title?.trim();
+    const artist = observed?.artist?.trim();
+    if (!title || !artist) return undefined;
+    return {
+      title,
+      artist,
+      ...(observed?.album?.trim() ? { album: observed.album.trim() } : {}),
+      ...(observed?.durationSeconds === undefined
+        ? {}
+        : { durationSeconds: observed.durationSeconds }),
+    };
   }
 
   private snapshot(hub: LugnDisplayHub) {
@@ -1483,6 +1563,8 @@ type UiAssetName =
   | 'photos-page.css'
   | 'photos-page.js'
   | 'page-views.js'
+  | 'lyrics-view.css'
+  | 'lyrics-view.js'
   | 'cameras-page.css'
   | 'cameras-page.js'
   | 'hub-probe.js';
@@ -1505,6 +1587,14 @@ const PAGE_ASSETS: ReadonlyMap<
   [
     '/cameras-page.js',
     { file: 'cameras-page.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  [
+    '/lyrics-view.css',
+    { file: 'lyrics-view.css', type: 'text/css; charset=utf-8' },
+  ],
+  [
+    '/lyrics-view.js',
+    { file: 'lyrics-view.js', type: 'text/javascript; charset=utf-8' },
   ],
   [
     '/quick-menu.css',

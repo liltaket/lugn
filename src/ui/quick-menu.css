@@ -113,6 +113,12 @@
   width: 32px;
   height: 32px;
 }
+/* A switch that is on (Musik's lyrics) is lit like the chosen scene. */
+.nb-round[aria-pressed='true'] {
+  background: rgba(var(--nb-rgb), 0.2);
+  border-color: rgba(var(--nb-rgb), 0.5);
+  color: rgb(var(--nb-rgb));
+}
 /* The row above the scenes: the back button at the left, the page's buttons at
    the right. Its height is fixed, so a page with fewer buttons moves nothing. */
 .nb-context {

@@ -370,6 +370,22 @@ view fetches no frames; the last frame stays and fetching resumes when Hem is
 shown again. Hem's playback ring keeps running, which costs nothing while it
 is not painted.
 
+### Musik with lyrics
+
+A button in the navbar's row above the scenes switches Musik between the cover
+view and the lyrics, and each Hub remembers the choice. With lyrics on, the
+cover, title, time bar, previous, play/pause, next and volume form a 256 px rail
+on the left, and the song's lines fill the right. The current line is bright and
+its first row is level with the cover's middle; the line before and up to three
+after are dimmer, and only whole lines show. With the navbar open the rail
+shrinks to 92 % and the lines stop above the navbar's buttons.
+
+A tap on the lines opens the navbar, as on the rest of the page; seeking is the
+time bar's. A track without timed lines, an instrumental, a failed fetch and a
+player without a position each say so where the current line would be. A paused
+computer reports no position, so the lines stay where they were. The source label
+is not shown in this view. See [Lyrics](MUSIC.md#lyrics) for what is sent where.
+
 ## Hub roles and access
 
 Each configured Hub has a role (`bed` or `desk`), a Cast receiver IP and a

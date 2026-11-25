@@ -36,6 +36,20 @@ function gridCameras(count) {
     .map(([id, name, color]) => ({ id, name, color }));
 }
 
+const previewLines = [
+  'Fönstret står på glänt mot den svala kvällen',
+  'Quiet steps along the wooden pier',
+  'Ljusen över vattnet drar sig sakta inåt land',
+  'We left the harbor lights behind the mist',
+  'Stanna kvar en stund tills vinden vänder hem',
+  'Holding every echo in the salt and cedar air',
+  'Skuggorna blir mjuka över bryggans gråa plank',
+  '',
+  'And even when the tide pulls out beyond the dark horizon, we keep a lantern burning on the southern stone wall for anyone still drifting home',
+  'Ingen brådska nu när natten ligger stilla',
+  'Every distant bell rings softer from the shore',
+].map((text, index) => ({ at: 6 + index * 9, text }));
+
 function snapshot(scenario) {
   if (!scenarios.has(scenario)) {
     const data = structuredClone(fixture);
@@ -215,11 +229,11 @@ function snapshot(scenario) {
       );
     // `seek`: the player's own track with a position. `optical`: a computer's
     // media behind the optical input. Both take steps and seeks.
-    if (scenario === 'seek' || scenario === 'optical') {
+    if (['seek', 'optical', 'lyrics'].includes(scenario)) {
       const at = { positionSeconds: 42, positionUpdatedAt: data.generatedAt };
       const observed = data.state.music.devices['music.room'].observed;
-      data.musicTrackControl = { 'music.room': scenario === 'seek' };
-      if (scenario === 'seek')
+      data.musicTrackControl = { 'music.room': scenario !== 'optical' };
+      if (scenario !== 'optical')
         Object.assign(observed, at, { durationSeconds: 215 });
       else {
         observed.source = 'Optical In';
@@ -284,6 +298,15 @@ const server = createServer(async (request, response) => {
     )
       return sendJson(response, 403, { error: 'origin' });
     const path = new URL(request.url, `http://${allowedHost}`).pathname;
+    // Invented lines for the `lyrics` scenario (and none elsewhere).
+    if (/^\/[a-z-]+\/display-api\/lyrics\/music\.room$/.test(path))
+      return sendJson(
+        response,
+        200,
+        path.startsWith('/lyrics/')
+          ? { status: 'synced', lines: previewLines }
+          : { status: 'none' },
+      );
     if (path === '/__fixture/actions') return sendJson(response, 200, actions);
     if (path === '/__fixture/probe')
       return sendJson(response, 200, probeReports);
@@ -316,6 +339,7 @@ const server = createServer(async (request, response) => {
         'camera-print-desk',
         'seek',
         'optical',
+        'lyrics',
       ].includes(scenario) &&
       !/^cameras(-\d)?$/.test(scenario) &&
       path !== '/fixture-cover.svg'
@@ -581,6 +605,8 @@ const server = createServer(async (request, response) => {
                 'page-views.js',
                 'cameras-page.css',
                 'cameras-page.js',
+                'lyrics-view.css',
+                'lyrics-view.js',
                 'quick-menu.css',
                 'quick-menu.js',
                 'photos-page.css',
@@ -613,6 +639,6 @@ const server = createServer(async (request, response) => {
 });
 server.listen(port, '127.0.0.1', () =>
   console.log(
-    `Simulated Hub only: http://127.0.0.1:${port}/bed/ (desk, morning, running, legacy, art-error, many, print, print-solo, print-paused, print-prep, print-done, print-long, camera, camera-print, camera-print-solo, seek, optical)`,
+    `Simulated Hub only: http://127.0.0.1:${port}/bed/ (desk, morning, running, legacy, art-error, many, print, print-solo, print-paused, print-prep, print-done, print-long, camera, camera-print, camera-print-solo, seek, optical, lyrics)`,
   ),
 );

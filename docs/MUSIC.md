@@ -113,6 +113,21 @@ Automatic policy actions are attributed to Lugn only when they are allowed. See
 [Volume policy](#volume-policy) for the distinction between active owner, last
 changer, automatic adjustment, baseline and target.
 
+## Lyrics
+
+The Hub's Musik page can show timed lyrics from [LRCLIB](https://lrclib.net), a
+free service without an account or key. When a Hub shows the lyrics, Lugn sends
+the track's title, artist and, where known, album and length to `lrclib.net`;
+nothing is sent while the lyrics are off. Behind a computer input the track is
+the computer's playing media, so a browser video with a title and channel is
+looked up too (recordings over 20 minutes are not).
+
+The Hub names only the player (`GET display-api/lyrics/<target>`); Lugn picks the
+track from its own state. An exact lookup comes first. Without timed lines there,
+a search result counts only if its length is within 3 seconds. Answers are kept
+in memory: a day for lines, an hour for an unknown track, 20 seconds after a
+failure. There is no setting, and nothing is stored on disk.
+
 ## Verification after missing feedback
 
 Service acceptance still does not confirm device state. If an accepted command
