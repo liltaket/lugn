@@ -213,6 +213,44 @@ function snapshot(scenario) {
           name: `Eget ljusläge ${index + 1}`,
         })),
       );
+    // `seek`: the player's own track with a position. `optical`: a computer's
+    // media behind the optical input. Both take steps and seeks.
+    if (scenario === 'seek' || scenario === 'optical') {
+      const at = { positionSeconds: 42, positionUpdatedAt: data.generatedAt };
+      const observed = data.state.music.devices['music.room'].observed;
+      data.musicTrackControl = { 'music.room': scenario === 'seek' };
+      if (scenario === 'seek')
+        Object.assign(observed, at, { durationSeconds: 215 });
+      else {
+        observed.source = 'Optical In';
+        data.state.music.computerPlayback = {
+          'music.room': {
+            active: true,
+            deviceId: 'desktop',
+            playback: 'playing',
+            canPause: true,
+            canResume: false,
+            canNext: true,
+            canPrevious: true,
+            canSeek: true,
+            pending: false,
+            lastCommand: null,
+          },
+        };
+        data.computerNowPlaying = {
+          'music.room': {
+            status: 'playing',
+            reason: 'single_playing',
+            deviceId: 'desktop',
+            title: 'En lång video',
+            artist: 'En kanal',
+            application: 'Firefox',
+            durationSeconds: 600,
+            ...at,
+          },
+        };
+      }
+    }
     scenarios.set(scenario, data);
   }
   const data = structuredClone(scenarios.get(scenario));
@@ -276,6 +314,8 @@ const server = createServer(async (request, response) => {
         'camera-print-solo',
         'print-desk',
         'camera-print-desk',
+        'seek',
+        'optical',
       ].includes(scenario) &&
       !/^cameras(-\d)?$/.test(scenario) &&
       path !== '/fixture-cover.svg'
@@ -489,9 +529,20 @@ const server = createServer(async (request, response) => {
         data.state.lighting.currentScene = body.sceneId;
         for (const run of data.routines?.runs ?? [])
           if (run.status === 'running') run.status = 'cancelled';
-      } else if (route === 'display-api/music')
-        player.observed[body.request.property] = body.request.value;
-      else if (route === 'display-api/music-preset')
+      } else if (route === 'display-api/music') {
+        const media =
+          data.computerNowPlaying?.['music.room'] ?? player.observed;
+        const { property, value } = body.request;
+        if (property === 'seek' || property === 'track')
+          Object.assign(media, {
+            positionSeconds: property === 'seek' ? value : 0,
+            positionUpdatedAt: data.generatedAt + Date.now() - startedAt,
+            ...(property === 'track'
+              ? { title: value === 'next' ? 'Nästa spår' : 'Förra spåret' }
+              : {}),
+          });
+        else player.observed[property] = value;
+      } else if (route === 'display-api/music-preset')
         player.observed.source = body.presetId === 4 ? 'Optical In' : 'Spotify';
       else if (route === 'display-api/volume-authority') {
         const policy = data.musicVolumePolicies['music.room'];
@@ -562,6 +613,6 @@ const server = createServer(async (request, response) => {
 });
 server.listen(port, '127.0.0.1', () =>
   console.log(
-    `Simulated Hub only: http://127.0.0.1:${port}/bed/ (desk, morning, running, legacy, art-error, many, print, print-solo, print-paused, print-prep, print-done, print-long, camera, camera-print, camera-print-solo)`,
+    `Simulated Hub only: http://127.0.0.1:${port}/bed/ (desk, morning, running, legacy, art-error, many, print, print-solo, print-paused, print-prep, print-done, print-long, camera, camera-print, camera-print-solo, seek, optical)`,
   ),
 );

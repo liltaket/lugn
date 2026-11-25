@@ -76,7 +76,7 @@
   // Generic focus targets ([tabindex] panels and scroll areas) do nothing on
   // a click and are left out.
   const CONTROLS =
-    'button, a[href], input, select, textarea, summary, label, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="option"]';
+    'button, a[href], input, select, textarea, summary, label, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="option"], [role="slider"]';
   const FOCUSABLE_FIELDS = 'input, select, textarea';
 
   const clock =

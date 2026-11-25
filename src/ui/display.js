@@ -2671,10 +2671,12 @@ function renderMusicExplanations(payload, target) {
           : 'Återgångsfönstret har löpt ut.'
         : 'Ingen sparad återgång.',
   );
-  // A track step (Nästa låt) is a one-off with nothing to confirm: it never
+  // A track step or seek is a one-off with nothing to confirm: it never
   // shows as a missing receipt, nor hides the status of a real request.
   const commands = (payload?.state?.music?.commands ?? []).filter(
-    (item) => item.target === target && item.requested?.property !== 'track',
+    (item) =>
+      item.target === target &&
+      !['track', 'seek'].includes(item.requested?.property),
   );
   const computerRoute = payload?.state?.music?.computerPlayback?.[target];
   const computerCommand =

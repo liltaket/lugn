@@ -1259,7 +1259,8 @@ function musicCapability(
     | 'music.setVolume'
     | 'music.selectSource'
     | 'music.playPreset'
-    | 'music.skipTrack';
+    | 'music.skipTrack'
+    | 'music.seek';
   input: unknown;
 } {
   switch (request.property) {
@@ -1282,6 +1283,11 @@ function musicCapability(
       return {
         name: 'music.playPreset',
         input: { target, preset: request.value },
+      };
+    case 'seek':
+      return {
+        name: 'music.seek',
+        input: { target, positionSeconds: request.value },
       };
     case 'track':
       return {

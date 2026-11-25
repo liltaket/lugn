@@ -411,6 +411,11 @@ describe('WiimMusicAdapter', () => {
       target: 'music.room',
       requested: { property: 'track', value: 'previous' },
     });
+    await adapter.dispatch({
+      id: 'c5s',
+      target: 'music.room',
+      requested: { property: 'seek', value: 83.9 },
+    });
 
     const sent = transport.commands
       .map((c) => c.command)
@@ -427,6 +432,7 @@ describe('WiimMusicAdapter', () => {
       'MCUKeyShortClick:1',
       'setPlayerCmd:next',
       'setPlayerCmd:prev',
+      'setPlayerCmd:seek:83',
     ]);
 
     // Source outside allowlist is rejected without hitting the network.

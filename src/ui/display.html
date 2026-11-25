@@ -695,21 +695,30 @@
             <span class="music-page-artist" data-view="artist"></span>
           </div>
           <div class="music-page-progress" data-view="progress" hidden>
-            <span class="music-page-bar"><i data-view="bar"></i></span>
+            <div class="music-page-seek" data-view="seek">
+              <span class="music-page-bar"><i data-view="bar"></i></span>
+              <span class="music-page-thumb" aria-hidden="true"></span>
+            </div>
             <span class="music-page-times"
               ><span data-view="elapsed"></span><span data-view="duration"></span
             ></span>
           </div>
           <div class="music-page-controls">
+            <button type="button" class="music-page-skip" data-view="previous" aria-label="Föregående låt" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 5.5v13L9.5 12Z M5 5.5h2.5v13H5Z" /></svg>
+            </button>
             <button type="button" class="music-page-play" data-view="play" aria-label="Spela">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path data-view="play-icon" d="M8 5.5v13l11-6.5Z" /></svg>
             </button>
-            <button type="button" class="music-page-next" data-view="next" aria-label="Nästa låt" hidden>
+            <button type="button" class="music-page-skip" data-view="next" aria-label="Nästa låt" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 5.5v13l9.5-6.5Z M16.5 5.5h2.5v13h-2.5Z" /></svg>
             </button>
-            <span class="music-page-volume" data-view="volume" role="img" hidden>
+            <span class="music-page-volume" data-view="volume" hidden>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4Z" /><path d="M15.5 9a4 4 0 0 1 0 6" /><path d="M18 6.5a7.5 7.5 0 0 1 0 11" /></svg>
-              <span class="music-page-volume-track"><i data-view="volume-fill"></i></span>
+              <span class="music-page-volume-slider" data-view="volume-slider">
+                <span class="music-page-volume-track"><i data-view="volume-fill"></i></span>
+                <span class="music-page-thumb" aria-hidden="true"></span>
+              </span>
             </span>
           </div>
           <div class="music-page-presets" data-view="presets" hidden></div>

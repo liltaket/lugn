@@ -478,7 +478,13 @@ acceptance is separate from observed state:
 - commands time out as unconfirmed when no matching observation arrives;
 - preset selection is never reported as confirmed because the HA media-player
   state does not expose the selected WiiM preset;
-- a track step (`music.skipTrack`, Nästa låt) is never confirmed or retried:
+- a seek (`music.seek`, seconds into the playing track) is handled like a track
+  step below: never confirmed or retried, no playback or volume intent, and the
+  same four seconds of tolerance. It is refused without a reported track length
+  or past it. Home Assistant gets `media_seek`; the direct WiiM transport sends
+  whole seconds;
+- a track step (`music.skipTrack`, Föregående and Nästa låt) is never confirmed
+  or retried:
   nothing in the player's state says it happened, and a retry could skip
   twice. Players often pass through pause, idle or buffering on the way to the
   next track, so for four seconds after a step a playback change that happened

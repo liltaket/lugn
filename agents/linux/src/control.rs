@@ -8,6 +8,15 @@ use tokio::sync::{mpsc, watch};
 pub enum Action {
     Pause,
     Resume,
+    Next,
+    Previous,
+    Seek,
+}
+impl Action {
+    /// One-off track and position actions: they take and grant no ownership.
+    pub fn is_transport(self) -> bool {
+        matches!(self, Self::Next | Self::Previous | Self::Seek)
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,6 +30,8 @@ pub enum Outcome {
 pub enum Reason {
     Paused,
     Resumed,
+    Skipped,
+    Sought,
     Disabled,
     Retained,
     Expired,
@@ -58,7 +69,12 @@ pub struct Command {
     pub pause_command_id: Option<String>,
     pub resume_token: Option<String>,
     pub lease_ttl_ms: Option<u64>,
+    /// Only a seek carries it; every other command omits the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_ms: Option<u64>,
 }
+/// Longest position a seek may ask for (a week).
+const MAX_POSITION_MS: u64 = 604_800_000;
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lease {
     pub pause_command_id: String,
@@ -73,6 +89,9 @@ pub struct Player {
     pub playback_status: Option<String>,
     pub can_pause: bool,
     pub can_play: bool,
+    pub can_go_next: bool,
+    pub can_go_previous: bool,
+    pub can_seek: bool,
     pub pause_lease: Option<Lease>,
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,9 +221,17 @@ impl Command {
         if self.expires_at_ms <= now {
             return Err(Reason::Expired);
         }
+        let unowned = self.pause_command_id.is_none()
+            && self.resume_token.is_none()
+            && self.lease_ttl_ms.is_none();
         match self.action {
+            Action::Next | Action::Previous if unowned && self.position_ms.is_none() => Ok(()),
+            Action::Seek if unowned && self.position_ms.is_some_and(|ms| ms <= MAX_POSITION_MS) => {
+                Ok(())
+            }
             Action::Pause
-                if self.pause_command_id.is_none()
+                if self.position_ms.is_none()
+                    && self.pause_command_id.is_none()
                     && self.resume_token.is_none()
                     && self
                         .lease_ttl_ms
@@ -213,7 +240,8 @@ impl Command {
                 Ok(())
             }
             Action::Resume
-                if self.lease_ttl_ms.is_none()
+                if self.position_ms.is_none()
+                    && self.lease_ttl_ms.is_none()
                     && self.pause_command_id.as_deref().is_some_and(uuid_valid)
                     && self.resume_token.as_deref().is_some_and(uuid_valid) =>
             {
@@ -251,7 +279,8 @@ pub fn parse(payload: &[u8]) -> Option<Command> {
     }
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
     let object = value.as_object()?;
-    if object.len() != 14
+    let fields = 14 + usize::from(object.get("position_ms").is_some_and(|v| !v.is_null()));
+    if object.len() != fields
         || ![
             "schema_version",
             "device_id",

@@ -161,6 +161,10 @@ export class HomeAssistantMusicAdapter implements MusicAdapter {
             ? 'media_next_track'
             : 'media_previous_track';
         break;
+      case 'seek':
+        service = 'media_seek';
+        body['seek_position'] = requested.value;
+        break;
       case 'preset':
         // The WiiM integration exposes a dedicated action for hardware
         // presets. Using media_player.play_media can set the displayed media

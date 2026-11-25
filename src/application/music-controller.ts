@@ -19,6 +19,7 @@ import {
   type DeviceMusicState,
   type Provenance,
   type MusicRecoveryStopReason,
+  isOneOffMusicRequest,
 } from '../core/schemas.js';
 import { volumeFeedbackMatches } from '../core/music-volume-settings.js';
 import { MusicCommandRecovery } from './music-command-recovery.js';
@@ -596,11 +597,12 @@ export class MusicController {
       !device.allowedSources.includes(requested.value)
     )
       throw new Error(`Source is not allowed for ${target}`);
-    // A track step is a one-off: it supersedes no Play, Pause, source or
-    // preset recovery (only an earlier pending track step, below).
-    if (recover && requested.property !== 'track')
+    // A track step or seek is a one-off: it supersedes no Play, Pause, source
+    // or preset recovery (only an earlier pending one of its kind, below).
+    // Either may pass the player through pause or buffering.
+    if (recover && !isOneOffMusicRequest(requested))
       this.bumpIntent(target, this.intentDomain(requested));
-    if (requested.property === 'track')
+    if (isOneOffMusicRequest(requested))
       this.beginTrackStep(target, this.clock.now());
     const supersededIds = new Set<string>();
     for (const prior of this.state.commands) {
@@ -1912,8 +1914,9 @@ export class MusicController {
     // Home Assistant does not expose WiiM's selected preset in the state
     // snapshot, so playback state alone must never claim a preset confirmed.
     if (command.requested.property === 'preset') return false;
-    // Nor is there a "next" to observe: a track step stays unconfirmed.
-    if (command.requested.property === 'track') return false;
+    // Nor is there a "next" to observe, and a position moves on at once: a
+    // track step or seek stays unconfirmed.
+    if (isOneOffMusicRequest(command.requested)) return false;
     const { property, value } = command.requested;
     const actual = observation.values[property];
     const matches =

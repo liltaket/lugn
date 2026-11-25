@@ -533,7 +533,22 @@
       r?.musicArtwork?.dataset.state === 'available' &&
       r?.musicArtworkImage &&
       !r.musicArtworkImage.hidden;
-    const volume = device?.observed?.volume;
+    // Behind a computer input the steps and the position are the computer's
+    // media; otherwise the player's own.
+    const desktop = data?.state?.music?.computerPlayback?.[target];
+    const onComputer = desktop?.active === true;
+    const connected =
+      typeof isUnavailable === 'function' ? !isUnavailable() : true;
+    const ownControl =
+      Boolean(device) &&
+      data?.musicTrackControl?.[target] === true &&
+      r?.musicPlayback?.disabled === false;
+    const computerControl = (flag) =>
+      onComputer && connected && !desktop.pending && desktop[flag] === true;
+    const progress =
+      typeof musicProgress === 'object' && musicProgress
+        ? { ...musicProgress }
+        : null;
     return {
       ready: Boolean(data),
       active,
@@ -574,21 +589,23 @@
           disabled: button.disabled,
           busy: button.getAttribute('aria-busy') === 'true',
         })),
-      volume:
-        typeof volume === 'number' && Number.isFinite(volume)
-          ? Math.round(Math.min(1, Math.max(0, volume)) * 100)
-          : null,
-      // The server says whether this player can skip (Nästa låt).
-      nextBusy:
+      volume: shownVolume(target, device),
+      // Adjustable exactly when Hem's own volume buttons are.
+      canVolume:
+        r?.musicVolumeDown?.disabled === false ||
+        r?.musicVolumeUp?.disabled === false,
+      // The server says whether this player, or the computer's playing media,
+      // can step and seek. A computer's buttons stay (disabled) while it
+      // cannot, so they do not come and go with its playback.
+      stepBusy:
         typeof pending === 'object' && pending.has(`music-track:${target}`),
-      canSkip:
-        Boolean(device) &&
-        data?.musicTrackControl?.[target] === true &&
-        r?.musicPlayback?.disabled === false,
-      progress:
-        typeof musicProgress === 'object' && musicProgress
-          ? { ...musicProgress }
-          : null,
+      showSteps: ownControl || (Boolean(device) && onComputer),
+      canNext: onComputer ? computerControl('canNext') : ownControl,
+      canPrevious: onComputer ? computerControl('canPrevious') : ownControl,
+      canSeek:
+        Boolean(progress) &&
+        (onComputer ? computerControl('canSeek') : ownControl),
+      progress: progress && shownProgress(target, progress),
     };
   }
 
@@ -601,6 +618,8 @@
       ...state,
       art: undefined,
       progress: undefined,
+      volume: undefined,
+      canSeek: undefined,
     });
     if (key !== musicKey) {
       musicKey = key;
@@ -622,12 +641,17 @@
           : state.source,
       );
       if (titleChanged) reveal(view('music', 'text'), 8);
-      drawVolume(state.volume);
-      const next = view('music', 'next');
-      setAttr(next, 'aria-busy', String(state.nextBusy));
-      if (next.disabled !== state.nextBusy) next.disabled = state.nextBusy;
-      if (next.hidden !== !(state.active && state.canSkip))
-        next.hidden = !(state.active && state.canSkip);
+      for (const [name, can] of [
+        ['previous', state.canPrevious],
+        ['next', state.canNext],
+      ]) {
+        const button = view('music', name);
+        setAttr(button, 'aria-busy', String(state.stepBusy));
+        const disabled = state.stepBusy || !can;
+        if (button.disabled !== disabled) button.disabled = disabled;
+        const hidden = !(state.active && state.showSteps);
+        if (button.hidden !== hidden) button.hidden = hidden;
+      }
       drawPresets(state);
       const play = view('music', 'play');
       shownPlayAction = state.playing ? 'paused' : 'playing';
@@ -639,7 +663,9 @@
         state.playing ? PAUSE_PATH : PLAY_PATH,
       );
     }
+    drawVolume(state.volume, state.canVolume);
     drawProgress(state.progress);
+    drawSeek(state.progress, state.canSeek && state.active, state.title);
   }
 
   // Hem's choices in Hem's order, disabled and busy as there.
@@ -669,15 +695,365 @@
   }
 
   // The volume as a level, not a number (the number is for screen readers).
-  function drawVolume(percent) {
+  function drawVolume(percent, adjustable) {
     const box = view('music', 'volume');
     if (box.hidden !== (percent === null)) box.hidden = percent === null;
-    if (percent === null) return;
-    setAttr(box, 'aria-label', `Volym ${percent} %`);
-    const fill = view('music', 'volume-fill');
-    const transform = `scaleX(${(percent / 100).toFixed(2)})`;
-    if (fill.style.transform !== transform) fill.style.transform = transform;
+    if (percent === null) {
+      volumeSlider?.enable(false);
+      return;
+    }
+    volumeSlider?.enable(adjustable, {
+      label: 'Volym',
+      max: 100,
+      now: percent,
+      text: `${percent} %`,
+    });
+    // While it is held, the finger says where the level is.
+    if (!volumeSlider?.held()) drawLevel(percent / 100);
   }
+
+  function drawLevel(fraction) {
+    const fill = view('music', 'volume-fill');
+    const transform = `scaleX(${fraction.toFixed(2)})`;
+    if (fill.style.transform !== transform) fill.style.transform = transform;
+    volumeSlider?.at(fraction);
+  }
+
+  // ── Adjusting: drag, tap, wheel or arrow keys on the two bars ──
+
+  const WHEEL_NOTCH_PX = 40;
+  const WHEEL_SEND_MS = 250;
+  const VOLUME_SEND_MS = 300;
+  const VOLUME_STEP = 0.02;
+  const SEEK_STEP_SECONDS = 5;
+  // How long a sent level or position is shown while no report confirms it.
+  const VOLUME_HOLD_MS = 4000;
+  const SEEK_HOLD_MS = 5000;
+
+  const clamp = (value) => Math.min(1, Math.max(0, value));
+
+  // Where along an element a pointer is. Older engines give a zoomed canvas's
+  // rects in its own px, the pointer in the screen's.
+  function fractionAt(element, clientX) {
+    const rect = element.getBoundingClientRect();
+    const zoom =
+      Number(element.closest?.('.page-canvas')?.style.zoom || 1) || 1;
+    const scale =
+      zoom !== 1 && Math.abs(rect.width - element.offsetWidth) < 1 ? zoom : 1;
+    return rect.width > 0
+      ? clamp((clientX - rect.left * scale) / (rect.width * scale))
+      : 0;
+  }
+
+  // A horizontal bar taken by touch, the mouse (also the bridged one, whose
+  // held moves reach the document), the wheel or the arrow keys. `value` is
+  // where it stands, `show` draws a position while it is adjusted, `move`
+  // hears the drag and `commit` the position chosen. A bar that cannot be
+  // adjusted is left alone: a swipe over it turns the page as before.
+  function adjustable(element, { value, step, show, move, commit, restore }) {
+    if (!element) return null;
+    let enabled = false;
+    let drag = null;
+    let wheeled = null;
+    let wheelTimer = 0;
+    let wheelSum = 0;
+
+    const held = () => Boolean(drag || wheeled !== null);
+    function preview(fraction) {
+      show(fraction);
+      element.style.setProperty('--at', fraction.toFixed(4));
+    }
+    function end() {
+      drag = null;
+      wheeled = null;
+      window.clearTimeout(wheelTimer);
+      wheelSum = 0;
+      element.removeAttribute('data-dragging');
+    }
+    function cancel() {
+      if (!held()) return;
+      end();
+      restore();
+    }
+    function choose(fraction) {
+      end();
+      commit(fraction);
+    }
+
+    element.addEventListener('pointerdown', (event) => {
+      if (!enabled || event.button !== 0 || drag) return;
+      event.preventDefault();
+      end();
+      drag = { id: event.pointerId, at: fractionAt(element, event.clientX) };
+      element.setAttribute('data-dragging', 'true');
+      try {
+        element.setPointerCapture?.(event.pointerId);
+      } catch {
+        // The bridge's synthetic pointer cannot be captured; it bubbles.
+      }
+      preview(drag.at);
+    });
+    const mine = (event) => drag && event.pointerId === drag.id;
+    document.addEventListener('pointermove', (event) => {
+      if (!mine(event)) return;
+      drag.at = fractionAt(element, event.clientX);
+      preview(drag.at);
+      move?.(drag.at);
+    });
+    document.addEventListener('pointerup', (event) => {
+      if (mine(event)) choose(fractionAt(element, event.clientX));
+    });
+    document.addEventListener('pointercancel', (event) => {
+      if (mine(event)) cancel();
+    });
+
+    // Up or right is more. A wheel notch is one step; a trackpad's small
+    // deltas add up to one. The choice is sent once the wheel rests.
+    element.addEventListener(
+      'wheel',
+      (event) => {
+        if (!enabled) return;
+        event.preventDefault();
+        if (drag) return;
+        const delta =
+          Math.abs(event.deltaX) > Math.abs(event.deltaY)
+            ? event.deltaX
+            : -event.deltaY;
+        wheelSum += delta * (event.deltaMode === 1 ? WHEEL_NOTCH_PX : 1);
+        if (Math.abs(wheelSum) < WHEEL_NOTCH_PX) return;
+        const direction = Math.sign(wheelSum);
+        wheelSum = 0;
+        wheeled = clamp((wheeled ?? value()) + direction * step());
+        element.setAttribute('data-dragging', 'true');
+        preview(wheeled);
+        window.clearTimeout(wheelTimer);
+        wheelTimer = window.setTimeout(() => choose(wheeled), WHEEL_SEND_MS);
+      },
+      { passive: false },
+    );
+
+    element.addEventListener('keydown', (event) => {
+      const direction = {
+        ArrowRight: 1,
+        ArrowUp: 1,
+        ArrowLeft: -1,
+        ArrowDown: -1,
+      }[event.key];
+      if (!enabled || !direction) return;
+      // The pager's own arrow keys stay out of it.
+      event.preventDefault();
+      const next = clamp(value() + direction * step());
+      preview(next);
+      choose(next);
+    });
+
+    return {
+      held,
+      cancel,
+      at(fraction) {
+        if (!held()) element.style.setProperty('--at', fraction.toFixed(4));
+      },
+      enable(on, aria) {
+        if (on !== enabled) {
+          enabled = on;
+          if (on) {
+            element.setAttribute('role', 'slider');
+            element.setAttribute('tabindex', '0');
+            element.setAttribute('data-pager', 'ignore');
+          } else {
+            cancel();
+            for (const name of [
+              'role',
+              'tabindex',
+              'data-pager',
+              'aria-label',
+              'aria-valuemin',
+              'aria-valuemax',
+              'aria-valuenow',
+              'aria-valuetext',
+            ])
+              element.removeAttribute(name);
+          }
+        }
+        if (!on || !aria) return;
+        setAttr(element, 'aria-label', aria.label);
+        setAttr(element, 'aria-valuemin', '0');
+        setAttr(element, 'aria-valuemax', String(aria.max));
+        setAttr(element, 'aria-valuenow', String(aria.now));
+        setAttr(element, 'aria-valuetext', aria.text);
+      },
+    };
+  }
+
+  const currentTarget = () =>
+    typeof musicTarget === 'string' ? musicTarget : '';
+
+  // Volume: sent while dragging (not too often) and on release, one request at
+  // a time with only the newest level waiting. Shown as chosen until the
+  // player reports it.
+  let chosenVolume = null;
+  let queuedVolume = null;
+  let sendingVolume = false;
+  let volumeSentAt = -Infinity;
+  const playerVolume = () => {
+    const device = payload()?.state?.music?.devices?.[currentTarget()];
+    return device ? shownVolume(currentTarget(), device) : null;
+  };
+
+  function shownVolume(target, device) {
+    const observed = device?.observed?.volume;
+    const percent =
+      typeof observed === 'number' && Number.isFinite(observed)
+        ? Math.round(clamp(observed) * 100)
+        : null;
+    if (chosenVolume?.target !== target) return percent;
+    if (
+      percent === null ||
+      percent === chosenVolume.percent ||
+      performance.now() >= chosenVolume.until
+    ) {
+      chosenVolume = null;
+      return percent;
+    }
+    return chosenVolume.percent;
+  }
+
+  async function sendVolume(fraction) {
+    const target = currentTarget();
+    if (!target || typeof runCommand !== 'function') return;
+    const percent = Math.round(clamp(fraction) * 100);
+    // The level already on its way (or standing) is not asked for twice.
+    if (percent === (chosenVolume?.percent ?? playerVolume())) return;
+    chosenVolume = {
+      target,
+      percent,
+      until: performance.now() + VOLUME_HOLD_MS,
+    };
+    volumeSentAt = performance.now();
+    queuedVolume = { target, value: percent / 100 };
+    if (sendingVolume) return;
+    sendingVolume = true;
+    try {
+      while (queuedVolume) {
+        const next = queuedVolume;
+        queuedVolume = null;
+        // Its own command key: a drag neither waits for Play nor marks it.
+        await runCommand(`music-volume:${next.target}`, {
+          target: next.target,
+          request: { property: 'volume', value: next.value },
+        });
+      }
+    } finally {
+      sendingVolume = false;
+    }
+  }
+
+  const volumeSlider = adjustable(view('music', 'volume-slider'), {
+    value: () => (playerVolume() ?? 0) / 100,
+    step: () => VOLUME_STEP,
+    show: (fraction) => drawLevel(fraction),
+    move: (fraction) => {
+      if (performance.now() - volumeSentAt >= VOLUME_SEND_MS)
+        void sendVolume(fraction);
+    },
+    commit: (fraction) => {
+      void sendVolume(fraction);
+      drawMusic();
+    },
+    restore: () => drawMusic(),
+  });
+
+  // Time: one seek when the finger lets go. Shown there until the player
+  // reports a position taken after it.
+  let chosenPosition = null;
+  let seekSample = null;
+  let seekTrack = '';
+  function shownProgress(target, sample) {
+    if (chosenPosition?.target !== target) return sample;
+    if (
+      sample.at > chosenPosition.at ||
+      sample.duration !== chosenPosition.duration ||
+      performance.now() >= chosenPosition.until
+    ) {
+      chosenPosition = null;
+      return sample;
+    }
+    return {
+      ...sample,
+      position: chosenPosition.position,
+      at: chosenPosition.at,
+    };
+  }
+
+  const positionNow = (sample) =>
+    Math.min(
+      sample.duration,
+      sample.position +
+        (sample.playing ? Math.max(0, (serverNow() - sample.at) / 1000) : 0),
+    );
+
+  function drawSeek(sample, seekable, title) {
+    // A position chosen on one track is never sent to the next.
+    if (
+      seekSlider?.held() &&
+      (title !== seekTrack || sample?.duration !== seekSample?.duration)
+    )
+      seekSlider.cancel();
+    if (!seekSlider?.held()) {
+      seekSample = sample;
+      seekTrack = title;
+    }
+    if (!sample || !(sample.duration > 0)) {
+      seekSlider?.enable(false);
+      return;
+    }
+    const position = positionNow(sample);
+    seekSlider?.enable(seekable, {
+      label: 'Position i låten',
+      max: Math.floor(sample.duration),
+      now: Math.floor(position),
+      text: `${clockText(position)} av ${clockText(sample.duration)}`,
+    });
+    seekSlider?.at(position / sample.duration);
+  }
+
+  const seekSlider = adjustable(view('music', 'seek'), {
+    value: () =>
+      seekSample ? positionNow(seekSample) / seekSample.duration : 0,
+    step: () => (seekSample ? SEEK_STEP_SECONDS / seekSample.duration : 0),
+    show: (fraction) => {
+      barAnimation?.cancel();
+      barAnimation = null;
+      barKey = '';
+      view('music', 'bar').style.transform = `scaleX(${fraction.toFixed(4)})`;
+      if (seekSample)
+        setText(
+          view('music', 'elapsed'),
+          clockText(fraction * seekSample.duration),
+        );
+    },
+    commit: (fraction) => {
+      const target = currentTarget();
+      if (!target || !seekSample || typeof runCommand !== 'function') return;
+      const position = Math.floor(fraction * seekSample.duration);
+      chosenPosition = {
+        target,
+        position,
+        duration: seekSample.duration,
+        at: serverNow(),
+        until: performance.now() + SEEK_HOLD_MS,
+      };
+      void runCommand(`music-seek:${target}`, {
+        target,
+        request: { property: 'seek', value: position },
+      });
+      drawMusic();
+    },
+    restore: () => {
+      barKey = '';
+      drawMusic();
+    },
+  });
 
   // A short rise and fade-in (opacity and transform only), shown only on the
   // page in view and not when the viewer asks for less motion.
@@ -889,6 +1265,11 @@
       return;
     }
     if (box.hidden) box.hidden = false;
+    // While it is held, the finger says where playback is.
+    if (seekSlider?.held()) {
+      setText(view('music', 'duration'), clockText(sample.duration));
+      return;
+    }
     const now =
       typeof estimatedServerNow === 'function'
         ? estimatedServerNow()
@@ -966,27 +1347,28 @@
     window.setTimeout(drawMusic, 0);
   });
 
-  // Nästa låt: a one-off request the player either takes or not; the new
-  // title arrives with the next state.
-  view('music', 'next')?.addEventListener('click', () => {
-    const data = payload();
-    const target = typeof musicTarget === 'string' ? musicTarget : '';
-    if (
-      !target ||
-      view('music', 'next').hidden ||
-      data?.musicTrackControl?.[target] !== true ||
-      hem()?.musicPlayback?.disabled !== false ||
-      typeof runCommand !== 'function'
-    )
-      return;
-    // Its own command key: a pending play does not swallow it, nor does it
-    // make the play button look busy.
-    void runCommand(`music-track:${target}`, {
-      target,
-      request: { property: 'track', value: 'next' },
+  // Föregående and Nästa låt: one-off requests the player either takes or
+  // not; the new title arrives with the next state.
+  for (const step of ['previous', 'next']) {
+    view('music', step)?.addEventListener('click', () => {
+      const target = currentTarget();
+      const state = musicState();
+      if (
+        !target ||
+        view('music', step).hidden ||
+        !(step === 'next' ? state.canNext : state.canPrevious) ||
+        typeof runCommand !== 'function'
+      )
+        return;
+      // Their own command key: a pending play does not swallow them, nor do
+      // they make the play button look busy.
+      void runCommand(`music-track:${target}`, {
+        target,
+        request: { property: 'track', value: step },
+      });
+      window.setTimeout(drawMusic, 0);
     });
-    window.setTimeout(drawMusic, 0);
-  });
+  }
 
   // A choice is sent only while Hem's own button for it is enabled.
   view('music', 'presets')?.addEventListener('click', (event) => {
@@ -1041,6 +1423,8 @@
       window.clearInterval(musicTimer);
       musicTimer = 0;
       musicShown = false;
+      seekSlider?.cancel();
+      volumeSlider?.cancel();
       barAnimation?.cancel();
       barAnimation = null;
       barKey = '';

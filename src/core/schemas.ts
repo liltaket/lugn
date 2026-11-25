@@ -165,6 +165,7 @@ export const SemanticMusicIdSchema = z
   .regex(/^music\.[a-z0-9][a-z0-9._-]*$/);
 export const MusicPresetSchema = z.enum(['spotify_dj', 'optical']);
 export const MusicTrackStepSchema = z.enum(['next', 'previous']);
+export const MusicSeekPositionSchema = z.number().min(0).max(604_800);
 export const MusicRequestSchema = z.discriminatedUnion('property', [
   z
     .object({
@@ -185,8 +186,22 @@ export const MusicRequestSchema = z.discriminatedUnion('property', [
   z
     .object({ property: z.literal('track'), value: MusicTrackStepSchema })
     .strict(),
+  // Seconds into the playing track. Also a one-off: playback moves on at once.
+  z
+    .object({ property: z.literal('seek'), value: MusicSeekPositionSchema })
+    .strict(),
 ]);
 export type MusicRequest = z.infer<typeof MusicRequestSchema>;
+/** A track step or a seek: done once, never retried, no state to hold. */
+export type MusicOneOffRequest = Extract<
+  MusicRequest,
+  { property: 'track' | 'seek' }
+>;
+export function isOneOffMusicRequest(
+  request: MusicRequest,
+): request is MusicOneOffRequest {
+  return request.property === 'track' || request.property === 'seek';
+}
 export const MusicFadeRequestSchema = z
   .object({
     target: SemanticMusicIdSchema,
@@ -277,6 +292,7 @@ export const DeviceMusicStateSchema = z.object({
     source: z.string().optional(),
     preset: MusicPresetSchema.optional(),
     track: MusicTrackStepSchema.optional(),
+    seek: MusicSeekPositionSchema.optional(),
   }),
   availability: z.enum(['available', 'unavailable']),
   observedAt: z.number().nonnegative().nullable(),
@@ -367,6 +383,9 @@ export const ComputerPlaybackRouteSnapshotSchema = z.object({
   playback: z.enum(['playing', 'paused', 'unknown']),
   canPause: z.boolean(),
   canResume: z.boolean(),
+  canNext: z.boolean().optional(),
+  canPrevious: z.boolean().optional(),
+  canSeek: z.boolean().optional(),
   pending: z.boolean(),
   lastCommand: MusicCommandRecordSchema.nullable(),
 });

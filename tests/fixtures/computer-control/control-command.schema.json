@@ -47,7 +47,7 @@
       "maxLength": 36
     },
     "action": {
-      "enum": ["pause", "resume"]
+      "enum": ["pause", "resume", "next", "previous", "seek"]
     },
     "player": {
       "type": "string",
@@ -113,6 +113,11 @@
           "type": "null"
         }
       ]
+    },
+    "position_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 604800000
     }
   },
   "anyOf": [
@@ -132,6 +137,9 @@
           "minimum": 1000,
           "maximum": 3600000
         }
+      },
+      "not": {
+        "required": ["position_ms"]
       }
     },
     {
@@ -150,6 +158,45 @@
           "format": "uuid",
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
           "maxLength": 36
+        },
+        "lease_ttl_ms": {
+          "type": "null"
+        }
+      },
+      "not": {
+        "required": ["position_ms"]
+      }
+    },
+    {
+      "properties": {
+        "action": {
+          "enum": ["next", "previous"]
+        },
+        "pause_command_id": {
+          "type": "null"
+        },
+        "resume_token": {
+          "type": "null"
+        },
+        "lease_ttl_ms": {
+          "type": "null"
+        }
+      },
+      "not": {
+        "required": ["position_ms"]
+      }
+    },
+    {
+      "required": ["position_ms"],
+      "properties": {
+        "action": {
+          "const": "seek"
+        },
+        "pause_command_id": {
+          "type": "null"
+        },
+        "resume_token": {
+          "type": "null"
         },
         "lease_ttl_ms": {
           "type": "null"

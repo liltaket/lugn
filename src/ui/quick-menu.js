@@ -318,12 +318,13 @@
     attach({
       id: 'music',
       root: musicRoot,
-      // A press on a control (play, next, presets, volume, the cover) is that
-      // control's own; only the bare page opens or closes the bar.
+      // A press on a control (play, the steps, presets, the time and volume
+      // bars, the cover) is that control's own; only the bare page opens or
+      // closes the bar.
       handleTap: (event) =>
         Boolean(
           event.target.closest?.(
-            "button, a, input, [data-view='presets'], [data-view='volume'], [data-view='cover']",
+            "button, a, input, [data-view='presets'], [data-view='volume'], [data-view='seek'], [data-view='cover']",
           ),
         ),
     });
