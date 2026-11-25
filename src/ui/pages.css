@@ -208,9 +208,12 @@
   padding: 34px 52px;
   overflow: hidden;
 }
+/* Its own stacking context: the two canvases that cross-fade stay under the
+   dimming, and under the page. */
 .music-page-backdrop {
   position: absolute;
   inset: 0;
+  z-index: 0;
   overflow: hidden;
   background: #121716;
 }
@@ -230,6 +233,7 @@
   content: '';
   position: absolute;
   inset: 0;
+  z-index: 2;
   background:
     radial-gradient(
       120% 90% at 25% 40%,
@@ -240,6 +244,7 @@
 }
 .music-page-cover {
   position: relative;
+  isolation: isolate;
   width: 372px;
   height: 372px;
   border-radius: 22px;

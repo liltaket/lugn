@@ -733,19 +733,57 @@ export class LugnDisplayServer {
           sendJson(response, 403, { error: 'invalid_origin' });
           return;
         }
-        const target = hubRequest.route.slice('/display-api/playhead/'.length);
+        // `/lyrics` says the page shows lyrics: only then is a new track
+        // sent to the lyrics source ahead of the page asking.
+        const rest = hubRequest.route.slice('/display-api/playhead/'.length);
+        const wantsLyrics = rest.endsWith('/lyrics');
+        const target = wantsLyrics ? rest.slice(0, -'/lyrics'.length) : rest;
         const state = this.options.stateProvider();
         if (!Object.hasOwn(state.music.devices, target)) {
           sendJson(response, 404, { error: 'playhead_unavailable' });
           return;
         }
         const asked = performance.now();
-        const playhead = await this.playhead(state, target);
+        const playhead = await this.playhead(
+          state,
+          target,
+          wantsLyrics,
+          `${this.pathForHub(hubRequest.hub.id)}display-api/player-art/`,
+        );
         sendJson(response, 200, {
           ...playhead,
           // Time spent here (asking the player), for the page's own timing.
           held: Math.round(performance.now() - asked),
         });
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        hubRequest.route.startsWith('/display-api/player-art/')
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        const asset = this.options.playhead?.art?.(
+          hubRequest.route.slice('/display-api/player-art/'.length),
+        );
+        if (!asset) {
+          sendJson(response, 404, { error: 'artwork_unavailable' });
+          return;
+        }
+        // The id names one image for good.
+        response.writeHead(200, {
+          'cache-control': 'private, max-age=86400, immutable',
+          'content-type': asset.contentType,
+          'content-length': asset.body.byteLength,
+          'x-content-type-options': 'nosniff',
+          'cross-origin-resource-policy': 'same-origin',
+        });
+        response.end(asset.body);
         return;
       }
       if (
@@ -1021,7 +1059,12 @@ export class LugnDisplayServer {
    * computer input, the player's own report where it can be read, and else the
    * last report extrapolated (`coarse`: whole seconds through Home Assistant).
    */
-  private async playhead(state: RoomState, target: string) {
+  private async playhead(
+    state: RoomState,
+    target: string,
+    wantsLyrics: boolean,
+    artPrefix: string,
+  ) {
     const since = (at: number) => Math.max(0, (Date.now() - at) / 1000);
     const computer = this.computerNowPlaying.snapshot(state)[target];
     if (computer) {
@@ -1046,7 +1089,7 @@ export class LugnDisplayServer {
     if (player) {
       const age = (this.options.playhead!.now() - player.measuredAt) / 1000;
       const track = playerTrack(player);
-      this.prefetchLyrics(target, track);
+      if (wantsLyrics) this.prefetchLyrics(target, track);
       return {
         source: 'player' as const,
         playing: player.playing,
@@ -1055,6 +1098,7 @@ export class LugnDisplayServer {
         ...(player.title && player.artist
           ? { track: { title: player.title, artist: player.artist } }
           : {}),
+        ...(player.art ? { art: `${artPrefix}${player.art}` } : {}),
       };
     }
     const observed = state.music.devices[target]?.observed;

@@ -26,8 +26,6 @@
   // With the navbar open everything stays above its buttons.
   const CLOSED = { middle: 300, top: 14, bottom: 586 };
   const OPEN = { middle: 222, top: 10, bottom: 430 };
-  // The padding above and below a line's text (lyrics-view.css).
-  const LINE_PAD = 13;
   // How bright a line is by its distance from the current one.
   const OPACITY = new Map([
     [-2, 0.16],
@@ -37,6 +35,11 @@
     [2, 0.32],
     [3, 0.2],
   ]);
+  const RAIL_OPACITY = new Map([
+    [-1, 0.24],
+    [0, 1],
+    [1, 0.38],
+  ]);
   const SCROLL_MS = 220;
   const LIGHT_MS = 100;
   const EASING = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
@@ -45,6 +48,18 @@
   const DELAY_STEP_TENTHS = 1;
   const DELAY_LIMIT_TENTHS = 50;
   const POLL_MS = 1_000;
+  // Around a track change the player is asked more often.
+  const HURRY_MS = 250;
+  const HURRY_FOR_MS = 3_000;
+  // The player's own track counts for this long after it was last heard.
+  const FRESH_MS = 4_000;
+  // Lines of a new track not here by now are said to be on their way.
+  const PATIENCE_MS = 600;
+  const MODE_MS = 320;
+  // The lines' column per layout (lyrics-view.css): its left edge, the text
+  // size and the padding above and below a line's text.
+  const RAIL_COLUMN = { left: 408, size: 34, pad: 16 };
+  const FULL_COLUMN = { left: 72, size: 52, pad: 13 };
   // Answers slower than this say too little about when they were measured.
   const SLOW_MS = 700;
   const PLAYHEAD_TIMEOUT_MS = 4_000;
@@ -103,7 +118,14 @@
     holdStart: null,
     // Set by the first answer, or the first failure to get one.
     answered: false,
+    art: null,
+    // When the player itself was last heard, and its position then.
+    heard: 0,
+    sample: null,
   };
+  let hurryUntil = 0;
+  let leaving = null;
+  let drawnGeometry = null;
   let pollTimer = 0;
   let polling = false;
   let pollAgain = false;
@@ -141,7 +163,6 @@
   const base = () =>
     typeof BASE_PATH === 'string' ? BASE_PATH : location.pathname;
   const isOpen = () => Boolean(root.classList?.contains('menu-open'));
-  const visible = () => view !== 'off' && Boolean(info?.shown);
 
   // A question that hangs is given up, so the next one can be asked.
   async function ask(path, timeout) {
@@ -173,6 +194,9 @@
       holdUntil: 0,
       holdStart: null,
       answered: false,
+      art: null,
+      heard: 0,
+      sample: null,
     });
   }
 
@@ -185,6 +209,8 @@
   // is when the position was true, give or take the network's asymmetry.
   function take(answer, at) {
     stats.source = answer.source;
+    sync.heard = answer.source === 'player' ? performance.now() : 0;
+    if (answer.source === 'player') sync.art = answer.art ?? null;
     if (answer.source === 'none' || typeof answer.position !== 'number') {
       sync.start = null;
       sync.still = null;
@@ -202,6 +228,7 @@
     sync.duration = answer.duration ?? null;
     sync.playing = answer.playing === true;
     if (!sync.playing) {
+      sync.sample = null;
       sync.still = answer.position;
       sync.start = null;
       sync.samples = [];
@@ -209,6 +236,13 @@
     }
     sync.still = null;
     const start = at - answer.position;
+    if (info?.serverNow)
+      sync.sample = {
+        position: answer.position,
+        duration: sync.duration,
+        at: info.serverNow() - Math.max(0, (seconds() - at) * 1000),
+        playing: true,
+      };
     if (
       performance.now() < sync.holdUntil &&
       Math.abs(start - sync.holdStart) > 1.5
@@ -254,9 +288,41 @@
     pollTimer = 0;
   }
 
+  // The player's track, for the page to show ahead of the dashboard's.
+  function player(target) {
+    if (
+      target !== sync.target ||
+      !sync.track?.title ||
+      !sync.heard ||
+      performance.now() - sync.heard > FRESH_MS
+    )
+      return null;
+    return {
+      title: sync.track.title,
+      artist: sync.track.artist,
+      art: sync.art,
+      progress: sync.sample,
+    };
+  }
+
+  const identity = () => JSON.stringify([sync.track?.title, sync.art]);
+
+  // Soon after a step, at a track's end, and while a new cover is on its way.
+  function nextPoll() {
+    if (performance.now() < hurryUntil) return HURRY_MS;
+    if (sync.playing && sync.start !== null && sync.duration) {
+      const left = (sync.duration - (seconds() - sync.start)) * 1000;
+      if (left < POLL_MS && left > -HURRY_FOR_MS)
+        return Math.max(HURRY_MS, left + 150);
+    }
+    return POLL_MS;
+  }
+
+  const wanted = () => Boolean(info?.shown && info.active && info.target);
+
   async function poll() {
     stopPolling();
-    if (!visible() || !info.active || !info.target) return;
+    if (!wanted()) return;
     if (polling) {
       pollAgain = true;
       return;
@@ -264,14 +330,17 @@
     polling = true;
     const target = info.target;
     const sent = performance.now();
+    const before = identity();
     try {
       const answer = await ask(
-        `playhead/${encodeURIComponent(target)}`,
+        `playhead/${encodeURIComponent(target)}${
+          view === 'off' ? '' : '/lyrics'
+        }`,
         PLAYHEAD_TIMEOUT_MS,
       );
       const received = performance.now();
       const rtt = received - sent;
-      stats.rtt.push(rtt);
+      if (view !== 'off') stats.rtt.push(rtt);
       if (answer && target === sync.target) {
         // The position is as of the answer leaving Lugn: the time held there
         // is no part of the way here, which is taken as half the rest.
@@ -284,13 +353,20 @@
     }
     polling = false;
     if (target === sync.target) sync.answered = true;
-    report();
+    if (view !== 'off') report();
+    if (identity() !== before) {
+      // A new track without its cover yet: it follows shortly.
+      if (sync.heard && !sync.art)
+        hurryUntil = performance.now() + HURRY_FOR_MS;
+      else if (sync.art) hurryUntil = 0;
+      for (const listener of listeners) listener();
+    }
     render();
-    if (!visible()) return;
+    if (!wanted()) return;
     if (pollAgain) {
       pollAgain = false;
       void poll();
-    } else if (!pollTimer) pollTimer = window.setTimeout(poll, POLL_MS);
+    } else if (!pollTimer) pollTimer = window.setTimeout(poll, nextPoll());
   }
 
   // Once a minute the Hub says how well it keeps time (Lugn's journal).
@@ -414,6 +490,85 @@
     return wanted;
   }
 
+  const reduced = () =>
+    typeof matchMedia === 'function' &&
+    matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const canMove = (element) =>
+    Boolean(info?.shown) &&
+    !reduced() &&
+    typeof element?.animate === 'function';
+
+  // Where the current line sits in the layout on screen.
+  function geometry() {
+    const full = root.dataset.lyricsFull === 'true' && !isOpen();
+    return {
+      ...(full ? FULL_COLUMN : RAIL_COLUMN),
+      middle: (isOpen() ? OPEN : CLOSED).middle,
+    };
+  }
+
+  // The current line travels from where it was to where it is now: the new
+  // layout is in place at once, and this only moves the eye there.
+  function glide(from, to) {
+    if (!from || !canMove(pane)) return;
+    const scale = from.size / to.size;
+    const x = from.left - to.left;
+    const y = from.middle - to.middle;
+    if (!x && !y && scale === 1) return;
+    pane.animate(
+      [
+        {
+          transformOrigin: `0 ${to.middle}px`,
+          transform: `translate(${x}px, ${y}px) scale(${scale})`,
+          // The lines break differently at another size.
+          opacity: scale === 1 ? 1 : 0.1,
+        },
+        {
+          transformOrigin: `0 ${to.middle}px`,
+          transform: 'none',
+          opacity: 1,
+        },
+      ],
+      { duration: MODE_MS, easing: EASING },
+    );
+  }
+
+  // New lines rise into place.
+  function arrive(delay = 0) {
+    if (!canMove(pane)) return;
+    pane.animate(
+      [
+        { opacity: 0, transform: 'translateY(28px)' },
+        { opacity: 1, transform: 'none' },
+      ],
+      { duration: MODE_MS, delay, easing: EASING, fill: 'backwards' },
+    );
+  }
+
+  // The last track's lines fade while the next one's are fetched.
+  function leave() {
+    if (leaving) return;
+    cancelPlan();
+    const fade = canMove(track)
+      ? track.animate([{ opacity: 1 }, { opacity: 0 }], {
+          duration: 160,
+          easing: 'ease-out',
+          fill: 'forwards',
+        })
+      : null;
+    leaving = {
+      fade,
+      since: performance.now(),
+      timer: window.setTimeout(render, PATIENCE_MS),
+    };
+  }
+
+  function stay() {
+    window.clearTimeout(leaving?.timer);
+    leaving?.fade?.cancel();
+    leaving = null;
+  }
+
   // The rail gives the screen away only while there are lines to take it.
   function layout(status) {
     const full =
@@ -443,6 +598,7 @@
   }
 
   function showNote(status) {
+    stay();
     pane.dataset.status = status;
     layout(status);
     const [heading, detail] = NOTES[status] ?? ['Hämtar låttext …', ''];
@@ -458,7 +614,9 @@
   }
 
   function build(lines) {
+    stay();
     clearLines();
+    arrive();
     drawnLines = lines;
     elements = lines.map((line) => {
       const element = document.createElement('p');
@@ -483,12 +641,15 @@
     const band = isOpen() ? OPEN : CLOSED;
     // Before the first line, the first line waits in the middle, unlit.
     const [top, height] = metrics[Math.max(0, index)];
+    // Beside the rail fewer lines show, which leaves the page air.
+    const { size, pad } = geometry();
+    const full = size === FULL_COLUMN.size;
     const offset = Math.round(band.middle - top - height / 2);
     const opacity = metrics.map(([lineTop, lineHeight], at) => {
-      const value = OPACITY.get(at - index);
+      const value = (full ? OPACITY : RAIL_OPACITY).get(at - index);
       if (value === undefined) return 0;
-      const first = lineTop + offset + LINE_PAD;
-      const last = lineTop + offset + lineHeight - LINE_PAD;
+      const first = lineTop + offset + pad;
+      const last = lineTop + offset + lineHeight - pad;
       return at === index || (first >= band.top && last <= band.bottom)
         ? value
         : 0;
@@ -542,6 +703,7 @@
     const from = drawn;
     current = index;
     const next = frame(index);
+    drawnGeometry = geometry();
     apply(next);
     // The line is in place already: the movement only shows how it got there.
     if (move && from.transform) animate(from, next, 0, 'none');
@@ -624,22 +786,24 @@
     }
     entry = lookUp(name);
     if (entry.status === 'synced') follow();
+    else if (
+      entry.status === 'loading' &&
+      drawnLines &&
+      // Still the last track's: kept, fading, for a short while.
+      (!leaving || performance.now() - leaving.since < PATIENCE_MS)
+    )
+      leave();
     else showNote(entry.status);
   }
 
-  // The layout changed (navbar, view): measure again and move there.
+  // The layout changed (the navbar): measure again and move there.
   function relayout() {
+    const from = drawnGeometry;
     cancelPlan();
     metrics = null;
-    const index = current;
     current = null;
     render();
-    if (
-      index !== null &&
-      elements.length &&
-      typeof track.animate === 'function'
-    )
-      track.animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 180 });
+    if (elements.length) glide(from, geometry());
   }
 
   function applyView() {
@@ -648,16 +812,90 @@
     pane.hidden = view === 'off';
   }
 
+  const boxOf = (element) => element?.getBoundingClientRect?.();
+
+  // The cover is the same picture in every layout: it travels between its
+  // places, by the `translate` and `scale` properties so that the layout's own
+  // transform is left alone.
+  function moveCover(cover, before) {
+    const after = boxOf(cover);
+    if (!before?.width || !after?.width || !canMove(cover)) return;
+    const page = boxOf(root);
+    const zoom = page.width / root.offsetWidth || 1;
+    const scale = before.width / after.width;
+    const [originX, originY] = window
+      .getComputedStyle(cover)
+      .transformOrigin.split(' ')
+      .map(parseFloat);
+    const shift = (from, to, edge, offset, origin) => {
+      const was = (from - edge) / zoom - offset;
+      const is = (to - edge) / zoom - offset;
+      return was - origin - scale * (is - origin);
+    };
+    const x = shift(
+      before.left,
+      after.left,
+      page.left,
+      cover.offsetLeft,
+      originX,
+    );
+    const y = shift(before.top, after.top, page.top, cover.offsetTop, originY);
+    cover.animate(
+      [
+        { translate: `${x}px ${y}px`, scale: String(scale) },
+        { translate: '0px 0px', scale: '1' },
+      ],
+      { duration: MODE_MS + 60, easing: EASING },
+    );
+  }
+
+  // The lines fade out over the cover view taking their place.
+  function dismiss() {
+    if (!canMove(pane)) return;
+    pane.hidden = false;
+    pane.animate(
+      [
+        { opacity: 1, transform: 'none' },
+        { opacity: 0, transform: 'translateX(40px)' },
+      ],
+      { duration: 180, easing: 'ease-in' },
+    ).onfinish = () => {
+      pane.hidden = view === 'off';
+    };
+  }
+
   function choose(next) {
+    const cover = find('cover');
+    const before = boxOf(cover);
+    const from = drawnGeometry;
+    const was = view;
+    // The new layout takes its place at once, to be measured and then moved.
+    root.dataset.switching = 'true';
     view = next;
     keep(VIEW_KEY, view === 'off' ? '0' : view === 'full' ? 'full' : '1');
     applyView();
     cancelPlan();
+    stay();
     metrics = null;
     current = null;
-    if (view === 'off') stopPolling();
     for (const listener of listeners) listener();
     render();
+    if (was === 'off' || view === 'off') {
+      moveCover(cover, before);
+      const text = find('text')?.parentElement;
+      if (canMove(text))
+        text.animate([{ opacity: 0 }, { opacity: 1 }], {
+          duration: MODE_MS,
+          delay: 80,
+          fill: 'backwards',
+        });
+    }
+    if (view === 'off') dismiss();
+    else if (was === 'off') arrive(60);
+    else if (elements.length) glide(from, geometry());
+    window.setTimeout(() => {
+      root.dataset.switching = 'false';
+    }, 40);
     void poll();
   }
 
@@ -703,8 +941,14 @@
       render();
     },
     onToggle: (listener) => listeners.add(listener),
+    player,
+    // A step was asked for: the player is asked often until it shows.
+    hurry() {
+      hurryUntil = performance.now() + HURRY_FOR_MS;
+      void poll();
+    },
     draw(next) {
-      const wasVisible = visible();
+      const wasWanted = wanted();
       const changed =
         next.playing !== shownPlaying || next.title !== shownTitle;
       shownPlaying = next.playing;
@@ -713,14 +957,15 @@
       if (next.target !== sync.target) resetSync(next.target);
       render();
       // Ask at once when the page appears, and after a pause or a new title.
-      if (!visible()) stopPolling();
-      else if (!wasVisible || changed) void poll();
+      if (!wanted()) stopPolling();
+      else if (!wasWanted || changed) void poll();
       else if (!pollTimer && !polling) void poll();
     },
     sleep() {
       if (info) info = { ...info, shown: false };
       stopPolling();
       cancelPlan();
+      stay();
     },
   };
 })();

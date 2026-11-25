@@ -377,15 +377,23 @@ them on, two more controls appear beside it: one switches between the two
 layouts, and a stepper delays or advances the lines by a tenth of a second a
 press (up to 5 s). Each Hub remembers both choices.
 
-- **Beside the rail:** the cover, title, time bar, previous, play/pause, next
-  and volume form a 256 px rail on the left, and the lines fill the right.
+- **Beside the rail:** a 264 px rail on the left holds the cover, title, time
+  bar and play/pause; previous, next and the volume come with the navbar. The
+  right shows the current line with one before and one after.
 - **Lines only:** the lines take the whole screen at 52 px. A tap opens the
   navbar, and the rail comes in with it. Without lines to follow (none,
   instrumental, a failed fetch, no music) the rail stays.
 
-The current line is in the middle of the screen; up to two lines before and
-three after are dimmer, and only whole lines show. With the navbar open the rail
-shrinks to 92 % and the lines move up above the navbar's buttons.
+The current line is in the middle of the screen; its neighbours are dimmer (in
+the full layout up to two before and three after), and only whole lines show.
+With the navbar open the rail shrinks to 88 % and the lines move up above the
+navbar's buttons.
+
+Changes of layout move rather than jump: the cover travels to its new place and
+the current line to its new size and column. At a track change the last lines
+fade out while the next are fetched and the new ones rise in. The cover and the
+backdrop cross-fade from the last picture to the next, which is kept until the
+new one is decoded (for up to 5 s while a track has none).
 
 A tap on the lines opens the navbar, as on the rest of the page; seeking is the
 time bar's. A track without timed lines, an instrumental, a failed fetch and a

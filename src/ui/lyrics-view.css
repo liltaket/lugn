@@ -1,7 +1,8 @@
-/* Musik with lyrics (lyrics-view.js). Margins 52 px, a 256 px rail with the
-   cover and the controls, a 56 px gutter and the lines, the current one in the
-   middle of the screen. In the full layout the lines take the screen, and the
-   rail comes in with the navbar. Only opacity and transform move. */
+/* Musik with lyrics (lyrics-view.js). Beside the rail: margins 64 px, a
+   264 px rail, an 80 px gutter and the lines, the current one in the middle of
+   the screen. Closed, the rail holds only the cover, the title, the time and
+   play; the steps and the volume come with the navbar. In the full layout the
+   lines take the screen, and the rail comes in with the navbar. */
 .music-page-lyrics[hidden] {
   display: none;
 }
@@ -21,27 +22,27 @@
 }
 .music-page[data-lyrics='true'] .music-page-cover {
   position: absolute;
-  left: 52px;
-  top: 52px;
-  width: 256px;
-  height: 256px;
+  left: 64px;
+  top: 60px;
+  width: 264px;
+  height: 264px;
   border-radius: 18px;
 }
 .music-page[data-lyrics='true'] .music-page-info {
   position: absolute;
-  left: 52px;
-  top: 326px;
-  width: 256px;
+  left: 64px;
+  top: 348px;
+  width: 264px;
   gap: 0;
 }
 /* With the navbar open the rail shrinks towards its top left corner: both
-   parts as one block, from y 52 to 24 at 92 %. */
+   parts as one block, from y 60 to 24 at 88 %. */
 .music-page[data-lyrics='true'].menu-open .music-page-cover {
-  transform: translateY(-28px) scale(0.92);
+  transform: translateY(-36px) scale(0.88);
   transform-origin: 0 0;
 }
 .music-page[data-lyrics='true'].menu-open .music-page-info {
-  transform: translateY(-50px) scale(0.92);
+  transform: translateY(-71px) scale(0.88);
   transform-origin: 0 0;
 }
 .music-page[data-lyrics='true'] .music-page-source {
@@ -49,7 +50,7 @@
 }
 .music-page[data-lyrics='true'] .music-page-text {
   grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
+  gap: 4px;
 }
 .music-page[data-lyrics='true'] .music-page-title {
   display: block;
@@ -64,12 +65,15 @@
 }
 .music-page[data-lyrics='true'] .music-page-progress {
   gap: 8px;
-  margin-top: 16px;
+  margin-top: 20px;
 }
 .music-page[data-lyrics='true'] .music-page-times {
   line-height: 17px;
+  font-size: 13px;
+  color: rgba(238, 241, 232, 0.48);
 }
-/* The three buttons span the rail; the volume takes the row below. */
+/* The three buttons span the rail; the volume takes the row below. A player
+   without steps has play in the middle. */
 .music-page[data-lyrics='true'] .music-page-controls {
   flex-wrap: wrap;
   justify-content: space-between;
@@ -79,6 +83,12 @@
 .music-page[data-lyrics='true'] .music-page-play {
   width: 72px;
   height: 72px;
+  margin: 0 auto;
+}
+.music-page[data-lyrics='true']
+  .music-page-skip:not([hidden])
+  + .music-page-play {
+  margin: 0;
 }
 .music-page[data-lyrics='true'] .music-page-play svg {
   width: 32px;
@@ -92,9 +102,33 @@
   width: 24px;
   height: 24px;
 }
-/* A player without steps keeps the play button in the middle. */
-.music-page[data-lyrics='true'] .music-page-skip[hidden] + .music-page-play {
-  margin: 0 auto;
+/* Closed, play is a quiet button on its own, and what else there is to press
+   keeps its place for the navbar to bring in. */
+.music-page[data-lyrics='true'] .music-page-play {
+  transition:
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 200ms ease-out,
+    color 200ms ease-out;
+}
+.music-page[data-lyrics='true']:not(.menu-open) .music-page-play {
+  transform: scale(0.84);
+  background: rgba(238, 241, 232, 0.12);
+  color: #f4f4ef;
+  box-shadow: none;
+}
+.music-page[data-lyrics='true'] .music-page-skip,
+.music-page[data-lyrics='true'] .music-page-volume {
+  transition:
+    opacity 220ms ease-out,
+    visibility 0s;
+}
+.music-page[data-lyrics='true']:not(.menu-open) .music-page-skip,
+.music-page[data-lyrics='true']:not(.menu-open) .music-page-volume {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 220ms ease-out,
+    visibility 0s linear 220ms;
 }
 .music-page[data-lyrics='true'] .music-page-volume {
   flex: 0 0 calc(100% + 4px);
@@ -123,8 +157,8 @@
 
 .music-page-lyrics {
   position: absolute;
-  left: 364px;
-  right: 52px;
+  left: 408px;
+  right: 56px;
   top: 0;
   height: 600px;
   overflow: hidden;
@@ -139,9 +173,9 @@
 /* The script sets each line's opacity; unset lines are not shown. */
 .ly-line {
   margin: 0;
-  padding: 13px 0;
-  font-size: 36px;
-  line-height: 1.2;
+  padding: 16px 0;
+  font-size: 34px;
+  line-height: 1.24;
   font-weight: 700;
   letter-spacing: -0.012em;
   overflow-wrap: anywhere;
@@ -155,6 +189,7 @@
   right: 72px;
 }
 .music-page[data-lyrics-full='true']:not(.menu-open) .ly-line {
+  padding: 13px 0;
   font-size: 52px;
   line-height: 1.18;
   letter-spacing: -0.018em;
@@ -234,7 +269,15 @@
 .ly-skeleton i:nth-child(4) {
   width: 52%;
 }
+/* A layout change is measured in place, then moved by the script. */
+.music-page[data-switching='true'] .music-page-cover,
+.music-page[data-switching='true'] .music-page-info {
+  transition: none !important;
+}
 @media (prefers-reduced-motion: reduce) {
+  .music-page[data-lyrics='true'] .music-page-play,
+  .music-page[data-lyrics='true'] .music-page-skip,
+  .music-page[data-lyrics='true'] .music-page-volume,
   .music-page[data-lyrics='true'] .music-page-cover,
   .music-page[data-lyrics='true'] .music-page-info,
   .ly-note,

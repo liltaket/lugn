@@ -150,6 +150,10 @@ describe('the WiiM playhead', () => {
       { sendCommand },
       () => now,
     );
+    const asked = () =>
+      sendCommand.mock.calls.filter(
+        (call) => (call as unknown as string[])[1] === 'getPlayerStatus',
+      ).length;
     const [first, second] = await Promise.all([
       playhead.read('music.room'),
       playhead.read('music.room'),
@@ -164,10 +168,76 @@ describe('the WiiM playhead', () => {
       album: null,
     });
     expect(second).toEqual(first);
-    expect(sendCommand).toHaveBeenCalledTimes(1);
+    expect(asked()).toBe(1);
     now += 500;
     await playhead.read('music.room');
-    expect(sendCommand).toHaveBeenCalledTimes(2);
+    expect(asked()).toBe(2);
+  });
+
+  const meta = (title: string, albumArtURI: string) =>
+    JSON.stringify({ metaData: { title, albumArtURI } });
+  const cover = new Uint8Array([0xff, 0xd8, 0xff, 0x00]);
+  const spotify = `https://i.scdn.co/image/${'ab'.repeat(20)}`;
+
+  function covers(metaReply: () => string, image = cover) {
+    let now = 1_000;
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(image));
+    const playhead = new WiimPlayhead(
+      { 'music.room': '192.168.1.5' },
+      {
+        sendCommand: async (_host, command) =>
+          command === 'getMetaInfo' ? metaReply() : status(),
+      },
+      () => now,
+      fetcher,
+    );
+    const read = async (advance = 300) => {
+      now += advance;
+      const reading = await playhead.read('music.room');
+      // The cover is fetched behind the answer.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return reading;
+    };
+    return { playhead, fetcher, read };
+  }
+
+  it("fetches the track's cover once, and never holds the answer for it", async () => {
+    const s = covers(() => meta('Song', spotify));
+    expect((await s.read())?.art).toBeUndefined();
+    const id = 'ab'.repeat(20);
+    expect((await s.read())?.art).toBe(id);
+    await s.read();
+    expect(s.fetcher).toHaveBeenCalledTimes(1);
+    expect(s.fetcher.mock.calls[0]![0]).toBe(spotify);
+    expect(s.playhead.art(id)).toEqual({
+      body: cover,
+      contentType: 'image/jpeg',
+    });
+  });
+
+  it("waits for the metadata to be the track's", async () => {
+    let title = 'The last song';
+    const s = covers(() => meta(title, spotify));
+    await s.read();
+    title = 'Song';
+    expect((await s.read())?.art).toBeUndefined();
+    await s.read(1_100);
+    expect((await s.read())?.art).toBe('ab'.repeat(20));
+  });
+
+  it('fetches covers from one place only, and only JPEGs', async () => {
+    const elsewhere = covers(() =>
+      meta('Song', 'http://192.168.1.1/image/' + 'ab'.repeat(20)),
+    );
+    await elsewhere.read();
+    expect((await elsewhere.read(2_000))?.art).toBeUndefined();
+    expect(elsewhere.fetcher).not.toHaveBeenCalled();
+    const page = covers(
+      () => meta('Song', spotify),
+      new TextEncoder().encode('<html>'),
+    );
+    await page.read();
+    expect((await page.read())?.art).toBeUndefined();
   });
 
   it('has no answer for an input, a failure or an unknown player', async () => {
@@ -243,7 +313,7 @@ describe('the Hub lyrics route', () => {
     const get = (target: string, headers: Record<string, string> = {}) =>
       route(`lyrics/${target}`, headers);
     const at = (target: string) => route(`playhead/${target}`);
-    return { play, get, at };
+    return { play, get, at, route };
   }
 
   it("looks up the player's own track and names it", async () => {
@@ -301,7 +371,10 @@ describe('the Hub lyrics route', () => {
       media_duration: 200,
       media_position_updated_at: new Date().toISOString(),
     });
-    expect(await (await s.at('music.room')).json()).toEqual({
+    // Without lyrics on the page, nothing goes to the lyrics source.
+    await s.at('music.room');
+    expect(lookup).not.toHaveBeenCalled();
+    expect(await (await s.at('music.room/lyrics')).json()).toEqual({
       source: 'player',
       playing: true,
       position: 12.595,
@@ -316,6 +389,42 @@ describe('the Hub lyrics route', () => {
       album: 'Album',
       durationSeconds: 200.5,
     });
+  });
+
+  it("serves the player's cover from Lugn itself", async () => {
+    const id = 'cd'.repeat(20);
+    const s = await setup(undefined, {
+      now: () => 0,
+      read: async () => ({
+        playing: true,
+        positionSeconds: 1,
+        durationSeconds: 200,
+        measuredAt: 0,
+        title: 'Song',
+        artist: 'Band',
+        album: null,
+        art: id,
+      }),
+      art: (wanted) =>
+        wanted === id
+          ? { body: new Uint8Array([0xff, 0xd8]), contentType: 'image/jpeg' }
+          : undefined,
+    });
+    const answer = (await (await s.at('music.room')).json()) as {
+      art: string;
+    };
+    expect(answer.art).toMatch(
+      new RegExp(`^/k/a{32}/display-api/player-art/${id}$`),
+    );
+    const image = await s.route(`player-art/${id}`);
+    expect(image.headers.get('content-type')).toBe('image/jpeg');
+    expect(image.headers.get('cache-control')).toContain('immutable');
+    expect(new Uint8Array(await image.arrayBuffer())).toHaveLength(2);
+    expect((await s.route('player-art/other')).status).toBe(404);
+    expect(
+      (await s.route(`player-art/${id}`, { 'sec-fetch-site': 'cross-site' }))
+        .status,
+    ).toBe(403);
   });
 
   it('marks a position from Home Assistant as coarse', async () => {

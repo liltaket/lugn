@@ -148,7 +148,8 @@ function setup({
       ?.textContent;
   const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms);
   const asked = (kind: string) =>
-    fetcher.mock.calls.filter(([url]) => url.includes(`/${kind}/`)).length;
+    fetcher.mock.calls.filter(([url]) => url.includes(`/display-api/${kind}/`))
+      .length;
   return {
     api,
     view,
@@ -174,7 +175,13 @@ describe('Musik lyrics', () => {
     await s.wait(3_000);
     expect(s.api.shown()).toBe(false);
     expect(s.view('lyrics').hidden).toBe(true);
-    expect(s.fetcher).not.toHaveBeenCalled();
+    // Only the player is asked, and nothing about lyrics.
+    expect(s.asked('lyrics')).toBe(0);
+    expect(
+      s.fetcher.mock.calls.every(([url]) =>
+        url.endsWith('/playhead/music.room'),
+      ),
+    ).toBe(true);
     s.api.toggle();
     expect(s.view('root').dataset['lyrics']).toBe('true');
     expect(s.storage.get('lugn.musicLyrics')).toBe('1');
