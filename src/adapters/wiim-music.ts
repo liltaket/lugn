@@ -889,6 +889,10 @@ export class WiimMusicAdapter implements MusicAdapter {
         wireCommand = `MCUKeyShortClick:${presetNumber}`;
         break;
       }
+      case 'seek':
+        // The HTTP API takes whole seconds.
+        wireCommand = `setPlayerCmd:seek:${Math.floor(requested.value)}`;
+        break;
       case 'track':
         wireCommand =
           requested.value === 'next'

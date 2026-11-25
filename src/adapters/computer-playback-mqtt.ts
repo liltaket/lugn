@@ -17,6 +17,13 @@ const Identity = {
   session_id: UUID,
   connection_id: UUID,
 };
+const ComputerPlaybackActionSchema = z.enum([
+  'pause',
+  'resume',
+  'next',
+  'previous',
+  'seek',
+]);
 export const ComputerPlaybackPlayerSchema = z.strictObject({
   player: PlayerName,
   player_instance_id: UUID,
@@ -24,6 +31,10 @@ export const ComputerPlaybackPlayerSchema = z.strictObject({
   playback_status: z.enum(['Playing', 'Paused', 'Stopped']).nullable(),
   can_pause: z.boolean(),
   can_play: z.boolean(),
+  // Absent from agents without track and position control.
+  can_go_next: z.boolean().optional(),
+  can_go_previous: z.boolean().optional(),
+  can_seek: z.boolean().optional(),
   pause_lease: z
     .strictObject({
       pause_command_id: UUID,
@@ -47,7 +58,7 @@ export const ComputerPlaybackCommandSchema = z
   .strictObject({
     ...Identity,
     command_id: UUID,
-    action: z.enum(['pause', 'resume']),
+    action: ComputerPlaybackActionSchema,
     player: PlayerName,
     player_instance_id: UUID,
     content_id: UUID,
@@ -56,7 +67,10 @@ export const ComputerPlaybackCommandSchema = z
     pause_command_id: UUID.nullable(),
     resume_token: UUID.nullable(),
     lease_ttl_ms: Integer.nullable(),
+    /** A seek's position; every other command omits it. */
+    position_ms: Integer.max(604_800_000).optional(),
   })
+  .refine((c) => (c.action === 'seek') === (c.position_ms !== undefined))
   .refine(
     (c) =>
       c.expires_at_ms > c.issued_at_ms &&
@@ -69,15 +83,19 @@ export const ComputerPlaybackCommandSchema = z
         c.lease_ttl_ms !== null &&
         c.lease_ttl_ms >= 1_000 &&
         c.lease_ttl_ms <= 3_600_000
-      : c.pause_command_id !== null &&
-        c.resume_token !== null &&
-        c.lease_ttl_ms === null,
+      : c.action === 'resume'
+        ? c.pause_command_id !== null &&
+          c.resume_token !== null &&
+          c.lease_ttl_ms === null
+        : c.pause_command_id === null &&
+          c.resume_token === null &&
+          c.lease_ttl_ms === null,
   );
 export const ComputerPlaybackAckSchema = z
   .strictObject({
     ...Identity,
     command_id: UUID,
-    action: z.enum(['pause', 'resume']),
+    action: ComputerPlaybackActionSchema,
     player: PlayerName,
     player_instance_id: UUID,
     content_id: UUID,
@@ -86,6 +104,8 @@ export const ComputerPlaybackAckSchema = z
     reason: z.enum([
       'paused',
       'resumed',
+      'skipped',
+      'sought',
       'disabled',
       'retained',
       'expired',
@@ -117,7 +137,12 @@ export const ComputerPlaybackAckSchema = z
           a.resume_token !== null &&
           a.lease_expires_at_ms !== null &&
           a.lease_expires_at_ms > a.timestamp_ms
-        : a.reason === 'resumed' &&
+        : a.reason ===
+            (a.action === 'resume'
+              ? 'resumed'
+              : a.action === 'seek'
+                ? 'sought'
+                : 'skipped') &&
           a.resume_token === null &&
           a.lease_expires_at_ms === null),
   );
@@ -281,18 +306,37 @@ export class ComputerPlaybackMqttAdapter {
       player.content_id !== command.content_id
     )
       return Promise.reject(new Error('Computer playback player changed'));
-    if (
-      command.action === 'pause'
-        ? player.playback_status !== 'Playing' ||
-          !player.can_pause ||
-          player.pause_lease !== null
-        : player.playback_status !== 'Paused' ||
-          !player.can_play ||
-          !player.pause_lease ||
-          player.pause_lease.pause_command_id !== command.pause_command_id ||
-          player.pause_lease.resume_token !== command.resume_token ||
-          player.pause_lease.expires_at_ms <= now
-    )
+    const authorized = () => {
+      switch (command.action) {
+        case 'pause':
+          return (
+            player.playback_status === 'Playing' &&
+            player.can_pause &&
+            player.pause_lease === null
+          );
+        case 'resume':
+          return (
+            player.playback_status === 'Paused' &&
+            player.can_play &&
+            !!player.pause_lease &&
+            player.pause_lease.pause_command_id === command.pause_command_id &&
+            player.pause_lease.resume_token === command.resume_token &&
+            player.pause_lease.expires_at_ms > now
+          );
+        default:
+          return (
+            player.playback_status === 'Playing' &&
+            player[
+              command.action === 'next'
+                ? 'can_go_next'
+                : command.action === 'previous'
+                  ? 'can_go_previous'
+                  : 'can_seek'
+            ] === true
+          );
+      }
+    };
+    if (!authorized())
       return Promise.reject(
         new Error(
           'Computer playback action is not authorized by current state',

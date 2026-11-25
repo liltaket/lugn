@@ -152,6 +152,7 @@ describe('CONTROL v1 strict wire schemas', () => {
       ['control-resume.example.json', ComputerPlaybackCommandSchema],
       ['control-ack-paused.example.json', ComputerPlaybackAckSchema],
       ['control-ack-resumed.example.json', ComputerPlaybackAckSchema],
+      ['control-seek.example.json', ComputerPlaybackCommandSchema],
     ] as const) {
       const payload = JSON.parse(
         readFileSync(
@@ -228,6 +229,72 @@ describe('CONTROL v1 strict wire schemas', () => {
     expect(
       ComputerPlaybackAckSchema.safeParse(ack({ reason: 'resumed' })).success,
     ).toBe(false);
+  });
+});
+
+describe('track steps and seek on the wire', () => {
+  const step = (
+    action: 'next' | 'previous' | 'seek',
+    position_ms?: number,
+  ): ComputerPlaybackCommand =>
+    command({
+      action,
+      lease_ttl_ms: null,
+      ...(position_ms === undefined ? {} : { position_ms }),
+    });
+
+  it('carries no ownership, and a position only for a seek', () => {
+    const valid = (input: unknown) =>
+      ComputerPlaybackCommandSchema.safeParse(input).success;
+    expect(valid(step('next'))).toBe(true);
+    expect(valid(step('previous'))).toBe(true);
+    expect(valid(step('seek', 0))).toBe(true);
+    expect(valid(step('seek'))).toBe(false);
+    expect(valid(step('next', 1))).toBe(false);
+    expect(valid(step('seek', 604_800_001))).toBe(false);
+    expect(valid({ ...step('next'), resume_token: TOKEN })).toBe(false);
+    expect(valid({ ...step('next'), lease_ttl_ms: 1_000 })).toBe(false);
+    const applied = (action: string, reason: string) =>
+      ComputerPlaybackAckSchema.safeParse({
+        ...ack(),
+        action,
+        reason,
+        resume_token: null,
+        lease_expires_at_ms: null,
+      }).success;
+    expect(applied('next', 'skipped')).toBe(true);
+    expect(applied('seek', 'sought')).toBe(true);
+    expect(applied('seek', 'skipped')).toBe(false);
+    expect(applied('next', 'resumed')).toBe(false);
+  });
+
+  it('sends only what the playing media says it can take', async () => {
+    const { adapter, mqtt } = setup();
+    const player = state().players[0]!;
+    // An agent without these capabilities offers none of them.
+    mqtt.receive('state', state());
+    await expect(adapter.sendCommand(step('next'))).rejects.toThrow(
+      'not authorized',
+    );
+    mqtt.receive(
+      'state',
+      state({ sequence: 2, players: [{ ...player, can_go_next: true }] }),
+    );
+    await expect(adapter.sendCommand(step('seek', 1))).rejects.toThrow(
+      'not authorized',
+    );
+    const sent = adapter.sendCommand(step('next'));
+    expect(JSON.parse(mqtt.publish.mock.calls[0]![1])).toEqual(step('next'));
+    mqtt.receive(
+      'ack',
+      ack({
+        action: 'next',
+        reason: 'skipped',
+        resume_token: null,
+        lease_expires_at_ms: null,
+      }),
+    );
+    await expect(sent).resolves.toMatchObject({ outcome: 'applied' });
   });
 });
 

@@ -342,6 +342,7 @@
   margin-top: 18px;
 }
 .music-page-bar {
+  flex: 1;
   height: 4px;
   border-radius: 2px;
   background: rgba(238, 241, 232, 0.18);
@@ -369,7 +370,7 @@
   margin-top: 18px;
 }
 .music-page-play,
-.music-page-next {
+.music-page-skip {
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -389,20 +390,71 @@
   height: 38px;
   fill: currentColor;
 }
-.music-page-next {
+.music-page-skip {
   width: 64px;
   height: 64px;
   background: rgba(238, 241, 232, 0.12);
   border: 1px solid rgba(238, 241, 232, 0.14);
 }
-.music-page-next svg {
+.music-page-skip svg {
   width: 26px;
   height: 26px;
   fill: currentColor;
 }
+.music-page-skip:disabled {
+  opacity: 0.35;
+}
 .music-page-play[aria-busy='true'],
-.music-page-next[aria-busy='true'] {
+.music-page-skip[aria-busy='true'] {
   opacity: 0.6;
+}
+/* The time and volume bars look as thin as they are; the area a finger or the
+   mouse takes them by is much taller, without moving anything around them. A
+   knob shows only while one is held, hovered or focused. */
+.music-page-seek,
+.music-page-volume-slider {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.music-page-seek {
+  height: 36px;
+  margin: -16px 0;
+}
+.music-page-volume-slider {
+  height: 48px;
+  margin: -22px 0;
+}
+.music-page-seek[role='slider'],
+.music-page-volume-slider[role='slider'] {
+  touch-action: none;
+  cursor: pointer;
+  border-radius: 12px;
+}
+.music-page-thumb {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--at, 0) * 100%);
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  background: #f4f4ef;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  pointer-events: none;
+}
+[role='slider'][data-dragging='true'] > .music-page-thumb,
+[role='slider']:focus-visible > .music-page-thumb {
+  opacity: 1;
+}
+@media (hover: hover) {
+  [role='slider']:hover > .music-page-thumb {
+    opacity: 1;
+  }
+}
+.music-page-volume-slider[data-dragging='true'] i {
+  transition: none;
 }
 .music-page-volume {
   display: flex;

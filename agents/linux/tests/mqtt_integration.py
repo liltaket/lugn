@@ -43,7 +43,7 @@ def check_schema(value, schema, path="payload"):
     keywords fail explicitly so they cannot silently weaken this test.
     """
     supported = {"$schema", "$id", "title", "description", "type", "const",
-                 "enum", "format", "pattern", "minimum", "maximum", "anyOf",
+                 "enum", "format", "pattern", "minimum", "maximum", "anyOf", "not",
                  "required", "properties", "additionalProperties", "items",
                  "maxLength", "maxItems", "minLength", "oneOf",
                  "contentEncoding", "contentMediaType"}
@@ -57,6 +57,15 @@ def check_schema(value, schema, path="payload"):
                 pass
         else:
             raise AssertionError(f"{path}: no anyOf branch matched")
+    if "not" in schema:
+        # An unknown keyword inside would fail the inner check and so pass this one.
+        require(not set(schema["not"]) - supported, f"unsupported schema keywords at {path}.not")
+        try:
+            check_schema(value, schema["not"], path)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"{path}: matched a forbidden schema")
     if "oneOf" in schema:
         matches = 0
         for candidate in schema["oneOf"]:

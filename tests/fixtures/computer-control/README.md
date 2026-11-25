@@ -1,7 +1,7 @@
 # CONTROL v1 fixtures
 
-These five examples and three schemas are copied byte-for-byte from
-`agents/linux/protocol/` in companion PR #66. Observation v1 fixtures remain in
+These six examples and three schemas are copied byte-for-byte from
+`agents/linux/protocol/`. Observation v1 fixtures remain in
 `../computer-mqtt/`. All identities and lease tokens here are deterministic test
 values, not production credentials.
 

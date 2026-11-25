@@ -923,6 +923,11 @@ describe('Home Assistant music adapter', () => {
       target: 'music.room',
       requested: { property: 'track', value: 'previous' },
     });
+    await adapter.dispatch({
+      id: '4s',
+      target: 'music.room',
+      requested: { property: 'seek', value: 83 },
+    });
     expect(transport.mock.calls.map(([url]) => url)).toEqual(
       [
         'media_play',
@@ -931,6 +936,7 @@ describe('Home Assistant music adapter', () => {
         'select_source',
         'media_next_track',
         'media_previous_track',
+        'media_seek',
       ].map(
         (service) => `http://ha.local/api/services/media_player/${service}`,
       ),
@@ -944,6 +950,7 @@ describe('Home Assistant music adapter', () => {
       { entity_id: 'media_player.room', source: 'Optical' },
       { entity_id: 'media_player.room' },
       { entity_id: 'media_player.room' },
+      { entity_id: 'media_player.room', seek_position: 83 },
     ]);
     await expect(
       adapter.dispatch({
@@ -959,7 +966,7 @@ describe('Home Assistant music adapter', () => {
         requested: { property: 'playback', value: 'playing' },
       }),
     ).rejects.toThrow('No Home Assistant music');
-    expect(transport).toHaveBeenCalledTimes(6);
+    expect(transport).toHaveBeenCalledTimes(7);
   });
   it('normalizes startup and event observations, unavailable entities and malformed attributes', () => {
     const adapter = new HomeAssistantMusicAdapter(

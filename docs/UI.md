@@ -224,8 +224,8 @@ clicks and the pointer bridge responsive while something plays:
 The Hub dashboard is the first of several whole-screen pages (`src/ui/pages.js`,
 `pages.css`, `page-views.js`): **Hem** (the dashboard above), **Musik** (Hem's
 music full screen: cover over a soft, enlarged copy of itself, source, title, artist,
-progress with elapsed and total time, play/pause and the reported volume; the
-Spotify DJ and Optical choices when nothing plays), **Klocka** (large clock,
+progress with elapsed and total time, previous, play/pause, next and the volume;
+the Spotify DJ and Optical choices when nothing plays), **Klocka** (large clock,
 indoor air and presence) and **Info** (connection, stream, revisions, memory,
 screen, browser, and an opt-in swipe probe). Tapping the cover on Hem opens
 Musik; the controls on and around it keep their own actions. Musik has no
@@ -317,7 +317,23 @@ show the state Hem's buttons show (selected, pending, waiting for lamps). Musik
 reads title, artist, source and cover from Hem's music card, so the same pause
 grace, computer media and retained artwork rules apply, and play/pause sends
 Hem's playback command. Its progress bar is one compositor animation from the
-current position to the end of the track, run only while Musik is shown. A swipe with a finger or
+current position to the end of the track, run only while Musik is shown.
+
+The time bar and the volume bar on Musik can be adjusted: drag or tap with a
+finger or the mouse (also the bridged one), scroll the wheel over them (up or
+right is more: 2 percentage points or 5 s a notch) or use the arrow keys. They
+look as before; the area that takes the press is taller than the line, and a
+knob shows while a bar is held, hovered or focused. Volume is sent during a drag
+(at most every 0.3 s) and on release, one request at a time. A seek is sent on
+release. The chosen value is shown until the player reports it (volume at most
+4 s, position 5 s). A bar that cannot be adjusted is only a picture, and a swipe
+over it turns the page. Previous, next and seek follow what plays: the player's
+own track, or behind the computer input the computer's playing media, as far as
+it supports each (see [COMPUTER.md](COMPUTER.md#optional-optical-playback-control)).
+On the computer input the two buttons stay, disabled, while it cannot take them,
+and there is no time bar while it is paused.
+
+A swipe with a finger or
 the desk Hub's bridged mouse, a horizontal wheel or trackpad, a vertical wheel
 notch outside scrollable areas and the arrow keys turn the page; small dots at
 the bottom show where you are. A swipe turns at most one page. Taps and

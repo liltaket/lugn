@@ -121,6 +121,21 @@ fn fingerprint(value: &OwnedValue) -> Option<Vec<u8>> {
     (result.len() <= MAX_METADATA).then_some(result)
 }
 
+/// `mpris:trackid` as an object path. Several players (Spotify among them)
+/// send it as a string.
+fn track_path(metadata: &OwnedValue) -> Option<String> {
+    let map: Properties = metadata.try_clone().ok()?.try_into().ok()?;
+    let value = map.get("mpris:trackid")?;
+    let path = <&ObjectPath<'_>>::try_from(value)
+        .ok()
+        .map(|path| path.as_str())
+        .or_else(|| <&str>::try_from(value).ok())?;
+    (usable_track(path) && ObjectPath::try_from(path).is_ok()).then(|| path.to_owned())
+}
+fn position_us(command: &Command) -> i64 {
+    i64::try_from(command.position_ms.unwrap_or(0).saturating_mul(1_000)).unwrap_or(i64::MAX)
+}
+
 struct OwnedLease {
     wire: Lease,
     deadline: Instant,
@@ -132,6 +147,11 @@ struct Record {
     can_control: Option<bool>,
     can_pause: Option<bool>,
     can_play: Option<bool>,
+    can_go_next: Option<bool>,
+    can_go_previous: Option<bool>,
+    can_seek: Option<bool>,
+    /// The current track's object path, which SetPosition needs.
+    track: Option<String>,
     generation: u64,
     lease: Option<OwnedLease>,
 }
@@ -146,12 +166,19 @@ impl Record {
                 playback_status: None,
                 can_pause: false,
                 can_play: false,
+                can_go_next: false,
+                can_go_previous: false,
+                can_seek: false,
                 pause_lease: None,
             },
             metadata: None,
             can_control: None,
             can_pause: None,
             can_play: None,
+            can_go_next: None,
+            can_go_previous: None,
+            can_seek: None,
+            track: None,
             generation: 0,
             lease: None,
         }
@@ -165,6 +192,18 @@ impl Record {
         let known = self.metadata.is_some() && self.can_control == Some(true);
         self.wire.can_pause = known && self.can_pause == Some(true);
         self.wire.can_play = known && self.can_play == Some(true);
+        self.wire.can_go_next = known && self.can_go_next == Some(true);
+        self.wire.can_go_previous = known && self.can_go_previous == Some(true);
+        self.wire.can_seek = known && self.can_seek == Some(true);
+    }
+    fn capable(&self, action: Action) -> bool {
+        match action {
+            Action::Next => self.wire.can_go_next,
+            Action::Previous => self.wire.can_go_previous,
+            Action::Seek => self.wire.can_seek,
+            Action::Pause => self.wire.can_pause,
+            Action::Resume => self.wire.can_play,
+        }
     }
     fn unknown(&mut self) {
         self.revoke();
@@ -174,6 +213,10 @@ impl Record {
         self.can_control = None;
         self.can_pause = None;
         self.can_play = None;
+        self.can_go_next = None;
+        self.can_go_previous = None;
+        self.can_seek = None;
+        self.track = None;
         self.capabilities();
     }
     fn expire(&mut self) {
@@ -245,6 +288,7 @@ impl Actor {
             return;
         }
         if let Some(value) = properties.get("Metadata") {
+            record.track = track_path(value);
             let metadata = fingerprint(value);
             if metadata != record.metadata {
                 record.revoke();
@@ -272,6 +316,19 @@ impl Actor {
                 *field = value;
             }
         }
+        // Track and position capabilities carry no ownership: a change only
+        // changes what is offered.
+        for (key, field) in [
+            ("CanGoNext", &mut record.can_go_next),
+            ("CanGoPrevious", &mut record.can_go_previous),
+            ("CanSeek", &mut record.can_seek),
+        ] {
+            if let Some(value) = properties.get(key) {
+                *field = bool::try_from(value).ok();
+            } else if invalidated.iter().any(|name| name == key) {
+                *field = None;
+            }
+        }
         if let Some(value) = properties.get("PlaybackStatus") {
             let status = <&str>::try_from(value)
                 .ok()
@@ -280,13 +337,14 @@ impl Actor {
             let expected = self.expected.as_mut().filter(|expected| {
                 expected.name == name && expected.instance == record.wire.player_instance_id
             });
+            // Only Pause and Resume expect a transition.
             let target = expected.as_ref().map(|expected| match expected.action {
                 Action::Pause => "Paused",
-                Action::Resume => "Playing",
+                _ => "Playing",
             });
             let from = expected.as_ref().map(|expected| match expected.action {
                 Action::Pause => "Playing",
-                Action::Resume => "Paused",
+                _ => "Paused",
             });
             let allowed = expected.as_ref().is_some_and(|expected| !expected.observed)
                 && status.as_deref() == target
@@ -401,6 +459,11 @@ impl Actor {
         if control::now_ms() >= guard.command_expiry {
             return Err(Reason::Expired);
         }
+        // Once sent, a track step or seek changes the content and position
+        // itself: only the checks before the first poll apply to it.
+        if polled && guard.action.is_transport() {
+            return Ok(());
+        }
         let record = self.players.get(&guard.name).ok_or(Reason::PlayerChanged)?;
         if record.owner != guard.owner || record.wire.player_instance_id != guard.instance {
             return Err(Reason::PlayerChanged);
@@ -431,6 +494,7 @@ impl Actor {
                 },
             ),
             Action::Resume => ("Paused", "Playing", record.wire.can_play),
+            action => ("Playing", "Playing", record.capable(action)),
         };
         if !capable {
             return Err(Reason::NotCapable);
@@ -526,7 +590,7 @@ impl Actor {
             }
             let (before, after) = match command.action {
                 Action::Pause => ("Playing", "Paused"),
-                Action::Resume => ("Paused", "Playing"),
+                _ => ("Paused", "Playing"),
             };
             if ![Some(before), Some(after)].contains(&record.wire.playback_status.as_deref()) {
                 self.stage = "status_mismatch";
@@ -638,6 +702,114 @@ impl Actor {
         }
         Ok(record)
     }
+    /// Next, Previous and Seek on the exact playing content. MPRIS gives no
+    /// confirmation to wait for (Previous may only restart the track), so
+    /// applied means the player accepted the call.
+    async fn transport(
+        &mut self,
+        command: &Command,
+        owner: String,
+        generation: u64,
+        deadline: Instant,
+        clock: &mut Clock,
+    ) -> Result<(Reason, Option<Lease>), (Outcome, Reason)> {
+        let reject = |reason| (Outcome::Rejected, reason);
+        let record = self.target(command).map_err(reject)?;
+        if record.wire.playback_status.as_deref() != Some("Playing") {
+            return Err(reject(Reason::NotPlaying));
+        }
+        if !record.capable(command.action) {
+            return Err(reject(Reason::NotCapable));
+        }
+        let track = record.track.clone();
+        // Without a track path, a seek is made relative to where the player is.
+        let offset_us = if command.action == Action::Seek && track.is_none() {
+            let connection = self.connection.clone();
+            let unique = owner.clone();
+            let reply = self
+                .wait(
+                    async move {
+                        connection
+                            .call_method(
+                                Some(unique.as_str()),
+                                PATH,
+                                Some(PROPS),
+                                "Get",
+                                &(IFACE, "Position"),
+                            )
+                            .await
+                    },
+                    deadline,
+                )
+                .await
+                .map_err(reject)?;
+            let position: OwnedValue = reply
+                .body()
+                .deserialize()
+                .map_err(|_| reject(Reason::Unavailable))?;
+            let position = i64::try_from(&position).map_err(|_| reject(Reason::NotCapable))?;
+            position_us(command).saturating_sub(position)
+        } else {
+            0
+        };
+        if Instant::now() >= deadline || clock.now() >= command.expires_at_ms {
+            return Err(reject(Reason::Expired));
+        }
+        let guard = DispatchGuard {
+            name: command.player.clone(),
+            instance: command.player_instance_id.clone(),
+            content: command.content_id.clone(),
+            owner: owner.clone(),
+            generation,
+            action: command.action,
+            command_expiry: command.expires_at_ms,
+            lease_deadline: None,
+            lease_wall_expiry: None,
+        };
+        let connection = self.connection.clone();
+        let action = command.action;
+        let position = position_us(command);
+        self.stage = "method_rpc";
+        self.wait_action(
+            async move {
+                let to = Some(owner.as_str());
+                match (action, track) {
+                    (Action::Seek, Some(track)) => {
+                        let track = ObjectPath::try_from(track)?;
+                        connection
+                            .call_method(to, PATH, Some(IFACE), "SetPosition", &(track, position))
+                            .await
+                    }
+                    (Action::Seek, None) => {
+                        connection
+                            .call_method(to, PATH, Some(IFACE), "Seek", &(offset_us,))
+                            .await
+                    }
+                    (action, _) => {
+                        let method = if action == Action::Next {
+                            "Next"
+                        } else {
+                            "Previous"
+                        };
+                        connection
+                            .call_method(to, PATH, Some(IFACE), method, &())
+                            .await
+                    }
+                }
+            },
+            deadline,
+            guard,
+        )
+        .await
+        .map_err(|reason| (Outcome::Uncertain, reason))?;
+        self.publish();
+        let reason = if action == Action::Seek {
+            Reason::Sought
+        } else {
+            Reason::Skipped
+        };
+        Ok((reason, None))
+    }
     async fn execute(
         &mut self,
         delivery: &Delivery,
@@ -693,7 +865,15 @@ impl Actor {
         if record.generation != generation {
             return Err(reject(Reason::Unconfirmed));
         }
+        if command.action.is_transport() {
+            return self
+                .transport(command, owner, generation, deadline, clock)
+                .await;
+        }
         match command.action {
+            Action::Next | Action::Previous | Action::Seek => {
+                unreachable!("transport commands return above")
+            }
             Action::Pause => {
                 if record.wire.playback_status.as_deref() != Some("Playing") {
                     return Err(reject(Reason::NotPlaying));
@@ -769,7 +949,7 @@ impl Actor {
         let unique = owner.clone();
         let method = match command.action {
             Action::Pause => "Pause",
-            Action::Resume => "Play",
+            _ => "Play",
         };
         self.stage = "method_rpc";
         let result = self
@@ -827,7 +1007,7 @@ impl Actor {
         let record = self.target(command).map_err(uncertain)?;
         let target = match command.action {
             Action::Pause => "Paused",
-            Action::Resume => "Playing",
+            _ => "Playing",
         };
         if record.generation != generation {
             self.stage = "generation_changed";
@@ -1062,7 +1242,7 @@ pub async fn run(
                                     let record = actor.players.get(&delivery.command.player);
                                     let raw_observed = expected.is_some_and(|expected| expected.observed);
                                     let generation_matches = record.zip(expected).is_some_and(|(record, expected)| record.generation == expected.generation);
-                                    let status = match delivery.command.action { Action::Pause => "Paused", Action::Resume => "Playing" };
+                                    let status = match delivery.command.action { Action::Pause => "Paused", _ => "Playing" };
                                     let status_matches = record.is_some_and(|record| record.wire.playback_status.as_deref() == Some(status));
                                     eprintln!("MPRIS control command_id={} stage={} reason={reason:?} raw_observed={raw_observed} generation_matches={generation_matches} status_matches={status_matches} elapsed_ms={}",
                                         delivery.command.command_id, actor.stage, started.elapsed().as_millis());
@@ -1157,6 +1337,7 @@ mod tests {
             pause_command_id: None,
             resume_token: None,
             lease_ttl_ms: Some(10_000),
+            position_ms: None,
         }
     }
     pub(super) fn resume(
@@ -1179,6 +1360,9 @@ mod tests {
             playback_status: Some("Playing".into()),
             can_pause: true,
             can_play: true,
+            can_go_next: false,
+            can_go_previous: false,
+            can_seek: false,
             pause_lease: None,
         }
     }
@@ -1379,6 +1563,12 @@ mod tests {
         pub(super) identity_mode: AtomicU8,
         pub(super) pauses: AtomicUsize,
         pub(super) plays: AtomicUsize,
+        nexts: AtomicUsize,
+        previous: AtomicUsize,
+        /// The last SetPosition: its track path and position.
+        sought: std::sync::Mutex<Option<(String, i64)>>,
+        /// The last relative Seek.
+        offset: std::sync::Mutex<Option<i64>>,
         pause_race: AtomicBool,
         slow_snapshot: AtomicBool,
         slow_pause: AtomicBool,
@@ -1574,8 +1764,54 @@ mod tests {
         fn can_play(&self) -> bool {
             true
         }
+        async fn next(&self, #[zbus(connection)] connection: &Connection) {
+            self.0.nexts.fetch_add(1, Ordering::SeqCst);
+            self.0.track.store(1, Ordering::SeqCst);
+            changed(
+                connection,
+                "Metadata",
+                zbus::zvariant::Value::from(fixture_metadata(&self.0))
+                    .try_into()
+                    .unwrap(),
+            )
+            .await;
+        }
+        async fn previous(&self) {
+            self.0.previous.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn set_position(
+            &self,
+            track: ObjectPath<'_>,
+            position: i64,
+            #[zbus(connection)] connection: &Connection,
+        ) {
+            *self.0.sought.lock().unwrap() = Some((track.as_str().to_owned(), position));
+            connection
+                .emit_signal(None::<&str>, PATH, IFACE, "Seeked", &(position,))
+                .await
+                .unwrap();
+        }
+        async fn seek(&self, offset: i64) {
+            *self.0.offset.lock().unwrap() = Some(offset);
+        }
+        #[zbus(property)]
+        fn position(&self) -> i64 {
+            30_000_000
+        }
         #[zbus(property)]
         fn can_control(&self) -> bool {
+            true
+        }
+        #[zbus(property)]
+        fn can_go_next(&self) -> bool {
+            true
+        }
+        #[zbus(property)]
+        fn can_go_previous(&self) -> bool {
+            self.0.identity_mode.load(Ordering::SeqCst) != 2
+        }
+        #[zbus(property)]
+        fn can_seek(&self) -> bool {
             true
         }
         #[zbus(property)]
@@ -1883,6 +2119,116 @@ mod tests {
         );
         let player = state(runtime, |player| player.pause_lease.is_some()).await;
         (player, command, ack)
+    }
+
+    /// Private bus only, like the lifecycle test below.
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires isolated dbus-run-session and LUGN_TEST_DBUS=1"]
+    async fn dbus_lifecycle_control_transport() {
+        assert_eq!(std::env::var("LUGN_TEST_DBUS").as_deref(), Ok("1"));
+        assert_eq!(
+            std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap(),
+            std::env::var("DBUS_SYSTEM_BUS_ADDRESS").unwrap()
+        );
+        const NAME: &str = "org.mpris.MediaPlayer2.control_transport_fixture";
+        let fixture = Arc::new(Fixture::default());
+        let _bus = Builder::session()
+            .unwrap()
+            .name(NAME)
+            .unwrap()
+            .serve_at(PATH, Fake(fixture.clone()))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let context = context();
+        let mut runtime = control::spawn(context.clone());
+        let ready = |player: &Player| player.content_id.is_some() && player.can_seek;
+        let player = state_for(&mut runtime, NAME, ready).await;
+        assert!(player.can_go_next && player.can_go_previous);
+        let transport = |player: &Player, action| {
+            let mut command = command(&context, player, action);
+            command.lease_ttl_ms = None;
+            command.position_ms = (action == Action::Seek).then_some(42_000);
+            command
+        };
+
+        let ack = send(&mut runtime, transport(&player, Action::Seek)).await;
+        assert!(ack.outcome == Outcome::Applied && ack.reason == Reason::Sought);
+        assert!(ack.resume_token.is_none());
+        assert_eq!(
+            *fixture.sought.lock().unwrap(),
+            Some(("/track/A".to_owned(), 42_000_000))
+        );
+
+        let before = transport(&player, Action::Next);
+        let ack = send(&mut runtime, before.clone()).await;
+        assert!(ack.outcome == Outcome::Applied && ack.reason == Reason::Skipped);
+        assert_eq!(fixture.nexts.load(Ordering::SeqCst), 1);
+        let next = state_for(&mut runtime, NAME, |p| {
+            p.content_id.is_some() && p.content_id != player.content_id
+        })
+        .await;
+        // The old track's identity no longer commands anything.
+        let ack = send(&mut runtime, transport(&player, Action::Previous)).await;
+        assert!(ack.outcome == Outcome::Rejected && ack.reason == Reason::ContentChanged);
+        assert_eq!(fixture.previous.load(Ordering::SeqCst), 0);
+
+        let ack = send(&mut runtime, transport(&next, Action::Previous)).await;
+        assert!(ack.outcome == Outcome::Applied && ack.reason == Reason::Skipped);
+        assert_eq!(fixture.previous.load(Ordering::SeqCst), 1);
+
+        // A paused player takes no step, and keeps the lease of our pause.
+        let pause = command(&context, &next, Action::Pause);
+        let ack = send(&mut runtime, pause).await;
+        assert_eq!(ack.reason, Reason::Paused);
+        let paused = state_for(&mut runtime, NAME, |p| p.pause_lease.is_some()).await;
+        let ack = send(&mut runtime, transport(&paused, Action::Next)).await;
+        assert!(ack.outcome == Outcome::Rejected && ack.reason == Reason::NotPlaying);
+        assert_eq!(fixture.nexts.load(Ordering::SeqCst), 1);
+        assert!(
+            runtime
+                .states
+                .borrow()
+                .iter()
+                .any(|p| p.player == NAME && p.pause_lease.is_some())
+        );
+    }
+
+    /// Without a track path SetPosition is impossible: the seek is relative.
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires isolated dbus-run-session and LUGN_TEST_DBUS=1"]
+    async fn dbus_lifecycle_control_relative_seek() {
+        assert_eq!(std::env::var("LUGN_TEST_DBUS").as_deref(), Ok("1"));
+        const NAME: &str = "org.mpris.MediaPlayer2.control_seek_fixture";
+        let fixture = Arc::new(Fixture::default());
+        // URL-only identity, and no way back to a previous track.
+        fixture.identity_mode.store(2, Ordering::SeqCst);
+        let _bus = Builder::session()
+            .unwrap()
+            .name(NAME)
+            .unwrap()
+            .serve_at(PATH, Fake(fixture.clone()))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let context = context();
+        let mut runtime = control::spawn(context.clone());
+        let player = state_for(&mut runtime, NAME, |p| p.content_id.is_some() && p.can_seek).await;
+        assert!(!player.can_go_previous);
+        let mut step = command(&context, &player, Action::Previous);
+        step.lease_ttl_ms = None;
+        let ack = send(&mut runtime, step).await;
+        assert!(ack.outcome == Outcome::Rejected && ack.reason == Reason::NotCapable);
+        let mut seek = command(&context, &player, Action::Seek);
+        seek.lease_ttl_ms = None;
+        seek.position_ms = Some(12_000);
+        let ack = send(&mut runtime, seek).await;
+        assert!(ack.outcome == Outcome::Applied && ack.reason == Reason::Sought);
+        // The fixture stands at 30 s.
+        assert_eq!(*fixture.offset.lock().unwrap(), Some(-18_000_000));
+        assert!(fixture.sought.lock().unwrap().is_none());
     }
 
     /// Private bus only. This test owns only its fixture name and never contacts

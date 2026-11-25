@@ -8,6 +8,7 @@ import type { Clock, TimerHandle } from '../core/clock.js';
 import { isHumanActor } from '../core/automation-holds.js';
 import {
   ProvenanceSchema,
+  isOneOffMusicRequest,
   type Provenance,
   type LightingScene,
 } from '../core/schemas.js';
@@ -922,7 +923,7 @@ export class RoutineService {
           (newer) =>
             newer.target === command.target &&
             newer.requested.property !== 'volume' &&
-            newer.requested.property !== 'track' &&
+            !isOneOffMusicRequest(newer.requested) &&
             newer.provenance.requestId !== work.run.id,
         )
     );

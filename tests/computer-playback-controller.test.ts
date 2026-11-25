@@ -832,3 +832,96 @@ it('rejects an invalidated routine guard before sending computer playback comman
   ).rejects.toThrow('superseded');
   expect(s.sendCommand).not.toHaveBeenCalled();
 });
+
+const next = { property: 'track' as const, value: 'next' as const };
+const seek = { property: 'seek' as const, value: 42.5 };
+const human = { actor: { type: 'user' as const }, source: 'dashboard' };
+
+function transportSetup() {
+  const s = setup();
+  Object.assign(s.player, {
+    can_go_next: true,
+    can_go_previous: false,
+    can_seek: true,
+  });
+  s.sendCommand.mockImplementation(async (command) => ({
+    ...s.ack(command),
+    reason: command.action === 'seek' ? 'sought' : 'skipped',
+    resume_token: null,
+    lease_expires_at_ms: null,
+  }));
+  s.controller.observe();
+  return s;
+}
+
+it('steps and seeks the selected playing media without taking ownership', async () => {
+  const s = transportSetup();
+  expect(s.controller.state[target]).toMatchObject({
+    canNext: true,
+    canPrevious: false,
+    canSeek: true,
+  });
+  expect((await s.controller.transport(target, next, human)).status).toBe(
+    'confirmed',
+  );
+  expect((await s.controller.transport(target, seek, human)).status).toBe(
+    'confirmed',
+  );
+  expect(s.sendCommand.mock.calls.map(([command]) => command)).toMatchObject([
+    {
+      action: 'next',
+      player: spotify,
+      content_id: uuid(21),
+      lease_ttl_ms: null,
+      resume_token: null,
+    },
+    { action: 'seek', player: spotify, position_ms: 42_500 },
+  ]);
+  expect(s.sendCommand.mock.calls[0]![0]).not.toHaveProperty('position_ms');
+  // Play and Pause's last command, and ownership, are untouched.
+  expect(s.controller.state[target]?.lastCommand).toBeNull();
+  expect(s.controller.canResume(target)).toBe(false);
+});
+
+it('refuses what the media cannot take, and everything while it is paused', async () => {
+  const s = transportSetup();
+  const previous = { property: 'track' as const, value: 'previous' as const };
+  expect(s.controller.canTransport(target, previous)).toBe(false);
+  await expect(
+    s.controller.transport(target, previous, human),
+  ).rejects.toThrow();
+  s.player.playback_status = 'Paused';
+  s.controller.observe();
+  expect(s.controller.canTransport(target, next)).toBe(false);
+  expect(s.controller.state[target]).toMatchObject({
+    canNext: false,
+    canSeek: false,
+  });
+  await expect(s.controller.transport(target, seek, human)).rejects.toThrow();
+  expect(s.sendCommand).not.toHaveBeenCalled();
+});
+
+it('takes one step at a time and reports a refused one', async () => {
+  const s = transportSetup();
+  let finish: ((ack: ComputerPlaybackAck) => void) | undefined;
+  s.sendCommand.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const first = s.controller.transport(target, next, human);
+  await expect(s.controller.transport(target, next, human)).rejects.toThrow();
+  finish!({
+    ...s.ack(s.sendCommand.mock.calls[0]![0]),
+    outcome: 'rejected',
+    reason: 'content_changed',
+    resume_token: null,
+    lease_expires_at_ms: null,
+  });
+  expect(await first).toMatchObject({
+    status: 'failed',
+    diagnosticReason: 'computer_rejected:content_changed',
+  });
+  expect(s.controller.canTransport(target, next)).toBe(true);
+});

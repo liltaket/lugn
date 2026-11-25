@@ -62,6 +62,9 @@
           "playback_status",
           "can_pause",
           "can_play",
+          "can_go_next",
+          "can_go_previous",
+          "can_seek",
           "pause_lease"
         ],
         "properties": {
@@ -103,6 +106,15 @@
             "type": "boolean"
           },
           "can_play": {
+            "type": "boolean"
+          },
+          "can_go_next": {
+            "type": "boolean"
+          },
+          "can_go_previous": {
+            "type": "boolean"
+          },
+          "can_seek": {
             "type": "boolean"
           },
           "pause_lease": {

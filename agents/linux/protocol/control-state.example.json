@@ -14,6 +14,9 @@
       "playback_status": "Paused",
       "can_pause": true,
       "can_play": true,
+      "can_go_next": true,
+      "can_go_previous": true,
+      "can_seek": true,
       "pause_lease": {
         "pause_command_id": "55555555-5555-4555-8555-555555555555",
         "resume_token": "66666666-6666-4666-8666-666666666666",

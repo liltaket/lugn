@@ -9,6 +9,7 @@ const RESUME: &str = include_str!("../protocol/control-resume.example.json");
 const STATE: &str = include_str!("../protocol/control-state.example.json");
 const PAUSED: &str = include_str!("../protocol/control-ack-paused.example.json");
 const RESUMED: &str = include_str!("../protocol/control-ack-resumed.example.json");
+const SEEK: &str = include_str!("../protocol/control-seek.example.json");
 
 fn pause() -> Command {
     parse(PAUSE.as_bytes()).expect("canonical pause fixture must parse")
@@ -63,7 +64,13 @@ fn control_fixtures_roundtrip_and_share_an_exact_pause_lease() {
         let expected: Value = serde_json::from_str(fixture).unwrap();
         let command = parse(fixture.as_bytes()).unwrap();
         assert_eq!(serde_json::to_value(command).unwrap(), expected);
-        exact_fields(&expected, &command_schema);
+        // `position_ms` belongs to a seek alone.
+        let mut schema = command_schema.clone();
+        schema["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("position_ms");
+        exact_fields(&expected, &schema);
     }
     for fixture in [PAUSED, RESUMED] {
         let expected: Value = serde_json::from_str(fixture).unwrap();
@@ -134,10 +141,55 @@ fn control_fixtures_roundtrip_and_share_an_exact_pause_lease() {
 }
 
 #[test]
+fn transport_commands_carry_no_ownership_and_only_seek_a_position() {
+    let expected: Value = serde_json::from_str(SEEK).unwrap();
+    let seek = parse(SEEK.as_bytes()).expect("canonical seek fixture must parse");
+    assert_eq!(serde_json::to_value(&seek).unwrap(), expected);
+    let context = Context {
+        device_id: seek.device_id.clone(),
+        session_id: seek.session_id.clone(),
+        connection_id: seek.connection_id.clone(),
+    };
+    let now = seek.issued_at_ms;
+    assert_eq!(seek.validate(&context, now), Ok(()));
+    for action in [Action::Next, Action::Previous] {
+        let mut step = seek.clone();
+        step.action = action;
+        // A position belongs to a seek alone.
+        assert_eq!(step.validate(&context, now), Err(Reason::InvalidCommand));
+        step.position_ms = None;
+        assert_eq!(step.validate(&context, now), Ok(()));
+        step.lease_ttl_ms = Some(10_000);
+        assert_eq!(step.validate(&context, now), Err(Reason::InvalidCommand));
+    }
+    let mut missing = seek.clone();
+    missing.position_ms = None;
+    assert_eq!(missing.validate(&context, now), Err(Reason::InvalidCommand));
+    let mut far = seek.clone();
+    far.position_ms = Some(604_800_001);
+    assert_eq!(far.validate(&context, now), Err(Reason::InvalidCommand));
+    let mut owned = seek;
+    owned.resume_token = Some(owned.command_id.clone());
+    assert_eq!(owned.validate(&context, now), Err(Reason::InvalidCommand));
+    let mut pause = pause();
+    pause.position_ms = Some(1);
+    assert_eq!(
+        pause.validate(&self::context(), NOW),
+        Err(Reason::InvalidCommand)
+    );
+    // An explicit null is not the same as leaving the field out.
+    let mut null: Value = serde_json::from_str(PAUSE).unwrap();
+    null["position_ms"] = Value::Null;
+    assert!(parse(&serde_json::to_vec(&null).unwrap()).is_none());
+}
+
+#[test]
 fn control_reason_schema_matches_every_rust_wire_variant() {
     let reasons = [
         Reason::Paused,
         Reason::Resumed,
+        Reason::Skipped,
+        Reason::Sought,
         Reason::Disabled,
         Reason::Retained,
         Reason::Expired,

@@ -4,9 +4,9 @@ This additive contract leaves the observation v1 schemas and topics unchanged.
 The observation-only statements in [README.md](README.md) describe the default
 mode. `control_enabled` defaults to `false`. Enabling it requires a configured
 MQTT username and password, plus broker ACLs limited to the intended device's
-topics. Control accepts only targeted pause and lease-bound resume; it provides
-no shell commands, arbitrary D-Bus methods, generic player selection, or
-`PlayPause` toggle.
+topics. Control accepts only targeted pause, lease-bound resume, and previous, next and
+seek on playing media; it provides no shell commands, arbitrary D-Bus methods,
+generic player selection, or `PlayPause` toggle.
 
 ## Topics and wire limits
 
@@ -19,7 +19,8 @@ The root is `{topic_prefix}/{device_id}`, normally `lugn/computers/desktop`.
 | `control/ack`        | Agent                 | 1   | No       | 8,192 bytes          |
 
 State contains at most 64 players. All schema fields are required, including
-fields whose value may be `null`; unknown fields are rejected by the schemas.
+fields whose value may be `null` (except a command's `position_ms`, which only a
+seek has); unknown fields are rejected by the schemas.
 Integers are limited to JSON's safe range, 0–9,007,199,254,740,991; sequence is
 positive. Device IDs contain 1–64 ASCII letters, digits, `_` or `-`, starting
 with a letter or digit. `player` is the exact well-known
@@ -103,6 +104,26 @@ more than two seconds relative to monotonic time. Command-cache retirement uses
 a nondecreasing logical clock so a backward adjustment cannot make a retired
 command executable again.
 
+### Previous, next and seek
+
+`action: "previous"`, `"next"` or `"seek"` carries `null` for
+`pause_command_id`, `resume_token` and `lease_ttl_ms`. A seek adds
+`position_ms` (0 through 604,800,000), the position in the content; every other
+command omits that field, so its 14 fields are unchanged.
+
+The agent requires the exact player instance and content,
+`PlaybackStatus=Playing`, `CanControl=true` and `CanGoPrevious`, `CanGoNext` or
+`CanSeek` respectively, which state reports as `can_go_previous`, `can_go_next`
+and `can_seek`. It calls `Previous` or `Next`; a seek calls `SetPosition` with
+the content's `mpris:trackid`, or, when that is not an object path, `Seek` with
+the offset from a freshly read `Position`. A paused player is refused with
+`not_playing`, so these actions never disturb a pause lease.
+
+There is nothing to confirm: `Previous` may only restart the track and a player
+ignores a `SetPosition` it will not honour. `applied` (reason `skipped` or
+`sought`) means the player accepted the call. A failure after the call was sent
+is `uncertain`. Neither is retried.
+
 ## Player and content generations
 
 `player_instance_id` is an opaque UUID tied to the observed D-Bus owner instance.
@@ -143,7 +164,7 @@ Reason values are exactly:
 
 | Category                            | Reasons                                                                                                                         |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Confirmed outcome                   | `paused`, `resumed`                                                                                                             |
+| Confirmed outcome                   | `paused`, `resumed`, `skipped`, `sought`                                                                                        |
 | Delivery, identity or configuration | `disabled`, `retained`, `expired`, `invalid_command`, `wrong_session`, `wrong_connection`, `id_conflict`, `busy`, `unavailable` |
 | Target and ownership guards         | `unknown_player`, `player_changed`, `content_changed`, `not_playing`, `not_paused`, `not_capable`, `not_owner`, `lease_expired` |
 | Call or confirmation status         | `timeout`, `unconfirmed`                                                                                                        |
@@ -178,6 +199,7 @@ The files share coherent device/session/connection/player/content IDs.
 delivery TTL. `control-ack-paused.example.json` confirms it, and
 `control-state.example.json` shows the resulting owned Paused state.
 `control-resume.example.json` echoes that exact lease and
-`control-ack-resumed.example.json` confirms consumption. Their fixed historical
+`control-ack-resumed.example.json` confirms consumption.
+`control-seek.example.json` seeks the same content. Their fixed historical
 timestamps are illustrative, not currently valid commands. Tests and other
 consumers should substitute a controlled clock when using them.

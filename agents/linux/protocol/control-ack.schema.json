@@ -47,7 +47,7 @@
       "maxLength": 36
     },
     "action": {
-      "enum": ["pause", "resume"]
+      "enum": ["pause", "resume", "next", "previous", "seek"]
     },
     "player": {
       "type": "string",
@@ -78,6 +78,8 @@
       "enum": [
         "paused",
         "resumed",
+        "skipped",
+        "sought",
         "disabled",
         "retained",
         "expired",

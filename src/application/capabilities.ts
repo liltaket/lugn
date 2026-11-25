@@ -19,13 +19,14 @@ import {
   MusicDecisionSchema,
   MusicPresetSchema,
   MusicTrackStepSchema,
+  MusicSeekPositionSchema,
   LightingValuesSchema,
   ProvenanceSchema,
   RoomStateSchema,
   SemanticSwitchIdSchema,
   SwitchCommandStatusSchema,
 } from '../core/schemas.js';
-import type { ActorSchema } from '../core/schemas.js';
+import type { ActorSchema, MusicRequest } from '../core/schemas.js';
 import {
   ChimeKindSchema,
   ChimeStyleSchema,
@@ -77,6 +78,12 @@ const PresetMusicInput = z
   .strict();
 const SkipTrackMusicInput = z
   .object({ target: SemanticMusicIdSchema, step: MusicTrackStepSchema })
+  .strict();
+const SeekMusicInput = z
+  .object({
+    target: SemanticMusicIdSchema,
+    positionSeconds: MusicSeekPositionSchema,
+  })
   .strict();
 const MusicCommandOutput = z.object({
   accepted: z.literal(true),
@@ -196,6 +203,7 @@ export const CapabilitySchemas = {
     input: SkipTrackMusicInput,
     output: MusicCommandOutput,
   },
+  'music.seek': { input: SeekMusicInput, output: MusicCommandOutput },
   'switch.getState': {
     input: GetSwitchInput,
     output: z.object({ device: DeviceSwitchStateSchema }),
@@ -508,14 +516,25 @@ export class CapabilityRegistry {
         };
         break;
       }
-      case 'music.skipTrack': {
-        const input = SkipTrackMusicInput.parse(rawInput);
-        getMusicTarget(this.engine, input.target);
+      case 'music.skipTrack':
+      case 'music.seek': {
+        let target: string;
+        let request: MusicRequest;
+        if (name === 'music.seek') {
+          const input = SeekMusicInput.parse(rawInput);
+          target = input.target;
+          request = { property: 'seek', value: input.positionSeconds };
+        } else {
+          const input = SkipTrackMusicInput.parse(rawInput);
+          target = input.target;
+          request = { property: 'track', value: input.step };
+        }
+        getMusicTarget(this.engine, target);
         let command;
         try {
           command = await this.engine.requestMusic(
-            input.target,
-            { property: 'track', value: input.step },
+            target,
+            request,
             provenance,
             isCurrent,
           );

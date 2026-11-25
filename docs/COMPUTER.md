@@ -240,8 +240,23 @@ The agent pins the unique D-Bus owner, checks content and capabilities, observes
 transitions and rechecks immediately before calling Pause/Play. A user action
 racing the final check cannot be excluded, and an already-sent D-Bus method cannot
 be retracted by a local timeout. This is guarded best effort; ambiguous outcomes
-never establish ownership. No shell commands, seeking, volume control, computer
-power control or generic D-Bus invocation is exposed.
+never establish ownership. No shell commands, volume control, computer power
+control or generic D-Bus invocation is exposed.
+
+### Previous, next and seek
+
+On the computer input the Hub's previous, next and time bar address the selected
+**playing** media, with the same identity checks, through the control actions
+`previous`, `next` and `seek`. The agent offers each only where the player
+reports `CanGoPrevious`, `CanGoNext` or `CanSeek`. They take and grant no pause
+ownership and are not available while the media is paused. Applied means the
+player accepted the call: MPRIS gives nothing to confirm, and many players treat
+previous as "back to the start" first. They are never retried.
+
+Update Lugn before the agent. An updated agent reports the three capabilities in
+its control state, which an older Lugn rejects as unknown fields; an updated
+Lugn with an older agent keeps Play and Pause and leaves the new controls
+disabled.
 
 ## Fast WiiM Optical switching
 

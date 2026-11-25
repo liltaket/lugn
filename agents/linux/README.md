@@ -3,7 +3,8 @@
 A standalone Rust observation publisher for Kubuntu KDE Plasma/Wayland. It sends
 computer telemetry over MQTT and does not depend on the Lugn runtime. Default
 operation is observation-only. Optional authenticated MQTT control supports exact
-MPRIS Pause and lease-bound Resume; it provides no shell commands, input injection,
+MPRIS Pause, lease-bound Resume, and previous, next and seek on playing media; it
+provides no shell commands, input injection,
 screen capture or window control. A second opt-in, `display_control_enabled`,
 accepts display sleep/wake requests (see below). Fast WiiM Optical switching, on by default, switches a WiiM to
 its Optical input when the computer plays sound (see below). Lugn-side consumption belongs to a

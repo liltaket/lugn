@@ -5,6 +5,7 @@ import type {
   ComputerPlaybackRouteSnapshot,
   MusicCommandRecord,
   MusicObservationValues,
+  MusicOneOffRequest,
   MusicRequest,
   Provenance,
   RoomState,
@@ -34,6 +35,14 @@ export interface ComputerPlaybackControl {
     provenance: Provenance,
     isCurrent?: () => boolean,
   ): Promise<MusicCommandRecord>;
+  /** Next, previous or seek on the media playing now. */
+  canTransport?(target: string, request: MusicOneOffRequest): boolean;
+  transport?(
+    target: string,
+    request: MusicOneOffRequest,
+    provenance: Provenance,
+    isCurrent?: () => boolean,
+  ): Promise<MusicCommandRecord>;
   observe(): void;
   invalidate(target?: string): void;
   dispose(): void;
@@ -42,6 +51,12 @@ export type ComputerPlaybackTransport = Pick<
   ComputerPlaybackMqttAdapter,
   'getSnapshot' | 'sendCommand'
 >;
+type TransportAction = 'next' | 'previous' | 'seek';
+const TRANSPORT_CAPABILITY = {
+  next: 'can_go_next',
+  previous: 'can_go_previous',
+  seek: 'can_seek',
+} as const;
 type Context = {
   route: ComputerAudioRoute;
   control: ComputerPlaybackState;
@@ -81,6 +96,8 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
   private readonly pending = new Map<string, PendingCommand>();
   private readonly revisions = new Map<string, number>();
   private readonly resumedPlayers = new Map<string, ResumedPlayer>();
+  /** Targets with a track step or seek on its way. */
+  private readonly transporting = new Set<string>();
   private disposed = false;
   private readonly waiters = new Set<() => void>();
   constructor(
@@ -164,6 +181,98 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
     return context.control.players.find(
       (player) => player.player === name && player.content_id !== null,
     );
+  }
+
+  /** The playing media that can take `action`; paused media takes none. */
+  private transportable(
+    context: Context,
+    target: string,
+    action: TransportAction,
+  ): ComputerPlaybackPlayer | undefined {
+    const player = this.selected(context, target);
+    return player?.playback_status === 'Playing' &&
+      player[TRANSPORT_CAPABILITY[action]] === true
+      ? player
+      : undefined;
+  }
+
+  canTransport(target: string, request: MusicOneOffRequest): boolean {
+    const context = this.context(target);
+    return (
+      !!context &&
+      !this.pending.has(target) &&
+      !this.transporting.has(target) &&
+      !!this.transportable(context, target, transportAction(request))
+    );
+  }
+
+  /** A one-off on the exact playing content. It takes and grants no ownership,
+   * and stays out of the route's last command, which reports Play and Pause. */
+  async transport(
+    target: string,
+    request: MusicOneOffRequest,
+    provenance: Provenance,
+    isCurrent?: () => boolean,
+  ): Promise<MusicCommandRecord> {
+    if (isCurrent && !isCurrent())
+      throw new Error('Computer playback intent was superseded');
+    const action = transportAction(request);
+    const context = this.context(target);
+    const player =
+      context && this.canTransport(target, request)
+        ? this.transportable(context, target, action)
+        : undefined;
+    if (!context || !player?.content_id)
+      throw new Error('Computer media cannot take a track step or seek');
+    const now = this.options.clock.now();
+    const commandId = (this.options.uuid ?? randomUUID)();
+    const command: ComputerPlaybackCommand = {
+      schema_version: 1,
+      device_id: context.route.deviceId,
+      session_id: context.control.session_id,
+      connection_id: context.control.connection_id,
+      command_id: commandId,
+      action,
+      player: player.player,
+      player_instance_id: player.player_instance_id,
+      content_id: player.content_id,
+      issued_at_ms: now,
+      expires_at_ms: now + 10_000,
+      pause_command_id: null,
+      resume_token: null,
+      lease_ttl_ms: null,
+      ...(request.property === 'seek'
+        ? { position_ms: Math.round(request.value * 1000) }
+        : {}),
+    };
+    const record: MusicCommandRecord = {
+      id: commandId,
+      target,
+      requested: request,
+      provenance,
+      issuedAt: now,
+      status: 'pending',
+      acceptedAt: now,
+    };
+    // What a later Pause addresses is whatever plays after this.
+    this.resumedPlayers.delete(target);
+    this.transporting.add(target);
+    try {
+      const ack = await context.transport.sendCommand(command);
+      if (ack.outcome === 'applied') {
+        record.status = 'confirmed';
+        record.confirmedAt = this.options.clock.now();
+      } else {
+        record.status = ack.outcome === 'uncertain' ? 'unconfirmed' : 'failed';
+        record.diagnosticReason = `computer_${ack.outcome}:${ack.reason}`;
+      }
+    } catch {
+      record.status = 'unconfirmed';
+      record.diagnosticReason = 'computer_delivery_uncertain';
+    } finally {
+      this.transporting.delete(target);
+    }
+    return record;
   }
 
   needsInputOpen(target: string): boolean {
@@ -311,6 +420,10 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
         canPause:
           !!player && player.playback_status === 'Playing' && player.can_pause,
         canResume: this.canResume(target),
+        canNext: !!context && !!this.transportable(context, target, 'next'),
+        canPrevious:
+          !!context && !!this.transportable(context, target, 'previous'),
+        canSeek: !!context && !!this.transportable(context, target, 'seek'),
         pending: this.pending.has(target),
         lastCommand: this.state[target]?.lastCommand ?? null,
       };
@@ -645,4 +758,8 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
     this.selector.reset();
     for (const notify of [...this.waiters]) notify();
   }
+}
+
+function transportAction(request: MusicOneOffRequest): TransportAction {
+  return request.property === 'seek' ? 'seek' : request.value;
 }

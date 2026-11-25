@@ -97,6 +97,8 @@ import {
   MusicIntentSnapshotSchema,
   type MusicIntentSnapshot,
   type MusicDecision,
+  isOneOffMusicRequest,
+  type MusicOneOffRequest,
 } from '../core/schemas.js';
 import { CommandLedger } from '../execution/command-ledger.js';
 import { synchronizeSceneColorTemperature } from './dashboard-scenes.js';
@@ -106,13 +108,13 @@ import {
   type WindowLighting,
 } from '../core/window-lighting.js';
 
-/** Execution guards: volume, a track step, and everything else (playback). */
+/** Execution guards: volume, a track step, a seek, and the rest (playback). */
 function musicGuardKey(target: string, property: string): string {
   return `${target}:${
     property === 'volume'
       ? 'volume'
-      : property === 'track'
-        ? 'track'
+      : property === 'track' || property === 'seek'
+        ? property
         : 'playback'
   }`;
 }
@@ -1825,18 +1827,18 @@ export class LugnEngine {
     requested = MusicRequestSchema.parse(requested);
     provenance = ProvenanceSchema.parse(provenance);
     this.musicController.getState(target);
-    // A track step is refused before anything else happens, and it is not a
-    // playback or volume intent: it notes no intervention and has its own
-    // execution guard.
+    // A track step or seek is refused before anything else happens, and it is
+    // not a playback or volume intent: it notes no intervention and has its
+    // own execution guard.
     if (
-      requested.property === 'track' &&
-      !canStepTrack(this.state, target, this.computerAudioInputs)
+      isOneOffMusicRequest(requested) &&
+      !this.canTransport(target, requested)
     )
       throw new MusicTrackUnavailableError(target);
     if (
       isHumanActor(provenance.actor) &&
       !isCurrent &&
-      requested.property !== 'track'
+      !isOneOffMusicRequest(requested)
     )
       this.noteIntervention({ domain: 'music', target });
     const key = musicGuardKey(target, requested.property);
@@ -1871,6 +1873,17 @@ export class LugnEngine {
     return command;
   }
 
+  /** Whether the playing source can take this track step or seek now. */
+  private canTransport(target: string, request: MusicOneOffRequest): boolean {
+    if (this.computerPlayback?.handles(target))
+      return this.computerPlayback.canTransport?.(target, request) === true;
+    if (!canStepTrack(this.state, target, this.computerAudioInputs))
+      return false;
+    if (request.property === 'track') return true;
+    const duration = this.state.music.devices[target]?.observed.durationSeconds;
+    return duration !== undefined && request.value <= duration;
+  }
+
   private async dispatchMusicRequest(
     target: string,
     requested: MusicRequest,
@@ -1878,6 +1891,18 @@ export class LugnEngine {
     isCurrent?: ExecutionGuard,
   ): Promise<MusicCommandRecord> {
     this.assertExecution(isCurrent);
+    // Behind a computer input, the step or seek goes to the computer's media.
+    if (
+      isOneOffMusicRequest(requested) &&
+      this.computerPlayback?.handles(target) &&
+      this.computerPlayback.transport
+    )
+      return this.computerPlayback.transport(
+        target,
+        requested,
+        provenance,
+        isCurrent,
+      );
     if (
       requested.property === 'playback' &&
       this.computerPlayback?.handles(target)
