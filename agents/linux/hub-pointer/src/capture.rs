@@ -966,7 +966,7 @@ mod tests {
         let t0 = Instant::now();
         for input in [
             (|p: &mut Pointer| p.button(0x110, true)) as fn(&mut Pointer),
-            |p| p.button(0x113, true), // a side button the page has no name for
+            |p| p.button(0x117, true), // BTN_TASK, a button the page has no name for
             |p| p.scroll(0.0, 3.0),
             |p| p.scroll_discrete(0, 120),
         ] {
@@ -1310,6 +1310,8 @@ mod tests {
         p.button(0x110, true);
         p.button(0x111, false);
         p.button(0x113, true);
+        p.button(0x114, false);
+        p.button(0x117, true);
         let out = p.frame(now);
         assert_eq!(
             out.msgs,
@@ -1326,6 +1328,18 @@ mod tests {
                 },
                 AgentMsg::Button {
                     button: ButtonName::Right,
+                    down: false,
+                    x: 1200.0,
+                    y: 700.0
+                },
+                AgentMsg::Button {
+                    button: ButtonName::Back,
+                    down: true,
+                    x: 1200.0,
+                    y: 700.0
+                },
+                AgentMsg::Button {
+                    button: ButtonName::Forward,
                     down: false,
                     x: 1200.0,
                     y: 700.0

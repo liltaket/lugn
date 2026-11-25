@@ -32,15 +32,15 @@ unknown fields are ignored by both sides.
 
 ## Agent to page
 
-| `t`      | Fields                                                              | Meaning                                                                       |
-| -------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `enter`  | `x`, `y`                                                            | Capture started; show the cursor at this viewport point                       |
-| `move`   | `x`, `y`                                                            | Absolute viewport CSS px (floats). At most one per 8 ms, latest position wins |
-| `button` | `button` (`"left"`, `"right"`, `"middle"`), `down` (bool), `x`, `y` | Press or release at the point                                                 |
-| `wheel`  | `dx`, `dy` (CSS px, positive = down/right), `x`, `y`                | Scroll at the point                                                           |
-| `leave`  | none                                                                | Capture ended; hide the cursor and release any held button                    |
-| `warm`   | `on` (bool)                                                         | The desktop pointer is near the entry corner (or left it); get ready to draw  |
-| `ping`   | `id` (integer)                                                      | Once per second while connected; every 20 ms while warm; page answers `pong`  |
+| `t`      | Fields                                                                                     | Meaning                                                                       |
+| -------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `enter`  | `x`, `y`                                                                                   | Capture started; show the cursor at this viewport point                       |
+| `move`   | `x`, `y`                                                                                   | Absolute viewport CSS px (floats). At most one per 8 ms, latest position wins |
+| `button` | `button` (`"left"`, `"right"`, `"middle"`, `"back"`, `"forward"`), `down` (bool), `x`, `y` | Press or release at the point                                                 |
+| `wheel`  | `dx`, `dy` (CSS px, positive = down/right), `x`, `y`                                       | Scroll at the point                                                           |
+| `leave`  | none                                                                                       | Capture ended; hide the cursor and release any held button                    |
+| `warm`   | `on` (bool)                                                                                | The desktop pointer is near the entry corner (or left it); get ready to draw  |
+| `ping`   | `id` (integer)                                                                             | Once per second while connected; every 20 ms while warm; page answers `pong`  |
 
 The agent owns the cursor position and clamps it to `0 <= x < w`,
 `y < h`. `enter` is not sent when the compositor hands the pointer over,
@@ -61,6 +61,10 @@ flushed first so they land at the right point.
 ## Page behavior
 
 - Right button: acts as Escape (closes an open sheet or camera view).
+- Back and forward (the side buttons, `BTN_SIDE`/`BTN_BACK` and
+  `BTN_EXTRA`/`BTN_FORWARD`): dispatched as `mousedown`/`mouseup` with button
+  3 or 4, as a real mouse does; the dashboard steps on the release (see the
+  dashboard's `hub-history.js`).
 - Left button: pointerdown/mousedown on press, pointerup/mouseup on release,
   then `click` when press and release hit the same control.
 - The page hides the cursor on `leave`, on disconnect, and when the socket is

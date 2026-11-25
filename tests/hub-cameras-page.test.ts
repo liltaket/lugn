@@ -189,7 +189,14 @@ type MenuOptions = {
   handleTap(event: { target: El }): boolean;
 };
 
-function setup(count = 5) {
+const historyScript = readFileSync(
+  new URL('../src/ui/hub-history.js', import.meta.url),
+  'utf8',
+);
+
+type History = { back(): boolean; forward(): boolean };
+
+function setup(count = 5, { history = false } = {}) {
   vi.useFakeTimers();
   const names = ['Entré', 'Framsida', 'Norr', 'Syd', 'Baksida'].slice(0, count);
   const ids = ['entry', 'front', 'north', 'south', 'back'].slice(0, count);
@@ -313,10 +320,31 @@ function setup(count = 5) {
       };
     },
   };
+  // Hem and Kameror as the pager shows them: a change is told at once and the
+  // camera page is entered or left with it.
+  const pages = { current: 'home', held: false, overlay: false };
+  const go = vi.fn((page: string) => {
+    if (pages.held) return false;
+    if (page === pages.current) return true;
+    pages.current = page;
+    if (history) {
+      for (const fn of windowListeners.get('lugn:page') ?? []) fn();
+      if (page === 'kameror') hooks.current!.enter();
+      else hooks.current!.leave();
+    }
+    return true;
+  });
   context['lugnPages'] = {
-    go: vi.fn(() => true),
+    go,
+    current: () => pages.current,
     define: (_id: string, h: Hooks) => (hooks.current = h),
   };
+  context['closeHubOverlay'] = () => {
+    const open = pages.overlay;
+    pages.overlay = false;
+    return open;
+  };
+  if (history) runInContext(historyScript, context);
   runInContext(script, context);
   const stage = views['stage']!;
   const tiles = () =>
@@ -327,6 +355,9 @@ function setup(count = 5) {
   };
   return {
     menu,
+    pages,
+    go,
+    history: context['lugnHistory'] as History,
     hooks: hooks.current!,
     views,
     stage,
@@ -505,5 +536,115 @@ describe('camera grid page', () => {
     expect(tap({ target: s.tiles()[0]! })).toBe(false);
     expect(s.tiles().filter((t) => !t.hidden)).toHaveLength(1);
     expect(s.menu.back).toBeTypeOf('function');
+  });
+});
+
+describe('back and forward on the Hub', () => {
+  afterEach(() => vi.useRealTimers());
+
+  const large = (s: ReturnType<typeof setup>) => {
+    const shown = s.tiles().filter((t) => !t.hidden);
+    return shown.length === 1 ? shown[0]!.dataset['camera'] : '';
+  };
+
+  /** Hem → Kameror → the camera Norr large. */
+  async function focused() {
+    const s = setup(5, { history: true });
+    s.go('kameror');
+    await s.flush(0);
+    s.menu.options!.handleTap({ target: s.tiles()[2]! });
+    await s.flush(0);
+    expect(large(s)).toBe('north');
+    return s;
+  }
+
+  it('goes from one camera to all, then to the page before, and forward again', async () => {
+    const s = await focused();
+    expect(s.history.back()).toBe(true);
+    expect(s.pages.current).toBe('kameror');
+    expect(large(s)).toBe('');
+    expect(s.history.back()).toBe(true);
+    expect(s.pages.current).toBe('home');
+    expect(s.history.back()).toBe(false);
+    expect(s.history.forward()).toBe(true);
+    await s.flush(0);
+    expect(s.pages.current).toBe('kameror');
+    expect(large(s)).toBe('');
+    expect(s.history.forward()).toBe(true);
+    expect(large(s)).toBe('north');
+    expect(s.history.forward()).toBe(false);
+  });
+
+  it("counts the navbar's own way back as Back", async () => {
+    const s = await focused();
+    s.menu.back!();
+    expect(large(s)).toBe('');
+    // The next Back leaves the page rather than opening the camera again.
+    expect(s.history.back()).toBe(true);
+    expect(s.pages.current).toBe('home');
+  });
+
+  it('counts swiping to the page before as Back', async () => {
+    const s = setup(5, { history: true });
+    s.go('music');
+    s.go('kameror');
+    await s.flush(0);
+    s.go('music');
+    expect(s.history.back()).toBe(true);
+    expect(s.pages.current).toBe('home');
+  });
+
+  it('opens the camera again when Back returns to it', async () => {
+    const s = await focused();
+    s.go('music');
+    await s.flush(0);
+    expect(s.history.back()).toBe(true);
+    await s.flush(0);
+    expect(s.pages.current).toBe('kameror');
+    expect(large(s)).toBe('north');
+  });
+
+  it('closes what lies open over Hem before it changes page', async () => {
+    const s = setup(5, { history: true });
+    s.go('music');
+    s.go('home');
+    s.go('kameror');
+    s.go('home');
+    s.pages.overlay = true;
+    s.go.mockClear();
+    expect(s.history.back()).toBe(true);
+    expect(s.pages.overlay).toBe(false);
+    expect(s.go).not.toHaveBeenCalled();
+  });
+
+  it('stays, and keeps its step, while the pages are held', async () => {
+    const s = setup(5, { history: true });
+    s.go('music');
+    s.pages.held = true;
+    expect(s.history.back()).toBe(false);
+    s.pages.held = false;
+    expect(s.history.back()).toBe(true);
+    expect(s.pages.current).toBe('home');
+  });
+
+  it('acts on the release of buttons 3 and 4, and leaves the rest to the browser', async () => {
+    const s = await focused();
+    const release = (button: number) => {
+      const preventDefault = vi.fn();
+      for (const fn of s.windowListeners.get('mouseup') ?? [])
+        (fn as (event: unknown) => void)({ button, preventDefault });
+      return preventDefault;
+    };
+    expect(release(0)).not.toHaveBeenCalled();
+    expect(large(s)).toBe('north');
+    expect(release(3)).toHaveBeenCalled();
+    expect(large(s)).toBe('');
+    expect(release(4)).toHaveBeenCalled();
+    expect(large(s)).toBe('north');
+    release(3);
+    release(3);
+    expect(s.pages.current).toBe('home');
+    // Nothing left to step back to: the browser keeps its own Back.
+    expect(release(3)).not.toHaveBeenCalled();
   });
 });

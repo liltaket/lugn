@@ -1010,6 +1010,28 @@ describe('Hub pointer bridge page script', () => {
     expect(page.document.log.map((entry) => entry.type)).toEqual(['keydown']);
   });
 
+  it('sends the side buttons as mouse events with button 3 and 4', async () => {
+    const page = await connected();
+    const target = page.document.element('div');
+    page.document.hit = target;
+    page.socket.receive({ t: 'enter', x: 10, y: 10 });
+    for (const button of ['back', 'forward'])
+      for (const down of [true, false])
+        page.socket.receive({ t: 'button', button, down, x: 10, y: 10 });
+    expect(
+      page.document.log.map((entry) => [
+        entry.type,
+        entry.event['button'],
+        entry.target === target,
+      ]),
+    ).toEqual([
+      ['mousedown', 3, true],
+      ['mouseup', 3, true],
+      ['mousedown', 4, true],
+      ['mouseup', 4, true],
+    ]);
+  });
+
   it('scrolls the nearest scrollable ancestor under the cursor', async () => {
     const page = await connected();
     const outer = page.document.element('section');
