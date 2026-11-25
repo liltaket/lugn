@@ -372,19 +372,27 @@ is not painted.
 
 ### Musik with lyrics
 
-A button in the navbar's row above the scenes switches Musik between the cover
-view and the lyrics, and each Hub remembers the choice. With lyrics on, the
-cover, title, time bar, previous, play/pause, next and volume form a 256 px rail
-on the left, and the song's lines fill the right. The current line is bright and
-its first row is level with the cover's middle; the line before and up to three
-after are dimmer, and only whole lines show. With the navbar open the rail
-shrinks to 92 % and the lines stop above the navbar's buttons.
+A button in the navbar's row above the scenes switches lyrics on and off. With
+them on, two more controls appear beside it: one switches between the two
+layouts, and a stepper delays or advances the lines by a tenth of a second a
+press (up to 5 s). Each Hub remembers both choices.
+
+- **Beside the rail:** the cover, title, time bar, previous, play/pause, next
+  and volume form a 256 px rail on the left, and the lines fill the right.
+- **Lines only:** the lines take the whole screen at 52 px. A tap opens the
+  navbar, and the rail comes in with it. Without lines to follow (none,
+  instrumental, a failed fetch, no music) the rail stays.
+
+The current line is in the middle of the screen; up to two lines before and
+three after are dimmer, and only whole lines show. With the navbar open the rail
+shrinks to 92 % and the lines move up above the navbar's buttons.
 
 A tap on the lines opens the navbar, as on the rest of the page; seeking is the
 time bar's. A track without timed lines, an instrumental, a failed fetch and a
 player without a position each say so where the current line would be. A paused
 computer reports no position, so the lines stay where they were. The source label
-is not shown in this view. See [Lyrics](MUSIC.md#lyrics) for what is sent where.
+is not shown in these layouts. See [Lyrics](MUSIC.md#lyrics) for what is sent
+where and how lines follow playback.
 
 ## Hub roles and access
 

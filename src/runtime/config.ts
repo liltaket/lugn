@@ -4,7 +4,10 @@ import {
   type CameraDashboardConfig,
 } from '../core/cameras.js';
 import { HomeAssistantMusicMappingsSchema } from '../adapters/home-assistant-music.js';
-import { WiimMusicMappingsSchema } from '../adapters/wiim-music.js';
+import {
+  WiimMusicMappingSchema,
+  WiimMusicMappingsSchema,
+} from '../adapters/wiim-music.js';
 import { HomeAssistantEnvironmentMappingsSchema } from '../adapters/home-assistant-environment.js';
 import { HomeAssistantPrinterConfigSchema } from '../adapters/home-assistant-printer.js';
 import { HomeAssistantHomePresenceConfigSchema } from '../adapters/home-assistant-home-presence.js';
@@ -27,6 +30,7 @@ import { clerkFrontendApiOrigin } from './clerk-auth.js';
 import {
   SceneSchema,
   SemanticLightingIdSchema,
+  SemanticMusicIdSchema,
   SemanticSwitchIdSchema,
   LightingValuesSchema,
   LightingControlModesSchema,
@@ -475,6 +479,21 @@ const WiimConfigSchema = z
   })
   .strict();
 
+const LyricsConfigSchema = z
+  .object({
+    /**
+     * WiiM players whose position the lyrics are followed by, read directly
+     * whichever adapter controls the player.
+     */
+    players: z
+      .record(
+        SemanticMusicIdSchema,
+        z.object({ wiimHost: WiimMusicMappingSchema.shape.host }).strict(),
+      )
+      .default({}),
+  })
+  .strict();
+
 const FileConfigSchema = z
   .object({
     http: z
@@ -497,6 +516,7 @@ const FileConfigSchema = z
       .strict()
       .optional(),
     wiim: WiimConfigSchema.optional(),
+    lyrics: LyricsConfigSchema.optional(),
     homeAssistant: HomeAssistantConfigSchema,
     lightingControlModes: LightingControlModesSchema.default({}),
     windowLighting: WindowLightingSchema.optional(),
@@ -766,6 +786,7 @@ export type RuntimeConfig = {
   wiim?: {
     music: z.output<typeof WiimMusicMappingsSchema>;
   };
+  lyrics?: z.output<typeof LyricsConfigSchema>;
   windowLighting?: WindowLighting;
   dynamicLighting?: z.output<typeof DynamicLightingConfigSchema>;
   presenceControl?: z.output<typeof PresenceControlConfigSchema>;
@@ -1006,6 +1027,7 @@ export function loadRuntimeConfig(
         : { printer: fileConfig.homeAssistant.printer }),
     },
     ...(mqtt === undefined ? {} : { mqtt }),
+    ...(fileConfig.lyrics === undefined ? {} : { lyrics: fileConfig.lyrics }),
     ...(fileConfig.presenceControl === undefined
       ? {}
       : { presenceControl: fileConfig.presenceControl }),

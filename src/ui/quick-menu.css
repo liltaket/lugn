@@ -113,6 +113,37 @@
   width: 32px;
   height: 32px;
 }
+/* How much later than sung the lyrics show, adjusted a tenth a press. */
+.nb-delay {
+  display: flex;
+  align-items: center;
+  height: 56px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(10, 12, 12, 0.32);
+}
+.nb-delay[hidden] {
+  display: none;
+}
+.nb-delay button {
+  width: 56px;
+  height: 54px;
+  padding: 0;
+  border: 0;
+  border-radius: 27px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 28px;
+}
+.nb-delay output {
+  min-width: 62px;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 /* A switch that is on (Musik's lyrics) is lit like the chosen scene. */
 .nb-round[aria-pressed='true'] {
   background: rgba(var(--nb-rgb), 0.2);

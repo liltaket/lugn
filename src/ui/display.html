@@ -785,6 +785,14 @@
             <button type="button" class="nb-round" data-nb="next" aria-label="Nästa bild" hidden>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 5 7 7-7 7" /></svg>
             </button>
+            <div class="nb-delay" data-view="lyrics-delay" role="group" aria-label="Textens fördröjning" hidden>
+              <button type="button" data-nb="lyrics-earlier" aria-label="Visa texten tidigare">−</button>
+              <output data-view="lyrics-delay-value">0,0 s</output>
+              <button type="button" data-nb="lyrics-later" aria-label="Visa texten senare">+</button>
+            </div>
+            <button type="button" class="nb-round" data-nb="lyrics-full" aria-label="Bara text" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></svg>
+            </button>
             <button type="button" class="nb-round" data-nb="lyrics" aria-label="Låttext" aria-pressed="false" hidden>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h-.5A2.5 2.5 0 0 1 5 13.5Z" /><path d="M8.5 8.5h7M8.5 12h4.5" /></svg>
             </button>

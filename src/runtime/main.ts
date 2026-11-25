@@ -95,6 +95,7 @@ import { defaultScenes, LugnEngine } from '../application/lugn-engine.js';
 import { systemClock, type TimerHandle } from '../core/clock.js';
 import { LugnDisplayServer } from './display-server.js';
 import { LrclibLyrics } from './lrclib-lyrics.js';
+import { WiimPlayhead } from './wiim-playhead.js';
 import { DashCastManager } from './dashcast-manager.js';
 import { LightingIntentStore } from './lighting-intent-store.js';
 import { ScenePresetStore } from './scene-preset-store.js';
@@ -1228,6 +1229,17 @@ export async function startRuntime(
         ),
         capabilities,
         lyrics: new LrclibLyrics(),
+        ...(config.lyrics
+          ? {
+              playhead: new WiimPlayhead(
+                Object.fromEntries(
+                  Object.entries(config.lyrics.players).map(
+                    ([target, { wiimHost }]) => [target, wiimHost],
+                  ),
+                ),
+              ),
+            }
+          : {}),
         ...(artwork ? { artworkProvider: artwork } : {}),
         ...(cameraService && cameraMedia ? { cameraService, cameraMedia } : {}),
         ...(photoLibrary ? { photoLibrary } : {}),

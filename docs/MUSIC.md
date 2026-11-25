@@ -126,7 +126,29 @@ The Hub names only the player (`GET display-api/lyrics/<target>`); Lugn picks th
 track from its own state. An exact lookup comes first. Without timed lines there,
 a search result counts only if its length is within 3 seconds. Answers are kept
 in memory: a day for lines, an hour for an unknown track, 20 seconds after a
-failure. There is no setting, and nothing is stored on disk.
+failure. Nothing is stored on disk.
+
+### Following playback
+
+Home Assistant reports a media player's position in whole seconds, a few apart,
+which put lines about a second late and up to two. Name each WiiM in the
+configuration to have its position read directly (`getPlayerStatus`, read only;
+the player stays controlled as before):
+
+```json
+"lyrics": { "players": { "music.room": { "wiimHost": "192.168.1.20" } } }
+```
+
+While lyrics are on screen a Hub asks `GET display-api/playhead/<target>` about
+once a second. The answer comes from the computer's media behind a computer
+input, else from the named WiiM, else from the last report (`coarse`). The page
+counts on from the median of the last few answers on its own clock, takes a
+change over 0.35 s as a seek, and hands each line change to the compositor ahead
+of its time, 0.15 s before the line is sung plus the Hub's chosen delay. A new
+track seen at the player has its lines asked for at once.
+
+Once a minute a Hub showing lyrics reports its request times and how late line
+changes were committed (`hub probe` with phase `lyrics` in Lugn's journal).
 
 ## Verification after missing feedback
 

@@ -85,16 +85,19 @@ export class LrclibLyrics implements LyricsProvider {
       ...(track.album ? { album_name: track.album } : {}),
       ...(duration === undefined ? {} : { duration: String(duration) }),
     });
-    const direct = (await this.get(`/get?${exact}`)) as LrclibRecord | null;
-    const first = direct ? read(direct) : null;
-    if (first) return first;
     // The exact lookup misses other album names, and may answer with a record
-    // that has no timed lines while another one does.
+    // that has no timed lines while another one does. The search runs beside
+    // it, so a miss costs no second wait.
     const query = new URLSearchParams({
       track_name: track.title,
       artist_name: track.artist,
     });
-    const found = await this.get(`/search?${query}`);
+    const search = this.get(`/search?${query}`);
+    search.catch(() => undefined);
+    const direct = (await this.get(`/get?${exact}`)) as LrclibRecord | null;
+    const first = direct ? read(direct) : null;
+    if (first) return first;
+    const found = await search;
     const records = (Array.isArray(found) ? found : []) as LrclibRecord[];
     const distance = (record: LrclibRecord) =>
       duration === undefined || typeof record.duration !== 'number'

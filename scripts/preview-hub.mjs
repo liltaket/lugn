@@ -298,6 +298,19 @@ const server = createServer(async (request, response) => {
     )
       return sendJson(response, 403, { error: 'origin' });
     const path = new URL(request.url, `http://${allowedHost}`).pathname;
+    if (/^\/lyrics\/display-api\/playhead\/music\.room$/.test(path)) {
+      const data = snapshot('lyrics');
+      const observed = data.state.music.devices['music.room'].observed;
+      // On the preview's own clock, which is the fixture's.
+      return sendJson(response, 200, {
+        source: 'player',
+        playing: true,
+        position:
+          observed.positionSeconds +
+          (data.generatedAt - observed.positionUpdatedAt) / 1000,
+        duration: observed.durationSeconds,
+      });
+    }
     // Invented lines for the `lyrics` scenario (and none elsewhere).
     if (/^\/[a-z-]+\/display-api\/lyrics\/music\.room$/.test(path))
       return sendJson(

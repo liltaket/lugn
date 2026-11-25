@@ -43,6 +43,7 @@ import type {
 import type { StateEventStream } from '../core/event-stream.js';
 import type { ArtworkProvider } from '../core/artwork.js';
 import type { LyricsProvider, LyricsTrack } from '../core/lyrics.js';
+import type { PlayheadProvider } from './wiim-playhead.js';
 import {
   PrinterLightUnavailableError,
   type PrinterActivityProvider,
@@ -68,6 +69,7 @@ const MAX_REQUEST_BYTES = 8 * 1024;
 /** One phase of the on-device profile (src/ui/hub-probe.js), logged as is. */
 const PROBE_PHASES = [
   'info',
+  'lyrics',
   'cpu',
   'idle',
   'bare',
@@ -187,6 +189,8 @@ export type LugnDisplayServerOptions = {
   artworkProvider?: ArtworkProvider;
   /** Timed lyrics for the Hubs' music page, asked for only when shown. */
   lyrics?: LyricsProvider;
+  /** The players' own position, where it can be read directly. */
+  playhead?: PlayheadProvider;
   experience?: ExperienceApi;
   cameraService?: CameraDashboardService;
   cameraMedia?: CameraMediaProvider;
@@ -197,6 +201,20 @@ export type LugnDisplayServerOptions = {
   printer?: PrinterActivityProvider;
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
 };
+
+function playerTrack(player: {
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  durationSeconds: number;
+}): LyricsTrack {
+  return {
+    title: player.title ?? '',
+    artist: player.artist ?? '',
+    ...(player.album ? { album: player.album } : {}),
+    durationSeconds: player.durationSeconds,
+  };
+}
 
 /** Only the hub resolved from the authenticated secret path supplies provenance. */
 function hubProvenance(hub: LugnDisplayHub) {
@@ -262,6 +280,7 @@ export class LugnDisplayServer {
   private readonly computerNowPlaying: ComputerNowPlayingSelector;
   private unsubscribeComputerObservations: (() => void) | undefined;
   private readonly computerTracks = new Map<string, LyricsTrack>();
+  private readonly prefetched = new Map<string, string>();
 
   constructor(private readonly options: LugnDisplayServerOptions) {
     this.computerNowPlaying =
@@ -705,6 +724,32 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'GET' &&
+        hubRequest.route.startsWith('/display-api/playhead/')
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        const target = hubRequest.route.slice('/display-api/playhead/'.length);
+        const state = this.options.stateProvider();
+        if (!Object.hasOwn(state.music.devices, target)) {
+          sendJson(response, 404, { error: 'playhead_unavailable' });
+          return;
+        }
+        const asked = performance.now();
+        const playhead = await this.playhead(state, target);
+        sendJson(response, 200, {
+          ...playhead,
+          // Time spent here (asking the player), for the page's own timing.
+          held: Math.round(performance.now() - asked),
+        });
+        return;
+      }
+      if (
+        request.method === 'GET' &&
         hubRequest.route.startsWith('/display-api/lyrics/')
       ) {
         if (
@@ -723,7 +768,7 @@ export class LugnDisplayServer {
           sendJson(response, 404, { error: 'lyrics_unavailable' });
           return;
         }
-        const track = this.lyricsTrack(state, target);
+        const track = await this.lyricsTrack(state, target);
         sendJson(
           response,
           200,
@@ -933,10 +978,10 @@ export class LugnDisplayServer {
    * computer's media, otherwise the player's own. The page never names it, so
    * a Hub cannot have anything else looked up.
    */
-  private lyricsTrack(
+  private async lyricsTrack(
     state: RoomState,
     target: string,
-  ): LyricsTrack | undefined {
+  ): Promise<LyricsTrack | undefined> {
     const computer = this.computerNowPlaying.snapshot(state)[target];
     if (computer) {
       // A paused computer reports no media; the page keeps showing the last.
@@ -955,6 +1000,8 @@ export class LugnDisplayServer {
         ? this.computerTracks.get(target)
         : undefined;
     }
+    const player = await this.options.playhead?.read(target);
+    if (player?.title && player.artist) return playerTrack(player);
     const observed = state.music.devices[target]?.observed;
     const title = observed?.title?.trim();
     const artist = observed?.artist?.trim();
@@ -967,6 +1014,73 @@ export class LugnDisplayServer {
         ? {}
         : { durationSeconds: observed.durationSeconds }),
     };
+  }
+
+  /**
+   * Where the shown track is, as of this answer: the computer's media behind a
+   * computer input, the player's own report where it can be read, and else the
+   * last report extrapolated (`coarse`: whole seconds through Home Assistant).
+   */
+  private async playhead(state: RoomState, target: string) {
+    const since = (at: number) => Math.max(0, (Date.now() - at) / 1000);
+    const computer = this.computerNowPlaying.snapshot(state)[target];
+    if (computer) {
+      const { positionSeconds, positionUpdatedAt } = computer;
+      if (
+        computer.status !== 'playing' ||
+        positionSeconds === undefined ||
+        positionUpdatedAt === undefined
+      )
+        return { source: 'none' as const };
+      return {
+        source: 'computer' as const,
+        playing: true,
+        position: positionSeconds + since(positionUpdatedAt),
+        duration: computer.durationSeconds,
+        ...(computer.title && computer.artist
+          ? { track: { title: computer.title, artist: computer.artist } }
+          : {}),
+      };
+    }
+    const player = await this.options.playhead?.read(target);
+    if (player) {
+      const age = (this.options.playhead!.now() - player.measuredAt) / 1000;
+      const track = playerTrack(player);
+      this.prefetchLyrics(target, track);
+      return {
+        source: 'player' as const,
+        playing: player.playing,
+        position: player.positionSeconds + (player.playing ? age : 0),
+        duration: player.durationSeconds,
+        ...(player.title && player.artist
+          ? { track: { title: player.title, artist: player.artist } }
+          : {}),
+      };
+    }
+    const observed = state.music.devices[target]?.observed;
+    if (
+      observed?.positionSeconds === undefined ||
+      observed.positionUpdatedAt === undefined
+    )
+      return { source: 'none' as const };
+    const playing = observed.playback === 'playing';
+    return {
+      source: 'coarse' as const,
+      playing,
+      position:
+        observed.positionSeconds +
+        (playing ? since(observed.positionUpdatedAt) : 0),
+      duration: observed.durationSeconds,
+    };
+  }
+
+  /** A new track's lines are asked for before any page asks. */
+  private prefetchLyrics(target: string, track: LyricsTrack): void {
+    if (!this.options.lyrics || !track.title || !track.artist) return;
+    const key = JSON.stringify([track.title, track.artist]);
+    if (this.prefetched.get(target) === key) return;
+    this.prefetched.set(target, key);
+    void this.options.lyrics.lookup(track).catch(() => undefined);
   }
 
   private snapshot(hub: LugnDisplayHub) {

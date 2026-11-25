@@ -48,10 +48,13 @@
     back: button('back'),
     next: button('next'),
     lyrics: button('lyrics'),
+    lyricsFull: button('lyrics-full'),
     music: button('music'),
     cameras: button('cameras'),
   };
   const dock = nav.querySelector("[data-view='dock']");
+  const lyricsDelay = nav.querySelector("[data-view='lyrics-delay']");
+  const delayValue = nav.querySelector("[data-view='lyrics-delay-value']");
 
   const controllers = new Map();
   let open = false;
@@ -91,6 +94,16 @@
     hide(buttons.lyrics, !lyrics);
     if (lyrics)
       buttons.lyrics?.setAttribute('aria-pressed', String(lyrics.shown()));
+    // With lyrics on: how much of the screen they take, and their timing.
+    const timed = Boolean(lyrics?.shown());
+    hide(buttons.lyricsFull, !timed);
+    hide(lyricsDelay, !timed);
+    if (timed) {
+      buttons.lyricsFull?.setAttribute('aria-pressed', String(lyrics.full()));
+      const text = lyrics.delayText();
+      if (delayValue && delayValue.textContent !== text)
+        delayValue.textContent = text;
+    }
     hide(buttons.cameras, controller.id === 'kameror' || !cameras);
     // A page may tint the selected scene with its own colour (Musik: the
     // cover's), as the three numbers of an rgb() colour.
@@ -242,8 +255,12 @@
     if (name === 'back') controller?.back?.();
     else if (name === 'next') controller?.actions?.next?.();
     else if (name === 'music') pagesApi.go('music');
-    else if (name === 'lyrics') {
-      globalThis.lugnLyrics?.toggle();
+    else if (name?.startsWith('lyrics')) {
+      const lyrics = globalThis.lugnLyrics;
+      if (name === 'lyrics') lyrics?.toggle();
+      else if (name === 'lyrics-full') lyrics?.toggleFull();
+      else if (name === 'lyrics-earlier') lyrics?.nudge(-1);
+      else if (name === 'lyrics-later') lyrics?.nudge(1);
       drawContext();
     } else if (name === 'cameras') openCameras();
     // A press keeps the bar a while longer (a scene button is the dock's own).

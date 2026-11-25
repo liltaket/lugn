@@ -7,6 +7,10 @@ import { FakeClock } from '../src/core/clock.js';
 import { parseLrc, type LyricsProvider } from '../src/core/lyrics.js';
 import { LrclibLyrics } from '../src/runtime/lrclib-lyrics.js';
 import { LugnDisplayServer } from '../src/runtime/display-server.js';
+import {
+  WiimPlayhead,
+  type PlayheadProvider,
+} from '../src/runtime/wiim-playhead.js';
 
 const synced = '[00:10.00] First line\n[00:14.50] Second line';
 const json = (body: unknown, status = 200) =>
@@ -49,8 +53,15 @@ describe('LRCLIB', () => {
       ],
     });
     expect(await lyrics.lookup({ ...track, album: 'Album' })).toEqual(first);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    const url = new URL(String(fetcher.mock.calls[0]![0]));
+    // The exact lookup and the search beside it, once.
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const url = new URL(
+      String(
+        fetcher.mock.calls.find(([input]) =>
+          String(input).includes('/get?'),
+        )![0],
+      ),
+    );
     expect(url.origin + url.pathname).toBe('https://lrclib.net/api/get');
     expect(Object.fromEntries(url.searchParams)).toEqual({
       track_name: 'Song',
@@ -98,10 +109,10 @@ describe('LRCLIB', () => {
     const lyrics = new LrclibLyrics(fetcher, () => now);
     await lyrics.lookup(track);
     await lyrics.lookup(track);
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
     now = 60_000;
     await lyrics.lookup(track);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
   it('does not ask about a recording longer than any song', async () => {
@@ -116,6 +127,64 @@ describe('LRCLIB', () => {
   });
 });
 
+describe('the WiiM playhead', () => {
+  const status = (extra: Record<string, string> = {}) =>
+    JSON.stringify({
+      mode: '31',
+      status: 'play',
+      curpos: '11285',
+      totlen: '238426',
+      Title: Buffer.from('Song').toString('hex'),
+      Artist: Buffer.from('Band').toString('hex'),
+      ...extra,
+    });
+
+  it('times the position halfway through the question, and shares answers', async () => {
+    let now = 1_000;
+    const sendCommand = vi.fn(async () => {
+      now += 40;
+      return status();
+    });
+    const playhead = new WiimPlayhead(
+      { 'music.room': '192.168.1.5' },
+      { sendCommand },
+      () => now,
+    );
+    const [first, second] = await Promise.all([
+      playhead.read('music.room'),
+      playhead.read('music.room'),
+    ]);
+    expect(first).toEqual({
+      playing: true,
+      positionSeconds: 11.285,
+      durationSeconds: 238.426,
+      measuredAt: 1_020,
+      title: 'Song',
+      artist: 'Band',
+      album: null,
+    });
+    expect(second).toEqual(first);
+    expect(sendCommand).toHaveBeenCalledTimes(1);
+    now += 500;
+    await playhead.read('music.room');
+    expect(sendCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it('has no answer for an input, a failure or an unknown player', async () => {
+    const reader = (reply: () => Promise<string>) =>
+      new WiimPlayhead({ 'music.room': '192.168.1.5' }, { sendCommand: reply });
+    expect(
+      await reader(async () => status({ mode: '43' })).read('music.room'),
+    ).toBeNull();
+    expect(
+      await reader(async () => {
+        throw new Error('offline');
+      }).read('music.room'),
+    ).toBeNull();
+    expect(await reader(async () => status()).read('constructor')).toBeNull();
+  });
+});
+
 describe('the Hub lyrics route', () => {
   const token = 'a'.repeat(32);
   const cleanups: Array<() => Promise<void>> = [];
@@ -123,7 +192,7 @@ describe('the Hub lyrics route', () => {
     for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   });
 
-  async function setup(lyrics?: LyricsProvider) {
+  async function setup(lyrics?: LyricsProvider, playhead?: PlayheadProvider) {
     const finder = createServer();
     await new Promise<void>((resolve) =>
       finder.listen(0, '127.0.0.1', resolve),
@@ -154,6 +223,7 @@ describe('the Hub lyrics route', () => {
       stateProvider: () => engine.state,
       stateStream: engine.stream,
       ...(lyrics ? { lyrics } : {}),
+      ...(playhead ? { playhead } : {}),
     });
     await server.start();
     cleanups.push(async () => {
@@ -166,12 +236,14 @@ describe('the Hub lyrics route', () => {
         state: 'playing',
         attributes,
       });
+    const route = (path: string, headers: Record<string, string> = {}) =>
+      fetch(`http://127.0.0.1:${port}/k/${token}/display-api/${path}`, {
+        headers,
+      });
     const get = (target: string, headers: Record<string, string> = {}) =>
-      fetch(
-        `http://127.0.0.1:${port}/k/${token}/display-api/lyrics/${target}`,
-        { headers },
-      );
-    return { play, get };
+      route(`lyrics/${target}`, headers);
+    const at = (target: string) => route(`playhead/${target}`);
+    return { play, get, at };
   }
 
   it("looks up the player's own track and names it", async () => {
@@ -201,6 +273,68 @@ describe('the Hub lyrics route', () => {
       (await s.get('music.room', { 'sec-fetch-site': 'cross-site' })).status,
     ).toBe(403);
     expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("answers where the player itself says it is, ahead of Home Assistant's report", async () => {
+    const lookup = vi.fn<LyricsProvider['lookup']>(async () => ({
+      status: 'none',
+    }));
+    const s = await setup(
+      { lookup },
+      {
+        now: () => 1_500,
+        read: async () => ({
+          playing: true,
+          positionSeconds: 12.345,
+          durationSeconds: 200.5,
+          measuredAt: 1_250,
+          title: 'New song',
+          artist: 'Band',
+          album: 'Album',
+        }),
+      },
+    );
+    s.play({
+      media_title: 'Old song',
+      media_artist: 'Band',
+      media_position: 11,
+      media_duration: 200,
+      media_position_updated_at: new Date().toISOString(),
+    });
+    expect(await (await s.at('music.room')).json()).toEqual({
+      source: 'player',
+      playing: true,
+      position: 12.595,
+      duration: 200.5,
+      track: { title: 'New song', artist: 'Band' },
+      held: expect.any(Number),
+    });
+    // The new track's lines are asked for before any page asks.
+    expect(lookup).toHaveBeenCalledWith({
+      title: 'New song',
+      artist: 'Band',
+      album: 'Album',
+      durationSeconds: 200.5,
+    });
+  });
+
+  it('marks a position from Home Assistant as coarse', async () => {
+    const s = await setup();
+    expect(await (await s.at('music.room')).json()).toMatchObject({
+      source: 'none',
+    });
+    s.play({
+      media_title: 'Song',
+      media_position: 30,
+      media_duration: 200,
+      media_position_updated_at: new Date().toISOString(),
+    });
+    expect(await (await s.at('music.room')).json()).toMatchObject({
+      source: 'coarse',
+      playing: true,
+      duration: 200,
+    });
+    expect((await s.at('music.other')).status).toBe(404);
   });
 
   it('is absent without a lyrics source', async () => {

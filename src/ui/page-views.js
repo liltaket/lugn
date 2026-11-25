@@ -680,6 +680,7 @@
       title: state.title,
       artist: state.artist,
       progress: state.progress,
+      playing: state.playing,
       serverNow,
     });
   }
@@ -1063,6 +1064,7 @@
         target,
         request: { property: 'seek', value: position },
       });
+      globalThis.lugnLyrics?.seek(position);
       drawMusic();
     },
     restore: () => {
