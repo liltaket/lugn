@@ -704,6 +704,14 @@
     );
   }
 
+  // The side buttons, as the events a real mouse sends for them (button 3 is
+  // back, 4 forward); hub-history.js acts on the release.
+  function sideButton(button, down) {
+    const target = hitAt(true) ?? document.body;
+    dispatchMouse(down ? 'mousedown' : 'mouseup', target, button, 0);
+    if (!down) recheckHover();
+  }
+
   function scrollableAncestor(element, axis) {
     for (let node = element; node; node = node.parentElement) {
       const style = getComputedStyle(node);
@@ -911,6 +919,10 @@
         } else if (message.button === 'right' && message.down) {
           escape();
           recheckHover();
+        } else if (message.button === 'back') {
+          sideButton(3, message.down === true);
+        } else if (message.button === 'forward') {
+          sideButton(4, message.down === true);
         }
         return;
       case 'wheel':

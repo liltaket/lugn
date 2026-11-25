@@ -130,6 +130,7 @@ describe('display pointer bridge', () => {
       ['quick-menu.js', 'text/javascript; charset=utf-8'],
       ['photos-page.css', 'text/css; charset=utf-8'],
       ['photos-page.js', 'text/javascript; charset=utf-8'],
+      ['hub-history.js', 'text/javascript; charset=utf-8'],
     ] as const) {
       const response = await fetch(`${bed}/${file}`);
       expect(response.status).toBe(200);
@@ -152,6 +153,12 @@ describe('display pointer bridge', () => {
     expect(
       html.indexOf('<script src="./cameras-page.js" defer></script>'),
     ).toBeGreaterThan(views);
+    // Back and forward come last: every page has registered by then.
+    expect(
+      html.indexOf('<script src="./hub-history.js" defer></script>'),
+    ).toBeGreaterThan(
+      html.indexOf('<script src="./photos-page.js" defer></script>'),
+    );
     expect(html).toContain('<link rel="stylesheet" href="./pages.css" />');
     expect(html.indexOf('id="hub-track"')).toBeLessThan(
       html.indexOf('id="app-root"'),

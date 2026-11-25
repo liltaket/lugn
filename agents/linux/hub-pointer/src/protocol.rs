@@ -13,6 +13,8 @@ pub enum ButtonName {
     Left,
     Right,
     Middle,
+    Back,
+    Forward,
 }
 
 impl ButtonName {
@@ -22,6 +24,10 @@ impl ButtonName {
             0x110 => Some(Self::Left),
             0x111 => Some(Self::Right),
             0x112 => Some(Self::Middle),
+            // Mice report their side buttons as BTN_SIDE and BTN_EXTRA, a
+            // few as BTN_BACK and BTN_FORWARD.
+            0x113 | 0x116 => Some(Self::Back),
+            0x114 | 0x115 => Some(Self::Forward),
             _ => None,
         }
     }
@@ -303,6 +309,10 @@ mod tests {
         assert_eq!(ButtonName::from_evdev(0x110), Some(ButtonName::Left));
         assert_eq!(ButtonName::from_evdev(0x111), Some(ButtonName::Right));
         assert_eq!(ButtonName::from_evdev(0x112), Some(ButtonName::Middle));
-        assert_eq!(ButtonName::from_evdev(0x113), None);
+        assert_eq!(ButtonName::from_evdev(0x113), Some(ButtonName::Back));
+        assert_eq!(ButtonName::from_evdev(0x116), Some(ButtonName::Back));
+        assert_eq!(ButtonName::from_evdev(0x114), Some(ButtonName::Forward));
+        assert_eq!(ButtonName::from_evdev(0x115), Some(ButtonName::Forward));
+        assert_eq!(ButtonName::from_evdev(0x117), None);
     }
 }
