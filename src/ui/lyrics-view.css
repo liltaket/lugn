@@ -1,9 +1,8 @@
 /* Musik with lyrics (lyrics-view.js). Beside the rail: margins 64 px, a
-   264 px rail, an 80 px gutter and the lines, the current one in the middle of
-   the screen. Closed, the rail holds only the cover, the title and the time,
-   centred on the screen; what there is to press comes with the navbar. In the
-   full layout the lines take the screen, and the rail comes in with the
-   navbar. */
+   264 px rail with the cover, the title and the time, centred on the screen, an
+   80 px gutter and the lines, the current one in the middle. In the full layout
+   the lines take the screen. Both show only with the navbar closed: with it
+   open the page is the cover view. Only opacity and transform move. */
 .music-page-lyrics[hidden] {
   display: none;
 }
@@ -11,20 +10,23 @@
   display: block;
   padding: 0;
 }
-.music-page[data-lyrics='true'] .music-page-backdrop::after {
-  background:
-    linear-gradient(rgba(8, 10, 10, 0.34), rgba(8, 10, 10, 0.34)),
-    radial-gradient(
-      120% 90% at 25% 40%,
-      rgba(8, 10, 10, 0.05),
-      rgba(8, 10, 10, 0.55)
-    ),
-    linear-gradient(180deg, rgba(8, 10, 10, 0) 55%, rgba(8, 10, 10, 0.55));
+/* The backdrop dims behind lyrics, fading with the change of layout. */
+.music-page-backdrop::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: rgba(8, 10, 10, 0.34);
+  opacity: 0;
+  transition: opacity 400ms ease-out;
+}
+.music-page[data-lyrics='true'] .music-page-backdrop::before {
+  opacity: 1;
 }
 .music-page[data-lyrics='true'] .music-page-cover {
   position: absolute;
   left: 64px;
-  top: 60px;
+  top: 102px;
   width: 264px;
   height: 264px;
   border-radius: 18px;
@@ -32,7 +34,7 @@
 .music-page[data-lyrics='true'] .music-page-info {
   position: absolute;
   left: 64px;
-  top: 348px;
+  top: 390px;
   width: 264px;
   gap: 0;
 }
@@ -63,93 +65,10 @@
   font-size: 13px;
   color: rgba(238, 241, 232, 0.48);
 }
-/* The three buttons span the rail; the volume takes the row below. A player
-   without steps has play in the middle. */
-.music-page[data-lyrics='true'] .music-page-controls {
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 16px 0;
-  margin-top: 16px;
-}
-.music-page[data-lyrics='true'] .music-page-play {
-  width: 72px;
-  height: 72px;
-  margin: 0 auto;
-}
-.music-page[data-lyrics='true']
-  .music-page-skip:not([hidden])
-  + .music-page-play {
-  margin: 0;
-}
-.music-page[data-lyrics='true'] .music-page-play svg {
-  width: 32px;
-  height: 32px;
-}
-.music-page[data-lyrics='true'] .music-page-skip {
-  width: 56px;
-  height: 56px;
-}
-.music-page[data-lyrics='true'] .music-page-skip svg {
-  width: 24px;
-  height: 24px;
-}
-/* What shows sits at the screen's middle. */
-.music-page[data-lyrics='true'] .music-page-cover,
-.music-page[data-lyrics='true'] .music-page-info {
-  z-index: 1;
-  transform: translateY(42px);
-}
-.music-page[data-lyrics='true'] .music-page-cover,
-.music-page[data-lyrics='true'] .music-page-text,
-.music-page[data-lyrics='true'] .music-page-progress {
-  transform-origin: 0 0;
-}
-.music-page[data-lyrics='true'] .music-page-text,
-.music-page[data-lyrics='true'] .music-page-progress {
-  transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.music-page[data-lyrics='true'] .music-page-cover::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  background: rgba(8, 10, 10, 0.55);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 240ms ease-out;
-}
-/* Closed, nothing is there to press: the navbar brings the buttons in. */
-.music-page[data-lyrics='true'] .music-page-controls > * {
-  transition:
-    opacity 220ms ease-out,
-    visibility 0s;
-}
-.music-page[data-lyrics='true']:not(.menu-open) .music-page-controls > * {
-  opacity: 0;
-  visibility: hidden;
-  transition:
-    opacity 220ms ease-out,
-    visibility 0s linear 220ms;
-}
-.music-page[data-lyrics='true'] .music-page-volume {
-  flex: 0 0 calc(100% + 4px);
-  height: 24px;
-  gap: 12px;
-  /* The speaker's drawing starts inside its box. */
-  margin-left: -4px;
-}
-.music-page[data-lyrics='true'] .music-page-volume[hidden] {
-  display: none;
-}
-.music-page[data-lyrics='true'] .music-page-volume-slider,
-.music-page[data-lyrics='true'] .music-page-volume-track {
-  flex: 1;
-  width: auto;
-}
+/* There is nothing to press here: a tap opens the navbar, and with it the
+   cover view and its controls. */
+.music-page[data-lyrics='true'] .music-page-controls,
 .music-page[data-lyrics='true'] .music-page-presets {
-  flex-wrap: wrap;
-}
-.music-page[data-lyrics='true'][data-active='false'] .music-page-controls {
   display: none;
 }
 .music-page[data-ready='false'] .music-page-lyrics {
@@ -185,11 +104,11 @@
   opacity: 0;
 }
 /* The full layout: the lines alone, larger, over the whole screen. */
-.music-page[data-lyrics-full='true']:not(.menu-open) .music-page-lyrics {
+.music-page[data-lyrics-full='true'] .music-page-lyrics {
   left: 72px;
   right: 72px;
 }
-.music-page[data-lyrics-full='true']:not(.menu-open) .ly-line {
+.music-page[data-lyrics-full='true'] .ly-line {
   padding: 13px 0;
   font-size: 52px;
   line-height: 1.18;
@@ -202,8 +121,8 @@
     transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
     visibility 0s;
 }
-.music-page[data-lyrics-full='true']:not(.menu-open) .music-page-cover,
-.music-page[data-lyrics-full='true']:not(.menu-open) .music-page-info {
+.music-page[data-lyrics-full='true'] .music-page-cover,
+.music-page[data-lyrics-full='true'] .music-page-info {
   opacity: 0;
   visibility: hidden;
   transform: translateX(-32px);
@@ -226,9 +145,6 @@
   gap: 38px;
   transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.music-page.menu-open .ly-skeleton {
-  transform: translateY(-78px);
-}
 .music-page-lyrics:not([data-status='loading']) .ly-skeleton {
   opacity: 0;
 }
@@ -248,125 +164,13 @@
 .ly-skeleton i:nth-child(4) {
   width: 52%;
 }
-/* ── With the navbar open, four styles on trial ── */
-
-/* 1: the controls join the navbar's row (y 438), left of its buttons. The
-   cover and the title draw together to 88 %, between y 80 and 428: below the
-   top left corner, which other things on the screen may use, and above the row.
-   Each part moves by itself, so the controls keep their size. */
-.music-page[data-lyrics='true'][data-lyrics-controls='1'].menu-open
-  .music-page-cover {
-  transform: translate(15.8px, 20px) scale(0.88);
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='1'].menu-open
-  .music-page-info {
-  transform: none;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='1'].menu-open
-  .music-page-text {
-  transform: translate(15.8px, -14.6px) scale(0.88);
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='1'].menu-open
-  .music-page-progress {
-  transform: translate(15.8px, -23.9px) scale(0.88);
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='1'] .music-page-controls {
-  position: absolute;
-  left: -36px;
-  top: 90px;
-  width: 432px;
-  height: 56px;
-  flex-wrap: nowrap;
-  justify-content: flex-start;
-  gap: 12px;
-  margin: 0;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='1'] .music-page-play {
-  flex: none;
-  width: 56px;
-  height: 56px;
-  margin: 0;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='1'] .music-page-play svg {
-  width: 26px;
-  height: 26px;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='1'] .music-page-skip {
-  flex: none;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='1'] .music-page-volume {
-  flex: 0 0 220px;
-  margin-left: 8px;
-}
-
-/* 2: nothing moves; the cover dims and carries the controls. */
-.music-page[data-lyrics='true'][data-lyrics-controls='2'].menu-open
-  .music-page-cover::after {
-  opacity: 1;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='2'] .music-page-controls {
-  position: absolute;
-  left: 0;
-  top: -192px;
-  width: 264px;
-  justify-content: center;
-  gap: 48px 20px;
-  margin: 0;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='2'] .music-page-play {
-  margin: 0;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='2'] .music-page-volume {
-  flex: 0 0 228px;
-  margin: 0;
-}
-
-/* 3: large controls beside the rail, under the line being sung. */
-.music-page[data-lyrics='true'][data-lyrics-controls='3'] .music-page-controls {
-  position: absolute;
-  left: 344px;
-  top: -140px;
-  width: 560px;
-  justify-content: center;
-  gap: 44px 28px;
-  margin: 0;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='3'] .music-page-play {
-  width: 96px;
-  height: 96px;
-  margin: 0;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='3'] .music-page-play svg {
-  width: 40px;
-  height: 40px;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='3'] .music-page-skip {
-  width: 72px;
-  height: 72px;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='3'] .music-page-skip svg {
-  width: 30px;
-  height: 30px;
-}
-.music-page[data-lyrics='true'][data-lyrics-controls='3'] .music-page-volume {
-  flex: 0 0 320px;
-  margin: 0;
-}
-
-/* 4: the page itself changes to the cover view (lyrics-view.js). */
-
 /* A layout change is measured in place, then moved by the script. */
-.music-page[data-switching='true'] .music-page-text,
-.music-page[data-switching='true'] .music-page-progress,
-.music-page[data-switching='true'] .music-page-cover::after,
 .music-page[data-switching='true'] .music-page-cover,
 .music-page[data-switching='true'] .music-page-info {
   transition: none !important;
 }
 @media (prefers-reduced-motion: reduce) {
-  .music-page[data-lyrics='true'] .music-page-text,
-  .music-page[data-lyrics='true'] .music-page-progress,
-  .music-page[data-lyrics='true'] .music-page-controls > *,
+  .music-page-backdrop::before,
   .music-page[data-lyrics='true'] .music-page-cover,
   .music-page[data-lyrics='true'] .music-page-info,
   .ly-skeleton {

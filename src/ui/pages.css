@@ -194,6 +194,14 @@
   grid-column: 1 / -1;
 }
 
+/* Info's head stands under the navbar's top row while that is open. */
+.info-page > * {
+  transition: transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.info-page.menu-open > * {
+  transform: translateY(54px);
+}
+
 /* ── Musik ──
    The cover's own colour (--music-accent, measured once per cover) tints the
    controls and, through --nb-rgb, the navbar's lit scene, so the page reads
@@ -282,20 +290,17 @@
   gap: 8px;
   min-width: 0;
 }
-/* With the navbar open the content makes room for it: it lifts a little
-   and the cover shrinks towards the top. Transform only. */
+/* With the navbar open the content makes room for its scenes by lifting a
+   little, under the buttons along the top. Transform only. */
 .music-page-info,
 .music-page-cover {
   transition:
     opacity 0.45s ease-out,
-    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.music-page.menu-open .music-page-info {
-  transform: translateY(-66px);
-}
+.music-page.menu-open .music-page-info,
 .music-page.menu-open .music-page-cover {
-  transform: translateY(-52px) scale(0.84);
-  transform-origin: 50% 0;
+  transform: translateY(-18px);
 }
 /* Until the first state arrives the page shows only its backdrop (and its
    empty controls are neither seen nor reached). */

@@ -773,37 +773,29 @@
     </section>
     </div>
     <nav class="hub-nav" id="hub-nav" data-page="" aria-label="Navigering">
-      <div class="hub-nav-bar">
-        <div class="nb-context">
-          <button type="button" class="nb-round" data-nb="back" aria-label="Tillbaka" hidden>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m15 5-7 7 7 7" /></svg>
+      <div class="nb-context">
+        <button type="button" class="nb-round" data-nb="back" aria-label="Tillbaka" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m15 5-7 7 7 7" /></svg>
+        </button>
+        <div class="nb-actions">
+          <button type="button" class="nb-round" data-nb="next" aria-label="Nästa bild" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 5 7 7-7 7" /></svg>
           </button>
-          <div class="nb-actions">
-            <button type="button" class="nb-round" data-nb="next" aria-label="Nästa bild" hidden>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 5 7 7-7 7" /></svg>
-            </button>
-            <div class="nb-delay" data-view="lyrics-delay" role="group" aria-label="Textens fördröjning" hidden>
-              <button type="button" data-nb="lyrics-earlier" aria-label="Visa texten tidigare">−</button>
-              <output data-view="lyrics-delay-value">0,0 s</output>
-              <button type="button" data-nb="lyrics-later" aria-label="Visa texten senare">+</button>
-            </div>
-            <button type="button" class="nb-round nb-trial" data-nb="lyrics-style" aria-label="Byt knapplayout (test)" hidden>
-              <span data-view="lyrics-style-name">1</span>
-            </button>
-            <button type="button" class="nb-round" data-nb="lyrics-full" aria-label="Bara text" aria-pressed="false" hidden>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></svg>
-            </button>
-            <button type="button" class="nb-round" data-nb="lyrics" aria-label="Låttext" aria-pressed="false" hidden>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h-.5A2.5 2.5 0 0 1 5 13.5Z" /><path d="M8.5 8.5h7M8.5 12h4.5" /></svg>
-            </button>
-            <button type="button" class="nb-round" data-nb="music" aria-label="Musik" hidden>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 18V6l10-2v12" /><circle cx="6.5" cy="18" r="2.5" /><circle cx="16.5" cy="16" r="2.5" /></svg>
-            </button>
-            <button type="button" class="nb-round" data-nb="cameras" aria-label="Kameror" hidden>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z" /><circle cx="12" cy="13.5" r="3.5" /></svg>
-            </button>
-          </div>
+          <button type="button" class="nb-round" data-nb="lyrics-full" aria-label="Bara text" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></svg>
+          </button>
+          <button type="button" class="nb-round" data-nb="lyrics" aria-label="Låttext" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h-.5A2.5 2.5 0 0 1 5 13.5Z" /><path d="M8.5 8.5h7M8.5 12h4.5" /></svg>
+          </button>
+          <button type="button" class="nb-round" data-nb="music" aria-label="Musik" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 18V6l10-2v12" /><circle cx="6.5" cy="18" r="2.5" /><circle cx="16.5" cy="16" r="2.5" /></svg>
+          </button>
+          <button type="button" class="nb-round" data-nb="cameras" aria-label="Kameror" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z" /><circle cx="12" cy="13.5" r="3.5" /></svg>
+          </button>
         </div>
+      </div>
+      <div class="hub-nav-bar">
         <div class="scene-dock" data-view="dock" aria-label="Ljuslägen"></div>
       </div>
     </nav>

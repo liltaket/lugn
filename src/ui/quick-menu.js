@@ -5,6 +5,9 @@
 // nothing to a page until it is shown and changes only the opacity and
 // position of its own layer.
 //
+// It has two parts: Hem's scenes along the bottom edge, and along the top the
+// page's own buttons, which slide in together.
+//
 // The bar draws what the page it is over needs (its context):
 // - Hem's scenes (the dock, drawn by page-views.js) on every page;
 // - a Musik button everywhere but on Musik, a Kameror button everywhere but
@@ -49,14 +52,11 @@
     next: button('next'),
     lyrics: button('lyrics'),
     lyricsFull: button('lyrics-full'),
-    lyricsStyle: button('lyrics-style'),
     music: button('music'),
     cameras: button('cameras'),
   };
   const dock = nav.querySelector("[data-view='dock']");
-  const lyricsDelay = nav.querySelector("[data-view='lyrics-delay']");
-  const delayValue = nav.querySelector("[data-view='lyrics-delay-value']");
-  const styleName = nav.querySelector("[data-view='lyrics-style-name']");
+  const capsule = nav.querySelector('.nb-actions');
 
   const controllers = new Map();
   let open = false;
@@ -104,25 +104,13 @@
         missing ? 'Låttext saknas för den här låten' : 'Låttext',
       );
     }
-    // With lyrics on: how much of the screen they take, their timing, and
-    // (on trial) how the controls appear.
+    // With lyrics on: whether they take the whole screen.
     const timed = Boolean(lyrics?.shown()) && !missing;
     hide(buttons.lyricsFull, !timed);
-    hide(buttons.lyricsStyle, !timed);
-    hide(lyricsDelay, !timed);
-    // The navbar's dimming makes room for controls that sit in its row.
-    const style = timed ? lyrics.controls() : '';
-    if (nav.dataset.lyricsControls !== style)
-      nav.dataset.lyricsControls = style;
-    if (timed) {
-      if (styleName && styleName.textContent !== style)
-        styleName.textContent = style;
+    if (timed)
       buttons.lyricsFull?.setAttribute('aria-pressed', String(lyrics.full()));
-      const text = lyrics.delayText();
-      if (delayValue && delayValue.textContent !== text)
-        delayValue.textContent = text;
-    }
     hide(buttons.cameras, controller.id === 'kameror' || !cameras);
+    place();
     // A page may tint the selected scene with its own colour (Musik: the
     // cover's), as the three numbers of an rgb() colour.
     const rgb = controller.root?.style?.getPropertyValue?.('--nb-rgb') || '';
@@ -131,6 +119,27 @@
       if (rgb) nav.style.setProperty('--nb-rgb', rgb);
       else nav.style.removeProperty('--nb-rgb');
     }
+  }
+
+  // The top row: the page's buttons in one capsule at the right (clear of the
+  // Bed Hub's own overlay, which the style knows from the role), and the back
+  // button at the left, beside whatever else has that corner.
+  function place() {
+    const role = document.getElementById('app-root')?.dataset?.role || '';
+    if (nav.dataset.role !== role) nav.dataset.role = role;
+    if (capsule)
+      hide(
+        capsule,
+        Object.entries(buttons).every(
+          ([name, element]) => name === 'back' || element?.hidden !== false,
+        ),
+      );
+    const chip = document.getElementById('presence-chip');
+    const taken =
+      chip && !chip.hidden && chip.offsetWidth
+        ? chip.offsetLeft + chip.offsetWidth + 12
+        : 18;
+    nav.style.setProperty?.('--nb-back-left', `${taken}px`);
   }
 
   function drawDock() {
@@ -277,9 +286,13 @@
       const lyrics = globalThis.lugnLyrics;
       if (name === 'lyrics') lyrics?.toggle();
       else if (name === 'lyrics-full') lyrics?.toggleFull();
-      else if (name === 'lyrics-style') lyrics?.cycleControls();
-      else if (name === 'lyrics-earlier') lyrics?.nudge(-1);
-      else if (name === 'lyrics-later') lyrics?.nudge(1);
+      // The bar covers the lyrics' layout: a choice that changes it puts the
+      // bar away, so the result is seen.
+      if (name === 'lyrics-full' || lyrics?.shown()) {
+        close();
+        suppress();
+        return;
+      }
       drawContext();
     } else if (name === 'cameras') openCameras();
     // A press keeps the bar a while longer (a scene button is the dock's own).

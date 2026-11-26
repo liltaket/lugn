@@ -261,16 +261,22 @@ after Hem (Hem has none). It does not move with the pages: it stays open when
 a swipe or one of its buttons changes page, and takes the new page's context.
 It slides up from the bottom edge when the mouse moves over the page (a real
 mouse, or the Hub's bridged one, which `pointer-bridge.js` announces as the
-window event `lugn:pointer-move`) or the page is tapped. In two rows: the
-scenes along the bottom edge, the same on every page and never moving, and a
-row of small round buttons a little above them for what changes with the page:
-a back button at the left (only where the page has a level to go back from) and,
-at the right, buttons for what the page does not already show: Musik (not on Musik),
-Kameror (not on Kameror, nor where Hem has no cameras) and, on Foto, the next
-picture. A soft veil, drawn from each picture's own bottom edge (no blur is
-computed), a short dark floor and a very thin dimming of the whole page make
-the buttons readable. The buttons are glass; the lit scene is the page's own
-colour in glass (Musik: the cover's), not a solid fill.
+window event `lugn:pointer-move`) or the page is tapped. It has two parts that
+slide in together: the scenes up from the bottom edge, one row, the same on
+every page and in the same place, and a top row down from the top edge with what
+changes with the page. There, a back button stands at the left (only where the
+page has a level to go back from; beside whatever else has that corner) and the
+page's buttons share one glass capsule at the right, each shown only where it
+applies: Musik (not on Musik), Kameror (not on Kameror, nor where Hem has no
+cameras), on Foto the next picture and on Musik the lyrics. On the Bed Hub the
+capsule stands left of the Hub's own overlay in the top right corner. Pages make
+room by moving: Musik lifts a little, Kameror lays its grid out between the two
+rows and moves the tiles there, Foto moves its clock down and its music widget
+up, and Info moves down. A soft veil, drawn from each picture's own bottom edge
+(no blur is computed), short dark floors along both edges and a very thin
+dimming of the whole page make the buttons readable. The buttons are glass; the
+lit scene is the page's own colour in glass (Musik: the cover's), not a solid
+fill.
 
 How it opens decides how it closes. Opened by the mouse, it goes when the mouse
 leaves the screen (a real mouse's `mouseleave`, or the bridge's
@@ -372,41 +378,38 @@ is not painted.
 
 ### Musik with lyrics
 
-A button in the navbar's row above the scenes switches lyrics on and off. With
-them on, two more controls appear beside it: one switches between the two
-layouts, and a stepper delays or advances the lines by a tenth of a second a
-press (up to 5 s). Each Hub remembers both choices.
+A button in the navbar's top row switches lyrics on and off, and with them on a
+second one switches between the two layouts. Each Hub remembers both choices.
 
 - **Beside the rail:** a 264 px rail on the left holds the cover, title and
-  time bar, centred on the screen; previous, play/pause, next and the volume
-  come with the navbar. The right shows the current line with one before and one
-  after.
-- **Lines only:** the lines take the whole screen at 52 px. A tap opens the
-  navbar, and the rail comes in with it.
+  time bar, centred on the screen, and the right shows the current line with one
+  before and one after.
+- **Lines only:** the lines take the whole screen at 52 px, with up to two
+  before and three after.
 
-The current line is in the middle of the screen; its neighbours are dimmer (in
-the full layout up to two before and three after), and only whole lines show.
-With the navbar open the lines move up above its buttons, and the rail takes one
-of four styles, on trial and chosen with the numbered button in the navbar (each
-Hub remembers it): 1, previous, play/pause, next and volume in the navbar's row
-with the cover and title drawing together above; 2, the controls on the dimmed cover; 3, large controls
-beside the rail under the line being sung; 4, the cover view while the navbar is
-open.
+The current line is in the middle of the screen, its neighbours are dimmer, and
+only whole lines show. There is nothing to press in these layouts: a tap opens
+the navbar, and while it is open the page is the cover view with its controls.
+Choosing a layout in the navbar puts it away, so the result is seen. Seeking is
+the cover view's time bar.
 
-Changes of layout move rather than jump: the cover travels to its new place and
-the current line to its new size and column. At a track change the last lines
-fade out while the next are fetched and the new ones rise in. The cover and the
-backdrop cross-fade from the last picture to the next, which is kept until the
-new one is decoded (for up to 5 s while a track has none).
+Changes of layout move rather than jump: what leaves fades first while the cover
+travels to its new place, then what arrives fades in and the lines rise. At a
+track change the last lines fade out while the next are fetched. The cover and
+the backdrop cross-fade from the last picture to the next, which is kept until
+the new one is decoded (for up to 5 s while a track has none).
 
-A tap on the lines opens the navbar, as on the rest of the page; seeking is the
-time bar's. A track without lines to follow (none, instrumental, a failed fetch,
-no artist or no position) and a player without music move to the cover view; the
-next track with lines moves back. The navbar's lyrics button stays on but
-greyed, and the layout, style and delay controls are put away. A paused computer
-reports no position, so the lines stay where they were. The source label is not
-shown in these layouts. See [Lyrics](MUSIC.md#lyrics) for what is sent
-where and how lines follow playback.
+A track without lines to follow (none, instrumental, a failed fetch, no artist
+or no position) and a player without music stay on the cover view; the next
+track with lines moves back. The navbar's lyrics button stays on but greyed, and
+the layout button is put away. A paused computer reports no position, so the
+lines stay where they were. The source label is not shown in these layouts.
+
+How much later than sung the lines show is a setting per Hub, in tenths of a
+second under `lugn.lyricsDelay` in its local storage (at most 50 either way). It
+has no control on the pages yet: `lugnLyrics.delayText()` reads it and
+`lugnLyrics.nudge(1)` or `nudge(-1)` changes it, for a settings page to use. See
+[Lyrics](MUSIC.md#lyrics) for what is sent where and how lines follow playback.
 
 ## Hub roles and access
 

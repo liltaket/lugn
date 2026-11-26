@@ -23,16 +23,7 @@
   const VIEW_KEY = 'lugn.musicLyrics';
   const DELAY_KEY = 'lugn.lyricsDelay';
   // Where the current line's middle sits, and the band whole lines show in.
-  // With the navbar open everything stays above its buttons.
-  const CLOSED = { middle: 300, top: 14, bottom: 586 };
-  const OPEN = { middle: 222, top: 10, bottom: 430 };
-  // On trial: how the controls appear with the navbar beside the rail.
-  // 1 in the navbar's row, 2 on the cover, 3 beside it under the sung line,
-  // 4 on the cover view.
-  const CONTROL_STYLES = ['1', '2', '3', '4'];
-  const CONTROLS_KEY = 'lugn.lyricsControls';
-  const ONE_LINE = new Map([[0, 1]]);
-  const ONE_LINE_MIDDLE = 162;
+  const BAND = { middle: 300, top: 14, bottom: 586 };
   // How bright a line is by its distance from the current one.
   const OPACITY = new Map([
     [-2, 0.16],
@@ -62,8 +53,11 @@
   const FRESH_MS = 4_000;
   // Lines of a new track not here by now are said to be on their way.
   const PATIENCE_MS = 600;
-  const MODE_MS = 320;
-  const DISMISS_MS = 180;
+  // A change of layout: what leaves fades first, then what arrives, while the
+  // cover travels between its places.
+  const MODE_MS = 400;
+  const LEAVE_MS = 150;
+  const ENTER_AFTER_MS = 130;
   // The lines' column per layout (lyrics-view.css): its left edge, the text
   // size and the padding above and below a line's text.
   const RAIL_COLUMN = { left: 408, size: 34, pad: 16 };
@@ -116,11 +110,10 @@
   };
   // Whether the lyrics layout is on screen: chosen, and with lines to show.
   let showing = false;
-  let controls = stored(CONTROLS_KEY, '1');
-  if (!CONTROL_STYLES.includes(controls)) controls = '1';
   // The track on screen has nothing to follow.
   let missing = false;
-  let dismissing = null;
+  let gone = null;
+  let drawnOpen = false;
   let hurryUntil = 0;
   let leaving = null;
   let drawnGeometry = null;
@@ -516,16 +509,12 @@
     !reduced() &&
     typeof element?.animate === 'function';
 
-  const oneLine = () => isOpen() && controls === '3';
-  // The cover view takes the navbar's place in the fourth style.
-  const givenWay = () => isOpen() && controls === '4';
-
   // Where the current line sits in the layout on screen.
   function geometry() {
-    const full = root.dataset.lyricsFull === 'true' && !isOpen();
+    const full = root.dataset.lyricsFull === 'true';
     return {
       ...(full ? FULL_COLUMN : RAIL_COLUMN),
-      middle: oneLine() ? ONE_LINE_MIDDLE : (isOpen() ? OPEN : CLOSED).middle,
+      middle: BAND.middle,
     };
   }
 
@@ -652,21 +641,18 @@
   }
 
   function frame(index) {
-    const band = isOpen() ? OPEN : CLOSED;
     // Before the first line, the first line waits in the middle, unlit.
     const [top, height] = metrics[Math.max(0, index)];
-    const middle = oneLine() ? ONE_LINE_MIDDLE : band.middle;
     // Beside the rail fewer lines show, which leaves the page air.
     const { size, pad } = geometry();
     const full = size === FULL_COLUMN.size;
-    const offset = Math.round(middle - top - height / 2);
+    const offset = Math.round(BAND.middle - top - height / 2);
     const opacity = metrics.map(([lineTop, lineHeight], at) => {
-      const shades = oneLine() ? ONE_LINE : full ? OPACITY : RAIL_OPACITY;
-      const value = shades.get(at - index);
+      const value = (full ? OPACITY : RAIL_OPACITY).get(at - index);
       if (value === undefined) return 0;
       const first = lineTop + offset + pad;
       const last = lineTop + offset + lineHeight - pad;
-      return at === index || (first >= band.top && last <= band.bottom)
+      return at === index || (first >= BAND.top && last <= BAND.bottom)
         ? value
         : 0;
     });
@@ -775,7 +761,8 @@
       return;
     }
     missing = false;
-    if (givenWay()) {
+    // The navbar's own view: the cover and the controls.
+    if (isOpen()) {
       entry.position = now;
       present(false);
       return;
@@ -814,7 +801,7 @@
     else if (entry.status !== 'loading') nothing();
     // Still being fetched: the layout stays as it is meanwhile, apart from
     // making way for the navbar and coming back after it.
-    else if (givenWay()) present(false);
+    else if (isOpen()) present(false);
     else if (!showing && !missing) present(true);
     else if (!showing) return;
     else if (
@@ -826,18 +813,7 @@
     else showLoading();
   }
 
-  // The layout changed (the navbar): measure again and move there.
-  function relayout() {
-    const from = drawnGeometry;
-    cancelPlan();
-    metrics = null;
-    current = null;
-    render();
-    if (elements.length) glide(from, geometry());
-  }
-
   function applyLayout() {
-    root.dataset.lyricsControls = controls;
     root.dataset.lyrics = String(showing);
     layout();
     pane.hidden = !showing;
@@ -880,42 +856,66 @@
     );
   }
 
-  // The lines fade out over the cover view taking their place.
-  function dismiss() {
-    if (!canMove(pane)) return;
-    pane.hidden = false;
-    const fade = pane.animate(
-      [
-        { opacity: 1, transform: 'none' },
-        { opacity: 0, transform: 'translateX(40px)' },
-      ],
-      { duration: DISMISS_MS, easing: 'ease-in', fill: 'forwards' },
-    );
-    // By the clock, so an interrupted fade cannot leave the pane over the
-    // controls.
-    const done = () => {
-      window.clearTimeout(timer);
-      fade.cancel();
-      pane.hidden = !showing;
+  // What is leaving the page: a copy of it as it looked, fading out over the
+  // new layout. The cover is not in it when the same cover travels on.
+  function leaveBehind(withCover) {
+    gone?.();
+    if (!canMove(root) || typeof root.cloneNode !== 'function') return;
+    const copy = root.cloneNode(true);
+    copy.classList.toggle('menu-open', drawnOpen);
+    // Nothing that finds the page's parts may find the copy's.
+    for (const element of [
+      copy,
+      ...copy.querySelectorAll('[data-view], [id]'),
+    ]) {
+      element.removeAttribute('data-view');
+      element.removeAttribute('id');
+    }
+    copy.setAttribute('aria-hidden', 'true');
+    Object.assign(copy.style, {
+      position: 'absolute',
+      left: '0',
+      top: '0',
+      pointerEvents: 'none',
+    });
+    const hide = (selector) => {
+      const element = copy.querySelector(selector);
+      if (element) element.style.visibility = 'hidden';
     };
-    const timer = window.setTimeout(done, DISMISS_MS);
-    dismissing = done;
+    hide('.music-page-backdrop');
+    if (!withCover) hide('.music-page-cover');
+    root.parentNode.appendChild(copy);
+    copy.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: LEAVE_MS,
+      easing: 'ease-out',
+      fill: 'forwards',
+    });
+    // By the clock, so a copy never stays over the controls.
+    const timer = window.setTimeout(() => gone?.(), LEAVE_MS);
+    gone = () => {
+      window.clearTimeout(timer);
+      copy.remove();
+      gone = null;
+    };
   }
 
-  // Moves the page to a layout: the cover travels, the lines come or go.
+  // Moves the page to a layout: the cover travels, the rest crosses over.
   function change(shows, mutate) {
     const cover = find('cover');
     const before = boxOf(cover);
+    const hidden =
+      canMove(cover) &&
+      window.getComputedStyle?.(cover).visibility === 'hidden';
     const from = drawnGeometry;
     const showed = showing;
-    // A fade still going is finished first.
-    dismissing?.();
-    dismissing = null;
+    mutate?.();
+    const covered = shows && view === 'full';
+    if (showed !== shows) leaveBehind(covered);
     // The new layout takes its place at once, to be measured and then moved.
     root.dataset.switching = 'true';
-    mutate?.();
     showing = shows;
     applyLayout();
+    drawnOpen = isOpen();
     cancelPlan();
     stay();
     metrics = null;
@@ -925,21 +925,25 @@
       for (const listener of listeners) listener();
     }, 0);
     if (showed !== showing) {
-      moveCover(cover, before);
-      const text = find('text')?.parentElement;
-      if (canMove(text))
-        text.animate([{ opacity: 0 }, { opacity: 1 }], {
-          duration: MODE_MS,
-          delay: 80,
-          fill: 'backwards',
-        });
-      if (showing) arrive(60);
-      else dismiss();
+      if (hidden) appear(cover, ENTER_AFTER_MS);
+      else if (!covered) moveCover(cover, before);
+      appear(find('text')?.parentElement, ENTER_AFTER_MS);
+      if (showing) arrive(ENTER_AFTER_MS);
     }
     window.setTimeout(() => {
       root.dataset.switching = 'false';
     }, 40);
     return from;
+  }
+
+  function appear(element, delay) {
+    if (!canMove(element)) return;
+    element.animate([{ opacity: 0 }, { opacity: 1 }], {
+      duration: MODE_MS - delay,
+      delay,
+      easing: 'ease-out',
+      fill: 'backwards',
+    });
   }
 
   function present(shows) {
@@ -956,7 +960,7 @@
     // it is already known to have nothing to follow.
     const known = entry && !['synced', 'loading'].includes(entry.status);
     missing = Boolean(known);
-    const hidden = known || (givenWay() && next !== 'off');
+    const hidden = known || (isOpen() && next !== 'off');
     const from = change(next !== 'off' && !hidden, () => {
       view = next;
       keep(VIEW_KEY, view === 'off' ? '0' : view === 'full' ? 'full' : '1');
@@ -972,9 +976,7 @@
       const open = isOpen();
       if (open === wasOpen) return;
       wasOpen = open;
-      if (view === 'off') return;
-      if (controls === '4') render();
-      else if (showing) relayout();
+      if (view !== 'off') render();
     }).observe(root, { attributes: true, attributeFilter: ['class'] });
   }
 
@@ -987,14 +989,6 @@
     showing: () => showing,
     // Chosen, but this track has nothing to follow.
     missing: () => view !== 'off' && missing,
-    controls: () => controls,
-    cycleControls() {
-      const next = CONTROL_STYLES.indexOf(controls) + 1;
-      controls = CONTROL_STYLES[next % CONTROL_STYLES.length];
-      keep(CONTROLS_KEY, controls);
-      applyLayout();
-      relayout();
-    },
     full: () => view === 'full',
     toggle: () => choose(view === 'off' ? 'rail' : 'off'),
     toggleFull: () => choose(view === 'full' ? 'rail' : 'full'),

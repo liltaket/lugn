@@ -122,8 +122,6 @@ function setup({
     shown(): boolean;
     showing(): boolean;
     missing(): boolean;
-    controls(): string;
-    cycleControls(): void;
     full(): boolean;
     toggle(): void;
     toggleFull(): void;
@@ -335,35 +333,24 @@ describe('Musik lyrics', () => {
     expect(s.api.missing()).toBe(false);
   });
 
-  it('cycles the four control styles and remembers one', () => {
-    const s = setup({ stored: on });
-    const seen = [s.api.controls()];
-    for (let press = 0; press < 4; press += 1) {
-      s.api.cycleControls();
-      seen.push(s.api.controls());
-    }
-    expect(seen).toEqual(['1', '2', '3', '4', '1']);
-    s.api.cycleControls();
-    expect(s.view('root').dataset['lyricsControls']).toBe('2');
-    expect(s.storage.get('lugn.lyricsControls')).toBe('2');
-    expect(
-      setup({ stored: { 'lugn.lyricsControls': '9' } }).api.controls(),
-    ).toBe('1');
-  });
-
-  it('shows the cover view while the navbar is open in the fourth style', async () => {
-    const s = setup({ stored: { ...on, 'lugn.lyricsControls': '4' } });
+  it('shows the cover view while the navbar is open', async () => {
+    const s = setup({ stored: { 'lugn.musicLyrics': 'full' } });
     s.draw();
     await s.wait(100);
     expect(s.api.showing()).toBe(true);
     s.view('root').classes.add('menu-open');
     s.draw();
     expect(s.api.showing()).toBe(false);
+    expect(s.view('root').dataset['lyricsFull']).toBe('false');
     // The lines are there: nothing is greyed or put away.
     expect(s.api.missing()).toBe(false);
+    // A layout chosen meanwhile is the one that comes back.
+    s.api.toggleFull();
+    expect(s.api.showing()).toBe(false);
     s.view('root').classes.delete('menu-open');
     s.draw();
     expect(s.api.showing()).toBe(true);
+    expect(s.view('root').dataset['lyricsFull']).toBe('false');
     expect(s.current()).toBe('One');
   });
 

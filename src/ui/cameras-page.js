@@ -318,16 +318,63 @@
   }
 
   // Tiles keep their size; only the grid they stand in changes (rarely).
+  // The room the stylesheet gives the grid, with the navbar open and closed.
+  const STAGE = { closed: 600 - 12 - 28, open: 600 - 84 - 106 };
+  const STAGE_TOP = { closed: 12, open: 84 };
+  const MOVE_MS = 360;
+  const MOVE_STEPS = 12;
+  const navOpen = () => Boolean(root.classList?.contains('menu-open'));
+  let drawnOpen = false;
   function stageSize() {
     const wide = Number.parseFloat(root.style.getPropertyValue('--W')) || 1024;
-    return { width: Math.max(300, wide - 24), height: 600 - 12 - 28 };
+    return {
+      width: Math.max(300, wide - 24),
+      height: navOpen() ? STAGE.open : STAGE.closed,
+    };
+  }
+
+  // Each tile moves from where it stood to its new place by transforms alone:
+  // the layout is already the new one, and the tile is scaled back to the old.
+  // Its picture and name are scaled the other way, so neither is squeezed.
+  function glide(tile, from, to) {
+    if (!from || !to.w || !to.h || typeof tile.animate !== 'function') return;
+    const img = tile.querySelector?.('img');
+    const name = tile.querySelector?.('.cams-name');
+    const frames = { tile: [], img: [], name: [] };
+    for (let step = 0; step <= MOVE_STEPS; step += 1) {
+      const t = step / MOVE_STEPS;
+      // Ease out, as the navbar's own movement.
+      const e = 1 - (1 - t) ** 3;
+      const mix = (a, b) => a + (b - a) * e;
+      const sx = mix(from.w / to.w, 1);
+      const sy = mix(from.h / to.h, 1);
+      const cover = Math.max(sx, sy);
+      frames.tile.push({
+        transform: `translate(${mix(from.x - to.x, 0)}px, ${mix(from.y - to.y, 0)}px) scale(${sx}, ${sy})`,
+      });
+      frames.img.push({ transform: `scale(${cover / sx}, ${cover / sy})` });
+      frames.name.push({
+        transformOrigin: '0 0',
+        transform: `scale(${1 / sx}, ${1 / sy})`,
+      });
+    }
+    const timing = { duration: MOVE_MS, easing: 'linear' };
+    tile.animate(frames.tile, timing);
+    img?.animate?.(frames.img, timing);
+    name?.animate?.(frames.name, timing);
   }
 
   function applyLayout() {
     const { width, height } = stageSize();
     const shown =
       mode === 'focus' ? cams.filter((c) => c.id === focusId) : cams;
-    const key = `${mode}:${focusId}:${cams.length}:${width}`;
+    const open = navOpen();
+    const key = `${mode}:${focusId}:${cams.length}:${width}:${open}`;
+    // Only the navbar opening or closing moves tiles; a new grid is just there.
+    const moving = active && open !== drawnOpen && layoutKey !== '';
+    const before = STAGE_TOP[drawnOpen ? 'open' : 'closed'];
+    const after = STAGE_TOP[open ? 'open' : 'closed'];
+    drawnOpen = open;
     if (key !== layoutKey) {
       layoutKey = key;
       const rects =
@@ -348,6 +395,10 @@
           cam.tile.setAttribute('aria-label', label);
         if (rect) {
           const s = cam.tile.style;
+          const was = cam.rect;
+          cam.rect = rect;
+          if (moving && was)
+            glide(cam.tile, { ...was, y: was.y + before - after }, rect);
           s.left = `${rect.x}px`;
           s.top = `${rect.y}px`;
           s.width = `${rect.w}px`;
@@ -609,6 +660,8 @@
         root,
         handleTap,
       }) ?? null;
+    navbar?.onOpen?.(applyLayout);
+    navbar?.onClose?.(applyLayout);
     setBack();
   }
   // Deferred scripts run while the document is still `interactive`, before
