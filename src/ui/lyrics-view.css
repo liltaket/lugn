@@ -206,43 +206,21 @@
   display: none;
 }
 
-/* Notes and the loading bars start where the current line starts. */
-.ly-note,
+/* The loading bars start about where the current line will. */
 .ly-skeleton {
   position: absolute;
   left: 0;
   right: 0;
-  transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.music-page.menu-open .ly-note,
-.music-page.menu-open .ly-skeleton {
-  transform: translateY(-78px);
-}
-.ly-note {
-  top: 262px;
-}
-.ly-note p {
-  margin: 0 0 12px;
-  font-size: 36px;
-  line-height: 1.2;
-  font-weight: 700;
-  color: rgba(238, 241, 232, 0.9);
-}
-.ly-note span {
-  display: block;
-  font-size: 20px;
-  line-height: 1.4;
-  color: rgba(238, 241, 232, 0.68);
-}
-.music-page-lyrics[data-status='synced'] .ly-note,
-.music-page-lyrics[data-status='loading'] .ly-note p,
-.music-page-lyrics:not([data-status='loading']) .ly-skeleton {
-  opacity: 0;
-}
-.ly-skeleton {
   top: 220px;
   display: grid;
   gap: 38px;
+  transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.music-page.menu-open .ly-skeleton {
+  transform: translateY(-78px);
+}
+.music-page-lyrics:not([data-status='loading']) .ly-skeleton {
+  opacity: 0;
 }
 .ly-skeleton i {
   height: 28px;
@@ -269,7 +247,6 @@
   .music-page[data-lyrics='true'] .music-page-controls > *,
   .music-page[data-lyrics='true'] .music-page-cover,
   .music-page[data-lyrics='true'] .music-page-info,
-  .ly-note,
   .ly-skeleton {
     transition: none;
   }

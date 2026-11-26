@@ -95,7 +95,7 @@
     if (lyrics)
       buttons.lyrics?.setAttribute('aria-pressed', String(lyrics.shown()));
     // With lyrics on: how much of the screen they take, and their timing.
-    const timed = Boolean(lyrics?.shown());
+    const timed = Boolean(lyrics?.showing());
     hide(buttons.lyricsFull, !timed);
     hide(lyricsDelay, !timed);
     if (timed) {

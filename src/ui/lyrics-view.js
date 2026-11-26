@@ -56,6 +56,7 @@
   // Lines of a new track not here by now are said to be on their way.
   const PATIENCE_MS = 600;
   const MODE_MS = 320;
+  const DISMISS_MS = 180;
   // The lines' column per layout (lyrics-view.css): its left edge, the text
   // size and the padding above and below a line's text.
   const RAIL_COLUMN = { left: 408, size: 34, pad: 16 };
@@ -76,23 +77,6 @@
   const STALE_MS = 1_500;
   const CACHED_TRACKS = 20;
   const GAP = '♪';
-
-  const NOTES = {
-    idle: ['Ingen musik spelar', ''],
-    none: [
-      'Ingen synkad text',
-      'Det finns ingen text att följa till den här låten.',
-    ],
-    instrumental: ['Instrumental', 'Den här låten har ingen sångtext.'],
-    unavailable: [
-      'Låttexten kunde inte hämtas',
-      'Lugn försöker igen om en stund.',
-    ],
-    unsynced: [
-      'Texten kan inte följas',
-      'Spelaren visar ingen position i låten.',
-    ],
-  };
 
   const tracks = new Map();
   const listeners = new Set();
@@ -123,6 +107,9 @@
     heard: 0,
     sample: null,
   };
+  // Whether the lyrics layout is on screen: chosen, and with lines to show.
+  let showing = false;
+  let dismissing = null;
   let hurryUntil = 0;
   let leaving = null;
   let drawnGeometry = null;
@@ -589,11 +576,9 @@
     leaving = null;
   }
 
-  // The rail gives the screen away only while there are lines to take it.
-  function layout(status) {
-    const full =
-      view === 'full' && (status === 'synced' || status === 'loading');
-    const value = String(full);
+  // The full layout, where it is chosen and the lyrics are on screen.
+  function layout() {
+    const value = String(showing && view === 'full');
     if (root.dataset.lyricsFull !== value) {
       root.dataset.lyricsFull = value;
       cancelPlan();
@@ -617,16 +602,10 @@
     current = null;
   }
 
-  function showNote(status) {
+  // New lines are on their way: bars where they will be.
+  function showLoading() {
     stay();
-    pane.dataset.status = status;
-    layout(status);
-    const [heading, detail] = NOTES[status] ?? ['Hämtar låttext …', ''];
-    const set = (element, text) => {
-      if (element && element.textContent !== text) element.textContent = text;
-    };
-    set(find('lyrics-heading'), heading);
-    set(find('lyrics-detail'), detail);
+    pane.dataset.status = 'loading';
     if (drawnLines) {
       clearLines();
       track.replaceChildren();
@@ -769,12 +748,13 @@
   function follow() {
     const now = position();
     if (now === null) {
-      showNote('unsynced');
+      // No position to follow the lines by.
+      present(false);
       return;
     }
+    present(true);
     entry.position = now;
     pane.dataset.status = 'synced';
-    layout('synced');
     if (drawnLines !== entry.lines) build(entry.lines);
     if (!measure()) return;
     const lead = LEAD_SECONDS - delayTenths / 10;
@@ -789,31 +769,30 @@
     else cancelPlan();
   }
 
+  // A track without lines to follow takes the cover view, until one has.
   function render() {
     if (view === 'off' || !info) return;
     if (!info.ready) {
-      showNote('loading');
+      showLoading();
       return;
     }
-    if (!info.active || !info.target) {
-      showNote('idle');
-      return;
-    }
-    const name = shownTrack();
-    if (!name.title || !name.artist) {
-      showNote('none');
+    const name = info.active && info.target ? shownTrack() : null;
+    if (!name?.title || !name.artist) {
+      present(false);
       return;
     }
     entry = lookUp(name);
     if (entry.status === 'synced') follow();
+    else if (entry.status !== 'loading') present(false);
+    // Still being fetched: the layout stays as it is meanwhile.
+    else if (!showing) return;
     else if (
-      entry.status === 'loading' &&
       drawnLines &&
       // Still the last track's: kept, fading, for a short while.
       (!leaving || performance.now() - leaving.since < PATIENCE_MS)
     )
       leave();
-    else showNote(entry.status);
+    else showLoading();
   }
 
   // The layout changed (the navbar): measure again and move there.
@@ -826,10 +805,10 @@
     if (elements.length) glide(from, geometry());
   }
 
-  function applyView() {
-    root.dataset.lyrics = String(view !== 'off');
-    if (view === 'off') root.dataset.lyricsFull = 'false';
-    pane.hidden = view === 'off';
+  function applyLayout() {
+    root.dataset.lyrics = String(showing);
+    layout();
+    pane.hidden = !showing;
   }
 
   const boxOf = (element) => element?.getBoundingClientRect?.();
@@ -873,34 +852,47 @@
   function dismiss() {
     if (!canMove(pane)) return;
     pane.hidden = false;
-    pane.animate(
+    const fade = pane.animate(
       [
         { opacity: 1, transform: 'none' },
         { opacity: 0, transform: 'translateX(40px)' },
       ],
-      { duration: 180, easing: 'ease-in' },
-    ).onfinish = () => {
-      pane.hidden = view === 'off';
+      { duration: DISMISS_MS, easing: 'ease-in', fill: 'forwards' },
+    );
+    // By the clock, so an interrupted fade cannot leave the pane over the
+    // controls.
+    const done = () => {
+      window.clearTimeout(timer);
+      fade.cancel();
+      pane.hidden = !showing;
     };
+    const timer = window.setTimeout(done, DISMISS_MS);
+    dismissing = done;
   }
 
-  function choose(next) {
+  // Moves the page to a layout: the cover travels, the lines come or go.
+  function change(shows, mutate) {
     const cover = find('cover');
     const before = boxOf(cover);
     const from = drawnGeometry;
-    const was = view;
+    const showed = showing;
+    // A fade still going is finished first.
+    dismissing?.();
+    dismissing = null;
     // The new layout takes its place at once, to be measured and then moved.
     root.dataset.switching = 'true';
-    view = next;
-    keep(VIEW_KEY, view === 'off' ? '0' : view === 'full' ? 'full' : '1');
-    applyView();
+    mutate?.();
+    showing = shows;
+    applyLayout();
     cancelPlan();
     stay();
     metrics = null;
     current = null;
-    for (const listener of listeners) listener();
-    render();
-    if (was === 'off' || view === 'off') {
+    // The page redraws what depends on the layout, once this change is done.
+    window.setTimeout(() => {
+      for (const listener of listeners) listener();
+    }, 0);
+    if (showed !== showing) {
       moveCover(cover, before);
       const text = find('text')?.parentElement;
       if (canMove(text))
@@ -909,13 +901,34 @@
           delay: 80,
           fill: 'backwards',
         });
+      if (showing) arrive(60);
+      else dismiss();
     }
-    if (view === 'off') dismiss();
-    else if (was === 'off') arrive(60);
-    else if (elements.length) glide(from, geometry());
     window.setTimeout(() => {
       root.dataset.switching = 'false';
     }, 40);
+    return from;
+  }
+
+  function present(shows) {
+    if (shows === showing) {
+      layout();
+      return;
+    }
+    // Lines on their way out stay drawn while the pane fades.
+    change(shows);
+  }
+
+  function choose(next) {
+    // Turned on, the lyrics layout shows while the track is looked up, unless
+    // it is already known to have nothing to follow.
+    const nothing = entry && !['synced', 'loading'].includes(entry.status);
+    const from = change(next !== 'off' && !nothing, () => {
+      view = next;
+      keep(VIEW_KEY, view === 'off' ? '0' : view === 'full' ? 'full' : '1');
+    });
+    render();
+    if (showing && elements.length) glide(from, geometry());
     void poll();
   }
 
@@ -925,14 +938,17 @@
       const open = isOpen();
       if (open === wasOpen) return;
       wasOpen = open;
-      if (view !== 'off') relayout();
+      if (showing) relayout();
     }).observe(root, { attributes: true, attributeFilter: ['class'] });
   }
 
-  applyView();
+  showing = view !== 'off';
+  applyLayout();
 
   globalThis.lugnLyrics = {
     shown: () => view !== 'off',
+    // Chosen and on screen: not while a track has nothing to follow.
+    showing: () => showing,
     full: () => view === 'full',
     toggle: () => choose(view === 'off' ? 'rail' : 'off'),
     toggleFull: () => choose(view === 'full' ? 'rail' : 'full'),

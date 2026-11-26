@@ -506,6 +506,9 @@
   let barKey = '';
   let barAnimation = null;
   let musicShown = false;
+  const COVER_WAIT_MS = 3_000;
+  let aheadTitle = '';
+  let aheadSince = 0;
   // The action the play button shows; a press sends exactly this.
   let shownPlayAction = 'playing';
 
@@ -550,6 +553,13 @@
     const player = active ? globalThis.lugnLyrics?.player(target) : null;
     const hemName = hemTitle(r).title.replace(/…$/, '').trimEnd();
     const ahead = Boolean(player) && !player.title.startsWith(hemName);
+    // The dashboard is normally seconds behind; longer than this and its
+    // cover is the better one to show than the last track's.
+    if (!ahead || aheadTitle !== player.title) {
+      aheadTitle = ahead ? player.title : '';
+      aheadSince = performance.now();
+    }
+    const waiting = ahead && performance.now() - aheadSince < COVER_WAIT_MS;
     const progress =
       ahead && player.progress
         ? player.progress
@@ -590,7 +600,7 @@
       art: !active
         ? ''
         : player
-          ? (player.art ?? (ahead ? null : hemArt))
+          ? (player.art ?? (waiting ? null : hemArt))
           : hemArt,
       // Hem's own play button label says what a press does there (Pausa
       // only when a press pauses; a manual pause on a player that still
@@ -1125,6 +1135,10 @@
   let coverUrl = '';
   let coverFront = null;
   let noCoverTimer = 0;
+  // A picture that fails is tried again at the next draw, this many times.
+  const COVER_TRIES = 3;
+  let failedUrl = '';
+  let failures = 0;
   function resetAccent() {
     const root = view('music', 'root');
     root.style.removeProperty('--music-accent');
@@ -1214,7 +1228,10 @@
     };
     const failed = () => {
       if (request !== coverRequest) return;
-      emptyCover();
+      failures = failedUrl === url ? failures + 1 : 1;
+      failedUrl = url;
+      if (failures < COVER_TRIES) coverUrl = '';
+      else emptyCover();
     };
     (typeof next.decode === 'function'
       ? next.decode()

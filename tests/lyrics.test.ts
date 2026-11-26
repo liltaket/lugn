@@ -197,11 +197,12 @@ describe('the WiiM playhead', () => {
     let now = 1_000;
     const transport = vi.fn<CoverTransport>(image);
     const covers = new SpotifyCovers(transport, () => now);
+    const reply = { status: () => status() };
     const playhead = new WiimPlayhead(
       { 'music.room': '192.168.1.5' },
       {
         sendCommand: async (_host, command) =>
-          command === 'getMetaInfo' ? metaReply() : status(),
+          command === 'getMetaInfo' ? metaReply() : reply.status(),
       },
       () => now,
       covers,
@@ -214,7 +215,7 @@ describe('the WiiM playhead', () => {
       await settle();
       return reading;
     };
-    return { playhead, covers, transport, read };
+    return { playhead, covers, transport, read, reply };
   }
 
   it('never holds the answer for the cover', async () => {
@@ -270,6 +271,22 @@ describe('the WiiM playhead', () => {
     title = 'Song';
     await s.read();
     await s.read();
+    expect((await s.read())?.art).toBe(id);
+  });
+
+  it('takes the cover of a name the metadata escapes', async () => {
+    const s = watched(() => meta('Sex &amp; Drugs', spotify));
+    const name = Buffer.from('Sex & Drugs').toString('hex');
+    s.reply.status = () => status({ Title: name });
+    await s.read();
+    expect((await s.read())?.art).toBe(id);
+  });
+
+  it('takes metadata that stays named another way', async () => {
+    const s = watched(() => meta('Song - Remastered', spotify));
+    for (let answer = 0; answer < 4; answer += 1) await s.read();
+    expect((await s.read())?.art).toBeUndefined();
+    for (let answer = 0; answer < 8; answer += 1) await s.read();
     expect((await s.read())?.art).toBe(id);
   });
 

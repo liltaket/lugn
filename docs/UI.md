@@ -382,8 +382,7 @@ press (up to 5 s). Each Hub remembers both choices.
   come with the navbar. The right shows the current line with one before and one
   after.
 - **Lines only:** the lines take the whole screen at 52 px. A tap opens the
-  navbar, and the rail comes in with it. Without lines to follow (none,
-  instrumental, a failed fetch, no music) the rail stays.
+  navbar, and the rail comes in with it.
 
 The current line is in the middle of the screen; its neighbours are dimmer (in
 the full layout up to two before and three after), and only whole lines show.
@@ -397,10 +396,12 @@ backdrop cross-fade from the last picture to the next, which is kept until the
 new one is decoded (for up to 5 s while a track has none).
 
 A tap on the lines opens the navbar, as on the rest of the page; seeking is the
-time bar's. A track without timed lines, an instrumental, a failed fetch and a
-player without a position each say so where the current line would be. A paused
-computer reports no position, so the lines stay where they were. The source label
-is not shown in these layouts. See [Lyrics](MUSIC.md#lyrics) for what is sent
+time bar's. A track without lines to follow (none, instrumental, a failed fetch,
+no artist or no position) and a player without music move to the cover view; the
+next track with lines moves back. The navbar's lyrics button stays lit, and the
+layout and delay controls show only with lines on screen. A paused computer
+reports no position, so the lines stay where they were. The source label is not
+shown in these layouts. See [Lyrics](MUSIC.md#lyrics) for what is sent
 where and how lines follow playback.
 
 ## Hub roles and access

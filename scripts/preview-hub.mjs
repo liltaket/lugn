@@ -40,6 +40,8 @@ function gridCameras(count) {
 // scenario, told the way a real one arrives: the player knows at once, its
 // cover a moment later, and the dashboard last.
 let nextTrackAt = 0;
+let nextTrackLines = true;
+let tracksStarted = 0;
 const nextTrack = { title: 'Andra stranden', artist: 'Astrid Holm' };
 
 const previewLines = [
@@ -327,6 +329,13 @@ const server = createServer(async (request, response) => {
     const path = new URL(request.url, `http://${allowedHost}`).pathname;
     if (path === '/__fixture/next-track' && request.method === 'POST') {
       nextTrackAt = Date.now();
+      // `?lines=none`: the next track has nothing to follow.
+      nextTrackLines =
+        new URL(request.url, 'http://x').searchParams.get('lines') !== 'none';
+      tracksStarted += 1;
+      Object.assign(nextTrack, {
+        title: `Andra stranden ${tracksStarted}`.replace(' 1', ''),
+      });
       // Pushed to the open pages, as the track is seen and as its cover is in.
       const push = () => {
         for (const client of clients)
@@ -368,7 +377,7 @@ const server = createServer(async (request, response) => {
       return sendJson(
         response,
         200,
-        !path.startsWith('/lyrics/')
+        !path.startsWith('/lyrics/') || (nextTrackAt && !nextTrackLines)
           ? { status: 'none' }
           : {
               status: 'synced',

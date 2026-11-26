@@ -120,6 +120,7 @@ function setup({
   runInContext(script, context);
   const api = context['lugnLyrics'] as {
     shown(): boolean;
+    showing(): boolean;
     full(): boolean;
     toggle(): void;
     toggleFull(): void;
@@ -294,21 +295,39 @@ describe('Musik lyrics', () => {
     const unsynced = setup({ stored: on, at: null });
     unsynced.draw();
     await unsynced.wait(100);
-    expect(unsynced.view('lyrics').dataset['status']).toBe('unsynced');
+    expect(unsynced.api.showing()).toBe(false);
   });
 
-  it('says why there is nothing to follow, beside the rail', async () => {
-    const s = setup({
-      stored: { 'lugn.musicLyrics': 'full' },
-      answer: { status: 'none' },
-    });
+  it.each(['none', 'instrumental', 'unavailable'])(
+    'takes the cover view for a track with nothing to follow (%s), and back',
+    async (status) => {
+      const answer: Record<string, unknown> = { status };
+      const s = setup({ stored: { 'lugn.musicLyrics': 'full' }, answer });
+      s.draw();
+      // Shown while the track is looked up.
+      expect(s.api.showing()).toBe(true);
+      await s.wait(400);
+      expect(s.api.showing()).toBe(false);
+      expect(s.view('root').dataset['lyrics']).toBe('false');
+      expect(s.view('root').dataset['lyricsFull']).toBe('false');
+      expect(s.view('lyrics').hidden).toBe(true);
+      // Still chosen: the next track with lines brings the layout back.
+      expect(s.api.shown()).toBe(true);
+      Object.assign(answer, { status: 'synced', lines });
+      s.draw({ title: 'Next song' });
+      await s.wait(200);
+      expect(s.api.showing()).toBe(true);
+      expect(s.view('root').dataset['lyricsFull']).toBe('true');
+      expect(s.current()).toBe('One');
+    },
+  );
+
+  it('takes the cover view when nothing plays', async () => {
+    const s = setup({ stored: on });
     s.draw();
-    expect(s.view('lyrics').dataset['status']).toBe('loading');
     await s.wait(100);
-    expect(s.view('lyrics-heading').textContent).toBe('Ingen synkad text');
-    expect(s.view('root').dataset['lyricsFull']).toBe('false');
     s.draw({ active: false });
-    expect(s.view('lyrics-heading').textContent).toBe('Ingen musik spelar');
+    expect(s.api.showing()).toBe(false);
   });
 
   it('does not keep lines that belong to another track', async () => {

@@ -38,10 +38,43 @@ const WATCH_EVERY_MS = 250;
 const RECENT_MS = 4_000;
 /** Metadata that was not yet the track's is asked for again after this. */
 const META_RETRY_MS = 250;
+/**
+ * Metadata still named differently after this many answers is the same track
+ * written another way, and is taken.
+ */
+const META_ATTEMPTS = 8;
 /** The only place covers are fetched from, whatever the player names. */
 const ART_URL = /^https:\/\/i\.scdn\.co\/image\/([0-9a-f]{20,64})$/;
 
-type Track = { key: string; cover?: string; retryAt: number };
+type Track = {
+  key: string;
+  cover?: string;
+  retryAt: number;
+  attempts: number;
+};
+
+const ENTITIES: Readonly<Record<string, string>> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+/** A name as text: the metadata may escape what the status writes plainly. */
+const plainName = (name: string) =>
+  name
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, entity: string) => {
+      if (entity[0] !== '#') return ENTITIES[entity.toLowerCase()] ?? whole;
+      const code =
+        entity[1]?.toLowerCase() === 'x'
+          ? Number.parseInt(entity.slice(2), 16)
+          : Number(entity.slice(1));
+      return code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+    })
+    .normalize('NFC')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 const trackKey = (playhead: PlayerPlayhead) =>
   JSON.stringify([playhead.title, playhead.artist, playhead.album]);
@@ -143,7 +176,7 @@ export class WiimPlayhead implements PlayheadProvider {
     const key = trackKey(playhead);
     let track = this.tracks.get(target);
     if (!track || track.key !== key) {
-      track = { key, retryAt: 0 };
+      track = { key, retryAt: 0, attempts: 0 };
       this.tracks.set(target, track);
     }
     if (track.cover) {
@@ -185,7 +218,12 @@ export class WiimPlayhead implements PlayheadProvider {
         }
       ).metaData;
       // The metadata can still be the last track's for a moment.
-      if (typeof meta?.title !== 'string' || meta.title.trim() !== title)
+      track.attempts += 1;
+      if (
+        typeof meta?.title !== 'string' ||
+        (plainName(meta.title) !== plainName(title) &&
+          track.attempts < META_ATTEMPTS)
+      )
         throw new Error('Metadata for another track');
       const url = typeof meta.albumArtURI === 'string' ? meta.albumArtURI : '';
       // Another source's cover is left to the dashboard's own artwork.

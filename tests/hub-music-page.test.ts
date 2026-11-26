@@ -72,7 +72,9 @@ function setup({
   vi.useFakeTimers();
   const views = new Map<string, El>();
   const view = (name: string) => {
-    const element = views.get(name) ?? new El();
+    const known = views.get(name);
+    if (known) return known;
+    const element = new El();
     views.set(name, element);
     // Images decode at once here.
     if (name.startsWith('art'))
@@ -305,6 +307,27 @@ describe('the Musik page', () => {
     s.window.fire('lugn:payload');
     await vi.advanceTimersByTimeAsync(0);
     expect(s.cover()).toEqual(['/art/second']);
+  });
+
+  it('tries a picture that failed again, and then gives up on it', async () => {
+    const s = setup();
+    await s.tick();
+    const asked: string[] = [];
+    for (const name of ['art', 'art-prev'])
+      Object.assign(s.view(name), {
+        decode: async () => {
+          asked.push(String(s.view(name).getAttribute('src')));
+          throw new Error('no picture');
+        },
+      });
+    s.musicArtworkImage.src = '/art/broken';
+    await s.tick();
+    await s.tick();
+    await s.tick();
+    await s.tick();
+    await s.tick();
+    expect(asked).toEqual(['/art/broken', '/art/broken', '/art/broken']);
+    expect(s.cover()).toEqual([]);
   });
 
   it('keeps the last cover until the next one is there', async () => {
