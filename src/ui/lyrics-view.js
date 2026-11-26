@@ -26,6 +26,13 @@
   // With the navbar open everything stays above its buttons.
   const CLOSED = { middle: 300, top: 14, bottom: 586 };
   const OPEN = { middle: 222, top: 10, bottom: 430 };
+  // On trial: how the controls appear with the navbar beside the rail.
+  // 1 in the navbar's row, 2 on the cover, 3 beside it under the sung line,
+  // 4 on the cover view.
+  const CONTROL_STYLES = ['1', '2', '3', '4'];
+  const CONTROLS_KEY = 'lugn.lyricsControls';
+  const ONE_LINE = new Map([[0, 1]]);
+  const ONE_LINE_MIDDLE = 162;
   // How bright a line is by its distance from the current one.
   const OPACITY = new Map([
     [-2, 0.16],
@@ -109,6 +116,10 @@
   };
   // Whether the lyrics layout is on screen: chosen, and with lines to show.
   let showing = false;
+  let controls = stored(CONTROLS_KEY, '1');
+  if (!CONTROL_STYLES.includes(controls)) controls = '1';
+  // The track on screen has nothing to follow.
+  let missing = false;
   let dismissing = null;
   let hurryUntil = 0;
   let leaving = null;
@@ -505,12 +516,16 @@
     !reduced() &&
     typeof element?.animate === 'function';
 
+  const oneLine = () => isOpen() && controls === '3';
+  // The cover view takes the navbar's place in the fourth style.
+  const givenWay = () => isOpen() && controls === '4';
+
   // Where the current line sits in the layout on screen.
   function geometry() {
     const full = root.dataset.lyricsFull === 'true' && !isOpen();
     return {
       ...(full ? FULL_COLUMN : RAIL_COLUMN),
-      middle: (isOpen() ? OPEN : CLOSED).middle,
+      middle: oneLine() ? ONE_LINE_MIDDLE : (isOpen() ? OPEN : CLOSED).middle,
     };
   }
 
@@ -640,12 +655,14 @@
     const band = isOpen() ? OPEN : CLOSED;
     // Before the first line, the first line waits in the middle, unlit.
     const [top, height] = metrics[Math.max(0, index)];
+    const middle = oneLine() ? ONE_LINE_MIDDLE : band.middle;
     // Beside the rail fewer lines show, which leaves the page air.
     const { size, pad } = geometry();
     const full = size === FULL_COLUMN.size;
-    const offset = Math.round(band.middle - top - height / 2);
+    const offset = Math.round(middle - top - height / 2);
     const opacity = metrics.map(([lineTop, lineHeight], at) => {
-      const value = (full ? OPACITY : RAIL_OPACITY).get(at - index);
+      const shades = oneLine() ? ONE_LINE : full ? OPACITY : RAIL_OPACITY;
+      const value = shades.get(at - index);
       if (value === undefined) return 0;
       const first = lineTop + offset + pad;
       const last = lineTop + offset + lineHeight - pad;
@@ -745,10 +762,21 @@
     return low - 1;
   };
 
+  // No lines to follow for what plays: the cover view.
+  function nothing() {
+    missing = true;
+    present(false);
+  }
+
   function follow() {
     const now = position();
     if (now === null) {
-      // No position to follow the lines by.
+      nothing();
+      return;
+    }
+    missing = false;
+    if (givenWay()) {
+      entry.position = now;
       present(false);
       return;
     }
@@ -778,13 +806,16 @@
     }
     const name = info.active && info.target ? shownTrack() : null;
     if (!name?.title || !name.artist) {
-      present(false);
+      nothing();
       return;
     }
     entry = lookUp(name);
     if (entry.status === 'synced') follow();
-    else if (entry.status !== 'loading') present(false);
-    // Still being fetched: the layout stays as it is meanwhile.
+    else if (entry.status !== 'loading') nothing();
+    // Still being fetched: the layout stays as it is meanwhile, apart from
+    // making way for the navbar and coming back after it.
+    else if (givenWay()) present(false);
+    else if (!showing && !missing) present(true);
     else if (!showing) return;
     else if (
       drawnLines &&
@@ -806,6 +837,7 @@
   }
 
   function applyLayout() {
+    root.dataset.lyricsControls = controls;
     root.dataset.lyrics = String(showing);
     layout();
     pane.hidden = !showing;
@@ -922,8 +954,10 @@
   function choose(next) {
     // Turned on, the lyrics layout shows while the track is looked up, unless
     // it is already known to have nothing to follow.
-    const nothing = entry && !['synced', 'loading'].includes(entry.status);
-    const from = change(next !== 'off' && !nothing, () => {
+    const known = entry && !['synced', 'loading'].includes(entry.status);
+    missing = Boolean(known);
+    const hidden = known || (givenWay() && next !== 'off');
+    const from = change(next !== 'off' && !hidden, () => {
       view = next;
       keep(VIEW_KEY, view === 'off' ? '0' : view === 'full' ? 'full' : '1');
     });
@@ -938,7 +972,9 @@
       const open = isOpen();
       if (open === wasOpen) return;
       wasOpen = open;
-      if (showing) relayout();
+      if (view === 'off') return;
+      if (controls === '4') render();
+      else if (showing) relayout();
     }).observe(root, { attributes: true, attributeFilter: ['class'] });
   }
 
@@ -949,6 +985,16 @@
     shown: () => view !== 'off',
     // Chosen and on screen: not while a track has nothing to follow.
     showing: () => showing,
+    // Chosen, but this track has nothing to follow.
+    missing: () => view !== 'off' && missing,
+    controls: () => controls,
+    cycleControls() {
+      const next = CONTROL_STYLES.indexOf(controls) + 1;
+      controls = CONTROL_STYLES[next % CONTROL_STYLES.length];
+      keep(CONTROLS_KEY, controls);
+      applyLayout();
+      relayout();
+    },
     full: () => view === 'full',
     toggle: () => choose(view === 'off' ? 'rail' : 'off'),
     toggleFull: () => choose(view === 'full' ? 'rail' : 'full'),

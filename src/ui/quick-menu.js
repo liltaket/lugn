@@ -49,12 +49,14 @@
     next: button('next'),
     lyrics: button('lyrics'),
     lyricsFull: button('lyrics-full'),
+    lyricsStyle: button('lyrics-style'),
     music: button('music'),
     cameras: button('cameras'),
   };
   const dock = nav.querySelector("[data-view='dock']");
   const lyricsDelay = nav.querySelector("[data-view='lyrics-delay']");
   const delayValue = nav.querySelector("[data-view='lyrics-delay-value']");
+  const styleName = nav.querySelector("[data-view='lyrics-style-name']");
 
   const controllers = new Map();
   let open = false;
@@ -92,13 +94,29 @@
     // Musik's own switch between the cover and the lyrics.
     const lyrics = controller.id === 'music' ? globalThis.lugnLyrics : null;
     hide(buttons.lyrics, !lyrics);
-    if (lyrics)
+    // On, but this track has nothing to follow: the button greys.
+    const missing = Boolean(lyrics?.missing());
+    if (lyrics) {
       buttons.lyrics?.setAttribute('aria-pressed', String(lyrics.shown()));
-    // With lyrics on: how much of the screen they take, and their timing.
-    const timed = Boolean(lyrics?.showing());
+      buttons.lyrics?.setAttribute('data-missing', String(missing));
+      buttons.lyrics?.setAttribute(
+        'aria-label',
+        missing ? 'Låttext saknas för den här låten' : 'Låttext',
+      );
+    }
+    // With lyrics on: how much of the screen they take, their timing, and
+    // (on trial) how the controls appear.
+    const timed = Boolean(lyrics?.shown()) && !missing;
     hide(buttons.lyricsFull, !timed);
+    hide(buttons.lyricsStyle, !timed);
     hide(lyricsDelay, !timed);
+    // The navbar's dimming makes room for controls that sit in its row.
+    const style = timed ? lyrics.controls() : '';
+    if (nav.dataset.lyricsControls !== style)
+      nav.dataset.lyricsControls = style;
     if (timed) {
+      if (styleName && styleName.textContent !== style)
+        styleName.textContent = style;
       buttons.lyricsFull?.setAttribute('aria-pressed', String(lyrics.full()));
       const text = lyrics.delayText();
       if (delayValue && delayValue.textContent !== text)
@@ -259,6 +277,7 @@
       const lyrics = globalThis.lugnLyrics;
       if (name === 'lyrics') lyrics?.toggle();
       else if (name === 'lyrics-full') lyrics?.toggleFull();
+      else if (name === 'lyrics-style') lyrics?.cycleControls();
       else if (name === 'lyrics-earlier') lyrics?.nudge(-1);
       else if (name === 'lyrics-later') lyrics?.nudge(1);
       drawContext();

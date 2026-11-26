@@ -386,8 +386,12 @@ press (up to 5 s). Each Hub remembers both choices.
 
 The current line is in the middle of the screen; its neighbours are dimmer (in
 the full layout up to two before and three after), and only whole lines show.
-With the navbar open the rail shrinks to 88 % and the lines move up above the
-navbar's buttons.
+With the navbar open the lines move up above its buttons, and the rail takes one
+of four styles, on trial and chosen with the numbered button in the navbar (each
+Hub remembers it): 1, previous, play/pause, next and volume in the navbar's row
+with the rail gliding up; 2, the controls on the dimmed cover; 3, large controls
+beside the rail under the line being sung; 4, the cover view while the navbar is
+open.
 
 Changes of layout move rather than jump: the cover travels to its new place and
 the current line to its new size and column. At a track change the last lines
@@ -398,8 +402,8 @@ new one is decoded (for up to 5 s while a track has none).
 A tap on the lines opens the navbar, as on the rest of the page; seeking is the
 time bar's. A track without lines to follow (none, instrumental, a failed fetch,
 no artist or no position) and a player without music move to the cover view; the
-next track with lines moves back. The navbar's lyrics button stays lit, and the
-layout and delay controls show only with lines on screen. A paused computer
+next track with lines moves back. The navbar's lyrics button stays on but
+greyed, and the layout, style and delay controls are put away. A paused computer
 reports no position, so the lines stay where they were. The source label is not
 shown in these layouts. See [Lyrics](MUSIC.md#lyrics) for what is sent
 where and how lines follow playback.
