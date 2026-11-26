@@ -233,9 +233,28 @@
   display: flex;
   flex-direction: column;
   padding: 76px 28px 22px;
+  isolation: isolate;
+}
+.gp-weather::before,
+.gp-weather::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: 0;
+  right: 0;
   border-radius: 28px;
   background: var(--glass);
   box-shadow: inset 0 0 0 1px var(--hair);
+  transition: opacity 240ms ease-out;
+}
+.gp-weather::before {
+  top: 0;
+  bottom: 0;
+}
+.gp-weather::after {
+  top: 64px;
+  bottom: 82px;
+  opacity: 0;
 }
 .gp-weather-when {
   font-size: 18px;
@@ -286,6 +305,45 @@
   --panel-w: 0px;
 }
 
+/* ── Navbar open (quick-menu.js) ── */
+
+/* The scenes take the bottom and the page's buttons the top, so the greeting
+   stands between them. Only opacity and position change: the weather panel's
+   shorter background is a second layer that fades in. */
+.gp-date,
+.gp-clock,
+.gp-title,
+.gp-sub,
+.greeting-page .gp-weather > * {
+  transition:
+    transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 240ms ease-out;
+}
+.greeting-page.menu-open .gp-date,
+.greeting-page.menu-open .gp-weather-facts {
+  opacity: 0;
+}
+.greeting-page.menu-open .gp-clock,
+.greeting-page.menu-open .gp-title,
+.greeting-page.menu-open .gp-sub {
+  transform: translateY(-22px);
+}
+.gp-tiles {
+  transition: transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.greeting-page.menu-open .gp-tiles {
+  transform: translateY(-42px);
+}
+.greeting-page.menu-open .gp-weather > :not(.gp-weather-facts) {
+  transform: translateY(12px);
+}
+.greeting-page.menu-open .gp-weather::before {
+  opacity: 0;
+}
+.greeting-page.menu-open .gp-weather::after {
+  opacity: 1;
+}
+
 /* ── Night: lamps off, only the time ── */
 .gp-night {
   position: absolute;
@@ -324,7 +382,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .greeting-page * {
+  .greeting-page *,
+  .greeting-page .gp-weather::before,
+  .greeting-page .gp-weather::after {
     transition: none !important;
   }
 }

@@ -15,8 +15,7 @@
   color: #eef1e8;
   font-family: system-ui, sans-serif;
 }
-.presence-chip[hidden],
-.hub-nav:not(.open) ~ .presence-chip[data-mode='steady'] {
+.presence-chip[hidden] {
   display: none;
 }
 
@@ -174,4 +173,23 @@
   .presence-chip[data-mode='leaving'] .pc-bar {
     transition: none;
   }
+}
+
+/* The quiet count slides in with the navbar's top row (quick-menu.css). The
+   amber calls to act stay where they are, navbar or not. */
+.presence-chip {
+  transition:
+    transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 240ms ease-out,
+    visibility 0s;
+}
+.hub-nav:not(.open) ~ .presence-chip[data-mode='steady']:not([hidden]) {
+  display: block;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-84px);
+  transition:
+    transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 240ms ease-out,
+    visibility 0s linear 360ms;
 }

@@ -394,6 +394,11 @@ The pager follows the responsiveness rules above:
 Parts without data are left out. The greeting and computer pages keep clear of
 the presence chip and the Bed Hub's top right overlay.
 
+While the navbar is open over them, the greeting's date and weather
+rows and the computer page's heading step aside and the rest moves between the
+navbar's two rows. The settings page ends above the scenes at all times, so its
+controls never move or end up under one.
+
 ### The presence chip
 
 A small capsule in the top left corner of every page but Hem (which has its
