@@ -101,6 +101,9 @@ import {
 import { defaultScenes, LugnEngine } from '../application/lugn-engine.js';
 import { systemClock, type TimerHandle } from '../core/clock.js';
 import { LugnDisplayServer } from './display-server.js';
+import { LrclibLyrics } from './lrclib-lyrics.js';
+import { SpotifyCovers } from './spotify-covers.js';
+import { WiimPlayhead } from './wiim-playhead.js';
 import { DashCastManager } from './dashcast-manager.js';
 import { LightingIntentStore } from './lighting-intent-store.js';
 import { ScenePresetStore } from './scene-preset-store.js';
@@ -797,9 +800,6 @@ export async function startRuntime(
             ? {
                 intelligence: {
                   enabled: config.photoFrame.intelligence.enabled,
-                  ...(config.photoFrame.intelligence.modelsDir
-                    ? { modelsDir: config.photoFrame.intelligence.modelsDir }
-                    : {}),
                   ...(config.photoFrame.intelligence.home
                     ? {
                         home: {
@@ -1245,6 +1245,7 @@ export async function startRuntime(
     display: displaySettings,
     ...(cameraStore ? { camera: cameraStore } : {}),
   });
+  const covers = new SpotifyCovers();
   const displayServer = config.display
     ? new LugnDisplayServer({
         host: config.display.host,
@@ -1260,6 +1261,30 @@ export async function startRuntime(
           }),
         ),
         capabilities,
+        lyrics: new LrclibLyrics(),
+        covers,
+        computerCoverTargets: new Set(
+          Object.entries({
+            ...config.homeAssistant.music,
+            ...config.wiim?.music,
+          }).flatMap(([target, mapping]) =>
+            mapping.computerAudio?.artwork ? [target] : [],
+          ),
+        ),
+        ...(config.lyrics
+          ? {
+              playhead: new WiimPlayhead(
+                Object.fromEntries(
+                  Object.entries(config.lyrics.players).map(
+                    ([target, { wiimHost }]) => [target, wiimHost],
+                  ),
+                ),
+                undefined,
+                undefined,
+                covers,
+              ),
+            }
+          : {}),
         ...(artwork ? { artworkProvider: artwork } : {}),
         ...(cameraService && cameraMedia ? { cameraService, cameraMedia } : {}),
         ...(photoLibrary ? { photoLibrary } : {}),

@@ -25,6 +25,7 @@ import {
   processPhoto,
 } from '../src/runtime/photo-frame.js';
 import sharp from 'sharp';
+import { FakeClock } from '../src/core/clock.js';
 
 // A binary plist with lat 55.52987 and lon 13.3773, as Apple stores a location.
 const LOCATION =
@@ -144,6 +145,49 @@ describe('readSharedAlbum', () => {
     expect(album.photos[0]!.latitude).toBeCloseTo(55.52987, 4);
     expect(album.photos[0]!.url).toContain('/photo.jpg?e=1');
     expect(calls[1]).toContain('p123-ckdatabasews.icloud.com');
+  });
+  it('offers the full-size original next to the browser rendition', async () => {
+    const records = photoRecords('a');
+    const master = records[1] as { fields: Record<string, unknown> };
+    master.fields['resOriginalRes'] = {
+      value: { downloadURL: 'https://cvws.icloud-content.com/B/o/${f}?e=2' },
+    };
+    master.fields['resOriginalFileType'] = { value: 'public.heic' };
+    master.fields['resOriginalWidth'] = { value: 4032 };
+    master.fields['resOriginalHeight'] = { value: 3024 };
+    const album = await readSharedAlbum(LINK, albumFetch(records).fetcher);
+    const renditions = album.photos[0]!.renditions!;
+    expect(renditions.map((r) => r.kind)).toEqual(['jpeg', 'original']);
+    expect(renditions[1]).toMatchObject({
+      width: 4032,
+      height: 3024,
+      type: 'public.heic',
+    });
+    expect(renditions[1]!.url).toContain('/photo.jpg?e=2');
+    // The asset's own upright full rendition wins over the master's original.
+    (records[0] as { fields: Record<string, unknown> }).fields[
+      'resJPEGFullRes'
+    ] = { value: { downloadURL: 'https://cvws.icloud-content.com/B/f/${f}' } };
+    (records[0] as { fields: Record<string, unknown> }).fields[
+      'resJPEGFullFileType'
+    ] = { value: 'public.heic' };
+    (records[0] as { fields: Record<string, unknown> }).fields[
+      'resJPEGFullWidth'
+    ] = { value: 3024 };
+    (records[0] as { fields: Record<string, unknown> }).fields[
+      'resJPEGFullHeight'
+    ] = { value: 4032 };
+    const upright = await readSharedAlbum(LINK, albumFetch(records).fetcher);
+    expect(upright.photos[0]!.renditions![1]).toMatchObject({
+      width: 3024,
+      height: 4032,
+    });
+    // A picture without an original still lists its browser rendition.
+    const plain = await readSharedAlbum(
+      LINK,
+      albumFetch(photoRecords('b')).fetcher,
+    );
+    expect(plain.photos[0]!.renditions).toHaveLength(1);
   });
   it('refuses a partition or download host that is not Apple’s', async () => {
     await expect(
@@ -1048,5 +1092,292 @@ describe('corner brightness', () => {
     cleanups.push(() => third.dispose());
     await third.start();
     expect(third.snapshot().photos[0]?.lu).toEqual([11, 22, 33]);
+  });
+});
+
+describe('PhotoLibrary at album scale', () => {
+  const jpeg = new Uint8Array([255, 216, 255, 217]);
+  const photo = (
+    id: string,
+    takenAt: number,
+    extra: Partial<AlbumPhoto> = {},
+  ): AlbumPhoto => ({
+    id,
+    url: `https://cvws.icloud-content.com/${id}`,
+    version: 'v1',
+    width: 1536,
+    height: 2048,
+    takenAt,
+    utcOffsetSeconds: 3600,
+    latitude: 55.528_765,
+    longitude: 13.377_321,
+    ...extra,
+  });
+  async function setup(over: Partial<PhotoLibraryOptions> = {}) {
+    const dir = await mkdtemp(join(tmpdir(), 'photo-frame-'));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const state: { listing: AlbumListing; lists: number } = {
+      listing: { title: 'T', photos: [], truncated: false },
+      lists: 0,
+    };
+    const make = (extra: Partial<PhotoLibraryOptions> = {}) => {
+      const library = new PhotoLibrary({
+        cacheDir: dir,
+        list: async () => {
+          state.lists += 1;
+          return state.listing;
+        },
+        download: async () => jpeg,
+        process: async () => ({
+          main: jpeg,
+          backdrop: jpeg,
+          width: 450,
+          height: 600,
+        }),
+        place: () => 'Svedala',
+        setTimer: () => ({}),
+        ...over,
+        ...extra,
+      });
+      cleanups.push(() => library.dispose());
+      return library;
+    };
+    return { dir, state, make, library: make() };
+  }
+
+  it('keeps up to 5000 pictures unless told otherwise', async () => {
+    const { DEFAULT_MAX_PHOTOS } =
+      await import('../src/runtime/photo-library.js');
+    expect(DEFAULT_MAX_PHOTOS).toBe(5000);
+  });
+
+  it('writes and shows its progress every few new pictures, and only a full pass clears files', async () => {
+    let processed = 0;
+    const control: { stop?: () => void } = {};
+    const { dir, state, make, library } = await setup({
+      checkpointEvery: 2,
+      process: async () => {
+        processed += 1;
+        // The fifth new picture of the second pass never finishes: Lugn is
+        // stopped mid-way.
+        if (processed === 6) control.stop?.();
+        return { main: jpeg, backdrop: jpeg, width: 1, height: 1 };
+      },
+    });
+    control.stop = () => library.dispose();
+    // A picture cached before, which is no longer in the album.
+    state.listing = {
+      title: 'T',
+      truncated: false,
+      photos: [photo('gone', 99)],
+    };
+    await library.start();
+    await library.refresh();
+    const gone = photoId('gone:v1');
+    state.listing = {
+      title: 'T',
+      truncated: false,
+      photos: [1, 2, 3, 4, 5, 6].map((n) => photo(`p${n}`, 10 - n)),
+    };
+    const seen: number[] = [];
+    library.subscribe(() => seen.push(library.snapshot().photos.length));
+    // Checkpoints after the 2nd and 4th new picture.
+    await library.refresh();
+    expect(seen).toEqual([3, 5]);
+    // The picture that left stays (with its files) until a pass completes.
+    expect((await readdir(dir)).some((name) => name.startsWith(gone))).toBe(
+      true,
+    );
+    // A restart keeps the four pictures done, and carries on from there.
+    const fresh = make();
+    await fresh.start();
+    expect(fresh.snapshot().photos.map((p) => p.id)).toEqual([
+      ...[1, 2, 3, 4].map((n) => photoId(`p${n}:v1`)),
+      gone,
+    ]);
+    await fresh.refresh();
+    expect(fresh.snapshot().photos.map((p) => p.id)).toEqual(
+      [1, 2, 3, 4, 5, 6].map((n) => photoId(`p${n}:v1`)),
+    );
+    expect((await readdir(dir)).some((name) => name.startsWith(gone))).toBe(
+      false,
+    );
+  });
+
+  it('keeps full precision for this machine and a coarse position for the Hubs', async () => {
+    const synced: Array<Array<{ lat: number | null }>> = [];
+    const { state, library } = await setup({
+      insight: {
+        start: async () => undefined,
+        sync: (photos) => void synced.push(photos),
+        decorate: () => ({
+          extras: [{}],
+          trips: [],
+          people: [],
+          scenes: {},
+          ai: false,
+        }),
+        revision: () => '0',
+        subscribe: () => () => undefined,
+        dispose: () => undefined,
+      },
+    });
+    state.listing = { title: 'T', truncated: false, photos: [photo('a', 1)] };
+    await library.start();
+    await library.refresh();
+    expect(library.snapshot().photos[0]).toMatchObject({
+      lat: 55.53,
+      lon: 13.38,
+    });
+    expect(synced.at(-1)?.[0]?.lat).toBe(55.528_765);
+  });
+
+  it("hands the photo brain the whole album with Lugn's own ids and fresh links", async () => {
+    const clock = new FakeClock(1_763_900_000_000);
+    const { state, library } = await setup({ clock, maxPhotos: 1 });
+    state.listing = {
+      title: 'Familjen',
+      truncated: false,
+      photos: [
+        photo('old', 1),
+        photo('new', 3, {
+          version: 'v7',
+          renditions: [
+            {
+              kind: 'jpeg',
+              url: 'https://cvws.icloud-content.com/j',
+              width: 1536,
+              height: 2048,
+            },
+            {
+              kind: 'original',
+              url: 'https://cvws.icloud-content.com/o',
+              width: 3024,
+              height: 4032,
+              type: 'public.heic',
+            },
+          ],
+        }),
+      ],
+    };
+    await library.start();
+    await library.refresh();
+    expect(library.snapshot().photos).toHaveLength(1);
+    const lists = state.lists;
+    const album = await library.albumForBrain();
+    // Listed less than five minutes ago: no new read.
+    expect(state.lists).toBe(lists);
+    expect(album).toMatchObject({
+      schema: 1,
+      title: 'Familjen',
+      listedAt: clock.now(),
+    });
+    expect(album.photos.map((p) => p.id)).toEqual([
+      photoId('new:v7'),
+      photoId('old:v1'),
+    ]);
+    expect(album.photos[0]).toMatchObject({
+      version: 'v7',
+      takenAt: 3,
+      utcOffsetSeconds: 3600,
+      latitude: 55.528_765,
+      longitude: 13.377_321,
+    });
+    expect(album.photos[0]!.renditions.map((r) => r.kind)).toEqual([
+      'jpeg',
+      'original',
+    ]);
+    expect(album.photos[1]!.renditions).toEqual([
+      {
+        kind: 'jpeg',
+        url: 'https://cvws.icloud-content.com/old',
+        width: 1536,
+        height: 2048,
+      },
+    ]);
+    // Older than five minutes: listed again, once for callers that arrive together.
+    clock.advanceBy(5 * 60_000 + 1);
+    await Promise.all([library.albumForBrain(), library.albumForBrain()]);
+    expect(state.lists).toBe(lists + 1);
+  });
+
+  it('serves a listing a few minutes old when Apple fails, never an expired one', async () => {
+    const clock = new FakeClock(1_000_000);
+    let fail = false;
+    const listing: AlbumListing = {
+      title: 'T',
+      truncated: false,
+      photos: [photo('a', 1)],
+    };
+    const { library } = await setup({
+      clock,
+      list: async () => {
+        if (fail) throw new Error('offline');
+        return listing;
+      },
+    });
+    await library.start();
+    await expect(library.albumForBrain()).resolves.toMatchObject({
+      listedAt: 1_000_000,
+    });
+    fail = true;
+    clock.advanceBy(10 * 60_000);
+    await expect(library.albumForBrain()).resolves.toMatchObject({
+      listedAt: 1_000_000,
+    });
+    clock.advanceBy(6 * 60_000);
+    await expect(library.albumForBrain()).rejects.toThrow('offline');
+  });
+
+  it('does not believe a single empty answer for the brain either', async () => {
+    const clock = new FakeClock(1_000_000);
+    let photos = [photo('a', 1)];
+    const { library } = await setup({
+      clock,
+      list: async () => ({ title: 'T', truncated: false, photos }),
+    });
+    await library.start();
+    await library.albumForBrain();
+    photos = [];
+    for (const expected of [1, 1, 0]) {
+      clock.advanceBy(5 * 60_000 + 1);
+      expect((await library.albumForBrain()).photos).toHaveLength(expected);
+    }
+  });
+
+  it('offers the brain API only with an insight that is switched on', async () => {
+    const insight = {
+      start: async () => undefined,
+      sync: () => undefined,
+      decorate: () => ({
+        extras: [],
+        trips: [],
+        people: [],
+        scenes: {},
+        ai: false,
+      }),
+      revision: () => '0',
+      subscribe: () => () => undefined,
+      dispose: () => undefined,
+      putIntel: async () => ({ accepted: 0, unknown: 0 }),
+      labels: () => ({
+        schema: 1 as const,
+        people: [],
+        decided: {},
+        previous: {},
+        not: {},
+      }),
+      brainState: () => ({ intelAt: null, pictures: 0, analysed: 0 }),
+    };
+    expect((await setup()).library.brainApi()).toBeUndefined();
+    expect(
+      (await setup({ insight, brainEnabled: false })).library.brainApi(),
+    ).toBeUndefined();
+    const { library } = await setup({ insight });
+    await library.start();
+    expect(library.brainApi()?.state()).toMatchObject({
+      revision: library.snapshot().revision,
+      intelAt: null,
+    });
   });
 });

@@ -36,6 +36,28 @@ function gridCameras(count) {
     .map(([id, name, color]) => ({ id, name, color }));
 }
 
+// `POST /__fixture/next-track` starts a second track in the `lyrics`
+// scenario, told the way a real one arrives: the player knows at once, its
+// cover a moment later, and the dashboard last.
+let nextTrackAt = 0;
+let nextTrackLines = true;
+let tracksStarted = 0;
+const nextTrack = { title: 'Andra stranden', artist: 'Astrid Holm' };
+
+const previewLines = [
+  'Fönstret står på glänt mot den svala kvällen',
+  'Quiet steps along the wooden pier',
+  'Ljusen över vattnet drar sig sakta inåt land',
+  'We left the harbor lights behind the mist',
+  'Stanna kvar en stund tills vinden vänder hem',
+  'Holding every echo in the salt and cedar air',
+  'Skuggorna blir mjuka över bryggans gråa plank',
+  '',
+  'And even when the tide pulls out beyond the dark horizon, we keep a lantern burning on the southern stone wall for anyone still drifting home',
+  'Ingen brådska nu när natten ligger stilla',
+  'Every distant bell rings softer from the shore',
+].map((text, index) => ({ at: 6 + index * 9, text }));
+
 function snapshot(scenario) {
   if (!scenarios.has(scenario)) {
     const data = structuredClone(fixture);
@@ -215,11 +237,11 @@ function snapshot(scenario) {
       );
     // `seek`: the player's own track with a position. `optical`: a computer's
     // media behind the optical input. Both take steps and seeks.
-    if (scenario === 'seek' || scenario === 'optical') {
+    if (['seek', 'optical', 'lyrics'].includes(scenario)) {
       const at = { positionSeconds: 42, positionUpdatedAt: data.generatedAt };
       const observed = data.state.music.devices['music.room'].observed;
-      data.musicTrackControl = { 'music.room': scenario === 'seek' };
-      if (scenario === 'seek')
+      data.musicTrackControl = { 'music.room': scenario !== 'optical' };
+      if (scenario !== 'optical')
         Object.assign(observed, at, { durationSeconds: 215 });
       else {
         observed.source = 'Optical In';
@@ -255,6 +277,27 @@ function snapshot(scenario) {
   }
   const data = structuredClone(scenarios.get(scenario));
   data.generatedAt += Date.now() - startedAt;
+  if (scenario === 'lyrics' && nextTrackAt) {
+    const since = Date.now() - nextTrackAt;
+    // The server's own word on the track, ahead of the dashboard's.
+    data.nowPlaying = {
+      'music.room': {
+        ...nextTrack,
+        ...(since >= 300 ? { art: '/fixture-cover-2.svg' } : {}),
+      },
+    };
+    if (since > 900) {
+      const observed = data.state.music.devices['music.room'].observed;
+      Object.assign(observed, nextTrack, {
+        positionSeconds: 0,
+        positionUpdatedAt: data.generatedAt - since,
+      });
+      data.artwork['music.room'] =
+        since > 2_200
+          ? { ...data.artwork['music.room'], url: '/fixture-cover-2.svg' }
+          : { url: null, status: 'unavailable', source: 'home_assistant' };
+    }
+  }
   for (const reading of Object.values(data.environment))
     reading.observedAt = Date.now();
   return data;
@@ -284,6 +327,69 @@ const server = createServer(async (request, response) => {
     )
       return sendJson(response, 403, { error: 'origin' });
     const path = new URL(request.url, `http://${allowedHost}`).pathname;
+    if (path === '/__fixture/next-track' && request.method === 'POST') {
+      nextTrackAt = Date.now();
+      // `?lines=none`: the next track has nothing to follow.
+      nextTrackLines =
+        new URL(request.url, 'http://x').searchParams.get('lines') !== 'none';
+      tracksStarted += 1;
+      Object.assign(nextTrack, {
+        title: `Andra stranden ${tracksStarted}`.replace(' 1', ''),
+      });
+      // Pushed to the open pages, as the track is seen and as its cover is in.
+      const push = () => {
+        for (const client of clients)
+          client.write(`data: ${JSON.stringify(snapshot('lyrics'))}\n\n`);
+      };
+      push();
+      setTimeout(push, 310);
+      return sendJson(response, 200, { nextTrackAt });
+    }
+    if (
+      /^\/lyrics\/display-api\/playhead\/music\.room(\/lyrics)?$/.test(path)
+    ) {
+      const data = snapshot('lyrics');
+      const observed = data.state.music.devices['music.room'].observed;
+      const since = Date.now() - nextTrackAt;
+      // On the preview's own clock, which is the fixture's.
+      return sendJson(response, 200, {
+        source: 'player',
+        playing: true,
+        position: nextTrackAt
+          ? since / 1000
+          : observed.positionSeconds +
+            (data.generatedAt - observed.positionUpdatedAt) / 1000,
+        duration: observed.durationSeconds,
+        track: nextTrackAt
+          ? nextTrack
+          : { title: observed.title, artist: observed.artist },
+        ...(!nextTrackAt
+          ? { art: '/fixture-cover.svg' }
+          : since > 300
+            ? { art: '/fixture-cover-2.svg' }
+            : {}),
+      });
+    }
+    // Invented lines for the `lyrics` scenario (and none elsewhere).
+    if (/^\/[a-z-]+\/display-api\/lyrics\/music\.room$/.test(path)) {
+      if (path.startsWith('/lyrics/') && nextTrackAt)
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      return sendJson(
+        response,
+        200,
+        !path.startsWith('/lyrics/') || (nextTrackAt && !nextTrackLines)
+          ? { status: 'none' }
+          : {
+              status: 'synced',
+              lines: nextTrackAt
+                ? previewLines.map((line, index) => ({
+                    at: 1 + index * 4,
+                    text: previewLines.at(-1 - index).text,
+                  }))
+                : previewLines,
+            },
+      );
+    }
     if (path === '/__fixture/actions') return sendJson(response, 200, actions);
     if (path === '/__fixture/probe')
       return sendJson(response, 200, probeReports);
@@ -316,9 +422,10 @@ const server = createServer(async (request, response) => {
         'camera-print-desk',
         'seek',
         'optical',
+        'lyrics',
       ].includes(scenario) &&
       !/^cameras(-\d)?$/.test(scenario) &&
-      path !== '/fixture-cover.svg'
+      !/^\/fixture-cover(-2)?\.svg$/.test(path)
     )
       return sendJson(response, 404, {});
     const route = parts.slice(1).join('/');
@@ -567,31 +674,38 @@ const server = createServer(async (request, response) => {
           : { accepted: true, simulated: true },
       );
     }
-    const name =
-      path === '/fixture-cover.svg'
-        ? 'tests/fixtures/hub/cover.svg'
-        : !route
-          ? 'src/ui/display.html'
-          : [
-                'display.css',
-                'display.js',
-                'pointer-bridge.js',
-                'pages.css',
-                'pages.js',
-                'page-views.js',
-                'cameras-page.css',
-                'cameras-page.js',
-                'quick-menu.css',
-                'quick-menu.js',
-                'photos-page.css',
-                'photos-page.js',
-                'hub-history.js',
-                'hub-probe.js',
-              ].includes(route)
-            ? `src/ui/${route}`
-            : null;
+    const name = /^\/fixture-cover(-2)?\.svg$/.test(path)
+      ? 'tests/fixtures/hub/cover.svg'
+      : !route
+        ? 'src/ui/display.html'
+        : [
+              'display.css',
+              'display.js',
+              'pointer-bridge.js',
+              'pages.css',
+              'pages.js',
+              'page-views.js',
+              'cameras-page.css',
+              'cameras-page.js',
+              'lyrics-view.css',
+              'lyrics-view.js',
+              'quick-menu.css',
+              'quick-menu.js',
+              'photos-page.css',
+              'photos-page.js',
+              'hub-history.js',
+              'hub-probe.js',
+            ].includes(route)
+          ? `src/ui/${route}`
+          : null;
     if (!name) return sendJson(response, 404, {});
     let content = await readFile(new URL(name, root), 'utf8');
+    // The second cover: the same drawing with red and blue swapped.
+    if (path === '/fixture-cover-2.svg')
+      content = content.replace(
+        /#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/gi,
+        '#$3$2$1',
+      );
     if (route === 'display.js')
       content = `const lightingFeedbackMatches = ${lightingFeedbackMatches.toString()};\n${content}`;
     const type = name.endsWith('.svg')
@@ -614,6 +728,6 @@ const server = createServer(async (request, response) => {
 });
 server.listen(port, '127.0.0.1', () =>
   console.log(
-    `Simulated Hub only: http://127.0.0.1:${port}/bed/ (desk, morning, running, legacy, art-error, many, print, print-solo, print-paused, print-prep, print-done, print-long, camera, camera-print, camera-print-solo, seek, optical)`,
+    `Simulated Hub only: http://127.0.0.1:${port}/bed/ (desk, morning, running, legacy, art-error, many, print, print-solo, print-paused, print-prep, print-done, print-long, camera, camera-print, camera-print-solo, seek, optical, lyrics)`,
   ),
 );

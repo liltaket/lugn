@@ -1025,10 +1025,10 @@
               <h2 id="photo-people-title">Foton och personer</h2>
               <p>
                 Fotoramen känner igen återkommande ansikten så att bilder med
-                samma personer visas tillsammans. Allt sker på Lugns egen dator;
-                inga ansikten eller bilder lämnar huset. Namnge en person,
-                bekräfta att en grupp stämmer eller flytta ett ansikte som
-                hamnat fel.
+                samma personer visas tillsammans. Bilderna analyseras på Kuffe,
+                hemma; inga ansikten eller bilder lämnar huset. Namnge en
+                person, bekräfta att en grupp stämmer eller flytta ett ansikte
+                som hamnat fel.
               </p>
             </div>
             <span class="state-chip" id="photo-people-state" data-tone="warn"
@@ -1039,46 +1039,115 @@
           <p class="pp-note" id="photo-people-note" role="status" hidden></p>
           <div class="pp-list" id="photo-people-list"></div>
           <p class="empty-note" id="photo-people-empty" hidden>
-            Inga ansikten hittade ännu. Nya bilder analyseras en i taget när de
+            Inga ansikten hittade ännu. Kuffe analyserar nya bilder när de
             kommer till albumet.
           </p>
           <div class="pp-block" id="photo-people-unassigned" hidden>
-            <h3>
-              Ansikten utan person (<span id="photo-people-unassigned-count"
-                >0</span
-              >)
-            </h3>
+            <div class="pp-block-head">
+              <h3>
+                Ansikten utan person (<span id="photo-people-unassigned-count"
+                  >0</span
+                >)
+              </h3>
+              <button
+                class="button button-primary button-small"
+                id="photo-review-start"
+                type="button"
+              >
+                Granska med tangentbordet
+              </button>
+            </div>
             <p class="field-help">
-              Ansikten som ännu inte liknar någon annan. Tryck på ett ansikte
-              för att ge det en person, eller låt det vara.
+              Ansikten som ännu inte liknar någon annan. Granska dem bild för
+              bild: tangenterna 1–9 väljer person, X låter ett ansikte vara
+              ointressant och A säger att inga ansikten i bilden spelar roll. Du
+              kan också trycka på ett ansikte här för att se det i sin bild.
             </p>
             <div class="pp-faces" id="photo-people-unassigned-faces"></div>
           </div>
+          <details class="pp-block" id="photo-people-skipped" hidden>
+            <summary id="photo-people-skipped-title">
+              Bilder där ansiktena inte spelar roll
+            </summary>
+            <p class="field-help">
+              Folksamlingar, gator och annat där ingen av personerna är
+              intressant. Tryck på en bild för att öppna den och ta med
+              ansiktena igen.
+            </p>
+            <div class="pp-thumbs" id="photo-people-skipped-list"></div>
+          </details>
           <details class="pp-block" id="photo-people-hidden" hidden>
             <summary>
               Dolda personer (<span id="photo-people-hidden-count">0</span>)
             </summary>
             <div class="pp-list" id="photo-people-hidden-list"></div>
           </details>
-          <dialog class="pp-dialog" id="photo-people-face">
-            <div class="pp-photo">
-              <img id="photo-people-face-photo" alt="" />
-              <span class="pp-frame" id="photo-people-face-frame"></span>
+          <dialog
+            class="pr-dialog"
+            id="photo-review"
+            aria-label="Granska ansikten"
+            tabindex="-1"
+          >
+            <div class="pr-stage" id="photo-review-stage">
+              <img
+                class="pr-photo"
+                id="photo-review-photo"
+                alt="Bilden som granskas"
+                draggable="false"
+              />
+              <div class="pr-boxes" id="photo-review-boxes"></div>
+              <p class="pr-banner" id="photo-review-banner" hidden></p>
             </div>
-            <div class="pp-dialog-side">
-              <p class="pp-who" id="photo-people-face-who"></p>
-              <select
-                class="pp-select"
-                id="photo-people-face-move"
-                aria-label="Flytta ansiktet"
-              ></select>
-              <button
-                class="button button-quiet"
-                id="photo-people-face-close"
-                type="button"
+            <div class="pr-side">
+              <div class="pr-top">
+                <p class="pr-progress" id="photo-review-progress"></p>
+                <button
+                  class="button button-small button-quiet"
+                  id="photo-review-close"
+                  type="button"
+                >
+                  Stäng <kbd>Esc</kbd>
+                </button>
+              </div>
+              <div
+                class="pr-current"
+                id="photo-review-current"
+                aria-live="polite"
               >
-                Stäng
-              </button>
+                <img id="photo-review-crop" alt="" />
+                <div>
+                  <p class="pr-who" id="photo-review-who"></p>
+                  <p class="pr-state" id="photo-review-state"></p>
+                </div>
+              </div>
+              <div class="pr-people" id="photo-review-people"></div>
+              <form class="pr-finder" id="photo-review-finder" hidden>
+                <input
+                  id="photo-review-search"
+                  type="text"
+                  maxlength="40"
+                  autocomplete="off"
+                  placeholder="Skriv ett namn …"
+                  aria-label="Sök eller skriv ett namn"
+                  role="combobox"
+                  aria-expanded="true"
+                  aria-controls="photo-review-matches"
+                />
+                <ul id="photo-review-matches" role="listbox"></ul>
+              </form>
+              <div class="pr-actions" id="photo-review-actions"></div>
+              <p class="pr-note" id="photo-review-note" role="status"></p>
+              <div class="pr-done" id="photo-review-done" hidden>
+                <p class="pr-who">Klart</p>
+                <p class="pr-state" id="photo-review-done-text"></p>
+                <button
+                  class="button button-primary"
+                  id="photo-review-done-close"
+                  type="button"
+                >
+                  Stäng
+                </button>
+              </div>
             </div>
           </dialog>
         </section>

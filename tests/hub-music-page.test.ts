@@ -62,13 +62,30 @@ class El {
 }
 
 /** The Musik page over a playing track: 200 s long, 20 s in, volume 30 %. */
-function setup({ computer }: { computer?: Record<string, unknown> } = {}) {
+function setup({
+  computer,
+  player,
+}: {
+  computer?: Record<string, unknown>;
+  player?: () => Record<string, unknown> | null;
+} = {}) {
   vi.useFakeTimers();
   const views = new Map<string, El>();
   const view = (name: string) => {
-    const element = views.get(name) ?? new El();
+    const known = views.get(name);
+    if (known) return known;
+    const element = new El();
     views.set(name, element);
+    // Images decode at once here.
+    if (name.startsWith('art'))
+      Object.assign(element, { decode: async () => undefined });
     return element;
+  };
+  const musicArtwork = { dataset: { state: 'available' } };
+  const musicArtworkImage = {
+    hidden: false,
+    src: '/art/first',
+    getAttribute: () => musicArtworkImage.src,
   };
   const appRoot = new El();
   appRoot.dataset['musicVisible'] = 'true';
@@ -120,7 +137,10 @@ function setup({ computer }: { computer?: Record<string, unknown> } = {}) {
       musicPlaybackLabel: text('Pausa'),
       musicVolumeDown: button,
       musicVolumeUp: button,
+      musicArtwork,
+      musicArtworkImage,
     },
+    ...(player ? { lugnLyrics: { player, draw() {}, onToggle() {} } } : {}),
     latestPayload: {
       state: {
         music: {
@@ -147,7 +167,25 @@ function setup({ computer }: { computer?: Record<string, unknown> } = {}) {
   context['globalThis'] = context;
   runInContext(script, context);
   pages.get('music')!['enter']!();
-  return { view, document, device, sent, pages };
+  const tick = () => vi.advanceTimersByTimeAsync(1_000);
+  // The image the cover shows: the last one asked for that is not hidden.
+  const cover = () =>
+    ['art', 'art-prev']
+      .map((name) => view(name))
+      .filter((image) => !image.hidden && image.getAttribute('src'))
+      .map((image) => image.getAttribute('src'));
+  return {
+    view,
+    window,
+    document,
+    device,
+    sent,
+    pages,
+    tick,
+    cover,
+    musicArtwork,
+    musicArtworkImage,
+  };
 }
 
 describe('the Musik page', () => {
@@ -260,5 +298,70 @@ describe('the Musik page', () => {
       bar.fire('wheel', { deltaY: -48 }).preventDefault,
     ).not.toHaveBeenCalled();
     expect(s.sent).toEqual([]);
+  });
+
+  it('draws a new state at once, without waiting for its tick', async () => {
+    const s = setup();
+    await s.tick();
+    s.musicArtworkImage.src = '/art/second';
+    s.window.fire('lugn:payload');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.cover()).toEqual(['/art/second']);
+  });
+
+  it('tries a picture that failed again, and then gives up on it', async () => {
+    const s = setup();
+    await s.tick();
+    const asked: string[] = [];
+    for (const name of ['art', 'art-prev'])
+      Object.assign(s.view(name), {
+        decode: async () => {
+          asked.push(String(s.view(name).getAttribute('src')));
+          throw new Error('no picture');
+        },
+      });
+    s.musicArtworkImage.src = '/art/broken';
+    await s.tick();
+    await s.tick();
+    await s.tick();
+    await s.tick();
+    await s.tick();
+    expect(asked).toEqual(['/art/broken', '/art/broken', '/art/broken']);
+    expect(s.cover()).toEqual([]);
+  });
+
+  it('keeps the last cover until the next one is there', async () => {
+    const s = setup();
+    await s.tick();
+    expect(s.cover()).toEqual(['/art/first']);
+    // A track change: the dashboard has no cover for a moment.
+    s.musicArtwork.dataset.state = 'missing';
+    await s.tick();
+    expect(s.cover()).toEqual(['/art/first']);
+    s.musicArtwork.dataset.state = 'available';
+    s.musicArtworkImage.src = '/art/second';
+    await s.tick();
+    expect(s.cover()).toEqual(['/art/second']);
+    // A track that never gets one: the cover goes after a while.
+    s.musicArtwork.dataset.state = 'missing';
+    await s.tick();
+    expect(s.cover()).toEqual(['/art/second']);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s.cover()).toEqual([]);
+  });
+
+  it("shows the player's track and cover while the dashboard lags", async () => {
+    let now: Record<string, unknown> | null = null;
+    const s = setup({ player: () => now });
+    await s.tick();
+    now = { title: 'Nästa', artist: 'Någon', art: null, progress: null };
+    await s.tick();
+    expect(s.view('title').textContent).toBe('Nästa');
+    expect(s.view('artist').textContent).toBe('Någon');
+    // Its cover is on the way: the dashboard's is the last track's.
+    expect(s.cover()).toEqual(['/art/first']);
+    now = { ...now, art: '/player-art/next' };
+    await s.tick();
+    expect(s.cover()).toEqual(['/player-art/next']);
   });
 });

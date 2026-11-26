@@ -3212,6 +3212,9 @@ function render(payload, force = false) {
   setClock(true);
   // Hub rules: what this Hub shows is decided by the server.
   globalThis.lugnHubPolicy?.apply(payload?.hubPolicy);
+  // The other pages draw what changed now, rather than at their next tick.
+  if (typeof Event === 'function')
+    window.dispatchEvent?.(new Event('lugn:payload'));
 }
 
 function renderPresenceCorrection(payload) {

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import {
@@ -32,10 +32,9 @@ export type PhotoFrameConfig = {
   cacheDir: string;
   refreshMinutes: number;
   maxPhotos: number;
-  /** Image analysis and smarter grouping; absent means the defaults. */
+  /** The photo brain's results and smarter grouping; absent means the defaults. */
   intelligence?: {
     enabled: boolean;
-    modelsDir?: string;
     home?: { lat: number; lon: number };
   };
 };
@@ -203,8 +202,6 @@ export function createPhotoFrame(
   const holder: { library?: PhotoLibrary } = {};
   const insight = new PhotoInsight({
     cacheDir: config.cacheDir,
-    modelsDir:
-      intelligence.modelsDir ?? join(dirname(config.cacheDir), 'photo-models'),
     enabled: intelligence.enabled,
     ...(intelligence.home ? { home: intelligence.home } : {}),
     readPhoto: async (id) => (await holder.library?.readMain(id)) ?? null,
@@ -213,6 +210,7 @@ export function createPhotoFrame(
   });
   const library = new PhotoLibrary({
     insight,
+    brainEnabled: intelligence.enabled,
     cacheDir: config.cacheDir,
     refreshMs: config.refreshMinutes * 60_000,
     maxPhotos: config.maxPhotos,

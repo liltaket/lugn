@@ -4,7 +4,10 @@ import {
   type CameraDashboardConfig,
 } from '../core/cameras.js';
 import { HomeAssistantMusicMappingsSchema } from '../adapters/home-assistant-music.js';
-import { WiimMusicMappingsSchema } from '../adapters/wiim-music.js';
+import {
+  WiimMusicMappingSchema,
+  WiimMusicMappingsSchema,
+} from '../adapters/wiim-music.js';
 import { HomeAssistantEnvironmentMappingsSchema } from '../adapters/home-assistant-environment.js';
 import { HomeAssistantPrinterConfigSchema } from '../adapters/home-assistant-printer.js';
 import { HomeAssistantHomePresenceConfigSchema } from '../adapters/home-assistant-home-presence.js';
@@ -33,6 +36,7 @@ import { clerkFrontendApiOrigin } from './clerk-auth.js';
 import {
   SceneSchema,
   SemanticLightingIdSchema,
+  SemanticMusicIdSchema,
   SemanticSwitchIdSchema,
   LightingValuesSchema,
   LightingControlModesSchema,
@@ -485,6 +489,21 @@ const WiimConfigSchema = z
   })
   .strict();
 
+const LyricsConfigSchema = z
+  .object({
+    /**
+     * WiiM players whose position the lyrics are followed by, read directly
+     * whichever adapter controls the player.
+     */
+    players: z
+      .record(
+        SemanticMusicIdSchema,
+        z.object({ wiimHost: WiimMusicMappingSchema.shape.host }).strict(),
+      )
+      .default({}),
+  })
+  .strict();
+
 const FileConfigSchema = z
   .object({
     http: z
@@ -507,6 +526,7 @@ const FileConfigSchema = z
       .strict()
       .optional(),
     wiim: WiimConfigSchema.optional(),
+    lyrics: LyricsConfigSchema.optional(),
     homeAssistant: HomeAssistantConfigSchema,
     lightingControlModes: LightingControlModesSchema.default({}),
     windowLighting: WindowLightingSchema.optional(),
@@ -531,16 +551,17 @@ const FileConfigSchema = z
           { message: 'must be a photos.icloud.com/shared/album/… link' },
         ),
         refreshMinutes: z.number().int().min(5).max(1440).default(30),
-        maxPhotos: z.number().int().min(1).max(500).default(150),
+        maxPhotos: z.number().int().min(1).max(20_000).default(5000),
         cacheDir: z.string().min(1).optional(),
         /**
-         * Image analysis for the photo frame: groups pictures by what they show
-         * and who is in them, and names the groups. Runs on this machine only,
-         * once per new picture; without the models nothing changes.
+         * The photo brain's results (docs/PHOTO-BRAIN.md): groups pictures by
+         * what they show and who is in them, and names the groups. Models run
+         * on Kuffe; without its results the frame groups by time and place.
          */
         intelligence: z
           .object({
             enabled: z.boolean().default(true),
+            /** Read by the old on-device analysis; accepted and ignored. */
             modelsDir: z.string().min(1).optional(),
             /** Where home is, so trips away can be told from days at home. */
             home: z
@@ -776,6 +797,7 @@ export type RuntimeConfig = {
   wiim?: {
     music: z.output<typeof WiimMusicMappingsSchema>;
   };
+  lyrics?: z.output<typeof LyricsConfigSchema>;
   windowLighting?: WindowLighting;
   dynamicLighting?: z.output<typeof DynamicLightingConfigSchema>;
   presenceControl?: z.output<typeof PresenceControlConfigSchema>;
@@ -851,7 +873,6 @@ export type RuntimeConfig = {
     intelligence?:
       | {
           enabled: boolean;
-          modelsDir?: string | undefined;
           home?: { latitude: number; longitude: number } | undefined;
         }
       | undefined;
@@ -1024,6 +1045,7 @@ export function loadRuntimeConfig(
         : { weather: fileConfig.homeAssistant.weather }),
     },
     ...(mqtt === undefined ? {} : { mqtt }),
+    ...(fileConfig.lyrics === undefined ? {} : { lyrics: fileConfig.lyrics }),
     ...(fileConfig.presenceControl === undefined
       ? {}
       : { presenceControl: fileConfig.presenceControl }),
