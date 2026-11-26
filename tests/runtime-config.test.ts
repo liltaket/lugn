@@ -649,6 +649,49 @@ describe('runtime configuration cross references', () => {
     );
   });
 
+  it('reads Hub rules, defaulting to none, and rejects a malformed rule', () => {
+    const environment = {
+      HA_TOKEN: 'deterministic-test-token',
+      DESK_HUB_TOKEN: 'd'.repeat(32),
+    };
+    const withRules = (rules?: unknown) => ({
+      ...minimal,
+      display: {
+        publicUrl: 'http://192.0.2.10:8788',
+        hubs: [
+          {
+            id: 'desk-hub',
+            role: 'desk',
+            castHost: '192.0.2.20',
+            tokenEnv: 'DESK_HUB_TOKEN',
+          },
+        ],
+        ...(rules === undefined ? {} : { rules }),
+      },
+    });
+    expect(loadConfig(withRules(), environment).display?.rules).toEqual([]);
+    const rule = {
+      id: 'away-calm',
+      when: { home: 'away' },
+      then: { only: ['clock'], dim: 0.5 },
+    };
+    expect(
+      loadConfig(withRules([rule]), environment).display?.rules[0],
+    ).toMatchObject({ id: 'away-calm', enabled: true, priority: 0 });
+    expect(
+      captureConfigError(() =>
+        loadConfig(
+          withRules([{ ...rule, when: { home: 'sometimes' } }]),
+          environment,
+        ),
+      ).message,
+    ).toContain('rules');
+    expect(
+      captureConfigError(() => loadConfig(withRules([rule, rule]), environment))
+        .message,
+    ).toContain('unique');
+  });
+
   it('resolves an optional per-Hub pointer bridge and rejects malformed ones', () => {
     const hub = {
       id: 'desk-hub',

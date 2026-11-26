@@ -82,6 +82,14 @@
     }
   }
 
+  // Hub rules take pages out of the pager (hub-policy.js): a place on one of
+  // those is passed over, and so is the place already on screen.
+  const reachable = (place) => pagesApi.ids?.().includes(place.page) !== false;
+  function prune(list) {
+    while (list.length && (!reachable(list.at(-1)) || same(list.at(-1), here)))
+      list.pop();
+  }
+
   function back() {
     note();
     if (
@@ -95,6 +103,7 @@
       note();
       return true;
     }
+    prune(behind);
     const target = behind.at(-1) ?? { page: 'home', level: '' };
     const from = here;
     if (same(target, from) || !travel(target)) return false;
@@ -105,6 +114,7 @@
 
   function forward() {
     note();
+    prune(ahead);
     const target = ahead.at(-1);
     const from = here;
     if (!target || !travel(target)) return false;

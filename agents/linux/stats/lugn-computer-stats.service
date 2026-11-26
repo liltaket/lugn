@@ -1,0 +1,19 @@
+[Unit]
+Description=Lugn computer statistics publisher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/lugn-computer-stats.py --config %E/lugn-linux-agent/config.toml
+UMask=0077
+Restart=always
+RestartSec=5
+# It only reads /proc and /sys and talks to the broker.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

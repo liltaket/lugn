@@ -116,6 +116,9 @@ Nest Hubs:
 }
 ```
 
+`display.rules` (optional, empty by default) decides what each Hub shows from
+the situation; see [Hub rules](HUB-RULES.md).
+
 The `publicUrl` must be reachable from each Hub, and its port must match the
 configured listener. Lugn connects directly to each configured Cast receiver
 on TCP port `8009`, launches DashCast, and opens that Hub's own Bed or Desk

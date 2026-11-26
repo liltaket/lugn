@@ -1,0 +1,330 @@
+/* Hälsning (greeting-page.js): Hem's own language on one more page. Date over
+   the clock, one greeting, up to three of Hem's tiles, and one weather panel
+   where Hem keeps music. Every rule is scoped under .greeting-page.
+   Kept clear: the presence chip (top left, to y 72) and the Bed system
+   overlay (x 896 to 1024, y 0 to 72). */
+
+.greeting-page {
+  --ground: #141c1b;
+  --ink: #eef1e8;
+  --ink-2: rgba(238, 241, 232, 0.64);
+  --ink-3: rgba(238, 241, 232, 0.42);
+  --glass: rgba(238, 241, 232, 0.055);
+  --glass-2: rgba(238, 241, 232, 0.09);
+  --hair: rgba(238, 241, 232, 0.08);
+  --glow: 231, 188, 120;
+  --glow-strength: 0.09;
+  --panel-w: 352px;
+  --left-w: calc(var(--W) - 60px - var(--panel-w));
+
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: system-ui, sans-serif;
+  background:
+    radial-gradient(
+      70% 95% at 100% 0%,
+      rgba(var(--glow), var(--glow-strength)),
+      transparent 70%
+    ),
+    radial-gradient(75% 85% at 0% 105%, rgba(var(--glow), 0.06), transparent),
+    var(--ground);
+}
+.greeting-page,
+.greeting-page * {
+  box-sizing: border-box;
+}
+.greeting-page [hidden] {
+  display: none !important;
+}
+
+/* The room's night palette, the same values as Hem's. */
+.greeting-page[data-tone='night'] {
+  --ground: #0b0f0e;
+  --ink: #e8dfcd;
+  --ink-2: rgba(232, 223, 205, 0.6);
+  --ink-3: rgba(232, 223, 205, 0.4);
+  --glow: 184, 149, 94;
+  --glow-strength: 0.07;
+}
+
+/* A special day changes the greeting and the light in the room, nothing else. */
+.greeting-page[data-skin] {
+  --glow-strength: 0.2;
+}
+.greeting-page[data-skin='jul'] {
+  --glow: 212, 98, 90;
+}
+.greeting-page[data-skin='nyar'] {
+  --glow: 230, 203, 138;
+}
+.greeting-page[data-skin='midsommar'] {
+  --glow: 150, 200, 130;
+}
+.greeting-page[data-skin='fodelsedag'] {
+  --glow: 240, 150, 120;
+}
+.greeting-page[data-skin='pask'] {
+  --glow: 236, 208, 111;
+}
+.greeting-page[data-skin='lucia'] {
+  --glow: 240, 196, 108;
+}
+.greeting-page[data-skin='allahelgon'] {
+  --glow: 217, 155, 94;
+}
+
+/* ── Left: date, clock, greeting ── */
+.gp-date,
+.gp-clock,
+.gp-title,
+.gp-sub {
+  position: absolute;
+  left: 22px;
+  margin: 0;
+  width: var(--left-w);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gp-date {
+  top: 84px;
+  font-size: 18px;
+  line-height: 24px;
+  color: var(--ink-2);
+}
+.gp-date::first-letter {
+  text-transform: uppercase;
+}
+.gp-clock {
+  left: 16px;
+  top: 110px;
+  font-size: 104px;
+  line-height: 100px;
+  font-weight: 400;
+  letter-spacing: -0.045em;
+  font-variant-numeric: tabular-nums;
+}
+.gp-title {
+  top: 246px;
+  color: var(--ink);
+  font-size: 46px;
+  line-height: 56px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+.gp-title[data-long='true'] {
+  font-size: 34px;
+}
+.gp-sub {
+  top: 306px;
+  font-size: 20px;
+  line-height: 28px;
+  color: var(--ink-2);
+}
+
+/* ── Hem's tiles ── */
+.gp-tiles {
+  position: absolute;
+  left: 20px;
+  top: 378px;
+  width: var(--left-w);
+  height: 162px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+.greeting-page .gp-tile {
+  --scene-color: #eef1e8;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 16px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  transition:
+    background 0.35s,
+    color 0.35s,
+    transform 0.15s;
+}
+.greeting-page .gp-tile:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.greeting-page .gp-tile:disabled {
+  opacity: 0.55;
+}
+.gp-tile[data-scene='scene.soft_light'] {
+  --scene-color: #f0a05a;
+}
+.gp-tile[data-scene='scene.everyday_light'] {
+  --scene-color: #ead3a1;
+}
+.gp-tile[data-scene='scene.focus_light'] {
+  --scene-color: #b5ced6;
+}
+.greeting-page .gp-tile[aria-pressed='true'] {
+  background:
+    radial-gradient(
+      120% 140% at 0% 0%,
+      rgba(255, 255, 255, 0.35),
+      transparent 55%
+    ),
+    var(--scene-color);
+  color: #1e1a14;
+  box-shadow: 0 10px 40px -10px var(--scene-color);
+}
+.greeting-page[data-tone='night'] .gp-tile[aria-pressed='true'] {
+  filter: brightness(0.62) saturate(0.85);
+}
+.gp-tile-mark {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+.gp-tile-mark svg {
+  width: 22px;
+  height: 22px;
+}
+/* The action of the scene carries Hem's light round button. */
+.gp-tile[data-main='true'] .gp-tile-mark {
+  background: var(--ink);
+  color: #18201f;
+}
+.gp-tile:not([data-main='true']) .gp-tile-mark {
+  background: var(--glass-2);
+  color: var(--scene-color);
+}
+.gp-tile[aria-pressed='true'] .gp-tile-mark {
+  background: rgba(30, 26, 20, 0.12);
+  color: #1e1a14;
+}
+.gp-tile-mark svg[data-symbol='pause'] {
+  stroke-width: 3;
+}
+.gp-tile-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 18px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ── Right: weather, in the place of Hem's music column ── */
+.gp-weather {
+  position: absolute;
+  right: 20px;
+  top: 20px;
+  width: var(--panel-w);
+  height: 560px;
+  display: flex;
+  flex-direction: column;
+  padding: 76px 28px 22px;
+  border-radius: 28px;
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
+.gp-weather-when {
+  font-size: 18px;
+  color: var(--ink-2);
+}
+.gp-weather-icon {
+  width: 72px;
+  height: 72px;
+  margin-top: 30px;
+  color: rgb(var(--glow));
+}
+.gp-weather-temp {
+  margin-top: 14px;
+  font-size: 104px;
+  line-height: 1;
+  font-weight: 300;
+  letter-spacing: -0.045em;
+  font-variant-numeric: tabular-nums;
+}
+.gp-weather-condition {
+  margin-top: 8px;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.gp-weather-facts {
+  margin: auto 0 0;
+}
+.gp-weather-facts div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 14px 0;
+  border-top: 1px solid var(--hair);
+}
+.gp-weather-facts dt {
+  font-size: 16px;
+  color: var(--ink-2);
+}
+.gp-weather-facts dd {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+/* Without weather the room's side takes the whole width. */
+.greeting-page[data-weather='false'] {
+  --panel-w: 0px;
+}
+
+/* ── Night: lamps off, only the time ── */
+.gp-night {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding-bottom: 40px;
+}
+.greeting-page[data-scene='natt'] {
+  background: #040505;
+}
+.greeting-page[data-scene='natt'] .gp-night {
+  display: flex;
+}
+.greeting-page[data-scene='natt'] > :not(.gp-night) {
+  display: none;
+}
+.gp-night time {
+  font-size: 196px;
+  line-height: 1;
+  font-weight: 200;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  color: rgba(214, 150, 110, 0.34);
+}
+.gp-night span::first-letter {
+  text-transform: uppercase;
+}
+.gp-night span {
+  display: block;
+  font-size: 22px;
+  color: rgba(214, 150, 110, 0.22);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .greeting-page * {
+    transition: none !important;
+  }
+}

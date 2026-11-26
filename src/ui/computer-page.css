@@ -1,0 +1,233 @@
+/* Dator (computer-page.js): Hem's language. Four readings, the busiest programs
+   and the network, in one accent. Every rule is scoped under .computer-page.
+   Kept clear: the presence chip and the Bed system overlay above y 72. */
+
+.computer-page {
+  --ground: #141c1b;
+  --ink: #eef1e8;
+  --ink-2: rgba(238, 241, 232, 0.64);
+  --ink-3: rgba(238, 241, 232, 0.42);
+  --glass: rgba(238, 241, 232, 0.055);
+  --glass-3: rgba(238, 241, 232, 0.14);
+  --hair: rgba(238, 241, 232, 0.08);
+  --accent: #e7bc78;
+  --high: #efb1a4;
+
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  background:
+    radial-gradient(
+      70% 95% at 100% 0%,
+      rgba(231, 188, 120, 0.08),
+      transparent 70%
+    ),
+    var(--ground);
+}
+.computer-page,
+.computer-page * {
+  box-sizing: border-box;
+}
+.computer-page [hidden] {
+  display: none !important;
+}
+
+.cp-head {
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  top: 84px;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+.cp-name {
+  margin: 0;
+  color: var(--ink);
+  font-size: 34px;
+  line-height: 42px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.cp-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 18px;
+  color: var(--ink-2);
+}
+.cp-clock {
+  margin-left: auto;
+  font-size: 34px;
+  line-height: 42px;
+  letter-spacing: -0.03em;
+  color: var(--ink-2);
+}
+
+.cp-card {
+  min-width: 0;
+  border-radius: 22px;
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
+
+.cp-readings {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 144px;
+  height: 184px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+.cp-reading {
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px;
+}
+.cp-label {
+  font-size: 18px;
+  font-weight: 600;
+}
+.cp-value {
+  margin-top: auto;
+  font-size: 62px;
+  line-height: 1;
+  font-weight: 300;
+  letter-spacing: -0.04em;
+}
+.cp-value small {
+  margin-left: 4px;
+  font-size: 26px;
+  color: var(--ink-2);
+}
+.cp-bar {
+  height: 4px;
+  margin: 14px 0 12px;
+  border-radius: 2px;
+  background: var(--glass-3);
+  overflow: hidden;
+}
+.cp-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform 0.6s ease;
+}
+.cp-reading[data-high='true'] .cp-bar i {
+  background: var(--high);
+}
+.cp-detail {
+  min-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  line-height: 20px;
+  color: var(--ink-2);
+}
+
+.cp-lower {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 338px;
+  height: 238px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.cp-programs {
+  padding: 10px 22px;
+}
+.cp-programs table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.cp-programs th,
+.cp-programs td {
+  padding: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+.cp-programs th:first-child,
+.cp-programs td:first-child {
+  width: 58%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+.cp-programs th {
+  height: 34px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+.cp-programs td {
+  height: 36px;
+  border-top: 1px solid var(--hair);
+  font-size: 17px;
+  color: var(--ink-2);
+}
+.cp-programs td:first-child {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.cp-network {
+  display: flex;
+  flex-direction: column;
+  padding: 18px 22px;
+}
+.cp-rate {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 14px;
+}
+.cp-rate span {
+  font-size: 16px;
+  color: var(--ink-2);
+}
+.cp-rate strong {
+  font-size: 30px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+.cp-rate strong small {
+  margin-left: 5px;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+.cp-disk {
+  display: flex;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--hair);
+  font-size: 16px;
+  color: var(--ink-2);
+}
+
+.cp-empty {
+  position: absolute;
+  left: 22px;
+  top: 150px;
+  margin: 0;
+  font-size: 20px;
+  color: var(--ink-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .computer-page * {
+    transition: none !important;
+  }
+}

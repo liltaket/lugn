@@ -36,6 +36,15 @@
 .hub-nav[data-page='info'] {
   --nb-rgb: 170, 188, 184;
 }
+.hub-nav[data-page='halsning'] {
+  --nb-rgb: 238, 171, 85;
+}
+.hub-nav[data-page='installningar'] {
+  --nb-rgb: 170, 188, 184;
+}
+.hub-nav[data-page='dator'] {
+  --nb-rgb: 231, 188, 120;
+}
 
 /* A very thin dimming over the whole page and, along the bottom edge, a short
    dark floor so the buttons read over any picture. */

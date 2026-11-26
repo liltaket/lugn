@@ -1,0 +1,177 @@
+/* The presence chip (presence-chip.js): top left, on the 600 px canvas. The
+   quiet count is drawn only while the navbar is open, so a photo or the clock is
+   never marked by it; the amber calls to act come up on their own.
+
+   Three looks. Steady is a quiet glass capsule, a reading that also corrects.
+   Empty and leaving are the call to act: a warm amber pill, one line, as large
+   as the text can be while the pill stays 56 px, and nothing else on it.
+   Only opacity and transform ever change, and nothing blurs. */
+.presence-chip {
+  --W: 1024px;
+  position: absolute;
+  left: 18px;
+  top: 16px;
+  z-index: 21;
+  color: #eef1e8;
+  font-family: system-ui, sans-serif;
+}
+.presence-chip[hidden],
+.hub-nav:not(.open) ~ .presence-chip[data-mode='steady'] {
+  display: none;
+}
+
+.pc-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 64px;
+  height: 56px;
+  padding: 0 20px 0 16px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(10, 12, 12, 0.36);
+  color: inherit;
+  font: inherit;
+  overflow: hidden;
+  cursor: pointer;
+  opacity: 0.8;
+  transition:
+    opacity 300ms ease-out,
+    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* A count of one has nothing to correct: it is only a reading. */
+.presence-chip[data-tap='false'] .pc-button {
+  pointer-events: none;
+}
+.pc-button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.pc-button[aria-busy='true'] {
+  border-style: dashed;
+}
+
+.pc-icon {
+  width: 24px;
+  height: 24px;
+  opacity: 0.85;
+}
+.pc-count {
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.pc-label,
+.pc-time,
+.pc-bar {
+  display: none;
+}
+
+/* The call to act: the words, in amber, and nothing else. */
+.presence-chip[data-mode='empty'] .pc-button,
+.presence-chip[data-mode='leaving'] .pc-button {
+  opacity: 1;
+  padding: 0 24px;
+  border-color: rgba(255, 224, 170, 0.55);
+  background: #eeab55;
+  color: #2b1805;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    0 10px 26px rgba(0, 0, 0, 0.42);
+  animation: pc-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.presence-chip[data-mode='empty'] .pc-button[aria-busy='true'],
+.presence-chip[data-mode='leaving'] .pc-button[aria-busy='true'] {
+  opacity: 0.8;
+  border-color: rgba(43, 24, 5, 0.55);
+}
+.presence-chip[data-mode='empty'] .pc-icon,
+.presence-chip[data-mode='empty'] .pc-count,
+.presence-chip[data-mode='leaving'] .pc-icon,
+.presence-chip[data-mode='leaving'] .pc-count {
+  display: none;
+}
+.presence-chip[data-mode='empty'] .pc-label,
+.presence-chip[data-mode='leaving'] .pc-label,
+.presence-chip[data-mode='leaving'] .pc-time {
+  display: block;
+}
+.pc-label {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+}
+/* With a countdown the words step back and the seconds lead. */
+.presence-chip[data-mode='leaving'] .pc-label {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0;
+  opacity: 0.78;
+}
+.pc-time {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+/* What is left of the wait, drawn as a line along the foot of the pill. */
+.presence-chip[data-mode='leaving'] .pc-bar {
+  display: block;
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(43, 24, 5, 0.5);
+  transform-origin: left;
+  transition: transform 1000ms linear;
+}
+.presence-chip[data-mode='leaving'] .pc-button {
+  padding-bottom: 5px;
+}
+
+/* A ring that breathes out from the pill; transform and opacity only. */
+.presence-chip[data-mode='empty']::before,
+.presence-chip[data-mode='leaving']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 28px;
+  border: 2px solid #eeab55;
+  pointer-events: none;
+  animation: pc-halo 2200ms ease-out infinite;
+}
+
+@keyframes pc-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+@keyframes pc-halo {
+  from {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.16, 1.34);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pc-button {
+    transition: none;
+  }
+  .presence-chip .pc-button,
+  .presence-chip::before {
+    animation: none !important;
+  }
+  .presence-chip[data-mode='leaving'] .pc-bar {
+    transition: none;
+  }
+}

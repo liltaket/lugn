@@ -16,6 +16,12 @@ import {
 } from '../adapters/assistant-entities-mqtt.js';
 import { WledCctMappingsSchema } from '../adapters/wled-cct.js';
 import { DynamicLightingConfigSchema } from '../core/dynamic-lighting.js';
+import { HomeAssistantWeatherConfigSchema } from '../adapters/home-assistant-weather.js';
+import {
+  GreetingsConfigSchema,
+  type GreetingsConfig,
+} from '../core/greetings.js';
+import { HubRulesSchema, type HubRule } from '../core/hub-rules.js';
 import { PresenceControlConfigSchema } from '../adapters/stl27l-presence-control.js';
 import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -264,6 +270,7 @@ const HomeAssistantConfigSchema = z
       pm25: 'sensor.alpstuga_air_quality_monitor_pm25',
     }),
     printer: HomeAssistantPrinterConfigSchema.optional(),
+    weather: HomeAssistantWeatherConfigSchema.optional(),
     switches: z
       .record(SemanticSwitchIdSchema, z.string().regex(/^switch\.[a-z0-9_]+$/))
       .default({}),
@@ -423,6 +430,9 @@ const DisplayConfigSchema = z
           .strict(),
       )
       .min(1),
+    /** What each Hub shows, decided from the situation (docs/HUB-RULES.md). */
+    rules: HubRulesSchema.default([]),
+    greetings: GreetingsConfigSchema,
   })
   .strict()
   .superRefine((config, context) => {
@@ -800,6 +810,7 @@ export type RuntimeConfig = {
       pm25: string;
     };
     printer?: z.output<typeof HomeAssistantPrinterConfigSchema>;
+    weather?: z.output<typeof HomeAssistantWeatherConfigSchema>;
   };
   mqtt?: {
     url: string;
@@ -828,6 +839,8 @@ export type RuntimeConfig = {
       token: string;
       pointerBridge?: { url: string; token: string };
     }>;
+    rules: HubRule[];
+    greetings: GreetingsConfig;
   };
   cameraDashboard?: CameraDashboardConfig;
   photoFrame?: {
@@ -925,6 +938,8 @@ export function loadRuntimeConfig(
               }
             : {}),
         })),
+        rules: fileConfig.display.rules,
+        greetings: fileConfig.display.greetings,
       }
     : undefined;
 
@@ -1004,6 +1019,9 @@ export function loadRuntimeConfig(
       ...(fileConfig.homeAssistant.printer === undefined
         ? {}
         : { printer: fileConfig.homeAssistant.printer }),
+      ...(fileConfig.homeAssistant.weather === undefined
+        ? {}
+        : { weather: fileConfig.homeAssistant.weather }),
     },
     ...(mqtt === undefined ? {} : { mqtt }),
     ...(fileConfig.presenceControl === undefined

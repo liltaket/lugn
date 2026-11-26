@@ -251,7 +251,7 @@
       const stale =
         typeof metric.observedAt === 'number' &&
         Date.now() - metric.observedAt > STALE_MS;
-      parts.push([label, `${value}${unit}`, stale]);
+      parts.push([label, `${value}${unit}`, stale, name]);
     }
     const presence = data?.state?.presence;
     const count = presence?.personCount;
@@ -266,8 +266,9 @@
     airKey = key;
     const list = view('clock', 'air');
     list?.replaceChildren(
-      ...parts.map(([label, value, stale]) => {
+      ...parts.map(([label, value, stale, name]) => {
         const row = document.createElement('div');
+        row.dataset.metric = name;
         const dt = document.createElement('dt');
         const dd = document.createElement('dd');
         dt.textContent = label;

@@ -231,7 +231,7 @@ screen, browser, and an opt-in swipe probe). Tapping the cover on Hem opens
 Musik; the controls on and around it keep their own actions. Musik has no
 permanent dock: its scenes are in the navbar (below), and while that is open
 the content lifts and the cover shrinks to make room (transform only). **Foto** (right after
-Musik; the order is Hem, Musik, Foto, Kameror, Klocka, Info) is a picture frame over a public iCloud shared album (see
+Musik; the order is Hem, Musik, Foto, Kameror, Klocka, Info, Inställningar) is a picture frame over a public iCloud shared album (see
 CONFIGURATION.md): one to three pictures at a time in changing layouts (a
 landscape full screen, two portraits, a portrait with a landscape, three
 portraits, a landscape with two portraits, three landscapes, two panoramas; a
@@ -369,6 +369,59 @@ The pager follows the responsiveness rules above:
 - **Mät svep** on Info records animation-frame gaps during swipes and long
   tasks, so the Hub itself can report how a swipe ran; it is off by default and
   remembered per Hub.
+
+### Greeting, computer and settings pages
+
+- **Hälsning** (`greeting-page.js`) is in the pager only while a
+  [Hub rule](HUB-RULES.md) shows a scene. It draws Hem's date and clock, a
+  headline, one line, up to three actions (Hem's own commands) and the weather
+  where Hem keeps music. The `natt` scene is the time alone on a nearly black
+  screen.
+- **Dator** (`computer-page.js`) is in the pager only while a rule shows it:
+  processor, graphics, memory and swap, the busiest programs, the network and
+  the disk, from the [statistics publisher](../agents/linux/stats/README.md).
+  Without a fresh sample it says so and shows no numbers.
+- **Inställningar** (`settings-page.js`), the last page, changes the few
+  settings the server lists in `payload.settings`; see
+  [Hub rules](HUB-RULES.md#dimming-the-air-reminder-and-the-settings-page).
+
+Parts without data are left out. The greeting and computer pages keep clear of
+the presence chip and the Bed Hub's top right overlay.
+
+### The presence chip
+
+A small capsule in the top left corner of every page but Hem (which has its
+own, in the clock), Info and Inställningar (`presence-chip.js`,
+`presence-chip.css`). It
+exists only where a presence sensor is configured (`presenceControl`). The quiet
+count is drawn only while the navbar is open, so a photo or the clock is never
+marked by it; the amber looks come up by themselves, because they are not the
+normal case. It has three looks:
+
+- **Steady**: the sensor's count, as a quiet glass capsule, with the navbar
+  open. A tap sets the count to 1, as Hem's capsule does; at a
+  count of 1 there is nothing to correct and it is only a reading.
+- **Empty**: the sensor sees nobody. An amber **Jag är här**, one tap. No icon,
+  no sentence.
+- **Leaving**: the sensor sees nobody and Lugn is about to switch off (the exit
+  grace). An amber **Jag är kvar** with the seconds left (`0:38`), counted on the
+  server's clock, and a line along the foot of the pill that shortens as the wait
+  runs out. One tap stops it.
+
+The tap is Hem's `presence:one` command: it is attributed to the Hub, reported
+by the same toast (which reaches every page) and held until the sensor answers,
+so a second tap cannot slip through. Only opacity and transform change, and
+nothing blurs; with reduced motion the pill neither breathes nor animates.
+
+### Hub rules on the page
+
+What a Hub shows can follow the situation (home or away, time since arriving,
+the room's people, whether someone is at the computer, the time, which Hub):
+which pages exist, which to bring up, how bright, and labels. The server decides
+and sends `hubPolicy`; `hub-policy.js` carries it out. See [Hub rules](HUB-RULES.md).
+The pager supports it with `lugnPages.setAvailable(ids)`, which takes pages out
+of the track (and `lugnPages.all()` for those that ask what exists); the dots,
+swiping, the navbar's buttons and the page on screen follow.
 
 The pager announces each page change as a `lugn:page` window event and the
 end of every motion as `lugn:pages-settled`; the pointer bridge measures its

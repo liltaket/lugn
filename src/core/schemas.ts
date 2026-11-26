@@ -845,6 +845,14 @@ export const RoomStateSchema = z.object({
     home: z.object({
       state: HomePresenceSchema,
       observedAt: z.number().nonnegative().nullable(),
+      /** When the state last changed to its current value; null while unknown. */
+      since: z.number().nonnegative().nullable().optional(),
+      /**
+       * When the resident last came home, that is `away` followed by `home`.
+       * A first observation after a restart is not an arrival. Cleared when
+       * the resident leaves.
+       */
+      arrivedAt: z.number().nonnegative().nullable().optional(),
     }),
   }),
   lighting: z.object({

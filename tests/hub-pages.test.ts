@@ -913,19 +913,116 @@ describe('Hub page markup', () => {
     new URL('../src/ui/display.html', import.meta.url),
     'utf8',
   );
-  it('has one dot per page, Hem first and Musik next to it', () => {
+  it('has one dot per page, Hem first, Musik next and Inställningar last', () => {
     const pages = [
       ...html.matchAll(/class="hub-page" data-page="([a-z]+)"/g),
     ].map((match) => match[1]);
-    expect(pages).toEqual([
+    // The conditional pages (greeting, computer) are in the pager only when
+    // Hub rules let them in; the usual pages keep their order.
+    expect(
+      pages.filter((page) => !['halsning', 'dator'].includes(page!)),
+    ).toEqual([
       'home',
       'music',
       'foto',
       'kameror',
       'clock',
       'info',
+      'installningar',
     ]);
+    expect(pages[0]).toBe('home');
+    expect(pages.at(-1)).toBe('installningar');
+    expect(html).toMatch(/data-page="halsning" data-conditional/);
+    expect(html).toMatch(/data-page="dator" data-conditional/);
     const dots = /<div class="hub-dots"[^>]*>(.*?)<\/div>/.exec(html)?.[1];
     expect(dots?.match(/<i><\/i>/g)).toHaveLength(pages.length);
+  });
+});
+
+describe('Hub pager: pages taken out by Hub rules', () => {
+  type Rules = {
+    setAvailable(ids: string[] | null): boolean;
+    ids(): string[];
+    all(): string[];
+  };
+  const rules = (api: unknown) => api as Rules;
+  // setup() names its pages home, clock, info, four.
+
+  it('closes up around a page that is left out and skips it', () => {
+    const { api, pages, dots } = setup(4);
+    expect(rules(api).setAvailable(['home', 'info', 'four'])).toBe(true);
+    expect(rules(api).ids()).toEqual(['home', 'info', 'four']);
+    // Every page is still known, for those that ask why one is missing.
+    expect(rules(api).all()).toEqual(['home', 'clock', 'info', 'four']);
+    expect(pages.map(({ page }) => page.style['display'])).toEqual([
+      '',
+      'none',
+      '',
+      '',
+    ]);
+    expect(
+      pages.map(({ page }) => page.style['left']).filter((x) => x),
+    ).toContain('200%');
+    expect(pages[2]?.page.style['left']).toBe('100%');
+    expect(pages[3]?.page.style['left']).toBe('200%');
+    expect(pages[1]?.page.inert).toBe(true);
+    // One dot for each page that remains.
+    expect(dots.children.map((dot) => dot.style['display'])).toEqual([
+      '',
+      '',
+      '',
+      'none',
+    ]);
+    expect(api.go('clock')).toBe(false);
+    expect(api.go('info')).toBe(true);
+  });
+
+  it('moves to the first page that is left when the one on screen goes', () => {
+    const { api, advance, finishAnimations } = setup(4);
+    const seen: string[] = [];
+    api.onChange((page, previous) => seen.push(`${previous}>${page}`));
+    api.go('info');
+    advance(20);
+    finishAnimations();
+    advance(400);
+    expect(api.current()).toBe('info');
+    seen.length = 0;
+    expect(rules(api).setAvailable(['home', 'four'])).toBe(true);
+    expect(api.current()).toBe('home');
+    expect(seen).toEqual(['info>home']);
+  });
+
+  it('keeps the page on screen when the list changes around it', () => {
+    const { api, advance, finishAnimations } = setup(4);
+    api.go('info');
+    advance(20);
+    finishAnimations();
+    advance(400);
+    expect(rules(api).setAvailable(['info', 'four'])).toBe(true);
+    expect(api.current()).toBe('info');
+    expect(rules(api).ids()).toEqual(['info', 'four']);
+  });
+
+  it('brings every page back, and never leaves none', () => {
+    const { api, pages } = setup(4);
+    rules(api).setAvailable(['home']);
+    expect(rules(api).ids()).toEqual(['home']);
+    expect(rules(api).setAvailable(null)).toBe(true);
+    expect(rules(api).ids()).toEqual(['home', 'clock', 'info', 'four']);
+    expect(rules(api).setAvailable([])).toBe(true);
+    expect(rules(api).ids()).toHaveLength(4);
+    expect(pages.every(({ page }) => page.style['display'] === '')).toBe(true);
+  });
+
+  it('does not rearrange the pages under a finger', () => {
+    const { api, pages, pointer, advance } = setup(4);
+    pointer('pointerdown', pages[0]!.button, 600);
+    advance(16);
+    pointer('pointermove', pages[0]!.button, 500);
+    expect(rules(api).setAvailable(['home', 'four'])).toBe(false);
+    expect(rules(api).ids()).toHaveLength(4);
+    pointer('pointerup', pages[0]!.button, 500);
+    advance(50);
+    expect(rules(api).setAvailable(['home', 'four'])).toBe(true);
   });
 });

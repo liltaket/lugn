@@ -191,6 +191,8 @@ or replay pending device commands after restart.
 - [Music](docs/MUSIC.md) — presets, away gate, 23:00 rule and volume curve
 - [UI, Nest Hubs and DashCast](docs/UI.md) — custom dashboard and receiver
   lifecycle
+- [Hub rules](docs/HUB-RULES.md) — what each Hub shows depending on home/away,
+  the room, the computer and the time
 - [Integrations](docs/INTEGRATIONS.md) — Home Assistant, STL27L/MQTT and
   supported boundaries
 - [Configuration and persistence](docs/CONFIGURATION.md)

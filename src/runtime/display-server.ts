@@ -23,6 +23,15 @@ import {
   type CapabilityRegistry,
 } from '../application/capabilities.js';
 import type { LightingScene, RoomState } from '../core/schemas.js';
+import type { WeatherSnapshot } from '../adapters/home-assistant-weather.js';
+import type { ComputerStats } from '../adapters/computer-stats-mqtt.js';
+import type { GreetingsConfig } from '../core/greetings.js';
+import type { HubRule } from '../core/hub-rules.js';
+import { HubPolicyEngine } from '../application/hub-policy.js';
+import {
+  HubSettingError,
+  type HubSettingsService,
+} from '../application/hub-settings.js';
 import { lightingFeedbackBrowserScript } from './lighting-feedback-script.js';
 import {
   displayPayloadKey,
@@ -168,6 +177,13 @@ export type LugnDisplayServerOptions = {
   allowedHosts?: readonly string[];
   capabilities: CapabilityRegistry;
   presenceCountCorrectionAvailable?: boolean;
+  /** What each Hub shows, decided from the situation (docs/HUB-RULES.md). */
+  hubRules?: readonly HubRule[];
+  hubGreetings?: GreetingsConfig;
+  /** Home Assistant's weather and sun; omitted when none is configured. */
+  weatherProvider?: () => WeatherSnapshot;
+  /** Resource statistics from each desktop that is reporting them. */
+  computerStatsProvider?: () => Record<string, ComputerStats>;
   scenes: readonly LightingScene[];
   scenesProvider?: () => readonly LightingScene[];
   stateProvider: () => RoomState;
@@ -193,6 +209,8 @@ export type LugnDisplayServerOptions = {
   /** Optional 3D printer shown as a live activity while it prints. */
   printer?: PrinterActivityProvider;
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
+  /** The few settings a Hub may change, shown on its settings page. */
+  hubSettings?: HubSettingsService;
 };
 
 /** Only the hub resolved from the authenticated secret path supplies provenance. */
@@ -231,6 +249,15 @@ function displayResourceCategory(
     case '/pages.js':
     case '/page-views.js':
     case '/hub-history.js':
+    case '/hub-policy.js':
+    case '/presence-chip.css':
+    case '/presence-chip.js':
+    case '/greeting-page.css':
+    case '/greeting-page.js':
+    case '/computer-page.css':
+    case '/computer-page.js':
+    case '/settings-page.css':
+    case '/settings-page.js':
     case '/cameras-page.css':
     case '/cameras-page.js':
     case '/hub-probe.js':
@@ -256,12 +283,19 @@ export class LugnDisplayServer {
   private readonly pointerBridgeOrigins = new Map<string, string>();
 
   private readonly computerNowPlaying: ComputerNowPlayingSelector;
+  private readonly hubPolicy: HubPolicyEngine;
   private unsubscribeComputerObservations: (() => void) | undefined;
 
   constructor(private readonly options: LugnDisplayServerOptions) {
     this.computerNowPlaying =
       options.computerNowPlayingSelector ??
       new ComputerNowPlayingSelector(options.computerAudioMappings ?? {});
+    const { hubSettings } = options;
+    this.hubPolicy = new HubPolicyEngine(
+      options.hubRules ?? [],
+      options.hubGreetings,
+      hubSettings ? () => hubSettings.own() : undefined,
+    );
     validateOptions(options);
     for (const hub of options.hubs) {
       if (hub.pointerBridge)
@@ -808,6 +842,41 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'POST' &&
+        hubRequest.route === '/display-api/setting'
+      ) {
+        if (!isJsonRequest(request)) {
+          sendJson(response, 415, {
+            error: 'content_type_must_be_application_json',
+          });
+          return;
+        }
+        const settings = this.options.hubSettings;
+        if (!settings) {
+          sendJson(response, 503, { error: 'settings_unavailable' });
+          return;
+        }
+        const input = z
+          .object({
+            id: z.string().min(1).max(32),
+            value: z.union([z.boolean(), z.number().finite()]),
+          })
+          .strict()
+          .parse(await readJsonBody(request));
+        try {
+          const list = await settings.set(input.id, input.value);
+          console.info(
+            `[lugn] ${hubRequest.hub.role} Hub set ${input.id} to ${String(input.value)}`,
+          );
+          sendJson(response, 200, { settings: list });
+        } catch (error) {
+          if (error instanceof HubSettingError)
+            sendJson(response, 400, { error: error.code });
+          else sendJson(response, 502, { error: 'setting_save_failed' });
+        }
+        return;
+      }
+      if (
+        request.method === 'POST' &&
         hubRequest.route === '/display-api/scene'
       ) {
         await this.invokeScene(request, response, hubRequest.hub);
@@ -922,7 +991,27 @@ export class LugnDisplayServer {
       role: hub.role,
       presenceCountCorrectionAvailable:
         this.options.presenceCountCorrectionAvailable ?? false,
+      // Only with rules configured, so a Hub without any sees today's payload.
+      ...(this.hubPolicy.hasRules
+        ? {
+            hubPolicy: this.hubPolicy.evaluate(
+              hub,
+              state,
+              Date.now(),
+              this.options.environmentProvider?.().co2,
+            ),
+          }
+        : {}),
       castStatus: this.options.castStatus?.(hub.id) ?? { state: 'unknown' },
+      ...(this.options.weatherProvider
+        ? { weather: this.options.weatherProvider() }
+        : {}),
+      ...(this.options.computerStatsProvider
+        ? { computerStats: this.options.computerStatsProvider() }
+        : {}),
+      ...(this.options.hubSettings
+        ? { settings: this.options.hubSettings.list() }
+        : {}),
       environment:
         this.options.environmentProvider?.() ?? emptyEnvironmentSnapshot(),
       printer:
@@ -1485,6 +1574,15 @@ type UiAssetName =
   | 'photos-page.js'
   | 'page-views.js'
   | 'hub-history.js'
+  | 'hub-policy.js'
+  | 'presence-chip.css'
+  | 'presence-chip.js'
+  | 'greeting-page.css'
+  | 'greeting-page.js'
+  | 'computer-page.css'
+  | 'computer-page.js'
+  | 'settings-page.css'
+  | 'settings-page.js'
   | 'cameras-page.css'
   | 'cameras-page.js'
   | 'hub-probe.js';
@@ -1503,6 +1601,42 @@ const PAGE_ASSETS: ReadonlyMap<
   [
     '/page-views.js',
     { file: 'page-views.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  [
+    '/hub-policy.js',
+    { file: 'hub-policy.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  [
+    '/presence-chip.css',
+    { file: 'presence-chip.css', type: 'text/css; charset=utf-8' },
+  ],
+  [
+    '/presence-chip.js',
+    { file: 'presence-chip.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  [
+    '/greeting-page.css',
+    { file: 'greeting-page.css', type: 'text/css; charset=utf-8' },
+  ],
+  [
+    '/greeting-page.js',
+    { file: 'greeting-page.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  [
+    '/computer-page.css',
+    { file: 'computer-page.css', type: 'text/css; charset=utf-8' },
+  ],
+  [
+    '/computer-page.js',
+    { file: 'computer-page.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  [
+    '/settings-page.css',
+    { file: 'settings-page.css', type: 'text/css; charset=utf-8' },
+  ],
+  [
+    '/settings-page.js',
+    { file: 'settings-page.js', type: 'text/javascript; charset=utf-8' },
   ],
   [
     '/cameras-page.css',

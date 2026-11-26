@@ -84,8 +84,20 @@
     const cameras = Boolean(r?.cameraMenu) && r.cameraMenu.hidden !== true;
     hide(buttons.back, !controller.back);
     hide(buttons.next, !controller.actions?.next);
-    hide(buttons.music, controller.id === 'music');
-    hide(buttons.cameras, controller.id === 'kameror' || !cameras);
+    // A page that Hub rules have taken out of the pager has no button either.
+    const reachable = pagesApi.ids();
+    hide(
+      buttons.music,
+      controller.id === 'music' || !reachable.includes('music'),
+    );
+    // Kameror taken out by a rule: no way round it through Hem's camera menu.
+    const camerasBanned = Boolean(
+      pagesApi.all?.().includes('kameror') && !reachable.includes('kameror'),
+    );
+    hide(
+      buttons.cameras,
+      controller.id === 'kameror' || !cameras || camerasBanned,
+    );
     // A page may tint the selected scene with its own colour (Musik: the
     // cover's), as the three numbers of an rgb() colour.
     const rgb = controller.root?.style?.getPropertyValue?.('--nb-rgb') || '';

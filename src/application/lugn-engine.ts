@@ -3211,10 +3211,23 @@ export class LugnEngine {
     observedAt = this.clock.now(),
   ): Promise<void> {
     const normalized = HomePresenceSchema.parse(state);
-    const previous = this.state.presence.home.state;
+    const { state: previous, since: previousSince } = this.state.presence.home;
+    const arrivedAt =
+      previous === 'away' && normalized === 'home'
+        ? observedAt
+        : normalized === 'away'
+          ? null
+          : (this.state.presence.home.arrivedAt ?? null);
     this.state.presence.home = {
       state: normalized,
       observedAt: normalized === 'unknown' ? null : observedAt,
+      since:
+        normalized === 'unknown'
+          ? null
+          : normalized === previous && typeof previousSince === 'number'
+            ? previousSince
+            : observedAt,
+      arrivedAt,
     };
     this.musicAutomation.handleHomePresence(normalized);
     if (normalized === 'away' && previous !== 'away') {

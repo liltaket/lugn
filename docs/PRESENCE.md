@@ -24,6 +24,12 @@ off and pauses music. Home status `unknown` is not treated as away.
 When `away` clears to `home` or `unknown` while the room is occupied, lighting
 reconciles immediately, including at night, without another sensor entry.
 
+The state keeps when the status last changed (`presence.home.since`) and when
+the resident last came home (`arrivedAt`: `away` followed by `home`; a first
+answer after a restart, or one that follows `unknown`, is not an arrival, and
+leaving clears it). [Hub rules](HUB-RULES.md) use them, for example for what a
+screen shows during the first minutes at home.
+
 The gate applies to automation. Explicit dashboard scene, light and music
 requests remain usable while away. That lets a person intentionally control a
 room remotely without allowing a passer-by sensor event to reactivate it.
@@ -67,6 +73,12 @@ source of reported room state and automatic lighting/music decisions. The
 dashboard therefore confirms the ledger acknowledgement while waiting for
 sensor status. An unavailable sensor or invalid acknowledgement reports a
 failure; the control stays hidden when no URL is configured.
+
+On every Hub page except Hem, Info and Inställningar, the same correction is a small chip in
+the top left corner that is always there; when the sensor sees nobody, or Lugn
+is waiting out the exit grace, it says **Jag är här** or **Jag är kvar** with
+the seconds left and one tap sets the count to 1 (see
+[UI](UI.md#the-presence-chip)).
 
 ### Correction blackbox
 

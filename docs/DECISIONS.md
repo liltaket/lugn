@@ -81,6 +81,30 @@ The detailed presence/continuity path is included in this implementation because
 - deliberate external casting should temporarily override the dashboard.
 - The current runtime serves custom Bed/Desk Hub dashboards through DashCast and an optional Clerk-authenticated operational control panel; visual configuration editing remains future work.
 
+### Hub rules (2026-11)
+
+- What a Hub screen shows (which pages exist, which to bring up, brightness,
+  labels) is decided by declarative rules in `display.rules`, evaluated **on the
+  server** per Hub and sent as `hubPolicy`; the Hub only carries it out. One
+  evaluation means every Hub reads a rule the same way and time-based conditions
+  need no clock on a slow Hub. A Hub without rules gets today's payload.
+- Conditions are three-valued. A test over an unknown fact is neither true nor
+  false and a rule only applies when its condition is true, so unknown never acts
+  as away, empty or idle (the same rule as presence and home status).
+- `focus` is offered once per activation of a rule, named by a token, not held:
+  a person who swipes away is not pulled back. Dimming is a black sheet over the
+  page because a Cast receiver cannot dim its own panel.
+- Pages are the unit a rule controls. Parts of a page react to free `tags`
+  rather than each getting its own effect; an effect is added when several parts
+  need the same thing.
+- The presence chip is on every page but Hem and Info, not only when something
+  changes: the sensor is wrong exactly when it would not raise an event, so it
+  does not wait for one. The quiet count (to take 2 back to 1) is drawn only
+  while the navbar is open, so the pictures and the clock stay clean. **Jag är
+  här** / **Jag är kvar** come up on their own, navbar or not: if the sensor sees
+  nobody and nobody corrects it, nobody is there to mind. One tap, the same
+  `presence.setCountOne` as Hem.
+
 ### Computer
 
 - computer integration remains important.
