@@ -61,6 +61,15 @@
   pageEls.forEach((el, index) => {
     el.style.left = `${index * 100}%`;
   });
+  // Every page there is, in pager order. `pages` is the part of it the pager
+  // contains now (see setAvailable).
+  const allPages = pages.slice();
+  // Pages marked `data-conditional` are in the pager only when Hub rules let
+  // them in (hub-policy.js): a greeting belongs to a moment, the computer page
+  // to someone at the computer.
+  const usualPages = allPages.filter(
+    (page) => page.el.dataset.conditional === undefined,
+  );
 
   let width = window.innerWidth || 1024;
   let index = 0;
@@ -423,8 +432,12 @@
   function syncDots() {
     if (!dots) return;
     const children = dots.children;
-    for (let i = 0; i < children.length; i += 1)
+    for (let i = 0; i < children.length; i += 1) {
+      // One dot per page the pager contains.
+      const shown = i < pages.length;
+      if (children[i].style) children[i].style.display = shown ? '' : 'none';
       children[i].classList.toggle('current', i === index);
+    }
   }
 
   // ── Gestures ──
@@ -747,6 +760,53 @@
     return true;
   }
 
+  // Which pages the pager contains (hub-policy.js). A page that is left out is
+  // taken out of the track, not just hidden, so a swipe goes straight to the
+  // next page that is in; the pages that remain close up. `null` (or an empty
+  // list) brings back the usual pages, that is every page but the conditional
+  // ones. Returns false while a finger or the wheel
+  // is moving the pages: the caller asks again.
+  function setAvailable(ids) {
+    const wanted = Array.isArray(ids)
+      ? allPages.filter((page) => ids.includes(page.id))
+      : usualPages.slice();
+    if (!wanted.length) return setAvailable(null);
+    if (
+      wanted.length === pages.length &&
+      wanted.every((page, i) => page === pages[i])
+    )
+      return true;
+    if (gesture || wheel) return false;
+    stopAnimation(false);
+    window.clearTimeout(nearTimer);
+    const shown = pages[index];
+    pages.splice(0, pages.length, ...wanted);
+    for (const page of allPages) {
+      const out = !wanted.includes(page);
+      page.el.style.display = out ? 'none' : '';
+      if (out) setState(page, 'off');
+    }
+    wanted.forEach((page, i) => {
+      page.index = i;
+      page.el.style.left = `${i * 100}%`;
+    });
+    const kept = wanted.indexOf(shown);
+    index = kept >= 0 ? kept : 0;
+    offset = base(index);
+    drawn = NaN;
+    write(offset);
+    syncDots();
+    if (kept < 0) {
+      // The page on screen is gone: the first page that is left takes over.
+      announcements.push({ page: pages[0].id, previous: shown.id });
+      setState(pages[0], 'active');
+      enterCurrent();
+    }
+    syncStates();
+    announce();
+    return true;
+  }
+
   function onResize() {
     const next = window.innerWidth || width;
     if (next === width) return;
@@ -812,6 +872,7 @@
   });
   window.addEventListener('resize', onResize);
 
+  setAvailable(null);
   write(0);
   pages.forEach((page, i) => setState(page, i === 0 ? 'active' : 'off'));
   syncStates();
@@ -825,8 +886,11 @@
     go,
     current: () => pages[index].id,
     ids: () => pages.map((page) => page.id),
+    // Every page there is, including those Hub rules have taken out.
+    all: () => allPages.map((page) => page.id),
+    setAvailable,
     define(id, hooks) {
-      const page = pages.find((p) => p.id === id);
+      const page = allPages.find((p) => p.id === id);
       if (!page) return;
       page.hooks = hooks || {};
       if (page.state === 'near') callHook(page, 'prepare');

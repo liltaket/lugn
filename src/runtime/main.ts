@@ -27,6 +27,11 @@ import {
 import { HomeAssistantBilresaAdapter } from '../adapters/home-assistant-bilresa.js';
 import { AssistantEntitiesMqttAdapter } from '../adapters/assistant-entities-mqtt.js';
 import { HomeAssistantEnvironmentAdapter } from '../adapters/home-assistant-environment.js';
+import {
+  fetchDailyForecast,
+  HomeAssistantWeatherAdapter,
+} from '../adapters/home-assistant-weather.js';
+import { ComputerStatsMqttAdapter } from '../adapters/computer-stats-mqtt.js';
 import { HomeAssistantPrinterAdapter } from '../adapters/home-assistant-printer.js';
 import { PrinterActivityService } from './printer-activity-service.js';
 import { HomeAssistantHomePresenceAdapter } from '../adapters/home-assistant-home-presence.js';
@@ -51,6 +56,8 @@ import { PresenceEventIngress } from '../adapters/presence-event-ingress.js';
 import { ChimePlayer, warmChimes } from '../adapters/chime-player.js';
 import { PresenceFeedback } from '../application/presence-feedback.js';
 import { PresenceFeedbackSettingsStore } from './presence-feedback-settings-store.js';
+import { HubSettingsStore } from './hub-settings-store.js';
+import { HubSettingsService } from '../application/hub-settings.js';
 import {
   Stl27lMqttPresenceAdapter,
   type Stl27lPresenceMqttSubscriber,
@@ -257,6 +264,9 @@ export async function startRuntime(
     config.homeAssistant.environment,
     systemClock,
   );
+  const homeAssistantWeather = config.homeAssistant.weather
+    ? new HomeAssistantWeatherAdapter(config.homeAssistant.weather, systemClock)
+    : undefined;
   const homeAssistantPrinter = config.homeAssistant.printer
     ? new HomeAssistantPrinterAdapter(config.homeAssistant.printer, systemClock)
     : undefined;
@@ -829,6 +839,7 @@ export async function startRuntime(
     homeAssistantSwitch?.acceptStateChangedEvent(event);
     homeAssistantMusic?.acceptStateChangedEvent(event);
     homeAssistantEnvironment.acceptStateChangedEvent(event);
+    homeAssistantWeather?.acceptStateChangedEvent(event);
     homeAssistantPrinter?.acceptStateChangedEvent(event);
     for (const sensor of powerSensors.values())
       sensor.acceptStateChangedEvent(event);
@@ -867,6 +878,7 @@ export async function startRuntime(
           cameraSeed = states;
           for (const state of states) {
             homeAssistantSun.acceptState(state);
+            homeAssistantWeather?.acceptState(state);
             homeAssistantPrinter?.acceptState(state);
             for (const sensor of powerSensors.values())
               if (
@@ -958,6 +970,7 @@ export async function startRuntime(
   let mqttSubscriber: RuntimeMqttSubscriber | undefined;
   let sensorAdapter: Stl27lMqttPresenceAdapter | undefined;
   const computerAdapters: ComputerMqttAdapter[] = [];
+  const computerStatsAdapters: ComputerStatsMqttAdapter[] = [];
   let unsubscribeMqttStatus: (() => void) | undefined;
   let assistantEntities: AssistantEntitiesMqttAdapter | undefined;
   let unsubscribeAssistantEntities: (() => void) | undefined;
@@ -1002,6 +1015,13 @@ export async function startRuntime(
       },
     );
     for (const computer of config.mqtt.computers ?? []) {
+      computerStatsAdapters.push(
+        new ComputerStatsMqttAdapter(mqttSubscriber, {
+          deviceId: computer.deviceId,
+          baseTopic: computer.baseTopic,
+          clock: systemClock,
+        }),
+      );
       computerAdapters.push(
         new ComputerMqttAdapter(
           mqttSubscriber,
@@ -1180,6 +1200,8 @@ export async function startRuntime(
       sensorAdapter?.setBrokerConnected(status === 'connected');
       for (const adapter of computerAdapters)
         adapter.setBrokerConnected(status === 'connected');
+      for (const adapter of computerStatsAdapters)
+        adapter.setBrokerConnected(status === 'connected');
     });
   }
 
@@ -1211,6 +1233,18 @@ export async function startRuntime(
     castManager: DashCastManager | undefined;
     displayServer: LugnDisplayServer | undefined;
   } = { castManager: undefined, displayServer: undefined };
+  const hubSettingsStore = new HubSettingsStore(
+    `${lightingIntentPath}.hub-settings.json`,
+    (message) => console.warn(`[lugn] ${message}`),
+  );
+  const hubSettings = new HubSettingsService({
+    rules: config.display?.rules ?? [],
+    saved: await hubSettingsStore.load(),
+    save: (settings) => hubSettingsStore.save(settings),
+    presence: presenceFeedback,
+    display: displaySettings,
+    ...(cameraStore ? { camera: cameraStore } : {}),
+  });
   const covers = new SpotifyCovers();
   const displayServer = config.display
     ? new LugnDisplayServer({
@@ -1256,6 +1290,9 @@ export async function startRuntime(
         ...(photoLibrary ? { photoLibrary } : {}),
         experience,
         presenceCountCorrectionAvailable: config.presenceControl !== undefined,
+        hubRules: config.display.rules,
+        hubGreetings: config.display.greetings,
+        hubSettings,
         scenes: Array.from(engine.scenes.values()),
         scenesProvider: () => Array.from(engine.scenes.values()),
         stateProvider: () => engine.state,
@@ -1271,6 +1308,20 @@ export async function startRuntime(
         musicPlaybackPoliciesProvider: () =>
           engine.getMusicPlaybackPolicySnapshots(),
         environmentProvider: () => homeAssistantEnvironment.snapshot(),
+        ...(homeAssistantWeather
+          ? { weatherProvider: () => homeAssistantWeather.snapshot() }
+          : {}),
+        ...(computerStatsAdapters.length > 0
+          ? {
+              computerStatsProvider: () =>
+                Object.fromEntries(
+                  computerStatsAdapters.flatMap((adapter) => {
+                    const stats = adapter.snapshot();
+                    return stats ? [[adapter.id, stats] as const] : [];
+                  }),
+                ),
+            }
+          : {}),
         ...(homeAssistantPrinter
           ? {
               printer: new PrinterActivityService(
@@ -1327,9 +1378,30 @@ export async function startRuntime(
     : undefined;
   displayRefs.castManager = castManager;
 
+  let weatherTimer: ReturnType<typeof setInterval> | undefined;
   try {
     sensorAdapter?.start();
     for (const adapter of computerAdapters) adapter.start();
+    for (const adapter of computerStatsAdapters) adapter.start();
+    if (homeAssistantWeather && config.homeAssistant.weather) {
+      const weatherConfig = config.homeAssistant.weather;
+      // The daily forecast is a service answer, not a state: ask now and then.
+      const refreshForecast = async (): Promise<void> => {
+        const forecast = await fetchDailyForecast(
+          config.homeAssistant.baseUrl,
+          config.homeAssistant.token,
+          weatherConfig.entity,
+          homeAssistantFetch,
+        );
+        if (forecast) homeAssistantWeather.acceptForecast(forecast);
+      };
+      void refreshForecast();
+      weatherTimer = setInterval(
+        () => void refreshForecast(),
+        weatherConfig.forecastRefreshMinutes * 60_000,
+      );
+      weatherTimer.unref?.();
+    }
     for (const adapter of playbackAdapters.values()) adapter.start();
     for (const adapter of displayAdapters.values()) adapter.start();
     for (const adapter of opticalAdapters.values()) adapter.start();
@@ -1344,7 +1416,10 @@ export async function startRuntime(
       homeAssistantFetch,
       undefined,
       (states) => {
-        for (const state of states) homeAssistantSun.acceptState(state);
+        for (const state of states) {
+          homeAssistantSun.acceptState(state);
+          homeAssistantWeather?.acceptState(state);
+        }
       },
     );
     if (mqttSubscriber) mqttSubscriber.start();
@@ -1386,6 +1461,8 @@ export async function startRuntime(
     for (const controller of displayControllers.values()) controller.dispose();
     for (const sensor of powerSensors.values()) sensor.dispose();
     for (const adapter of computerAdapters) adapter.stop();
+    for (const adapter of computerStatsAdapters) adapter.stop();
+    if (weatherTimer) clearInterval(weatherTimer);
     unsubscribeAssistantEntities?.();
     await assistantEntities?.stop();
     unsubscribeMqttStatus?.();
@@ -1436,6 +1513,8 @@ export async function startRuntime(
         controller.dispose();
       for (const sensor of powerSensors.values()) sensor.dispose();
       for (const adapter of computerAdapters) adapter.stop();
+      for (const adapter of computerStatsAdapters) adapter.stop();
+      if (weatherTimer) clearInterval(weatherTimer);
       unsubscribeAssistantEntities?.();
       await assistantEntities?.stop();
       unsubscribeMqttStatus?.();

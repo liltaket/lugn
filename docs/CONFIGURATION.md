@@ -26,7 +26,17 @@ Current configuration covers:
   and the defaults for fast WiiM Optical switching (`opticalSwitch`, on by
   default), also tunable in the panel;
 - prelight targets and duration;
-- scenes and optional Bed/Desk Hub roles, Cast receiver addresses and tokens.
+- scenes and optional Bed/Desk Hub roles, Cast receiver addresses and tokens;
+- optional `display.rules`: what each Hub shows depending on home/away, the
+  room, the computer, the lamps, the music and the time (see
+  [Hub rules](HUB-RULES.md));
+- optional `homeAssistant.weather`: `{ "entity": "weather.home", "sun": "sun.sun",
+"forecastRefreshMinutes": 30 }`. Lugn reads the weather entity and the sun from
+  Home Assistant (no outside service) and asks it for the daily forecast with
+  `weather.get_forecasts`; the greeting page shows them. Absent: no weather
+  anywhere on the Hubs.
+- optional `display.greetings`: birthdays and days of your own for the greeting
+  page's skins (see [Hub rules](HUB-RULES.md#scenes-and-greeting-days)).
 
 The example uses `device_tracker.lustigkurre` for home presence. Change it to
 the correct entity for another installation. Explicit `away` gates automatic

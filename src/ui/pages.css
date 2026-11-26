@@ -138,8 +138,28 @@
 /* ── Info ── */
 .info-page {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 14px;
+}
+/* Look at a scene on this Hub without waiting for its rule (hub-policy.js). */
+.info-scenes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-right: 120px;
+}
+.info-scenes button {
+  min-height: 44px;
+  padding: 8px 16px;
+  border-radius: 22px;
+  border: 1px solid rgba(238, 241, 232, 0.14);
+  background: rgba(238, 241, 232, 0.055);
+  color: inherit;
+  font-size: 16px;
+}
+.info-scenes button[aria-pressed='true'] {
+  background: rgba(231, 188, 120, 0.22);
+  border-color: rgba(231, 188, 120, 0.5);
 }
 .info-head {
   display: flex;
@@ -545,4 +565,47 @@
 }
 .pages-notice[data-state='error'] {
   border-color: rgba(232, 120, 104, 0.7);
+}
+
+/* Hub rules (hub-policy.js): a black sheet over everything, since the Hub
+   cannot dim its own panel. Only its opacity changes, slowly, so a rule that
+   starts at night comes on like dusk, not like a switch. */
+.hub-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1200ms ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hub-dim {
+    transition: none;
+  }
+}
+
+/* ── Dags att vädra (the Hub rules' `vadra` tag) ──
+   Only where the air is already read: Hem's air line and the clock. */
+html[data-hub-tags~='vadra'] #app-root .environment-metric[data-metric='co2'] {
+  align-items: baseline;
+  margin: -5px -12px;
+  padding: 5px 12px;
+  border-radius: 18px;
+  background: rgba(231, 188, 120, 0.16);
+}
+html[data-hub-tags~='vadra'] #app-root [data-metric='co2']::after {
+  content: 'Vädra';
+  margin-left: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+}
+html[data-hub-tags~='vadra'] .clock-page-air [data-metric='co2'] dd {
+  color: #e7bc78;
+}
+html[data-hub-tags~='vadra'] .clock-page-air [data-metric='co2']::after {
+  content: 'Dags att vädra';
+  font-size: 16px;
+  color: #e7bc78;
 }

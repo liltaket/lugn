@@ -290,6 +290,7 @@ const retiredInstances = new Set();
 const UNSTABLE_FIELDS =
   /"(?:deliveryRevision|generatedAt|revision|updatedAt|evaluatedAt)":\d+/g;
 let drawnStreamKey = '';
+let reloadForNewInstance = 0;
 
 function acceptPayload(payload, streamKey = '') {
   if (
@@ -305,6 +306,14 @@ function acceptPayload(payload, streamKey = '') {
     payload.instanceId !== currentInstanceId
   ) {
     if (retiredInstances.has(payload.instanceId)) return false;
+    // A Lugn that has restarted may have newer pages than this one: load them.
+    // The new page starts without an instance, so this cannot repeat.
+    if (currentInstanceId && !reloadForNewInstance) {
+      reloadForNewInstance = window.setTimeout(
+        () => globalThis.location?.reload?.(),
+        1500,
+      );
+    }
     if (currentInstanceId) retiredInstances.add(currentInstanceId);
     if (retiredInstances.size > 16)
       retiredInstances.delete(retiredInstances.values().next().value);
@@ -3201,6 +3210,8 @@ function render(payload, force = false) {
   renderCamera(payload);
   renderPrinter(payload);
   setClock(true);
+  // Hub rules: what this Hub shows is decided by the server.
+  globalThis.lugnHubPolicy?.apply(payload?.hubPolicy);
   // The other pages draw what changed now, rather than at their next tick.
   if (typeof Event === 'function')
     window.dispatchEvent?.(new Event('lugn:payload'));
@@ -3239,6 +3250,8 @@ function renderPresenceCorrection(payload) {
     `${observed}${available ? '. Tryck för att sätta till 1 person' : '. Korrigering ej tillgänglig'}`,
   );
   refs.clockTop.dataset.correction = String(available);
+  // The same facts, for the chip on the other pages.
+  globalThis.lugnPresenceChip?.render(payload);
   if (
     presenceAcknowledgedKey !== null &&
     JSON.stringify(presence) !== presenceAcknowledgedKey

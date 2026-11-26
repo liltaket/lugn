@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="./lyrics-view.css" />
     <script src="./lyrics-view.js" defer></script>
     <script src="./page-views.js" defer></script>
+    <script src="./hub-policy.js" defer></script>
     <link rel="stylesheet" href="./cameras-page.css" />
     <script src="./cameras-page.js" defer></script>
     <link rel="stylesheet" href="./quick-menu.css" />
@@ -20,6 +21,14 @@
     <link rel="stylesheet" href="./photos-page.css" />
     <script src="./photos-page.js" defer></script>
     <script src="./hub-history.js" defer></script>
+    <link rel="stylesheet" href="./presence-chip.css" />
+    <script src="./presence-chip.js" defer></script>
+    <link rel="stylesheet" href="./greeting-page.css" />
+    <script src="./greeting-page.js" defer></script>
+    <link rel="stylesheet" href="./computer-page.css" />
+    <script src="./computer-page.js" defer></script>
+    <link rel="stylesheet" href="./settings-page.css" />
+    <script src="./settings-page.js" defer></script>
   </head>
   <body>
     <!-- Pages (pages.js): the existing dashboard is the first page, Hem.
@@ -679,6 +688,9 @@
       </section>
     </div>
     </section>
+    <section class="hub-page" data-page="halsning" data-conditional aria-label="Hälsning">
+      <div class="page-canvas greeting-page" data-view="greeting"></div>
+    </section>
     <section class="hub-page" data-page="music" aria-label="Musik">
       <div class="page-canvas music-page" data-view="root" data-playing="false" data-ready="false">
         <div class="music-page-backdrop" aria-hidden="true">
@@ -763,14 +775,21 @@
         <span class="clock-page-presence" data-view="presence"></span>
       </div>
     </section>
+    <section class="hub-page" data-page="dator" data-conditional aria-label="Dator">
+      <div class="page-canvas computer-page" data-view="computer"></div>
+    </section>
     <section class="hub-page" data-page="info" aria-label="Info">
       <div class="page-canvas info-page">
         <header class="info-head">
           <h2>Info</h2>
           <button type="button" data-view="probe">Mät svep</button>
         </header>
+        <div class="info-scenes" data-view="scenes" aria-label="Förhandsvisa"></div>
         <dl class="info-grid" data-view="facts"></dl>
       </div>
+    </section>
+    <section class="hub-page" data-page="installningar" aria-label="Inställningar">
+      <div class="page-canvas settings-page" data-view="settings"></div>
     </section>
     </div>
     <nav class="hub-nav" id="hub-nav" data-page="" aria-label="Navigering">
@@ -800,8 +819,18 @@
         <div class="scene-dock" data-view="dock" aria-label="Ljuslägen"></div>
       </div>
     </nav>
+    <div class="presence-chip" id="presence-chip" data-mode="steady" hidden>
+      <button type="button" class="pc-button">
+        <svg class="pc-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="7" r="3.25" /><path d="M5.5 20v-2a6.5 6.5 0 0 1 13 0v2" /></svg>
+        <span class="pc-count" aria-hidden="true">?</span>
+        <span class="pc-label"></span>
+        <span class="pc-time" aria-hidden="true"></span>
+        <i class="pc-bar" aria-hidden="true"></i>
+      </button>
+    </div>
     <div class="pages-notice" id="pages-notice" role="status" aria-live="polite" hidden></div>
-    <div class="hub-dots" id="hub-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="hub-dim" id="hub-dim" aria-hidden="true" hidden></div>
+    <div class="hub-dots" id="hub-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
     </div>
   </body>
 </html>

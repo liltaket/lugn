@@ -34,6 +34,12 @@ The process of repeatedly checking and nudging devices until observed state matc
 
 The final target after baseline desired state and valid overrides are combined.
 
+## Hub rule
+
+A configured condition and its effects on what a Hub screen shows: pages, a page
+to bring up, brightness and labels. Evaluated on the server from facts about the
+home, the room, the computer and the time. See [Hub rules](HUB-RULES.md).
+
 ## Fast path
 
 The minimal latency-sensitive path used for actions such as entry/prelight lighting.

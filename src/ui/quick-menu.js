@@ -90,7 +90,12 @@
     const cameras = Boolean(r?.cameraMenu) && r.cameraMenu.hidden !== true;
     hide(buttons.back, !controller.back);
     hide(buttons.next, !controller.actions?.next);
-    hide(buttons.music, controller.id === 'music');
+    // A page that Hub rules have taken out of the pager has no button either.
+    const reachable = pagesApi.ids();
+    hide(
+      buttons.music,
+      controller.id === 'music' || !reachable.includes('music'),
+    );
     // Musik's own switch between the cover and the lyrics.
     const lyrics = controller.id === 'music' ? globalThis.lugnLyrics : null;
     hide(buttons.lyrics, !lyrics);
@@ -109,7 +114,14 @@
     hide(buttons.lyricsFull, !timed);
     if (timed)
       buttons.lyricsFull?.setAttribute('aria-pressed', String(lyrics.full()));
-    hide(buttons.cameras, controller.id === 'kameror' || !cameras);
+    // Kameror taken out by a rule: no way round it through Hem's camera menu.
+    const camerasBanned = Boolean(
+      pagesApi.all?.().includes('kameror') && !reachable.includes('kameror'),
+    );
+    hide(
+      buttons.cameras,
+      controller.id === 'kameror' || !cameras || camerasBanned,
+    );
     place();
     // A page may tint the selected scene with its own colour (Musik: the
     // cover's), as the three numbers of an rgb() colour.
