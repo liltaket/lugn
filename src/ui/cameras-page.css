@@ -16,7 +16,14 @@
   top: 12px;
   bottom: 28px;
 }
+/* With the navbar open the grid stands between its two rows (the script lays
+   the tiles out again and moves them there). */
+.cams-page.menu-open .cams-stage {
+  top: 84px;
+  bottom: 106px;
+}
 .cams-tile {
+  transform-origin: 0 0;
   position: absolute;
   padding: 0;
   min-height: 0;

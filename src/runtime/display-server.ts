@@ -4,6 +4,7 @@ import type { CameraMediaProvider } from './camera-media.js';
 import type { PhotoLibrary } from './photo-library.js';
 import {
   ComputerNowPlayingSelector,
+  type ComputerNowPlaying,
   type ComputerAudioRoute,
 } from '../application/computer-now-playing.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
@@ -42,6 +43,9 @@ import type {
 } from '../application/music-automation.js';
 import type { StateEventStream } from '../core/event-stream.js';
 import type { ArtworkProvider } from '../core/artwork.js';
+import type { LyricsProvider, LyricsTrack } from '../core/lyrics.js';
+import type { PlayheadProvider } from './wiim-playhead.js';
+import type { CoverProvider } from './spotify-covers.js';
 import {
   PrinterLightUnavailableError,
   type PrinterActivityProvider,
@@ -67,6 +71,7 @@ const MAX_REQUEST_BYTES = 8 * 1024;
 /** One phase of the on-device profile (src/ui/hub-probe.js), logged as is. */
 const PROBE_PHASES = [
   'info',
+  'lyrics',
   'cpu',
   'idle',
   'bare',
@@ -184,6 +189,14 @@ export type LugnDisplayServerOptions = {
     MusicPlaybackPolicySnapshot
   >;
   artworkProvider?: ArtworkProvider;
+  /** Timed lyrics for the Hubs' music page, asked for only when shown. */
+  lyrics?: LyricsProvider;
+  /** The players' own position, where it can be read directly. */
+  playhead?: PlayheadProvider;
+  /** Covers ready to serve as soon as a track is seen. */
+  covers?: CoverProvider;
+  /** Players whose computer input may use the computer's Spotify cover. */
+  computerCoverTargets?: ReadonlySet<string>;
   experience?: ExperienceApi;
   cameraService?: CameraDashboardService;
   cameraMedia?: CameraMediaProvider;
@@ -194,6 +207,20 @@ export type LugnDisplayServerOptions = {
   printer?: PrinterActivityProvider;
   castStatus?: (hubId: string) => LugnDisplayCastStatus;
 };
+
+function playerTrack(player: {
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  durationSeconds: number;
+}): LyricsTrack {
+  return {
+    title: player.title ?? '',
+    artist: player.artist ?? '',
+    ...(player.album ? { album: player.album } : {}),
+    durationSeconds: player.durationSeconds,
+  };
+}
 
 /** Only the hub resolved from the authenticated secret path supplies provenance. */
 function hubProvenance(hub: LugnDisplayHub) {
@@ -230,6 +257,8 @@ function displayResourceCategory(
     case '/pages.css':
     case '/pages.js':
     case '/page-views.js':
+    case '/lyrics-view.css':
+    case '/lyrics-view.js':
     case '/hub-history.js':
     case '/cameras-page.css':
     case '/cameras-page.js':
@@ -257,6 +286,8 @@ export class LugnDisplayServer {
 
   private readonly computerNowPlaying: ComputerNowPlayingSelector;
   private unsubscribeComputerObservations: (() => void) | undefined;
+  private readonly computerTracks = new Map<string, LyricsTrack>();
+  private readonly prefetched = new Map<string, string>();
 
   constructor(private readonly options: LugnDisplayServerOptions) {
     this.computerNowPlaying =
@@ -700,6 +731,105 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'GET' &&
+        hubRequest.route.startsWith('/display-api/playhead/')
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        // `/lyrics` says the page shows lyrics: only then is a new track
+        // sent to the lyrics source ahead of the page asking.
+        const rest = hubRequest.route.slice('/display-api/playhead/'.length);
+        const wantsLyrics = rest.endsWith('/lyrics');
+        const target = wantsLyrics ? rest.slice(0, -'/lyrics'.length) : rest;
+        const state = this.options.stateProvider();
+        if (!Object.hasOwn(state.music.devices, target)) {
+          sendJson(response, 404, { error: 'playhead_unavailable' });
+          return;
+        }
+        const asked = performance.now();
+        // Someone is looking: the way to the covers is kept open.
+        this.options.covers?.keepWarm();
+        const playhead = await this.playhead(
+          state,
+          target,
+          wantsLyrics,
+          `${this.pathForHub(hubRequest.hub.id)}display-api/player-art/`,
+        );
+        sendJson(response, 200, {
+          ...playhead,
+          // Time spent here (asking the player), for the page's own timing.
+          held: Math.round(performance.now() - asked),
+        });
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        hubRequest.route.startsWith('/display-api/player-art/')
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        const asset = this.options.covers?.get(
+          hubRequest.route.slice('/display-api/player-art/'.length),
+        );
+        if (!asset) {
+          sendJson(response, 404, { error: 'artwork_unavailable' });
+          return;
+        }
+        // The id names one image for good.
+        response.writeHead(200, {
+          'cache-control': 'private, max-age=86400, immutable',
+          'content-type': asset.contentType,
+          'content-length': asset.body.byteLength,
+          'x-content-type-options': 'nosniff',
+          'cross-origin-resource-policy': 'same-origin',
+        });
+        response.end(asset.body);
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        hubRequest.route.startsWith('/display-api/lyrics/')
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        const target = hubRequest.route.slice('/display-api/lyrics/'.length);
+        const state = this.options.stateProvider();
+        if (
+          !this.options.lyrics ||
+          !Object.hasOwn(state.music.devices, target)
+        ) {
+          sendJson(response, 404, { error: 'lyrics_unavailable' });
+          return;
+        }
+        const track = await this.lyricsTrack(state, target);
+        sendJson(
+          response,
+          200,
+          track
+            ? {
+                ...(await this.options.lyrics.lookup(track)),
+                track: { title: track.title, artist: track.artist },
+              }
+            : { status: 'none' },
+        );
+        return;
+      }
+      if (
+        request.method === 'GET' &&
         hubRequest.route === '/display-api/state'
       ) {
         const sourceAddress = request.socket.remoteAddress ?? 'unknown';
@@ -890,15 +1020,186 @@ export class LugnDisplayServer {
     return current.count <= PROBE_REPORTS_PER_MINUTE;
   }
 
+  /**
+   * The track the page shows for a player: behind a computer input the
+   * computer's media, otherwise the player's own. The page never names it, so
+   * a Hub cannot have anything else looked up.
+   */
+  private async lyricsTrack(
+    state: RoomState,
+    target: string,
+  ): Promise<LyricsTrack | undefined> {
+    const computer = this.computerNowPlaying.snapshot(state)[target];
+    if (computer) {
+      // A paused computer reports no media; the page keeps showing the last.
+      if (computer.status === 'playing' && computer.title && computer.artist) {
+        const track = {
+          title: computer.title,
+          artist: computer.artist,
+          ...(computer.durationSeconds === undefined
+            ? {}
+            : { durationSeconds: computer.durationSeconds }),
+        };
+        this.computerTracks.set(target, track);
+        return track;
+      }
+      return computer.status === 'idle'
+        ? this.computerTracks.get(target)
+        : undefined;
+    }
+    const player = await this.options.playhead?.read(target);
+    if (player?.title && player.artist) return playerTrack(player);
+    const observed = state.music.devices[target]?.observed;
+    const title = observed?.title?.trim();
+    const artist = observed?.artist?.trim();
+    if (!title || !artist) return undefined;
+    return {
+      title,
+      artist,
+      ...(observed?.album?.trim() ? { album: observed.album.trim() } : {}),
+      ...(observed?.durationSeconds === undefined
+        ? {}
+        : { durationSeconds: observed.durationSeconds }),
+    };
+  }
+
+  /**
+   * Where the shown track is, as of this answer: the computer's media behind a
+   * computer input, the player's own report where it can be read, and else the
+   * last report extrapolated (`coarse`: whole seconds through Home Assistant).
+   */
+  private async playhead(
+    state: RoomState,
+    target: string,
+    wantsLyrics: boolean,
+    artPrefix: string,
+  ) {
+    const since = (at: number) => Math.max(0, (Date.now() - at) / 1000);
+    const computer = this.computerNowPlaying.snapshot(state)[target];
+    if (computer) {
+      const { positionSeconds, positionUpdatedAt } = computer;
+      if (
+        computer.status !== 'playing' ||
+        positionSeconds === undefined ||
+        positionUpdatedAt === undefined
+      )
+        return { source: 'none' as const };
+      const art = this.computerCover(state, target);
+      return {
+        source: 'computer' as const,
+        playing: true,
+        position: positionSeconds + since(positionUpdatedAt),
+        duration: computer.durationSeconds,
+        ...(computer.title && computer.artist
+          ? { track: { title: computer.title, artist: computer.artist } }
+          : {}),
+        ...(art ? { art: `${artPrefix}${art}` } : {}),
+      };
+    }
+    const player = await this.options.playhead?.read(target);
+    if (player) {
+      const age = (this.options.playhead!.now() - player.measuredAt) / 1000;
+      const track = playerTrack(player);
+      if (wantsLyrics) this.prefetchLyrics(target, track);
+      return {
+        source: 'player' as const,
+        playing: player.playing,
+        position: player.positionSeconds + (player.playing ? age : 0),
+        duration: player.durationSeconds,
+        ...(player.title && player.artist
+          ? { track: { title: player.title, artist: player.artist } }
+          : {}),
+        ...(player.art ? { art: `${artPrefix}${player.art}` } : {}),
+      };
+    }
+    const observed = state.music.devices[target]?.observed;
+    if (
+      observed?.positionSeconds === undefined ||
+      observed.positionUpdatedAt === undefined
+    )
+      return { source: 'none' as const };
+    const playing = observed.playback === 'playing';
+    return {
+      source: 'coarse' as const,
+      playing,
+      position:
+        observed.positionSeconds +
+        (playing ? since(observed.positionUpdatedAt) : 0),
+      duration: observed.durationSeconds,
+    };
+  }
+
+  /**
+   * The cover of the computer's playing Spotify media, where the player's input
+   * allows it: its id once it is here, and asked for the moment it is seen.
+   */
+  private computerCover(state: RoomState, target: string): string | undefined {
+    const { covers, computerCoverTargets } = this.options;
+    if (!covers || !computerCoverTargets?.has(target)) return undefined;
+    const art = this.computerNowPlaying.selectedMedia(state, target)?.artwork;
+    if (art?.provider !== 'spotify') return undefined;
+    covers.want(art.id);
+    return covers.get(art.id) ? art.id : undefined;
+  }
+
+  /**
+   * What each player plays, as the page may show it before Home Assistant
+   * says so. A change is pushed to the Hubs, which then ask for the position.
+   */
+  private nowPlaying(
+    state: RoomState,
+    computers: Record<string, ComputerNowPlaying>,
+    artPrefix: string,
+  ) {
+    const result: Record<
+      string,
+      { title: string; artist: string | null; art?: string }
+    > = {};
+    for (const target of Object.keys(state.music.devices)) {
+      const computer = computers[target];
+      const player = computer
+        ? undefined
+        : this.options.playhead?.peek?.(target);
+      const title = computer
+        ? computer.status === 'playing'
+          ? computer.title
+          : null
+        : player?.title;
+      if (!title) continue;
+      const art = computer ? this.computerCover(state, target) : player?.art;
+      result[target] = {
+        title,
+        artist: (computer ? computer.artist : player?.artist) ?? null,
+        ...(art ? { art: `${artPrefix}${art}` } : {}),
+      };
+    }
+    return result;
+  }
+
+  /** A new track's lines are asked for before any page asks. */
+  private prefetchLyrics(target: string, track: LyricsTrack): void {
+    if (!this.options.lyrics || !track.title || !track.artist) return;
+    const key = JSON.stringify([track.title, track.artist]);
+    if (this.prefetched.get(target) === key) return;
+    this.prefetched.set(target, key);
+    void this.options.lyrics.lookup(track).catch(() => undefined);
+  }
+
   private snapshot(hub: LugnDisplayHub) {
     const state = this.options.stateProvider();
+    const computers = this.computerNowPlaying.snapshot(state);
     return {
       state: displayState(state),
       ...(this.options.cameraMedia
         ? { cameraDashboard: this.cameraSnapshot(hub) }
         : {}),
       ...this.options.experience?.snapshot(),
-      computerNowPlaying: this.computerNowPlaying.snapshot(state),
+      computerNowPlaying: computers,
+      nowPlaying: this.nowPlaying(
+        state,
+        computers,
+        `${this.pathForHub(hub.id)}display-api/player-art/`,
+      ),
       musicTrackControl: musicTrackControl(
         state,
         this.options.computerAudioMappings ?? {},
@@ -991,6 +1292,9 @@ export class LugnDisplayServer {
     const unsubscribe = stream.subscribe(scheduleSend);
     const unsubscribeArtwork =
       this.options.artworkProvider?.subscribe?.(scheduleSend);
+    const unsubscribeCovers = this.options.covers?.subscribe(scheduleSend);
+    const unsubscribePlayhead =
+      this.options.playhead?.subscribe?.(scheduleSend);
     const unsubscribeExperience =
       this.options.experience?.subscribe(scheduleSend);
     const unsubscribeCamera = this.options.cameraMedia?.subscribe(scheduleSend);
@@ -999,6 +1303,8 @@ export class LugnDisplayServer {
     response.once('close', () => {
       unsubscribe();
       unsubscribeArtwork?.();
+      unsubscribeCovers?.();
+      unsubscribePlayhead?.();
       unsubscribeExperience?.();
       unsubscribeCamera?.();
       unsubscribePrinter?.();
@@ -1484,6 +1790,8 @@ type UiAssetName =
   | 'photos-page.css'
   | 'photos-page.js'
   | 'page-views.js'
+  | 'lyrics-view.css'
+  | 'lyrics-view.js'
   | 'hub-history.js'
   | 'cameras-page.css'
   | 'cameras-page.js'
@@ -1511,6 +1819,14 @@ const PAGE_ASSETS: ReadonlyMap<
   [
     '/cameras-page.js',
     { file: 'cameras-page.js', type: 'text/javascript; charset=utf-8' },
+  ],
+  [
+    '/lyrics-view.css',
+    { file: 'lyrics-view.css', type: 'text/css; charset=utf-8' },
+  ],
+  [
+    '/lyrics-view.js',
+    { file: 'lyrics-view.js', type: 'text/javascript; charset=utf-8' },
   ],
   [
     '/quick-menu.css',

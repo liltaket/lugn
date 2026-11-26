@@ -506,6 +506,9 @@
   let barKey = '';
   let barAnimation = null;
   let musicShown = false;
+  const COVER_WAIT_MS = 3_000;
+  let aheadTitle = '';
+  let aheadSince = 0;
   // The action the play button shows; a press sends exactly this.
   let shownPlayAction = 'playing';
 
@@ -545,36 +548,60 @@
       r?.musicPlayback?.disabled === false;
     const computerControl = (flag) =>
       onComputer && connected && !desktop.pending && desktop[flag] === true;
+    // The player says what it plays well before Hem hears of it (and where
+    // it can be asked): its track and cover then lead.
+    const player = active ? globalThis.lugnLyrics?.player(target) : null;
+    const hemName = hemTitle(r).title.replace(/…$/, '').trimEnd();
+    const ahead = Boolean(player) && !player.title.startsWith(hemName);
+    // The dashboard is normally seconds behind; longer than this and its
+    // cover is the better one to show than the last track's.
+    if (!ahead || aheadTitle !== player.title) {
+      aheadTitle = ahead ? player.title : '';
+      aheadSince = performance.now();
+    }
+    const waiting = ahead && performance.now() - aheadSince < COVER_WAIT_MS;
     const progress =
-      typeof musicProgress === 'object' && musicProgress
-        ? { ...musicProgress }
-        : null;
+      ahead && player.progress
+        ? player.progress
+        : typeof musicProgress === 'object' && musicProgress
+          ? { ...musicProgress }
+          : null;
+    const hemArt = artReady
+      ? r.musicArtworkImage.getAttribute('src') || ''
+      : r?.musicArtwork?.dataset.state === 'loading'
+        ? null
+        : '';
     return {
       ready: Boolean(data),
       active,
-      title: active ? hemTitle(r).title : 'Ingen musik spelar',
+      title: !active
+        ? 'Ingen musik spelar'
+        : player
+          ? player.title
+          : hemTitle(r).title,
       // Last played: Hem's receiver title says so, or (computer media) its
       // status line.
       lastPlayed:
         active &&
+        !ahead &&
         (hemTitle(r).lastPlayed ||
           r?.musicPlayerStatus?.textContent?.trim() === 'Senast spelat'),
       // When the card has gone (no music, or the pause has run out) nothing of
       // the last track stays: no artist and no cover.
-      artist:
-        active && r?.musicArtist && !r.musicArtist.hidden
+      artist: player
+        ? player.artist
+        : active && r?.musicArtist && !r.musicArtist.hidden
           ? r.musicArtist.textContent.trim()
           : '',
       source: active ? r?.musicSource?.textContent?.trim() || '' : '',
       // While Hem loads a new cover, keep what is shown (null) rather than
       // flashing the empty cover.
+      // With the player ahead, Hem's cover is the last track's.
       art: !active
         ? ''
-        : artReady
-          ? r.musicArtworkImage.getAttribute('src') || ''
-          : active && r?.musicArtwork?.dataset.state === 'loading'
-            ? null
-            : '',
+        : player
+          ? (player.art ?? (waiting ? null : hemArt))
+          : hemArt,
       // Hem's own play button label says what a press does there (Pausa
       // only when a press pauses; a manual pause on a player that still
       // reports playing reads Spela).
@@ -613,7 +640,7 @@
     const state = musicState();
     // The cover URL (possibly a long data: URL of Hem's trimmed cover) is
     // compared on its own, not serialised into the key every second.
-    drawCover(state.art);
+    drawCover(state.art, state.active, state.title);
     const key = JSON.stringify({
       ...state,
       art: undefined,
@@ -666,6 +693,25 @@
     drawVolume(state.volume, state.canVolume);
     drawProgress(state.progress);
     drawSeek(state.progress, state.canSeek && state.active, state.title);
+    drawLyrics(state);
+  }
+
+  // The lyrics (lyrics-view.js) follow the same track and position as the
+  // controls beside them.
+  function drawLyrics(state) {
+    globalThis.lugnLyrics?.draw({
+      target: currentTarget(),
+      shown: musicShown,
+      ready: state.ready,
+      active: state.active,
+      title: state.title,
+      artist: state.artist,
+      progress: state.progress,
+      playing: state.playing,
+      // The server's own word on the track: a change is asked about at once.
+      announced: payload()?.nowPlaying?.[currentTarget()],
+      serverNow,
+    });
   }
 
   // Hem's choices in Hem's order, disabled and busy as there.
@@ -1047,6 +1093,7 @@
         target,
         request: { property: 'seek', value: position },
       });
+      globalThis.lugnLyrics?.seek(position);
       drawMusic();
     },
     restore: () => {
@@ -1076,73 +1123,115 @@
     );
   }
 
-  // Musik's own image decides what its cover shows. A new cover is decoded
-  // first and then faded in over the old one, so a track change never shows
-  // an empty square; a failed one falls back to the note.
+  // Musik's own images decide what its cover shows. A new cover is loaded
+  // and decoded in the hidden one of two images, then faded in over the shown
+  // one, so a track change never shows an empty square.
+  const COVER_MS = 240;
+  // The backdrop is drawn once the new cover has started to show.
+  const BACKDROP_AFTER_MS = 40;
+  // A track without a cover keeps the last one this long before it goes.
+  const NO_COVER_MS = 5_000;
   let coverRequest = 0;
   let coverUrl = '';
+  let coverFront = null;
+  let noCoverTimer = 0;
+  // A picture that fails is tried again at the next draw, this many times.
+  const COVER_TRIES = 3;
+  let failedUrl = '';
+  let failures = 0;
   function resetAccent() {
     const root = view('music', 'root');
     root.style.removeProperty('--music-accent');
     root.style.removeProperty('--nb-rgb');
   }
 
-  function drawCover(url) {
-    if (url === null || url === coverUrl) return;
-    coverUrl = url;
-    const request = ++coverRequest;
-    const cover = view('music', 'cover');
+  function emptyCover() {
+    coverFront = null;
+    view('music', 'art').hidden = true;
+    view('music', 'art-prev').hidden = true;
+    for (const name of ['backdrop', 'backdrop-next']) {
+      const canvas = view('music', name);
+      if (canvas) canvas.hidden = true;
+    }
+    view('music', 'cover').dataset.state = 'missing';
+    resetAccent();
+  }
+
+  // `keep` while music still plays: the next cover is usually moments away.
+  // `track` names whose cover it is: the same track's picture from another
+  // place fades in without the small zoom a new track's has.
+  let coverTrack = '';
+  function drawCover(url, keep = false, track = '') {
+    if (url === null) return;
     if (!url) {
-      view('music', 'art').hidden = true;
-      view('music', 'art-prev').hidden = true;
-      view('music', 'backdrop').hidden = true;
-      cover.dataset.state = 'missing';
-      resetAccent();
+      if (keep && coverFront) {
+        if (!noCoverTimer)
+          noCoverTimer = window.setTimeout(() => {
+            noCoverTimer = 0;
+            coverUrl = '';
+            coverRequest += 1;
+            emptyCover();
+          }, NO_COVER_MS);
+        return;
+      }
+      window.clearTimeout(noCoverTimer);
+      noCoverTimer = 0;
+      if (coverUrl === '' && !coverFront) return;
+      coverUrl = '';
+      coverRequest += 1;
+      emptyCover();
       return;
     }
+    window.clearTimeout(noCoverTimer);
+    noCoverTimer = 0;
+    if (url === coverUrl) return;
+    coverUrl = url;
+    const asked = performance.now();
+    const request = ++coverRequest;
+    const cover = view('music', 'cover');
     if (cover.dataset.state !== 'available') cover.dataset.state = 'loading';
-    const next = new Image();
-    next.decoding = 'async';
-    next.src = url;
+    const images = [view('music', 'art'), view('music', 'art-prev')];
+    const next = images.find((image) => image !== coverFront);
+    next.hidden = true;
+    next.setAttribute('src', url);
     const shown = () => {
       if (request !== coverRequest) return;
-      const art = view('music', 'art');
-      const prev = view('music', 'art-prev');
-      // The old cover stays underneath while the new one fades in over it.
-      const crossfade =
-        musicShown &&
-        !calm &&
-        !art.hidden &&
-        art.getAttribute('src') &&
-        typeof art.animate === 'function';
-      if (crossfade) {
-        prev.setAttribute('src', art.getAttribute('src'));
-        prev.hidden = false;
-      }
-      art.setAttribute('src', url);
-      art.hidden = false;
+      const last = coverFront;
+      coverFront = next;
+      next.style.zIndex = '2';
+      if (last) last.style.zIndex = '1';
+      next.hidden = false;
       cover.dataset.state = 'available';
-      drawBackdrop(next, crossfade);
-      if (musicShown && !calm && typeof art.animate === 'function') {
-        const fade = art.animate(
-          [
-            { opacity: 0, transform: 'scale(1.04)' },
-            { opacity: 1, transform: 'none' },
-          ],
-          { duration: 480, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
-        );
-        fade.onfinish = () => {
-          if (request === coverRequest) prev.hidden = true;
-        };
-      } else prev.hidden = true;
+      const moving = musicShown && !calm && typeof next.animate === 'function';
+      const arriving = track !== coverTrack;
+      coverTrack = track;
+      if (musicShown)
+        globalThis.lugnLyrics?.coverTook?.(performance.now() - asked);
+      if (!moving) {
+        drawBackdrop(next, false);
+        if (last) last.hidden = true;
+        return;
+      }
+      window.setTimeout(() => {
+        if (request === coverRequest) drawBackdrop(next, true);
+      }, BACKDROP_AFTER_MS);
+      const fade = next.animate(
+        [
+          { opacity: 0, transform: arriving ? 'scale(1.05)' : 'none' },
+          { opacity: 1, transform: 'none' },
+        ],
+        { duration: COVER_MS, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+      );
+      fade.onfinish = () => {
+        if (last && request === coverRequest) last.hidden = true;
+      };
     };
     const failed = () => {
       if (request !== coverRequest) return;
-      view('music', 'art').hidden = true;
-      view('music', 'art-prev').hidden = true;
-      view('music', 'backdrop').hidden = true;
-      cover.dataset.state = 'missing';
-      resetAccent();
+      failures = failedUrl === url ? failures + 1 : 1;
+      failedUrl = url;
+      if (failures < COVER_TRIES) coverUrl = '';
+      else emptyCover();
     };
     (typeof next.decode === 'function'
       ? next.decode()
@@ -1155,8 +1244,12 @@
 
   // The backdrop: the cover drawn once into a small canvas with a blur, and
   // its average colour as the page's accent (one style write per cover).
+  let backdropFront = null;
   function drawBackdrop(image, fadeIn = false) {
-    const canvas = view('music', 'backdrop');
+    // Drawn on the canvas out of sight, which then fades in over the other.
+    const layers = [view('music', 'backdrop'), view('music', 'backdrop-next')];
+    const last = backdropFront?.hidden === false ? backdropFront : null;
+    const canvas = layers.find((layer) => layer && layer !== last) ?? layers[0];
     const context = canvas?.getContext?.('2d', { willReadFrequently: true });
     if (!context || !image.naturalWidth) return;
     try {
@@ -1196,18 +1289,19 @@
         // The navbar tints its lit scene with the same colour.
         root.style.setProperty('--nb-rgb', `${ar}, ${ag}, ${ab}`);
       } else resetAccent();
-      const wasHidden = canvas.hidden;
       canvas.hidden = false;
-      if (
-        (wasHidden || fadeIn) &&
-        musicShown &&
-        !calm &&
-        typeof canvas.animate === 'function'
-      )
-        canvas.animate([{ opacity: wasHidden ? 0 : 0.35 }, { opacity: 0.85 }], {
-          duration: 700,
+      canvas.style.zIndex = '1';
+      backdropFront = canvas;
+      if (last) last.style.zIndex = '0';
+      const done = () => {
+        if (last && backdropFront === canvas) last.hidden = true;
+      };
+      if (fadeIn && typeof canvas.animate === 'function')
+        canvas.animate([{ opacity: 0 }, { opacity: 0.85 }], {
+          duration: last ? 480 : 600,
           easing: 'ease-out',
-        });
+        }).onfinish = done;
+      else done();
     } catch {
       canvas.hidden = true;
       resetAccent();
@@ -1366,6 +1460,7 @@
         target,
         request: { property: 'track', value: step },
       });
+      globalThis.lugnLyrics?.hurry();
       window.setTimeout(drawMusic, 0);
     });
   }
@@ -1429,12 +1524,18 @@
       barAnimation = null;
       barKey = '';
       drawProgress(musicState().progress);
+      drawLyrics(musicState());
     },
     sleep() {
       // Nothing runs while away: the bar stops with the page.
       barAnimation?.cancel();
       barAnimation = null;
       barKey = '';
+      globalThis.lugnLyrics?.sleep();
     },
+  });
+  globalThis.lugnLyrics?.onToggle(drawMusic);
+  window.addEventListener('lugn:payload', () => {
+    if (musicShown) drawMusic();
   });
 })();

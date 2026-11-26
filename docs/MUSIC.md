@@ -113,6 +113,56 @@ Automatic policy actions are attributed to Lugn only when they are allowed. See
 [Volume policy](#volume-policy) for the distinction between active owner, last
 changer, automatic adjustment, baseline and target.
 
+## Lyrics
+
+The Hub's Musik page can show timed lyrics from [LRCLIB](https://lrclib.net), a
+free service without an account or key. When a Hub shows the lyrics, Lugn sends
+the track's title, artist and, where known, album and length to `lrclib.net`;
+nothing is sent while the lyrics are off. Behind a computer input the track is
+the computer's playing media, so a browser video with a title and channel is
+looked up too (recordings over 20 minutes are not).
+
+The Hub names only the player (`GET display-api/lyrics/<target>`); Lugn picks the
+track from its own state. An exact lookup comes first. Without timed lines there,
+a search result counts only if its length is within 3 seconds. Answers are kept
+in memory: a day for lines, an hour for an unknown track, 20 seconds after a
+failure. Nothing is stored on disk.
+
+### Following playback
+
+Home Assistant reports a media player's position in whole seconds, a few apart,
+which put lines about a second late and up to two. Name each WiiM in the
+configuration to have its position read directly (`getPlayerStatus`, read only;
+the player stays controlled as before):
+
+```json
+"lyrics": { "players": { "music.room": { "wiimHost": "192.168.1.20" } } }
+```
+
+While lyrics are on screen a Hub asks `GET display-api/playhead/<target>` about
+once a second. The answer comes from the computer's media behind a computer
+input, else from the named WiiM, else from the last report (`coarse`). The page
+counts on from the median of the last few answers on its own clock, takes a
+change over 0.35 s as a seek, and hands each line change to the compositor ahead
+of its time, 0.15 s before the line is sung plus the Hub's chosen delay.
+
+The Musik page asks for the playhead in every layout while it is shown, and four
+times a second for a moment after a step, at a track's end and while a new cover
+is on its way. A named WiiM's track leads the page: its title, artist and cover
+show before Home Assistant reports them, and so does the computer's playing
+Spotify media behind its input. A player someone is asking about is watched four
+times a second, and a change of track or cover is pushed to the Hubs
+(`nowPlaying` in the state). Lugn reads a WiiM's cover address from
+`getMetaInfo`; the computer's comes with its media, where the input's
+`computerAudio.artwork` allows it. Covers are fetched only from
+`https://i.scdn.co/image/`, as JPEGs of at most 2 MiB, over a connection kept
+open while a Hub looks, and served as `display-api/player-art/<id>`; other
+sources keep Home Assistant's artwork. With lyrics on the page (the playhead
+route ending in `/lyrics`) a new track's lines are asked for at once.
+
+Once a minute a Hub showing lyrics reports its request times and how late line
+changes were committed (`hub probe` with phase `lyrics` in Lugn's journal).
+
 ## Verification after missing feedback
 
 Service acceptance still does not confirm device state. If an accepted command
