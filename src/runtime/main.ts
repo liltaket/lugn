@@ -95,6 +95,7 @@ import { defaultScenes, LugnEngine } from '../application/lugn-engine.js';
 import { systemClock, type TimerHandle } from '../core/clock.js';
 import { LugnDisplayServer } from './display-server.js';
 import { LrclibLyrics } from './lrclib-lyrics.js';
+import { SpotifyCovers } from './spotify-covers.js';
 import { WiimPlayhead } from './wiim-playhead.js';
 import { DashCastManager } from './dashcast-manager.js';
 import { LightingIntentStore } from './lighting-intent-store.js';
@@ -1213,6 +1214,7 @@ export async function startRuntime(
     castManager: DashCastManager | undefined;
     displayServer: LugnDisplayServer | undefined;
   } = { castManager: undefined, displayServer: undefined };
+  const covers = new SpotifyCovers();
   const displayServer = config.display
     ? new LugnDisplayServer({
         host: config.display.host,
@@ -1229,6 +1231,15 @@ export async function startRuntime(
         ),
         capabilities,
         lyrics: new LrclibLyrics(),
+        covers,
+        computerCoverTargets: new Set(
+          Object.entries({
+            ...config.homeAssistant.music,
+            ...config.wiim?.music,
+          }).flatMap(([target, mapping]) =>
+            mapping.computerAudio?.artwork ? [target] : [],
+          ),
+        ),
         ...(config.lyrics
           ? {
               playhead: new WiimPlayhead(
@@ -1237,6 +1248,9 @@ export async function startRuntime(
                     ([target, { wiimHost }]) => [target, wiimHost],
                   ),
                 ),
+                undefined,
+                undefined,
+                covers,
               ),
             }
           : {}),

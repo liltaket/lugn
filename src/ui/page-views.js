@@ -547,8 +547,7 @@
       onComputer && connected && !desktop.pending && desktop[flag] === true;
     // The player says what it plays well before Hem hears of it (and where
     // it can be asked): its track and cover then lead.
-    const player =
-      active && !onComputer ? globalThis.lugnLyrics?.player(target) : null;
+    const player = active ? globalThis.lugnLyrics?.player(target) : null;
     const hemName = hemTitle(r).title.replace(/…$/, '').trimEnd();
     const ahead = Boolean(player) && !player.title.startsWith(hemName);
     const progress =
@@ -699,6 +698,8 @@
       artist: state.artist,
       progress: state.progress,
       playing: state.playing,
+      // The server's own word on the track: a change is asked about at once.
+      announced: payload()?.nowPlaying?.[currentTarget()],
       serverNow,
     });
   }
@@ -1115,7 +1116,9 @@
   // Musik's own images decide what its cover shows. A new cover is loaded
   // and decoded in the hidden one of two images, then faded in over the shown
   // one, so a track change never shows an empty square.
-  const COVER_MS = 320;
+  const COVER_MS = 240;
+  // The backdrop is drawn once the new cover has started to show.
+  const BACKDROP_AFTER_MS = 40;
   // A track without a cover keeps the last one this long before it goes.
   const NO_COVER_MS = 5_000;
   let coverRequest = 0;
@@ -1169,6 +1172,7 @@
     noCoverTimer = 0;
     if (url === coverUrl) return;
     coverUrl = url;
+    const asked = performance.now();
     const request = ++coverRequest;
     const cover = view('music', 'cover');
     if (cover.dataset.state !== 'available') cover.dataset.state = 'loading';
@@ -1187,11 +1191,16 @@
       const moving = musicShown && !calm && typeof next.animate === 'function';
       const arriving = track !== coverTrack;
       coverTrack = track;
-      drawBackdrop(next, moving);
+      if (musicShown)
+        globalThis.lugnLyrics?.coverTook?.(performance.now() - asked);
       if (!moving) {
+        drawBackdrop(next, false);
         if (last) last.hidden = true;
         return;
       }
+      window.setTimeout(() => {
+        if (request === coverRequest) drawBackdrop(next, true);
+      }, BACKDROP_AFTER_MS);
       const fade = next.animate(
         [
           { opacity: 0, transform: arriving ? 'scale(1.05)' : 'none' },
@@ -1509,4 +1518,7 @@
     },
   });
   globalThis.lugnLyrics?.onToggle(drawMusic);
+  window.addEventListener('lugn:payload', () => {
+    if (musicShown) drawMusic();
+  });
 })();

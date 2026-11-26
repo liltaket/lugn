@@ -131,6 +131,7 @@
   let pollAgain = false;
   let shownPlaying = null;
   let shownTitle = null;
+  let shownAnnounced = '';
 
   // The lines on screen.
   let drawnLines = null;
@@ -141,7 +142,14 @@
   let planned = null;
   let animations = [];
 
-  const stats = { rtt: [], jumps: 0, late: [], source: '', since: 0 };
+  const stats = {
+    rtt: [],
+    jumps: 0,
+    late: [],
+    cover: [],
+    source: '',
+    since: 0,
+  };
 
   function stored(name, fallback) {
     try {
@@ -209,8 +217,10 @@
   // is when the position was true, give or take the network's asymmetry.
   function take(answer, at) {
     stats.source = answer.source;
-    sync.heard = answer.source === 'player' ? performance.now() : 0;
-    if (answer.source === 'player') sync.art = answer.art ?? null;
+    // The player's own word, or the computer's behind its input.
+    const direct = ['player', 'computer'].includes(answer.source);
+    sync.heard = direct ? performance.now() : 0;
+    if (direct) sync.art = answer.art ?? null;
     if (answer.source === 'none' || typeof answer.position !== 'number') {
       sync.start = null;
       sync.still = null;
@@ -390,8 +400,18 @@
       lateP50: at(stats.late, 0.5),
       lateP95: at(stats.late, 0.95),
       delayMs: delayTenths * 100,
+      // From a new cover's address to its picture being decoded.
+      covers: stats.cover.length,
+      coverP50: at(stats.cover, 0.5),
+      coverMax: at(stats.cover, 1),
     };
-    Object.assign(stats, { rtt: [], jumps: 0, late: [], since: now });
+    Object.assign(stats, {
+      rtt: [],
+      jumps: 0,
+      late: [],
+      cover: [],
+      since: now,
+    });
     void fetch(`${base()}display-api/probe`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -942,6 +962,7 @@
     },
     onToggle: (listener) => listeners.add(listener),
     player,
+    coverTook: (ms) => stats.cover.push(ms),
     // A step was asked for: the player is asked often until it shows.
     hurry() {
       hurryUntil = performance.now() + HURRY_FOR_MS;
@@ -949,10 +970,14 @@
     },
     draw(next) {
       const wasWanted = wanted();
+      const announced = JSON.stringify(next.announced ?? null);
       const changed =
-        next.playing !== shownPlaying || next.title !== shownTitle;
+        next.playing !== shownPlaying ||
+        next.title !== shownTitle ||
+        announced !== shownAnnounced;
       shownPlaying = next.playing;
       shownTitle = next.title;
+      shownAnnounced = announced;
       info = next;
       if (next.target !== sync.target) resetSync(next.target);
       render();

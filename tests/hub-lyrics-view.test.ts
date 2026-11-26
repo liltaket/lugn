@@ -326,6 +326,19 @@ describe('Musik lyrics', () => {
     expect(s.current()).toBe('One');
   });
 
+  it('asks at once when the server says the track changed', async () => {
+    const s = setup({ stored: on });
+    s.draw({ announced: { title: 'Song', artist: 'Band' } });
+    await s.wait(100);
+    const before = s.asked('playhead');
+    s.draw({ announced: { title: 'Song', artist: 'Band' } });
+    await s.wait(10);
+    expect(s.asked('playhead')).toBe(before);
+    s.draw({ announced: { title: 'Next', artist: 'Band' } });
+    await s.wait(10);
+    expect(s.asked('playhead')).toBe(before + 1);
+  });
+
   it('retries a failed fetch later', async () => {
     const s = setup({ stored: on, answer: { status: 'unavailable' } });
     s.draw();

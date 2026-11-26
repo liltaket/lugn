@@ -377,9 +377,10 @@ them on, two more controls appear beside it: one switches between the two
 layouts, and a stepper delays or advances the lines by a tenth of a second a
 press (up to 5 s). Each Hub remembers both choices.
 
-- **Beside the rail:** a 264 px rail on the left holds the cover, title, time
-  bar and play/pause; previous, next and the volume come with the navbar. The
-  right shows the current line with one before and one after.
+- **Beside the rail:** a 264 px rail on the left holds the cover, title and
+  time bar, centred on the screen; previous, play/pause, next and the volume
+  come with the navbar. The right shows the current line with one before and one
+  after.
 - **Lines only:** the lines take the whole screen at 52 px. A tap opens the
   navbar, and the rail comes in with it. Without lines to follow (none,
   instrumental, a failed fetch, no music) the rail stays.

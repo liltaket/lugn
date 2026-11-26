@@ -4,6 +4,7 @@ import type { CameraMediaProvider } from './camera-media.js';
 import type { PhotoLibrary } from './photo-library.js';
 import {
   ComputerNowPlayingSelector,
+  type ComputerNowPlaying,
   type ComputerAudioRoute,
 } from '../application/computer-now-playing.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
@@ -44,6 +45,7 @@ import type { StateEventStream } from '../core/event-stream.js';
 import type { ArtworkProvider } from '../core/artwork.js';
 import type { LyricsProvider, LyricsTrack } from '../core/lyrics.js';
 import type { PlayheadProvider } from './wiim-playhead.js';
+import type { CoverProvider } from './spotify-covers.js';
 import {
   PrinterLightUnavailableError,
   type PrinterActivityProvider,
@@ -191,6 +193,10 @@ export type LugnDisplayServerOptions = {
   lyrics?: LyricsProvider;
   /** The players' own position, where it can be read directly. */
   playhead?: PlayheadProvider;
+  /** Covers ready to serve as soon as a track is seen. */
+  covers?: CoverProvider;
+  /** Players whose computer input may use the computer's Spotify cover. */
+  computerCoverTargets?: ReadonlySet<string>;
   experience?: ExperienceApi;
   cameraService?: CameraDashboardService;
   cameraMedia?: CameraMediaProvider;
@@ -744,6 +750,8 @@ export class LugnDisplayServer {
           return;
         }
         const asked = performance.now();
+        // Someone is looking: the way to the covers is kept open.
+        this.options.covers?.keepWarm();
         const playhead = await this.playhead(
           state,
           target,
@@ -768,7 +776,7 @@ export class LugnDisplayServer {
           sendJson(response, 403, { error: 'invalid_origin' });
           return;
         }
-        const asset = this.options.playhead?.art?.(
+        const asset = this.options.covers?.get(
           hubRequest.route.slice('/display-api/player-art/'.length),
         );
         if (!asset) {
@@ -1075,6 +1083,7 @@ export class LugnDisplayServer {
         positionUpdatedAt === undefined
       )
         return { source: 'none' as const };
+      const art = this.computerCover(state, target);
       return {
         source: 'computer' as const,
         playing: true,
@@ -1083,6 +1092,7 @@ export class LugnDisplayServer {
         ...(computer.title && computer.artist
           ? { track: { title: computer.title, artist: computer.artist } }
           : {}),
+        ...(art ? { art: `${artPrefix}${art}` } : {}),
       };
     }
     const player = await this.options.playhead?.read(target);
@@ -1118,6 +1128,53 @@ export class LugnDisplayServer {
     };
   }
 
+  /**
+   * The cover of the computer's playing Spotify media, where the player's input
+   * allows it: its id once it is here, and asked for the moment it is seen.
+   */
+  private computerCover(state: RoomState, target: string): string | undefined {
+    const { covers, computerCoverTargets } = this.options;
+    if (!covers || !computerCoverTargets?.has(target)) return undefined;
+    const art = this.computerNowPlaying.selectedMedia(state, target)?.artwork;
+    if (art?.provider !== 'spotify') return undefined;
+    covers.want(art.id);
+    return covers.get(art.id) ? art.id : undefined;
+  }
+
+  /**
+   * What each player plays, as the page may show it before Home Assistant
+   * says so. A change is pushed to the Hubs, which then ask for the position.
+   */
+  private nowPlaying(
+    state: RoomState,
+    computers: Record<string, ComputerNowPlaying>,
+    artPrefix: string,
+  ) {
+    const result: Record<
+      string,
+      { title: string; artist: string | null; art?: string }
+    > = {};
+    for (const target of Object.keys(state.music.devices)) {
+      const computer = computers[target];
+      const player = computer
+        ? undefined
+        : this.options.playhead?.peek?.(target);
+      const title = computer
+        ? computer.status === 'playing'
+          ? computer.title
+          : null
+        : player?.title;
+      if (!title) continue;
+      const art = computer ? this.computerCover(state, target) : player?.art;
+      result[target] = {
+        title,
+        artist: (computer ? computer.artist : player?.artist) ?? null,
+        ...(art ? { art: `${artPrefix}${art}` } : {}),
+      };
+    }
+    return result;
+  }
+
   /** A new track's lines are asked for before any page asks. */
   private prefetchLyrics(target: string, track: LyricsTrack): void {
     if (!this.options.lyrics || !track.title || !track.artist) return;
@@ -1129,13 +1186,19 @@ export class LugnDisplayServer {
 
   private snapshot(hub: LugnDisplayHub) {
     const state = this.options.stateProvider();
+    const computers = this.computerNowPlaying.snapshot(state);
     return {
       state: displayState(state),
       ...(this.options.cameraMedia
         ? { cameraDashboard: this.cameraSnapshot(hub) }
         : {}),
       ...this.options.experience?.snapshot(),
-      computerNowPlaying: this.computerNowPlaying.snapshot(state),
+      computerNowPlaying: computers,
+      nowPlaying: this.nowPlaying(
+        state,
+        computers,
+        `${this.pathForHub(hub.id)}display-api/player-art/`,
+      ),
       musicTrackControl: musicTrackControl(
         state,
         this.options.computerAudioMappings ?? {},
@@ -1228,6 +1291,9 @@ export class LugnDisplayServer {
     const unsubscribe = stream.subscribe(scheduleSend);
     const unsubscribeArtwork =
       this.options.artworkProvider?.subscribe?.(scheduleSend);
+    const unsubscribeCovers = this.options.covers?.subscribe(scheduleSend);
+    const unsubscribePlayhead =
+      this.options.playhead?.subscribe?.(scheduleSend);
     const unsubscribeExperience =
       this.options.experience?.subscribe(scheduleSend);
     const unsubscribeCamera = this.options.cameraMedia?.subscribe(scheduleSend);
@@ -1236,6 +1302,8 @@ export class LugnDisplayServer {
     response.once('close', () => {
       unsubscribe();
       unsubscribeArtwork?.();
+      unsubscribeCovers?.();
+      unsubscribePlayhead?.();
       unsubscribeExperience?.();
       unsubscribeCamera?.();
       unsubscribePrinter?.();

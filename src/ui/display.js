@@ -3201,6 +3201,9 @@ function render(payload, force = false) {
   renderCamera(payload);
   renderPrinter(payload);
   setClock(true);
+  // The other pages draw what changed now, rather than at their next tick.
+  if (typeof Event === 'function')
+    window.dispatchEvent?.(new Event('lugn:payload'));
 }
 
 function renderPresenceCorrection(payload) {

@@ -174,6 +174,7 @@ function setup({
       .map((image) => image.getAttribute('src'));
   return {
     view,
+    window,
     document,
     device,
     sent,
@@ -295,6 +296,15 @@ describe('the Musik page', () => {
       bar.fire('wheel', { deltaY: -48 }).preventDefault,
     ).not.toHaveBeenCalled();
     expect(s.sent).toEqual([]);
+  });
+
+  it('draws a new state at once, without waiting for its tick', async () => {
+    const s = setup();
+    await s.tick();
+    s.musicArtworkImage.src = '/art/second';
+    s.window.fire('lugn:payload');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.cover()).toEqual(['/art/second']);
   });
 
   it('keeps the last cover until the next one is there', async () => {

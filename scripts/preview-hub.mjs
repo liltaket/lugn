@@ -277,6 +277,13 @@ function snapshot(scenario) {
   data.generatedAt += Date.now() - startedAt;
   if (scenario === 'lyrics' && nextTrackAt) {
     const since = Date.now() - nextTrackAt;
+    // The server's own word on the track, ahead of the dashboard's.
+    data.nowPlaying = {
+      'music.room': {
+        ...nextTrack,
+        ...(since >= 300 ? { art: '/fixture-cover-2.svg' } : {}),
+      },
+    };
     if (since > 900) {
       const observed = data.state.music.devices['music.room'].observed;
       Object.assign(observed, nextTrack, {
@@ -320,6 +327,13 @@ const server = createServer(async (request, response) => {
     const path = new URL(request.url, `http://${allowedHost}`).pathname;
     if (path === '/__fixture/next-track' && request.method === 'POST') {
       nextTrackAt = Date.now();
+      // Pushed to the open pages, as the track is seen and as its cover is in.
+      const push = () => {
+        for (const client of clients)
+          client.write(`data: ${JSON.stringify(snapshot('lyrics'))}\n\n`);
+      };
+      push();
+      setTimeout(push, 310);
       return sendJson(response, 200, { nextTrackAt });
     }
     if (

@@ -149,9 +149,14 @@ of its time, 0.15 s before the line is sung plus the Hub's chosen delay.
 The Musik page asks for the playhead in every layout while it is shown, and four
 times a second for a moment after a step, at a track's end and while a new cover
 is on its way. A named WiiM's track leads the page: its title, artist and cover
-show before Home Assistant reports them. Lugn reads the cover's address from the
-player (`getMetaInfo`), fetches it only from `https://i.scdn.co/image/` as a
-JPEG of at most 2 MiB, and serves it as `display-api/player-art/<id>`; other
+show before Home Assistant reports them, and so does the computer's playing
+Spotify media behind its input. A player someone is asking about is watched four
+times a second, and a change of track or cover is pushed to the Hubs
+(`nowPlaying` in the state). Lugn reads a WiiM's cover address from
+`getMetaInfo`; the computer's comes with its media, where the input's
+`computerAudio.artwork` allows it. Covers are fetched only from
+`https://i.scdn.co/image/`, as JPEGs of at most 2 MiB, over a connection kept
+open while a Hub looks, and served as `display-api/player-art/<id>`; other
 sources keep Home Assistant's artwork. With lyrics on the page (the playhead
 route ending in `/lyrics`) a new track's lines are asked for at once.
 

@@ -11,6 +11,11 @@ import {
   WiimPlayhead,
   type PlayheadProvider,
 } from '../src/runtime/wiim-playhead.js';
+import {
+  SpotifyCovers,
+  type CoverProvider,
+  type CoverTransport,
+} from '../src/runtime/spotify-covers.js';
 
 const synced = '[00:10.00] First line\n[00:14.50] Second line';
 const json = (body: unknown, status = 200) =>
@@ -176,12 +181,22 @@ describe('the WiiM playhead', () => {
 
   const meta = (title: string, albumArtURI: string) =>
     JSON.stringify({ metaData: { title, albumArtURI } });
-  const cover = new Uint8Array([0xff, 0xd8, 0xff, 0x00]);
-  const spotify = `https://i.scdn.co/image/${'ab'.repeat(20)}`;
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0x00]);
+  const id = 'ab'.repeat(20);
+  const spotify = `https://i.scdn.co/image/${id}`;
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const players: WiimPlayhead[] = [];
+  afterEach(() => {
+    for (const player of players.splice(0)) player.dispose();
+  });
 
-  function covers(metaReply: () => string, image = cover) {
+  function watched(
+    metaReply: () => string,
+    image: CoverTransport = async () => jpeg,
+  ) {
     let now = 1_000;
-    const fetcher = vi.fn<typeof fetch>(async () => new Response(image));
+    const transport = vi.fn<CoverTransport>(image);
+    const covers = new SpotifyCovers(transport, () => now);
     const playhead = new WiimPlayhead(
       { 'music.room': '192.168.1.5' },
       {
@@ -189,69 +204,132 @@ describe('the WiiM playhead', () => {
           command === 'getMetaInfo' ? metaReply() : status(),
       },
       () => now,
-      fetcher,
+      covers,
     );
+    players.push(playhead);
     const read = async (advance = 300) => {
       now += advance;
       const reading = await playhead.read('music.room');
       // The cover is fetched behind the answer.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await settle();
       return reading;
     };
-    return { playhead, fetcher, read };
+    return { playhead, covers, transport, read };
   }
 
-  it("fetches the track's cover once, and never holds the answer for it", async () => {
-    const s = covers(() => meta('Song', spotify));
+  it('never holds the answer for the cover', async () => {
+    const s = watched(
+      () => meta('Song', spotify),
+      () => new Promise(() => undefined),
+    );
+    expect(await s.read()).toMatchObject({ title: 'Song' });
     expect((await s.read())?.art).toBeUndefined();
-    const id = 'ab'.repeat(20);
+  });
+
+  it("fetches the track's cover once", async () => {
+    const s = watched(() => meta('Song', spotify));
+    const changed = vi.fn();
+    s.playhead.subscribe(changed);
+    await s.read();
     expect((await s.read())?.art).toBe(id);
     await s.read();
-    expect(s.fetcher).toHaveBeenCalledTimes(1);
-    expect(s.fetcher.mock.calls[0]![0]).toBe(spotify);
-    expect(s.playhead.art(id)).toEqual({
-      body: cover,
-      contentType: 'image/jpeg',
-    });
+    expect(s.transport).toHaveBeenCalledTimes(1);
+    expect(s.transport).toHaveBeenCalledWith(spotify, 'GET');
+    expect(s.covers.get(id)).toEqual({ body: jpeg, contentType: 'image/jpeg' });
+    expect(s.playhead.peek('music.room')?.art).toBe(id);
+    // Told of the track, and of its cover, once each.
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
+  it('watches a player for a while after it was asked about', async () => {
+    vi.useFakeTimers();
+    try {
+      const sendCommand = vi.fn(async () => status());
+      const playhead = new WiimPlayhead(
+        { 'music.room': '192.168.1.5' },
+        { sendCommand },
+        () => Date.now(),
+      );
+      players.push(playhead);
+      await playhead.read('music.room');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(sendCommand.mock.calls.length).toBeGreaterThan(6);
+      await vi.advanceTimersByTimeAsync(20_000);
+      const rested = sendCommand.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(sendCommand).toHaveBeenCalledTimes(rested);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits for the metadata to be the track's", async () => {
     let title = 'The last song';
-    const s = covers(() => meta(title, spotify));
+    const s = watched(() => meta(title, spotify));
     await s.read();
     title = 'Song';
-    expect((await s.read())?.art).toBeUndefined();
-    await s.read(1_100);
-    expect((await s.read())?.art).toBe('ab'.repeat(20));
+    await s.read();
+    await s.read();
+    expect((await s.read())?.art).toBe(id);
   });
 
-  it('fetches covers from one place only, and only JPEGs', async () => {
-    const elsewhere = covers(() =>
-      meta('Song', 'http://192.168.1.1/image/' + 'ab'.repeat(20)),
-    );
-    await elsewhere.read();
-    expect((await elsewhere.read(2_000))?.art).toBeUndefined();
-    expect(elsewhere.fetcher).not.toHaveBeenCalled();
-    const page = covers(
-      () => meta('Song', spotify),
-      new TextEncoder().encode('<html>'),
-    );
-    await page.read();
-    expect((await page.read())?.art).toBeUndefined();
+  it('leaves covers from anywhere else alone', async () => {
+    const s = watched(() => meta('Song', `http://192.168.1.1/image/${id}`));
+    await s.read();
+    expect((await s.read(2_000))?.art).toBeUndefined();
+    expect(s.transport).not.toHaveBeenCalled();
+  });
+});
+
+describe('the cover store', () => {
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff]);
+  const id = 'cd'.repeat(20);
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('keeps only JPEGs, and asks again after a failure', async () => {
+    let now = 0;
+    let body: Uint8Array = new TextEncoder().encode('<html>');
+    const transport = vi.fn<CoverTransport>(async () => body);
+    const covers = new SpotifyCovers(transport, () => now);
+    covers.want(id);
+    covers.want(id);
+    await settle();
+    expect(covers.get(id)).toBeUndefined();
+    covers.want(id);
+    expect(transport).toHaveBeenCalledTimes(1);
+    body = jpeg;
+    now = 2_000;
+    covers.want(id);
+    await settle();
+    expect(covers.get(id)?.body).toEqual(jpeg);
   });
 
-  it('has no answer for an input, a failure or an unknown player', async () => {
-    const reader = (reply: () => Promise<string>) =>
-      new WiimPlayhead({ 'music.room': '192.168.1.5' }, { sendCommand: reply });
-    expect(
-      await reader(async () => status({ mode: '43' })).read('music.room'),
-    ).toBeNull();
-    expect(
-      await reader(async () => {
-        throw new Error('offline');
-      }).read('music.room'),
-    ).toBeNull();
-    expect(await reader(async () => status()).read('constructor')).toBeNull();
+  it('puts nothing but an image id into the address', () => {
+    const transport = vi.fn<CoverTransport>(async () => jpeg);
+    const covers = new SpotifyCovers(transport);
+    for (const name of ['../x', 'https://example.com', 'ab', ''])
+      covers.want(name);
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('keeps its connection warm while someone looks', async () => {
+    let now = 0;
+    const transport = vi.fn<CoverTransport>(async () => jpeg);
+    const covers = new SpotifyCovers(transport, () => now);
+    covers.keepWarm();
+    covers.want(id);
+    await settle();
+    now = 30_000;
+    covers.keepWarm();
+    expect(transport).toHaveBeenCalledTimes(1);
+    now = 45_000;
+    covers.keepWarm();
+    covers.keepWarm();
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(transport).toHaveBeenLastCalledWith(
+      `https://i.scdn.co/image/${id}`,
+      'HEAD',
+    );
   });
 });
 
@@ -262,7 +340,11 @@ describe('the Hub lyrics route', () => {
     for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   });
 
-  async function setup(lyrics?: LyricsProvider, playhead?: PlayheadProvider) {
+  async function setup(
+    lyrics?: LyricsProvider,
+    playhead?: PlayheadProvider,
+    covers?: CoverProvider,
+  ) {
     const finder = createServer();
     await new Promise<void>((resolve) =>
       finder.listen(0, '127.0.0.1', resolve),
@@ -294,6 +376,7 @@ describe('the Hub lyrics route', () => {
       stateStream: engine.stream,
       ...(lyrics ? { lyrics } : {}),
       ...(playhead ? { playhead } : {}),
+      ...(covers ? { covers } : {}),
     });
     await server.start();
     cleanups.push(async () => {
@@ -391,31 +474,40 @@ describe('the Hub lyrics route', () => {
     });
   });
 
-  it("serves the player's cover from Lugn itself", async () => {
+  it("names the player's track in the state and serves its cover", async () => {
     const id = 'cd'.repeat(20);
-    const s = await setup(undefined, {
-      now: () => 0,
-      read: async () => ({
-        playing: true,
-        positionSeconds: 1,
-        durationSeconds: 200,
-        measuredAt: 0,
-        title: 'Song',
-        artist: 'Band',
-        album: null,
-        art: id,
-      }),
-      art: (wanted) =>
-        wanted === id
-          ? { body: new Uint8Array([0xff, 0xd8]), contentType: 'image/jpeg' }
-          : undefined,
-    });
-    const answer = (await (await s.at('music.room')).json()) as {
-      art: string;
+    const track = {
+      playing: true,
+      positionSeconds: 1,
+      durationSeconds: 200,
+      measuredAt: 0,
+      title: 'Song',
+      artist: 'Band',
+      album: null,
+      art: id,
     };
-    expect(answer.art).toMatch(
+    const keepWarm = vi.fn();
+    const s = await setup(
+      undefined,
+      { now: () => 0, read: async () => track, peek: () => track },
+      {
+        want: () => undefined,
+        subscribe: () => () => undefined,
+        keepWarm,
+        get: (wanted) =>
+          wanted === id
+            ? { body: new Uint8Array([0xff, 0xd8]), contentType: 'image/jpeg' }
+            : undefined,
+      },
+    );
+    const art = expect.stringMatching(
       new RegExp(`^/k/a{32}/display-api/player-art/${id}$`),
     );
+    expect(await (await s.at('music.room')).json()).toMatchObject({ art });
+    expect(keepWarm).toHaveBeenCalled();
+    expect(await (await s.route('state')).json()).toMatchObject({
+      nowPlaying: { 'music.room': { title: 'Song', artist: 'Band', art } },
+    });
     const image = await s.route(`player-art/${id}`);
     expect(image.headers.get('content-type')).toBe('image/jpeg');
     expect(image.headers.get('cache-control')).toContain('immutable');
