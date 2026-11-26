@@ -389,7 +389,7 @@ the full layout up to two before and three after), and only whole lines show.
 With the navbar open the lines move up above its buttons, and the rail takes one
 of four styles, on trial and chosen with the numbered button in the navbar (each
 Hub remembers it): 1, previous, play/pause, next and volume in the navbar's row
-with the rail gliding up; 2, the controls on the dimmed cover; 3, large controls
+with the cover and title drawing together above; 2, the controls on the dimmed cover; 3, large controls
 beside the rail under the line being sung; 4, the cover view while the navbar is
 open.
 
