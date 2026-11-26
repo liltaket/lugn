@@ -245,6 +245,7 @@
   ];
   const LINK_MIN = 0.42; // how well a newcomer must fit the whole group
   const LINK_FALLBACK = 0.2; // when the seed would otherwise stand alone
+  const FALLBACK_SIZE = 3; // ...and then only a small group, never a collage
   const RECENT_GROUPS = 8;
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -297,31 +298,59 @@
 
     // Every round starts from a picture nobody has seen yet this round (a
     // favourite a little more often), so nothing waits long to be shown.
+    // Screenshots, documents and unusable frames (`skip`) are never shown,
+    // unless the whole library is like that.
+    const usable = (photo) => !photo.skip;
+    const anyUsable = library.some(usable);
+    let leastUsable = Infinity;
+    for (const photo of library)
+      if (usable(photo) || !anyUsable)
+        leastUsable = Math.min(leastUsable, plays.get(photo.id) || 0);
+    least = leastUsable;
     const unseen = library.filter(
-      (photo) => (plays.get(photo.id) || 0) === least,
+      (photo) =>
+        (usable(photo) || !anyUsable) && (plays.get(photo.id) || 0) === least,
     );
     const seed = pickWeighted(unseen, (photo) => (photo.fav ? 1.8 : 1), random);
     const size = pickWeighted(GROUP_SIZES, (entry) => entry[1], random)[0];
     const group = [seed];
     const members = new Set([seed.id]);
     for (const threshold of [LINK_MIN, LINK_FALLBACK]) {
-      while (group.length < size) {
+      // The relaxed pass exists so a picture without company still gets some;
+      // it never grows a full group out of loosely related pictures.
+      const limit = threshold === LINK_MIN ? size : FALLBACK_SIZE;
+      while (group.length < limit) {
         const candidates = new Map();
         for (const member of group)
           for (const entry of member.nb || []) {
             const other = library[entry[0]];
-            if (other && !members.has(other.id))
+            if (
+              other &&
+              !members.has(other.id) &&
+              (usable(other) || !anyUsable)
+            )
               candidates.set(other.id, other);
           }
         const pool = [];
         for (const other of candidates.values()) {
           if (group.some((member) => duplicate(member, other))) continue;
           // How well it fits everyone already there; a stranger to some
-          // member pulls the average down.
+          // member pulls the average down, and too many strangers rule a
+          // picture out however well the rest of the group knows it.
           let fit = 0;
-          for (const member of group) fit += score(member, other);
+          let strangers = 0;
+          for (const member of group) {
+            const pair = score(member, other);
+            fit += pair;
+            if (pair <= 0) strangers += 1;
+          }
           fit /= group.length;
           if (fit < threshold) continue;
+          if (
+            threshold === LINK_MIN &&
+            strangers > Math.floor(group.length / 3)
+          )
+            continue;
           let weight = fit * fit * fresh(other, 1.5);
           for (const member of group)
             if (recent.has(pairKey(member, other))) weight *= 0.4;
@@ -344,6 +373,7 @@
       let bestKey = -Infinity;
       for (const other of library) {
         if (other === seed || duplicate(seed, other)) continue;
+        if (!usable(other) && anyUsable) continue;
         const apart =
           typeof seed.t === 'number' && typeof other.t === 'number'
             ? Math.min(Math.abs(seed.t - other.t) / DAY, 400)

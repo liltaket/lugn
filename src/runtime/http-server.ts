@@ -3,6 +3,7 @@ import { CameraError, type CameraDashboardSnapshot } from '../core/cameras.js';
 import type { CameraMediaProvider } from './camera-media.js';
 import type { PhotoLibrary } from './photo-library.js';
 import { PeopleError } from './photo-intel/people.js';
+import { IntelError } from './photo-intel/intel-store.js';
 import type {
   SensorStreamMessage,
   Stl27lSensorStream,
@@ -17,7 +18,12 @@ import {
   type MusicVolumeSettingsStore,
   MusicVolumeSettingsError,
 } from './music-volume-settings-store.js';
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 
 import { readFileSync } from 'node:fs';
 import {
@@ -27,6 +33,8 @@ import {
   type ServerResponse,
 } from 'node:http';
 import { join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
+import { createGunzip } from 'node:zlib';
 import { z, ZodError } from 'zod';
 import {
   SemanticLightingIdSchema,
@@ -61,6 +69,8 @@ import {
 } from './clerk-auth.js';
 
 const MAX_REQUEST_BYTES = 64 * 1024;
+/** The photo brain's bundle, measured after inflating. */
+const MAX_BRAIN_BUNDLE_BYTES = 64 * 1024 * 1024;
 const UI_SESSION_COOKIE = 'lugn_ui_session';
 const UI_SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;
 const MAX_UI_SESSIONS = 64;
@@ -188,6 +198,11 @@ export class LugnHttpServer {
         return;
       }
 
+      if (url.pathname.startsWith('/photo-brain/')) {
+        await this.handlePhotoBrain(request, response, url.pathname);
+        return;
+      }
+
       if (request.method === 'GET' && url.pathname === '/health') {
         const integrations = this.options.integrations();
         const connected = Object.values(integrations).every(
@@ -275,6 +290,84 @@ export class LugnHttpServer {
   }
 
   /**
+   * The photo brain on Kuffe (docs/PHOTO-BRAIN.md): it reads the album and
+   * the household's decisions and sends back its results. Machine routes
+   * behind the bearer token only; without a configured token they stay shut.
+   */
+  private async handlePhotoBrain(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string,
+  ): Promise<void> {
+    if (!this.options.bearerToken?.trim()) {
+      sendJson(response, 503, { error: 'photo_brain_requires_token' });
+      return;
+    }
+    const routes: Record<string, 'GET' | 'PUT'> = {
+      '/photo-brain/v1/album': 'GET',
+      '/photo-brain/v1/intel': 'PUT',
+      '/photo-brain/v1/people': 'GET',
+      '/photo-brain/v1/state': 'GET',
+    };
+    const method = routes[pathname];
+    if (!method) {
+      sendJson(response, 404, { error: 'not_found' });
+      return;
+    }
+    if (request.method !== method) {
+      response.setHeader('allow', method);
+      sendJson(response, 405, { error: 'method_not_allowed' });
+      return;
+    }
+    const api = this.options.photoLibrary?.brainApi();
+    if (!api) {
+      sendJson(response, 404, { error: 'photo_brain_unavailable' });
+      return;
+    }
+    if (pathname === '/photo-brain/v1/album') {
+      let album: unknown;
+      try {
+        album = await api.album();
+      } catch {
+        sendJson(response, 502, { error: 'album_unavailable' });
+        return;
+      }
+      sendJson(response, 200, album);
+      return;
+    }
+    if (pathname === '/photo-brain/v1/people') {
+      sendJson(response, 200, api.people());
+      return;
+    }
+    if (pathname === '/photo-brain/v1/state') {
+      sendJson(response, 200, api.state());
+      return;
+    }
+    if (!isJsonRequest(request)) {
+      sendJson(response, 415, {
+        error: 'content_type_must_be_application_json',
+      });
+      return;
+    }
+    let body: unknown;
+    try {
+      body = await readBrainBundle(request);
+    } catch (error) {
+      // Whatever is left of a refused body is not read.
+      if (error instanceof HttpRequestError)
+        response.setHeader('connection', 'close');
+      throw error;
+    }
+    try {
+      sendJson(response, 200, await api.putIntel(body));
+    } catch (error) {
+      if (error instanceof IntelError)
+        sendJson(response, 400, { error: error.code, issues: error.issues });
+      else throw error;
+    }
+  }
+
+  /**
    * The photo frame's people panel: who the faces are, names, confirmations
    * and corrections. Faces never leave this machine; the panel gets small
    * crops and the pictures through the signed-in session only.
@@ -290,10 +383,11 @@ export class LugnHttpServer {
       sendJson(response, 404, { error: 'photo_people_unavailable' });
       return true;
     }
-    const reply = (): void =>
+    const reply = (extra: Record<string, unknown> = {}): void =>
       sendJson(response, 200, {
         status: api.status(),
         ...api.peopleView(),
+        ...extra,
       });
     if (request.method === 'GET') {
       if (
@@ -305,6 +399,23 @@ export class LugnHttpServer {
       }
       if (pathname === '/ui/api/photo-people') {
         reply();
+        return true;
+      }
+      if (pathname === '/ui/api/photo-people/review') {
+        sendJson(response, 200, api.review());
+        return true;
+      }
+      const inPicture =
+        /^\/ui\/api\/photo-people\/photos\/([A-Za-z0-9_-]{24})\.json$/.exec(
+          pathname,
+        );
+      if (inPicture) {
+        try {
+          sendJson(response, 200, api.photoReview(inPicture[1]!));
+        } catch (error) {
+          if (!(error instanceof PeopleError)) throw error;
+          sendJson(response, 404, { error: error.code });
+        }
         return true;
       }
       const face =
@@ -323,13 +434,27 @@ export class LugnHttpServer {
         sendJson(response, 404, { error: 'not_found' });
         return true;
       }
-      response.writeHead(200, {
-        'content-type': 'image/jpeg',
-        'content-length': body.byteLength,
-        'cache-control': 'private, max-age=3600',
+      const headers: Record<string, string | number> = {
         'x-content-type-options': 'nosniff',
         'cross-origin-resource-policy': 'same-origin',
         'content-security-policy': "default-src 'none'; sandbox",
+      };
+      if (face) {
+        // A face crop changes when the household moves its box, so it is
+        // checked each time (a small answer on the home network) rather than kept.
+        const tag = `"${createHash('sha1').update(body).digest('base64url')}"`;
+        headers['etag'] = tag;
+        headers['cache-control'] = 'private, no-cache';
+        if (request.headers['if-none-match'] === tag) {
+          response.writeHead(304, headers);
+          response.end();
+          return true;
+        }
+      } else headers['cache-control'] = 'private, max-age=3600';
+      response.writeHead(200, {
+        ...headers,
+        'content-type': 'image/jpeg',
+        'content-length': body.byteLength,
       });
       response.end(body);
       return true;
@@ -370,6 +495,9 @@ export class LugnHttpServer {
         /^\/ui\/api\/photo-people\/faces\/([A-Za-z0-9_-]{24}\.\d{1,2})$/.exec(
           pathname,
         );
+      const picture =
+        /^\/ui\/api\/photo-people\/photos\/([A-Za-z0-9_-]{24})$/.exec(pathname);
+      let extra: Record<string, unknown> = {};
       if (person) {
         const input = z
           .object({
@@ -392,23 +520,45 @@ export class LugnHttpServer {
         const input = z
           .union([
             z.object({ person: personId }).strict(),
+            z.object({ named: z.string().min(1).max(80) }).strict(),
             z.object({ new: z.literal(true) }).strict(),
             z.object({ none: z.literal(true) }).strict(),
+            z.object({ open: z.literal(true) }).strict(),
+            z
+              .object({
+                box: z
+                  .tuple([z.number(), z.number(), z.number(), z.number()])
+                  .nullable(),
+              })
+              .strict(),
           ])
           .parse(body);
-        api.moveFace(
-          face[1]!,
-          'person' in input
-            ? { person: input.person }
-            : 'new' in input
-              ? 'new'
-              : 'none',
-        );
+        if ('box' in input) api.setFaceBox(face[1]!, input.box);
+        else
+          api.moveFace(
+            face[1]!,
+            'person' in input
+              ? { person: input.person }
+              : 'named' in input
+                ? { named: input.named }
+                : 'new' in input
+                  ? 'new'
+                  : 'none' in input
+                    ? 'none'
+                    : 'open',
+          );
+        // The picture the face is in, as it is now, so a review can go on.
+        const context = api.faceContext(face[1]!);
+        if (context) extra = { review: api.photoReview(context.photoId) };
+      } else if (picture) {
+        const input = z.object({ skip: z.boolean() }).strict().parse(body);
+        api.skipPhoto(picture[1]!, input.skip);
+        extra = { review: api.photoReview(picture[1]!) };
       } else {
         sendJson(response, 404, { error: 'not_found' });
         return true;
       }
-      reply();
+      reply(extra);
     } catch (error) {
       if (error instanceof PeopleError)
         sendJson(response, error.code === 'not_found' ? 404 : 400, {
@@ -441,6 +591,14 @@ export class LugnHttpServer {
       },
       '/ui/photo-people.js': {
         name: 'photo-people.js',
+        contentType: 'text/javascript; charset=utf-8',
+      },
+      '/ui/photo-review.js': {
+        name: 'photo-review.js',
+        contentType: 'text/javascript; charset=utf-8',
+      },
+      '/ui/photo-review-logic.js': {
+        name: 'photo-review-logic.js',
         contentType: 'text/javascript; charset=utf-8',
       },
       '/ui/display-power.js': {
@@ -1627,6 +1785,53 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   if (byteLength === 0) throw new HttpRequestError(400, 'empty_request_body');
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+  } catch {
+    throw new HttpRequestError(400, 'invalid_json');
+  }
+}
+
+/**
+ * The photo brain's bundle: JSON, optionally gzip, at most 64 MB once
+ * inflated. Inflating stops at the cap, so a small bomb cannot grow past it.
+ */
+async function readBrainBundle(request: IncomingMessage): Promise<unknown> {
+  const encoding = String(request.headers['content-encoding'] ?? 'identity')
+    .trim()
+    .toLowerCase();
+  if (encoding !== 'identity' && encoding !== 'gzip')
+    throw new HttpRequestError(415, 'unsupported_content_encoding');
+  const declared = Number(request.headers['content-length']);
+  if (Number.isFinite(declared) && declared > MAX_BRAIN_BUNDLE_BYTES)
+    throw new HttpRequestError(413, 'request_too_large');
+  const gunzip = encoding === 'gzip' ? createGunzip() : null;
+  if (gunzip) {
+    request.once('error', (error) => gunzip.destroy(error));
+    request.pipe(gunzip);
+  }
+  const decoder = new StringDecoder('utf8');
+  const parts: string[] = [];
+  let byteLength = 0;
+  try {
+    for await (const chunk of gunzip ?? request) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      byteLength += buffer.byteLength;
+      if (byteLength > MAX_BRAIN_BUNDLE_BYTES)
+        throw new HttpRequestError(413, 'request_too_large');
+      parts.push(decoder.write(buffer));
+    }
+  } catch (error) {
+    if (error instanceof HttpRequestError || !gunzip) throw error;
+    throw new HttpRequestError(400, 'invalid_gzip');
+  } finally {
+    if (gunzip) {
+      request.unpipe(gunzip);
+      gunzip.destroy();
+    }
+  }
+  if (byteLength === 0) throw new HttpRequestError(400, 'empty_request_body');
+  parts.push(decoder.end());
+  try {
+    return JSON.parse(parts.join('')) as unknown;
   } catch {
     throw new HttpRequestError(400, 'invalid_json');
   }

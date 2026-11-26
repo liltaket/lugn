@@ -1,31 +1,67 @@
 {
-  "note": "Scene vocabulary for the photo frame. Input to scripts/build-photo-scenes.mjs, which turns the prompts into data/photo-scenes.json. `sv` is the name shown on a Hub (null: only there so that other pictures are not forced into a scene).",
+  "note": "Scene vocabulary for the photo frame. Input to agents/linux/photo-brain/scripts/build-scenes.sh, which turns the prompts into data/photo-scenes.json with the SigLIP 2 text tower. `sv` is the name shown on a Hub (null: a sink, only there so that ordinary pictures are not forced into a named scene). `junk` marks pictures that are not photos of life (screenshots, documents); the clustering flags them. Prompts are lowercased by the builder.",
   "scenes": [
     {
       "key": "beach",
       "sv": "Stranden",
       "prompts": [
         "a photo of a sandy beach",
-        "people on the beach by the sea",
-        "a seaside beach with waves"
+        "people sunbathing on a beach",
+        "a sandy shore with waves"
       ]
     },
     {
       "key": "sea",
       "sv": "Havet",
       "prompts": [
-        "a photo of the sea and the horizon",
-        "a boat on the water",
-        "a harbour with boats"
+        "a photo of the open sea and the horizon",
+        "a sailing boat on the sea",
+        "waves breaking on a rocky shore"
+      ]
+    },
+    {
+      "key": "archipelago",
+      "sv": "Skärgården",
+      "prompts": [
+        "a photo of the swedish archipelago",
+        "small rocky islands in the sea",
+        "smooth granite rocks by the sea with a red cottage"
+      ]
+    },
+    {
+      "key": "harbour",
+      "sv": "Hamnen",
+      "prompts": [
+        "a harbour with moored boats",
+        "a marina full of sailing boats",
+        "a ferry at a quay"
       ]
     },
     {
       "key": "lake",
       "sv": "Sjön",
       "prompts": [
-        "a photo of a lake",
-        "a jetty at a calm lake",
-        "a river or a stream in nature"
+        "a photo of a calm lake",
+        "a wooden jetty on a lake",
+        "a lake surrounded by forest"
+      ]
+    },
+    {
+      "key": "river",
+      "sv": "Ån",
+      "prompts": [
+        "a river flowing through the landscape",
+        "a small stream in the forest",
+        "a waterfall"
+      ]
+    },
+    {
+      "key": "swim",
+      "sv": "Badet",
+      "prompts": [
+        "people swimming in a lake",
+        "children splashing in a swimming pool",
+        "jumping into the water from a jetty"
       ]
     },
     {
@@ -33,8 +69,17 @@
       "sv": "Skogen",
       "prompts": [
         "a photo of a forest",
-        "a path between tall trees",
-        "a walk in the woods"
+        "a path through a green forest",
+        "sunlight between tall pine trees"
+      ]
+    },
+    {
+      "key": "snowforest",
+      "sv": null,
+      "prompts": [
+        "a snowy forest in winter",
+        "spruce trees covered in snow",
+        "a forest path covered in snow"
       ]
     },
     {
@@ -42,61 +87,160 @@
       "sv": "Bergen",
       "prompts": [
         "a photo of mountains",
-        "a view from a mountain top",
-        "a rocky mountain landscape"
+        "the view from a mountain top",
+        "a rocky mountain landscape with peaks"
+      ]
+    },
+    {
+      "key": "countryside",
+      "sv": "Landet",
+      "prompts": [
+        "a green meadow with wildflowers",
+        "fields and farmland in the countryside",
+        "a red wooden barn in a field"
+      ]
+    },
+    {
+      "key": "garden",
+      "sv": "Trädgården",
+      "prompts": [
+        "a garden with flower beds",
+        "a lawn and fruit trees in a back garden",
+        "a close-up of flowers in a garden"
       ]
     },
     {
       "key": "snow",
       "sv": "Snön",
       "prompts": [
-        "a photo of snow",
         "a snowy winter landscape",
-        "skiing in the snow"
+        "children playing in the snow",
+        "a snowman"
+      ]
+    },
+    {
+      "key": "skiing",
+      "sv": "Skidåkningen",
+      "prompts": [
+        "skiing down a snowy slope",
+        "cross-country skiing on a trail",
+        "a ski resort with a ski lift"
+      ]
+    },
+    {
+      "key": "hike",
+      "sv": "Vandringen",
+      "prompts": [
+        "people hiking on a mountain trail",
+        "a hiker with a backpack",
+        "a tent at a campsite"
       ]
     },
     {
       "key": "sunset",
       "sv": "Solnedgången",
       "prompts": [
-        "a photo of a sunset",
-        "a colourful sky at sunrise",
-        "the sun setting over the horizon"
+        "a sunset over the sea",
+        "the evening sun going down behind the horizon",
+        "a red evening sky at dusk"
       ]
     },
     {
-      "key": "city",
-      "sv": "Staden",
+      "key": "sunrise",
+      "sv": "Soluppgången",
       "prompts": [
-        "a photo of a city street",
-        "tall buildings in a city",
-        "people walking in a busy town"
-      ]
-    },
-    {
-      "key": "oldtown",
-      "sv": "Gamla stan",
-      "prompts": [
-        "a photo of an old town with historic buildings",
-        "a church or a cathedral",
-        "a castle or a monument"
+        "a sunrise early in the morning",
+        "the morning sun coming up over the horizon",
+        "morning mist at dawn"
       ]
     },
     {
       "key": "night",
       "sv": "Kvällen",
       "prompts": [
-        "a photo of a city at night with lights",
-        "a night scene with neon lights",
-        "fireworks in the night sky"
+        "a city street at night with lights",
+        "a dark evening with street lamps",
+        "the starry night sky"
+      ]
+    },
+    {
+      "key": "fireworks",
+      "sv": "Fyrverkerierna",
+      "prompts": [
+        "fireworks in the night sky",
+        "new year's eve fireworks over a city",
+        "sparklers at night"
+      ]
+    },
+    {
+      "key": "sky",
+      "sv": null,
+      "prompts": [
+        "a blue sky with white clouds",
+        "clouds in the sky",
+        "a rainbow in the sky"
+      ]
+    },
+    {
+      "key": "city",
+      "sv": "Staden",
+      "prompts": [
+        "a busy city street with tall buildings",
+        "a city skyline",
+        "people walking in a city centre"
+      ]
+    },
+    {
+      "key": "oldtown",
+      "sv": "Gamla stan",
+      "prompts": [
+        "narrow cobblestone streets in an old town",
+        "historic buildings in an old european town",
+        "a medieval town square"
+      ]
+    },
+    {
+      "key": "landmark",
+      "sv": "Sevärdheterna",
+      "prompts": [
+        "a famous monument or landmark",
+        "a castle",
+        "a large cathedral"
+      ]
+    },
+    {
+      "key": "street",
+      "sv": null,
+      "prompts": [
+        "the outside of a house",
+        "a residential street with houses",
+        "a car parked on a street"
+      ]
+    },
+    {
+      "key": "market",
+      "sv": null,
+      "prompts": [
+        "a market with stalls",
+        "a supermarket aisle",
+        "the inside of a shop"
+      ]
+    },
+    {
+      "key": "museum",
+      "sv": null,
+      "prompts": [
+        "a museum exhibition",
+        "paintings in an art gallery",
+        "a museum display case"
       ]
     },
     {
       "key": "food",
       "sv": "Maten",
       "prompts": [
-        "a photo of a meal on a plate",
-        "food on a table",
+        "a plate of food",
+        "a home-cooked dinner on the table",
         "a close-up of a dish"
       ]
     },
@@ -104,131 +248,154 @@
       "key": "cafe",
       "sv": "Fikat",
       "prompts": [
-        "a photo of coffee and pastry in a cafe",
-        "people sitting in a restaurant",
-        "drinks on a bar table"
+        "a cup of coffee and a cinnamon bun",
+        "coffee and pastries in a cafe",
+        "a cosy cafe"
+      ]
+    },
+    {
+      "key": "restaurant",
+      "sv": "Restaurangen",
+      "prompts": [
+        "people eating at a restaurant",
+        "a restaurant table with wine glasses",
+        "a dining room in a restaurant"
       ]
     },
     {
       "key": "party",
       "sv": "Festen",
       "prompts": [
-        "a photo of a party with friends",
-        "people celebrating and laughing together",
-        "friends drinking at a party"
+        "friends celebrating at a party",
+        "people dancing at a party",
+        "a party with drinks and decorations"
       ]
     },
     {
       "key": "concert",
       "sv": "Konserten",
       "prompts": [
-        "a photo of a concert with stage lights",
+        "a band playing on a stage with stage lights",
         "a crowd at a music festival",
-        "a band playing on a stage"
+        "an orchestra in a concert hall"
       ]
     },
     {
       "key": "birthday",
       "sv": "Födelsedagen",
       "prompts": [
-        "a photo of a birthday cake with candles",
-        "birthday balloons and presents",
-        "a celebration with a cake"
+        "a birthday cake with lit candles",
+        "a child blowing out birthday candles",
+        "birthday presents and balloons"
       ]
     },
     {
       "key": "christmas",
       "sv": "Julen",
       "prompts": [
-        "a photo of a christmas tree",
-        "christmas decorations and presents",
-        "a festive holiday table"
+        "a decorated christmas tree with lights",
+        "presents under a christmas tree",
+        "santa claus"
+      ]
+    },
+    {
+      "key": "midsummer",
+      "sv": "Midsommar",
+      "prompts": [
+        "a maypole at a swedish midsummer celebration",
+        "people dancing around a midsummer pole",
+        "a girl with a flower wreath in her hair"
+      ]
+    },
+    {
+      "key": "wedding",
+      "sv": "Bröllopet",
+      "prompts": [
+        "a bride and groom at a wedding",
+        "a wedding ceremony",
+        "a wedding cake"
       ]
     },
     {
       "key": "dog",
       "sv": "Hunden",
-      "prompts": [
-        "a photo of a dog",
-        "a puppy playing outside",
-        "a dog on a walk"
-      ]
+      "prompts": ["a photo of a dog", "a dog playing in the grass", "a puppy"]
     },
     {
       "key": "cat",
       "sv": "Katten",
-      "prompts": ["a photo of a cat", "a cat sleeping on a sofa", "a kitten"]
+      "prompts": ["a photo of a cat", "a cat lying on a sofa", "a kitten"]
+    },
+    {
+      "key": "pet",
+      "sv": null,
+      "prompts": [
+        "a pet rabbit",
+        "a guinea pig or a hamster",
+        "a pet bird in a cage"
+      ]
     },
     {
       "key": "animal",
       "sv": "Djuren",
       "prompts": [
-        "a photo of a wild animal",
-        "birds in nature",
-        "a horse or a cow in a field"
+        "a wild animal in nature",
+        "birds in a tree",
+        "cows or horses in a field"
       ]
     },
     {
-      "key": "garden",
-      "sv": "Trädgården",
+      "key": "zoo",
+      "sv": "Djurparken",
       "prompts": [
-        "a photo of a garden with flowers",
-        "a close-up of flowers",
-        "a lawn and plants in a yard"
-      ]
-    },
-    {
-      "key": "hike",
-      "sv": "Vandringen",
-      "prompts": [
-        "a photo of people hiking on a trail",
-        "a hiker with a backpack in nature",
-        "a camping tent outdoors"
-      ]
-    },
-    {
-      "key": "sport",
-      "sv": "Sporten",
-      "prompts": [
-        "a photo of people playing sports",
-        "a bicycle ride",
-        "a running or swimming activity"
-      ]
-    },
-    {
-      "key": "travel",
-      "sv": null,
-      "prompts": [
-        "a photo from a car window on a road trip",
-        "an airport or an aeroplane window",
-        "a train station or a train ride"
-      ]
-    },
-    {
-      "key": "home",
-      "sv": "Hemma",
-      "prompts": [
-        "a photo of a living room at home",
-        "a cosy home interior with a sofa",
-        "a bedroom or a kitchen"
+        "animals at a zoo",
+        "an elephant or a giraffe at a zoo",
+        "a penguin at an aquarium"
       ]
     },
     {
       "key": "kids",
       "sv": "Barnen",
       "prompts": [
-        "a photo of children playing",
-        "a baby smiling",
-        "a child at a playground"
+        "children playing together",
+        "a smiling baby",
+        "a toddler with toys"
+      ]
+    },
+    {
+      "key": "playground",
+      "sv": null,
+      "prompts": [
+        "children on a playground",
+        "a slide and swings in a playground",
+        "a sandpit"
+      ]
+    },
+    {
+      "key": "sport",
+      "sv": "Sporten",
+      "prompts": [
+        "people playing football",
+        "a sports match in a stadium",
+        "a running race"
       ]
     },
     {
       "key": "selfie",
       "sv": null,
       "prompts": [
-        "a selfie of a person",
+        "a selfie",
         "a close-up portrait of a face",
         "a person posing for the camera"
+      ]
+    },
+    {
+      "key": "portrait",
+      "sv": null,
+      "prompts": [
+        "a portrait of a person outdoors",
+        "a person standing in front of a building",
+        "a person posing outside"
       ]
     },
     {
@@ -241,22 +408,99 @@
       ]
     },
     {
-      "key": "screen",
+      "key": "home",
+      "sv": "Hemma",
+      "prompts": [
+        "a cosy living room at home",
+        "a family relaxing at home on the sofa",
+        "a kitchen at home"
+      ]
+    },
+    {
+      "key": "room",
       "sv": null,
       "prompts": [
-        "a screenshot of a phone",
-        "a photo of a document or text",
-        "a photo of a computer screen"
+        "an ordinary room indoors",
+        "an office with desks and chairs",
+        "a bedroom"
       ]
+    },
+    {
+      "key": "hallway",
+      "sv": null,
+      "prompts": ["a hallway", "a staircase inside a building", "a corridor"]
+    },
+    {
+      "key": "car",
+      "sv": null,
+      "prompts": [
+        "the inside of a car",
+        "the view through a car windscreen",
+        "a car dashboard"
+      ]
+    },
+    {
+      "key": "airport",
+      "sv": null,
+      "prompts": [
+        "an airport terminal",
+        "the view from an aeroplane window",
+        "an aeroplane on the runway"
+      ]
+    },
+    {
+      "key": "train",
+      "sv": null,
+      "prompts": [
+        "a train station platform",
+        "the inside of a train",
+        "a train on the tracks"
+      ]
+    },
+    {
+      "key": "vehicle",
+      "sv": null,
+      "prompts": ["a car", "a bicycle", "a motorbike"]
     },
     {
       "key": "object",
       "sv": null,
       "prompts": [
-        "a close-up photo of an object on a table",
-        "a photo of electronics and tools on a workbench",
-        "a photo of a machine or a vehicle"
+        "a close-up of an object on a table",
+        "tools on a workbench",
+        "electronics and cables"
       ]
+    },
+    {
+      "key": "art",
+      "sv": null,
+      "prompts": ["a child's drawing", "a painting", "a poster on a wall"]
+    },
+    {
+      "key": "screen",
+      "sv": null,
+      "junk": "screenshot",
+      "prompts": [
+        "a screenshot of a phone screen",
+        "a screenshot of an app or a website",
+        "a photo of a computer monitor"
+      ]
+    },
+    {
+      "key": "document",
+      "sv": null,
+      "junk": "document",
+      "prompts": [
+        "a photo of a document with text",
+        "a page of a book",
+        "a printed form or a letter"
+      ]
+    },
+    {
+      "key": "receipt",
+      "sv": null,
+      "junk": "document",
+      "prompts": ["a shop receipt", "a paper receipt with prices", "an invoice"]
     }
   ]
 }

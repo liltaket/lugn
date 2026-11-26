@@ -40,6 +40,16 @@ export type AlbumPhotoDetails = {
   /** How many faces the phone itself found. */
   deviceFaces: number;
 };
+/** One downloadable version of a picture. */
+export type AlbumRendition = {
+  /** `jpeg`: the browser rendition (1536 × 2048 at most); `original`: full size. */
+  kind: 'jpeg' | 'original';
+  url: string;
+  width: number;
+  height: number;
+  /** Apple's file type, e.g. `public.heic`; absent when not stated. */
+  type?: string;
+};
 export type AlbumPhoto = {
   /** Stable CPLAsset record name. */
   id: string;
@@ -47,6 +57,8 @@ export type AlbumPhoto = {
   url: string;
   width: number;
   height: number;
+  /** Every version offered, for the machine that analyses the pictures at full size. */
+  renditions?: AlbumRendition[];
   /** Capture time, ms since the epoch, if the record carries one. */
   takenAt: number | null;
   /** Apple's fingerprint of the rendition; changes when the picture is edited. */
@@ -105,12 +117,20 @@ const RESOLVE_URL =
 const DATABASE_PATH = '/database/1/com.apple.photos.cloud/production/shared/';
 const QUERY_TYPE = 'CPLAssetAndMasterByAssetDateWithoutHiddenOrDeleted';
 const PAGE_SIZE = 200;
-const MAX_PAGES = 10;
+// A shared album holds at most about 5000 pictures; each is a CPLAsset plus a
+// CPLMaster record, 200 records to a page.
+const MAX_PAGES = 60;
 const REQUEST_TIMEOUT_MS = 20_000;
 const PARTITION_HOST = /^p\d{1,3}-ckdatabasews\.icloud\.com$/;
 const DOWNLOAD_HOST = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.icloud-content\.com$/;
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
 const IMAGE_TYPES = new Set(['public.jpeg', 'public.png']);
+const ORIGINAL_TYPES = new Set([
+  'public.jpeg',
+  'public.png',
+  'public.heic',
+  'public.heif',
+]);
 const RENDITIONS: ReadonlyArray<readonly ['asset' | 'master', string]> = [
   ['asset', 'resJPEGMed'],
   ['master', 'resJPEGMed'],
@@ -330,6 +350,26 @@ export function extractDetails(
   };
 }
 
+function downloadUrl(resource: unknown): string | null {
+  const download = (resource as { downloadURL?: unknown } | undefined)
+    ?.downloadURL;
+  if (typeof download !== 'string') return null;
+  const url = download.replace('${f}', 'photo.jpg');
+  try {
+    const parsed = new URL(url);
+    if (
+      parsed.protocol !== 'https:' ||
+      (parsed.port !== '' && parsed.port !== '443') ||
+      parsed.username !== '' ||
+      !DOWNLOAD_HOST.test(parsed.hostname)
+    )
+      return null;
+  } catch {
+    return null;
+  }
+  return url;
+}
+
 function pickRendition(
   asset: CloudRecord | undefined,
   master: CloudRecord,
@@ -337,32 +377,50 @@ function pickRendition(
   const records = { asset, master };
   for (const [on, prefix] of RENDITIONS) {
     const record = records[on];
-    const resource = value(record, `${prefix}Res`) as
-      { downloadURL?: unknown } | undefined;
-    if (typeof resource?.downloadURL !== 'string') continue;
+    const url = downloadUrl(value(record, `${prefix}Res`));
+    if (url === null) continue;
     const type = value(record, `${prefix}FileType`);
     if (type !== undefined && !IMAGE_TYPES.has(String(type))) continue;
     const width = num(value(record, `${prefix}Width`));
     const height = num(value(record, `${prefix}Height`));
     if (width <= 0 || height <= 0) continue;
-    const url = resource.downloadURL.replace('${f}', 'photo.jpg');
-    try {
-      const parsed = new URL(url);
-      if (
-        parsed.protocol !== 'https:' ||
-        (parsed.port !== '' && parsed.port !== '443') ||
-        parsed.username !== '' ||
-        !DOWNLOAD_HOST.test(parsed.hostname)
-      )
-        continue;
-    } catch {
-      continue;
-    }
     return {
       url,
       width,
       height,
       version: String(value(record, `${prefix}Fingerprint`) ?? ''),
+    };
+  }
+  return null;
+}
+
+/**
+ * The full-size picture, when Apple offers it: the asset's own full rendition
+ * (upright, edits applied), else the master's original. HEIC for iPhone
+ * pictures. Only the machine that analyses pictures at full size asks for it.
+ */
+function pickOriginal(
+  asset: CloudRecord | undefined,
+  master: CloudRecord,
+): AlbumRendition | null {
+  const candidates: Array<[CloudRecord | undefined, string]> = [
+    [asset, 'resJPEGFull'],
+    [master, 'resOriginal'],
+  ];
+  for (const [record, prefix] of candidates) {
+    const url = downloadUrl(value(record, `${prefix}Res`));
+    if (url === null) continue;
+    const type = String(value(record, `${prefix}FileType`) ?? '');
+    if (type !== '' && !ORIGINAL_TYPES.has(type)) continue;
+    const width = num(value(record, `${prefix}Width`));
+    const height = num(value(record, `${prefix}Height`));
+    if (width <= 0 || height <= 0) continue;
+    return {
+      kind: 'original',
+      url,
+      width,
+      height,
+      ...(type === '' ? {} : { type }),
     };
   }
   return null;
@@ -480,9 +538,19 @@ export async function readSharedAlbum(
       value(asset, 'assetDate') ?? value(master, 'originalCreationDate'),
     );
     const location = decodeLocation(value(asset, 'locationEnc'));
+    const original = pickOriginal(asset, master);
     photos.push({
       id,
       ...rendition,
+      renditions: [
+        {
+          kind: 'jpeg',
+          url: rendition.url,
+          width: rendition.width,
+          height: rendition.height,
+        },
+        ...(original ? [original] : []),
+      ],
       takenAt: date > 0 ? date : null,
       utcOffsetSeconds: num(value(asset, 'timeZoneOffset')),
       latitude: location?.latitude ?? null,

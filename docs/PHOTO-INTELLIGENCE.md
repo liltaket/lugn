@@ -2,10 +2,10 @@
 
 The Hubs' **Foto** page shows pictures in groups that belong together (same
 outing, same place, same people, similar look) and names each group. The
-analysis behind it runs on the machine that runs Lugn, once per new or changed
-picture, and never on a Hub and never while a picture is on screen. Without the
-models or with `photoFrame.intelligence.enabled` set to `false` the page keeps
-every earlier behaviour; grouping then uses time and place alone.
+pictures are analysed on Kuffe by the photo brain ([PHOTO-BRAIN.md](PHOTO-BRAIN.md)),
+never on BrunoCAM, never on a Hub and never while a picture is on screen.
+Without its results, or with `photoFrame.intelligence.enabled` set to `false`,
+the page keeps working and groups by time and place alone.
 
 ## What is read from the album
 
@@ -28,75 +28,64 @@ reach a Hub.
 "Stored, not yet scored" fields are read and cached so they can be used without
 another pass over the album; nothing claims they improve the grouping today.
 
-## Models
+## Who does what
 
-All three are permissively licensed, so the same files can be used in a product.
-`npm run photos:models` downloads them once, checks each against its SHA-256 and
-installs them in `photoFrame.intelligence.modelsDir` (default: `photo-models`
-next to the state file). They are not part of the repository.
+Lugn on BrunoCAM lists the album, keeps the small display copies, keeps the
+household's decisions about people and serves the Hubs. It never runs a model and
+never compares faces. The photo brain on Kuffe (`lugn-photo-brain`) downloads the
+full-size pictures, runs the models (scenes, quality, faces), proposes who each
+face is, and finds candidate neighbours, near-duplicates, events and trips. The
+two talk over three bearer-token routes on Lugn's loopback API; the contract, the
+bundle format and the reasons for the split are in
+[PHOTO-BRAIN.md](PHOTO-BRAIN.md).
 
-| Job                    | Model                                         | Licence    | Size   |
-| ---------------------- | --------------------------------------------- | ---------- | ------ |
-| what a picture shows   | CLIP ViT-B/32 image tower, int8 (Xenova ONNX) | MIT        | 89 MB  |
-| face boxes + landmarks | YuNet 2023 mar (OpenCV Zoo)                   | MIT        | 0.2 MB |
-| who a face is          | SFace 2021 dec, int8 (OpenCV Zoo)             | Apache-2.0 | 9.9 MB |
+- `PhotoLibrary` (`photo-library.ts`) keeps up to `maxPhotos` pictures (5000 by
+  default). A refresh with many new pictures writes its index every 25 pictures
+  and shows them at once, so a restart or a failure keeps what is done; unused
+  files are only removed after a full pass. It serves the album to Kuffe with
+  full-precision coordinates and fresh download links (the listing is read again
+  when it is older than five minutes); the Hubs keep getting rounded positions.
+- `IntelStore` (`photo-intel/intel-store.ts`) checks the bundle field by field
+  (schema 1, length and count limits, picture ids) and keeps it in `intel.json`
+  (mode 0600) next to the pictures. A damaged file is ignored until Kuffe sends
+  a new one.
+- `PeopleStore` (`photo-intel/people.ts`) maps Kuffe's proposals to people (see
+  below). `PhotoInsight` (`photo-intel/insight.ts`) turns both into the short
+  list per picture a Hub reads.
 
-Scene names (beach, forest, food, party, …) come from comparing a picture's
-embedding with text embeddings of a fixed vocabulary. The text vectors are
-computed once on a development machine (`scripts/build-photo-scenes.mjs`, input
-`data/photo-scenes.source.json`) and shipped as `data/photo-scenes.json`, so the
-text model, its tokenizer and any download are not needed at run time.
-
-**Why not MobileCLIP2 and InsightFace?** Both were considered first. MobileCLIP2
-is smaller and faster, and InsightFace's recognisers are stronger on hard faces,
-but Apple's MobileCLIP2 weights are released "exclusively for Research Purposes"
-and InsightFace's pretrained models for non-commercial research only. A
-household product is not that, so they are not shipped. Any model with the same
-inputs and outputs can replace a file of the same name; the scene vectors must
-then be rebuilt for the new text tower.
-
-## How it runs
-
-- `PhotoLibrary` hands every cached picture to `PhotoInsight`. Pictures without
-  a record go into a queue (`photo-intel/analyzer.ts`).
-- One worker process at a time (`photo-intel/worker.ts`), started with
-  `os.setPriority(19)`, a 128 MB heap limit, one ONNX thread, no memory arena, no weight packing and one malloc arena that trims (about 250 MB resident).
-  It analyses one picture, rests 250 ms, and exits after 30 s without work.
-  A picture that fails twice is skipped; three failures in a row pause the queue
-  for ten minutes. A crash or a stuck picture (two minutes) only replaces the
-  worker.
-- Results are kept in `analysis.json` next to the pictures, keyed by the
-  picture's id, which changes when the picture is edited. A new model version
-  starts the cache again once. Nothing is analysed twice.
-- The ONNX runtime contains a Microsoft telemetry client (OneCollector). The worker
-  starts with `ORT_DISABLE_TELEMETRY=1` so it is never started; nothing about a
-  picture or a face goes anywhere.
-- Faces and their decisions are in `people.json` (mode 0600). Faces are not
-  sent anywhere: the panel receives small crops and pictures through the signed
-  in session only, and a Hub receives person ids and names, never faces.
-
-Measured with one thread: 109 ms per picture on a 16-core development machine;
-about 3.4 s per picture and 230 MB resident on the Raspberry Pi 3B that runs
-Lugn (models load in 7 s), so 150 new pictures take about nine minutes at the
-lowest priority while the sensor and the lights keep their share.
+When Kuffe is away, Lugn keeps serving the last bundle. Pictures without a result
+yet (new ones, or all of them before the first bundle) are grouped by time and
+place alone. With `photoFrame.intelligence.enabled` set to `false` the bundle is
+not used (and the photo brain routes are closed), and every picture is grouped by
+time and place.
 
 ## Grouping
 
-`photo-intel/grouping.ts` scores every pair of pictures 0–1:
+For a picture Kuffe has seen, its candidates (about 48, each with a score 0–100
+computed without people) are adjusted by who is in both pictures, as decided on
+this machine (`shared ≥ 1`: raised; only different known people: lowered; see
+the formula in [PHOTO-BRAIN.md](PHOTO-BRAIN.md)), and the best fourteen with a
+score of at least 0.3 become its neighbours (`nb`). Candidates that left the
+library are dropped. A screenshot, a document, or a picture too blurred
+(sharpness < 8) or too dark (> 95) is marked `skip: 1`: no other picture lists it
+as a neighbour and it gets no neighbours of its own. (A Hub that does not know
+`skip` yet may still start a group from it.) Near-duplicates (`du`, burst shots)
+come from Kuffe and are never shown together. The scene is the top scene when
+Kuffe is at least 45 % sure. Trips are Kuffe's.
+
+For a picture Kuffe has not seen, `photo-intel/grouping.ts` compares it with the
+60 pictures nearest to it in time (never with all), on:
 
 - **time**: 1 within half an hour, 0.85 at 3 h, 0.6 at 8 h, 0.35 at a day and a
   half, 0.15 at a week, 0 after a month (linear in log time);
 - **place**: 1 within 300 m, 0.85 at 3 km, 0.6 at 15 km, 0.3 at 60 km, ~0 at 200 km;
-- **people**: shared people raise the score, disjoint known people lower it;
-- **look**: CLIP cosine, 0.5 (unrelated) to 0.85 (same scene);
-- missing information is skipped, not counted as a mismatch; far apart in both
-  time (> 2 weeks) and look without a shared person, or far away (> 150 km) at
-  a different time, cuts the score hard.
+- far apart in time (> 2 weeks), or far away (> 150 km) at a different time,
+  cuts the score hard.
 
-Each picture gets its fourteen best neighbours (score ≥ 0.3) and a list of
-near-duplicates (burst shots, never shown together). Trips are found as runs of
-sessions away from home (> 80 km; home = where a quarter of the located pictures
-are, or `photoFrame.intelligence.home`) spanning two days or another country.
+Trips for these pictures are found as runs of sessions away from home (> 80 km;
+home = `photoFrame.intelligence.home`, else Kuffe's, else where a quarter of the
+located pictures are) spanning two days or another country. The listing's `ai`
+is true once any picture has a result from Kuffe.
 
 On a Hub, `buildGroup` (`photos-page.js`) picks a seed among pictures not yet
 shown this round (favourites a bit more often), then adds four to six
@@ -147,23 +136,78 @@ person the faces form, with a name field, "Det här är en person" (confirm),
 merge, hide, and a tap on any face opens its picture to move it to another
 person, a new person, or "not a person". The panel's API is under
 `/ui/api/photo-people` and has the same session, same-origin and CSRF rules as the
-rest of the panel. Decisions made there are kept and never overridden: the
-automatic grouping only fills in what nobody decided and keeps its own earlier
-choices stable.
+rest of the panel. Face crops are cut here from the cached picture with the box
+Kuffe sent; no face embedding ever leaves Kuffe.
 
-Faces are grouped by SFace cosine similarity: a face joins a person when it is at
-least 0.40 similar to that person's average (0.30 to keep an earlier place), and
-new people start from clear, front-facing faces that agree on average at 0.38.
-These thresholds were set on one household's pictures; the panel is how they are
-corrected.
+Who a face is, in order: what the household decided for it; else Kuffe's
+proposal. A proposal of a known person (`p3`) is followed if that person still
+exists. A new group (`n7`, the same number on several faces) becomes the person
+most of its faces were before, unless a larger group took that person already;
+otherwise a new person, but only for two faces or more. A face is never given
+automatically to a person it was moved away from. People nobody named or
+confirmed, and who have no faces left, are dropped. Everything is mapped again
+when a bundle arrives and after every decision. Kuffe reads the decisions
+(`GET /photo-brain/v1/people`) and anchors its grouping on them.
+
+Decisions are kept in `people.json` (mode 0600, the same file format as before
+the photo brain). Each new decision also keeps the face's box, so a decision
+follows its face when Kuffe numbers the faces of a picture differently from the
+old on-device analysis or from an earlier model: it moves to the face in the same
+picture whose box overlaps by half or more, and is kept unused while no face
+matches. Decisions made before boxes were kept take their boxes once from the
+old `analysis.json`, if it is still there.
+
+### Reviewing faces
+
+"Granska med tangentbordet" (under "Ansikten utan person") walks through every
+picture that has a face nobody has placed, a crowd first, one picture at a time
+with all its faces drawn over it. Pressing a face in a person's card opens the
+same view on that picture. Everything can be done from the keyboard:
+
+| Key      | Does                                                             |
+| -------- | ---------------------------------------------------------------- |
+| `1`–`9`  | the face is that person (the numbers stay put for the whole run) |
+| `/`, `⏎` | type a name: finds a person, or makes a new one with that name   |
+| `N`      | a new, unnamed person                                            |
+| `X`      | this face does not matter                                        |
+| `A`      | none of this picture's faces matter (pressed again: they do)     |
+| `S`, `␣` | skip to the next face nobody has placed                          |
+| `←` `→`  | the previous / next face in the picture; `↑` `↓` the picture     |
+| `Z`      | undo, as far back as the run goes                                |
+| `R`      | give a moved box back to the detector                            |
+
+With the mouse, a box is dragged onto the real face when the detector put it on
+an arm, and a corner resizes it. A moved box is the household's: the detector's
+idea of who it was is dropped (the face waits to be placed, unless somebody had
+already placed it), the picture and the panel use the moved box, and Kuffe is told
+that the detector's own box is not an example of anybody, since it sits in the
+wrong place. A box can be given back with `R`. Nothing is recomputed from a moved
+box; it is a decision, not a new detection.
+
+"None of this picture's faces matter" is kept per picture, not as a decision per
+face, so it also covers faces Kuffe finds later and can be undone: faces the
+household placed on somebody in that picture stay theirs, everything else in it
+is left out of people, of the groups of pictures, and (as "not a person") of what
+Kuffe anchors on. The pictures are listed under "Bilder där ansiktena inte spelar
+roll" in the panel, where tapping one opens it to take them back.
+
+The review reads `GET /ui/api/photo-people/review` (the pictures waiting, and the
+people with a thumbnail) and `GET …/photos/<id>.json` (one picture). Each
+correction (`POST …/faces/<id>` with `person`, `named`, `new`, `none`, `open` or
+`box`; `POST …/photos/<id>` with `skip`) answers with the picture it was made in.
 
 ## Operations
 
-- `photoFrame.intelligence`: `enabled` (default true), `modelsDir`, `home`
-  (`latitude`/`longitude`). See [CONFIGURATION.md](CONFIGURATION.md#photo-frame).
-- Install: `npm ci` (the ONNX runtime is an optional dependency; if it cannot be
-  installed the frame works as before), then `npm run photos:models`. On a
-  machine with a CPU only, set `ONNXRUNTIME_NODE_INSTALL=skip` while installing
-  to avoid the optional GPU downloads.
-- Status: the panel's chip shows analysed pictures, and `journalctl` has
-  `photo analysis: one picture took … ms` lines.
+- `photoFrame.intelligence`: `enabled` (default true) and `home`
+  (`latitude`/`longitude`); an old `modelsDir` is accepted and ignored. See
+  [CONFIGURATION.md](CONFIGURATION.md#photo-frame).
+- The photo brain routes need Lugn's bearer token (`http.bearerTokenEnv`);
+  without one they answer `503 photo_brain_requires_token`.
+- Status: the panel's chip shows how many pictures Kuffe has analysed, "Väntar på
+  Kuffe" before the first bundle, and when Kuffe was last heard from if that is
+  more than six hours ago. `journalctl` has `photo brain: result for … pictures`
+  lines.
+- Files next to the pictures: `index.json`, `intel.json`, `people.json`. An
+  `analysis.json` and a `photo-models` directory from the old on-device analysis
+  are no longer used (only `analysis.json`'s face boxes are read once, see above)
+  and can be deleted once the decisions have followed their faces.

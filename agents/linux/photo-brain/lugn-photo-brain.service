@@ -1,0 +1,24 @@
+[Unit]
+Description=Lugn photo brain (stores the album's originals, analyses and clusters them for BrunoCAM)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart="%h/.local/bin/lugn-photo-brain" --config "%E/lugn-photo-brain/config.toml" run
+# LUGN_PHOTO_BRAIN_TOKEN=... (mode 0600). The token is never in config.toml.
+EnvironmentFile=-%E/lugn-photo-brain/environment
+UMask=0077
+# Kuffe is shared with other heavy jobs: lowest priority, idle disk I/O, a
+# memory ceiling, and the models' threads come from config.toml.
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=4G
+Restart=on-failure
+RestartSec=30
+# SIGTERM is checked between pictures and during downloads.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target
