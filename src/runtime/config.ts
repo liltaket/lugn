@@ -541,16 +541,17 @@ const FileConfigSchema = z
           { message: 'must be a photos.icloud.com/shared/album/… link' },
         ),
         refreshMinutes: z.number().int().min(5).max(1440).default(30),
-        maxPhotos: z.number().int().min(1).max(500).default(150),
+        maxPhotos: z.number().int().min(1).max(20_000).default(5000),
         cacheDir: z.string().min(1).optional(),
         /**
-         * Image analysis for the photo frame: groups pictures by what they show
-         * and who is in them, and names the groups. Runs on this machine only,
-         * once per new picture; without the models nothing changes.
+         * The photo brain's results (docs/PHOTO-BRAIN.md): groups pictures by
+         * what they show and who is in them, and names the groups. Models run
+         * on Kuffe; without its results the frame groups by time and place.
          */
         intelligence: z
           .object({
             enabled: z.boolean().default(true),
+            /** Read by the old on-device analysis; accepted and ignored. */
             modelsDir: z.string().min(1).optional(),
             /** Where home is, so trips away can be told from days at home. */
             home: z
@@ -859,7 +860,6 @@ export type RuntimeConfig = {
     intelligence?:
       | {
           enabled: boolean;
-          modelsDir?: string | undefined;
           home?: { latitude: number; longitude: number } | undefined;
         }
       | undefined;

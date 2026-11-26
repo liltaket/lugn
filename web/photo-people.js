@@ -1,11 +1,13 @@
-// Foton: who the photo frame has found in the pictures. Lugn groups the faces
-// it sees; here the household names the people, confirms a group or moves a
-// face that landed in the wrong one. app.js owns the session; this module
-// borrows its CSRF token through window.lugnPanel and talks only to Lugn.
-// Everything about a face stays on the machine that runs Lugn.
+// Foton: who the photo frame has found in the pictures. The photo brain on
+// Kuffe finds the faces and proposes who they are; here the household names
+// the people, confirms a group or moves a face that landed in the wrong one.
+// app.js owns the session; this module borrows its CSRF token through
+// window.lugnPanel and talks only to Lugn.
 
 const API = '/ui/api/photo-people';
 const POLL_MS = 4000;
+/** A bundle older than this: Kuffe has gone quiet. */
+const QUIET_MS = 6 * 60 * 60 * 1000;
 
 const el = (id) => document.getElementById(id);
 function node(tag, className = '', text = '') {
@@ -18,7 +20,6 @@ function node(tag, className = '', text = '') {
 let data = null;
 let pollTimer = 0;
 let busy = false;
-let openFace = null;
 
 const section = () => el('photo-people-section');
 const visible = () => {
@@ -88,7 +89,8 @@ function schedule() {
   window.clearTimeout(pollTimer);
   pollTimer = 0;
   if (!visible() || document.hidden) return;
-  const working = data?.status?.analyzer?.pending > 0;
+  const brain = data?.status?.brain;
+  const working = Boolean(brain?.intelAt) && brain.analysed < brain.photos;
   pollTimer = window.setTimeout(
     () => void load(),
     working ? POLL_MS : POLL_MS * 6,
@@ -97,21 +99,27 @@ function schedule() {
 
 // ── Reading the state ──
 
-function statusText(status) {
+const sinceFormat = new Intl.DateTimeFormat('sv-SE', {
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+function statusText(status, now = Date.now()) {
   if (!status) return ['Läser …', 'warn'];
-  if (!status.available)
+  if (!status.available) return ['Bildanalysen är av', 'warn'];
+  const brain = status.brain;
+  if (!brain?.intelAt) return ['Väntar på Kuffe', 'warn'];
+  if (now - brain.intelAt > QUIET_MS)
     return [
-      status.missingModels?.length ? 'Modellerna saknas' : 'Bildanalysen är av',
+      `Kuffe har inte hörts av sedan ${sinceFormat.format(new Date(brain.intelAt))}`,
       'warn',
     ];
-  const a = status.analyzer;
-  if (a.state === 'backoff') return ['Pausad efter fel', 'warn'];
-  if (a.pending > 0)
-    return [
-      `Analyserar ${a.pending} ${a.pending === 1 ? 'bild' : 'bilder'}`,
-      'warn',
-    ];
-  return [`${status.analysed} av ${status.photos} bilder analyserade`, 'ok'];
+  return [
+    `Kuffe: ${brain.analysed} av ${brain.photos} ${brain.photos === 1 ? 'bild analyserad' : 'bilder analyserade'}`,
+    brain.analysed < brain.photos ? 'warn' : 'ok',
+  ];
 }
 
 function peopleLabel(person) {
@@ -122,7 +130,7 @@ function peopleLabel(person) {
 
 // ── Drawing ──
 
-function faceButton(sample, owner) {
+function faceButton(sample) {
   const button = node('button', 'pp-face');
   button.type = 'button';
   button.setAttribute('aria-label', 'Visa ansiktet');
@@ -132,7 +140,7 @@ function faceButton(sample, owner) {
   image.decoding = 'async';
   image.src = `${API}/faces/${sample.id}.jpg`;
   button.append(image);
-  button.addEventListener('click', () => showFace(sample, owner));
+  button.addEventListener('click', () => void openPicture(sample));
   return button;
 }
 
@@ -176,8 +184,7 @@ function personCard(person) {
   head.append(field, chip);
   const meta = node('p', 'pp-meta', peopleLabel(person));
   const faces = node('div', 'pp-faces');
-  for (const sample of person.samples)
-    faces.append(faceButton(sample, person.id));
+  for (const sample of person.samples) faces.append(faceButton(sample));
   const actions = node('div', 'button-row pp-actions');
   if (!person.confirmed && !person.hidden && person.faces > 0) {
     const confirm = node(
@@ -257,94 +264,89 @@ function render() {
     data.unassigned.count,
   );
   const faces = el('photo-people-unassigned-faces');
-  faces.replaceChildren(
-    ...data.unassigned.samples.map((s) => faceButton(s, null)),
-  );
+  faces.replaceChildren(...data.unassigned.samples.map((s) => faceButton(s)));
 
   const hiddenBox = el('photo-people-hidden');
   hiddenBox.hidden = hidden.length === 0;
   el('photo-people-hidden-count').textContent = String(hidden.length);
   el('photo-people-hidden-list').replaceChildren(...hidden.map(personCard));
-  if (openFace) refreshFaceDialog();
-}
 
-// ── One face: look at it in its picture and put it right ──
-
-function dialog() {
-  return el('photo-people-face');
-}
-
-function showFace(sample, owner) {
-  openFace = { sample, owner };
-  const box = dialog();
-  if (!box) return;
-  const image = el('photo-people-face-photo');
-  image.src = `${API}/photos/${sample.photoId}.jpg`;
-  const frame = el('photo-people-face-frame');
-  frame.style.left = `${sample.x * 100}%`;
-  frame.style.top = `${sample.y * 100}%`;
-  frame.style.width = `${sample.w * 100}%`;
-  frame.style.height = `${sample.h * 100}%`;
-  refreshFaceDialog();
-  if (!box.open) box.showModal();
-}
-
-function refreshFaceDialog() {
-  const box = dialog();
-  if (!box || !openFace || !data) return;
-  const { sample, owner } = openFace;
-  const current = data.people.find((p) =>
-    p.samples.some((s) => s.id === sample.id),
+  const skipped = data.skippedPhotos ?? [];
+  el('photo-people-skipped').hidden = skipped.length === 0;
+  el('photo-people-skipped-title').textContent =
+    `Bilder där ansiktena inte spelar roll (${skipped.length})`;
+  el('photo-people-skipped-list').replaceChildren(
+    ...skipped.map((id) => pictureButton(id)),
   );
-  const ownerId = current?.id ?? null;
-  openFace.owner = ownerId;
-  el('photo-people-face-who').textContent = current
-    ? (current.name ?? `Okänd person ${current.id.slice(1)}`)
-    : 'Ingen person ännu';
-  const choose = el('photo-people-face-move');
-  choose.replaceChildren(new Option('Flytta till …', ''));
-  for (const person of data.people.filter((p) => !p.hidden && p.id !== ownerId))
-    choose.append(
-      new Option(
-        person.name ?? `Okänd person ${person.id.slice(1)}`,
-        `p:${person.id}`,
-      ),
-    );
-  choose.append(new Option('En ny person', 'new'));
-  choose.append(new Option('Inte en person (visa aldrig)', 'none'));
-  void owner;
 }
 
-function wireDialog() {
-  const box = dialog();
-  if (!box || box.dataset.wired) return;
-  box.dataset.wired = '1';
-  el('photo-people-face-close').addEventListener('click', () => {
-    box.close();
-  });
-  box.addEventListener('close', () => {
-    openFace = null;
-    el('photo-people-face-photo').removeAttribute('src');
-  });
-  el('photo-people-face-move').addEventListener('change', (event) => {
-    const value = event.target.value;
-    if (!value || !openFace) return;
-    const body =
-      value === 'new'
-        ? { new: true }
-        : value === 'none'
-          ? { none: true }
-          : { person: value.slice(2) };
-    const id = openFace.sample.id;
-    box.close();
-    void act(`/faces/${id}`, body, 'Ansiktet är flyttat.');
-  });
+/** A picture whose faces were marked as not mattering; tap to open it. */
+function pictureButton(photoId) {
+  const button = node('button', 'pp-thumb');
+  button.type = 'button';
+  button.setAttribute('aria-label', 'Öppna bilden');
+  const image = new Image();
+  image.alt = '';
+  image.loading = 'lazy';
+  image.decoding = 'async';
+  image.src = `${API}/photos/${photoId}.jpg`;
+  button.append(image);
+  button.addEventListener('click', () => void openPicture({ photoId }));
+  return button;
+}
+
+// ── Reviewing faces in their pictures ──
+
+/** The review is loaded the first time it is wanted. */
+let reviewLoaded = null;
+function reviewer() {
+  reviewLoaded ??= import('./photo-review.js')
+    .then((module) =>
+      module.createReview({
+        call,
+        // Every answer carries the panel's people, so the page behind stays right.
+        onChange(reply) {
+          if (reply?.people && reply.unassigned) data = reply;
+        },
+        onClose() {
+          render();
+          void load();
+        },
+      }),
+    )
+    .catch((error) => {
+      // A failed load is tried again next time.
+      reviewLoaded = null;
+      throw error;
+    });
+  return reviewLoaded;
+}
+
+async function openPicture(sample) {
+  try {
+    await (await reviewer()).openPhoto(sample.photoId, sample.id);
+  } catch {
+    say('Bilden gick inte att öppna just nu.', 'warn');
+  }
+}
+
+async function startReview() {
+  try {
+    if (!(await (await reviewer()).openQueue()))
+      say('Inga ansikten väntar på en person.', 'ok');
+  } catch {
+    say('Granskningen gick inte att starta just nu.', 'warn');
+  }
 }
 
 // ── Page life ──
 
 function start() {
-  wireDialog();
+  const begin = el('photo-review-start');
+  if (begin && !begin.dataset.wired) {
+    begin.dataset.wired = '1';
+    begin.addEventListener('click', () => void startReview());
+  }
   void load();
 }
 

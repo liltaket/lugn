@@ -693,6 +693,7 @@ const server = createServer(async (request, response) => {
               'quick-menu.js',
               'photos-page.css',
               'photos-page.js',
+              'hub-history.js',
               'hub-probe.js',
             ].includes(route)
           ? `src/ui/${route}`

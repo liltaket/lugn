@@ -1,0 +1,60 @@
+# lugn-photo-brain configuration (docs/PHOTO-BRAIN.md).
+# Default location: $XDG_CONFIG_HOME/lugn-photo-brain/config.toml, mode 0600.
+# The bearer token is NOT set here: put LUGN_PHOTO_BRAIN_TOKEN=... in
+# ~/.config/lugn-photo-brain/environment (mode 0600).
+
+# Lugn's API on BrunoCAM through the tunnel (lugn-brunocam-tunnel.service).
+# Plain http is only accepted for the loopback address.
+lugn_url = "http://127.0.0.1:18787"
+
+# Full-size originals, on the big disk. Never created while the disk is not
+# mounted: the brain waits (and still publishes from what it has analysed).
+store_dir = "/run/media/bruno/Filmer/lugn-photos"
+
+# Index, embeddings, cached people decisions and the last bundle (small).
+db_dir = "~/.local/state/lugn-photo-brain"
+
+# The repository's scene vocabulary; data/places.tsv next to it names places.
+scenes_file = "~/lugn/data/photo-scenes.json"
+# places_file = "~/lugn/data/places.tsv"
+
+# ONNX models, opened by the inference module.
+models_dir = "~/.local/share/lugn-photo-brain/models"
+
+# Threads for the models and for clustering (Kuffe has 16 cores, shared).
+threads = 4
+
+# Minutes between two album checks when there is nothing to do.
+poll_minutes = 30
+
+# Stop downloading below this much free space on store_dir.
+min_free_gb = 20
+
+# Rest between two analysed pictures, in ms.
+pause_ms = 200
+
+# Days an original stays on disk after it left the album.
+gone_grace_days = 7
+
+# Only the newest this many pictures are kept and analysed (default: all).
+# max_pictures = 20000
+
+# Home, when the pictures' own guess (the place with the most photographed
+# days) is wrong.
+# [home]
+# lat = 59.33
+# lon = 18.06
+
+# Scene labels below the raw cosine floor are not reported; a screen,
+# document or receipt label at or above *_document_p (and no faces) marks the
+# picture as a document. softmax = CLIP-like vocabularies, sigmoid = SigLIP.
+# [scenes]
+# softmax_min_cosine = 0.22
+# sigmoid_min_cosine = 0.05
+# softmax_document_p = 0.6
+# sigmoid_document_p = 0.5
+
+# Outings: a new one after a pause this long or a jump this far.
+# [events]
+# gap_hours = 4
+# km = 25

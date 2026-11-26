@@ -252,13 +252,15 @@
       for (let i = 0; i < cams.length; i += 1)
         cams[i].imageUrl = list[i].imageUrl;
     }
-    if (mode === 'focus' && !cams.some((c) => c.id === focusId)) mode = 'grid';
+    const lost = mode === 'focus' && !cams.some((c) => c.id === focusId);
+    if (lost) mode = 'grid';
     setNotice(
       cams.length === 0
         ? 'Inga kameror är påslagna. Slå på dem under Intelligence i kontrollpanelen.'
         : '',
     );
     applyLayout();
+    if (lost) globalThis.lugnHistory?.replace();
   }
 
   // ── Tiles ──
@@ -418,6 +420,22 @@
     applyLayout();
     // The camera now alone is asked for at once, and faster.
     if (active) schedule(0);
+    globalThis.lugnHistory?.note();
+  }
+
+  // The large camera as a level of this page, for Back and Forward
+  // (hub-history.js). Before the page is shown it is the camera asked for.
+  const freshRequest = () =>
+    focusRequest && Date.now() - focusRequest.at < FOCUS_REQUEST_MS
+      ? focusRequest.id
+      : '';
+  const openLevel = () => {
+    if (!active) return freshRequest();
+    return mode === 'focus' ? focusId : '';
+  };
+  function setLevel(id) {
+    if (active) setMode(id ? 'focus' : 'grid', id);
+    else focusRequest = id ? { id, at: Date.now() } : null;
   }
 
   // ── Pictures ──
@@ -563,10 +581,7 @@
   async function start() {
     active = true;
     generation += 1;
-    const request =
-      focusRequest && Date.now() - focusRequest.at < FOCUS_REQUEST_MS
-        ? focusRequest.id
-        : '';
+    const request = freshRequest();
     focusRequest = null;
     // The cameras are known from Hem's payload before the lease answers.
     if (cams.length === 0) seedFromPayload();
@@ -591,7 +606,10 @@
     );
     if (!(await openLease())) return;
     if (!active) return;
-    if (request && !cams.some((c) => c.id === request)) setMode('grid');
+    if (request && !cams.some((c) => c.id === request)) {
+      setMode('grid');
+      globalThis.lugnHistory?.replace();
+    }
     schedule(0);
   }
 
@@ -654,6 +672,10 @@
   // the cameras. It is attached once every script has run (quick-menu.js comes
   // after this one).
   function attachMenu() {
+    globalThis.lugnHistory?.level('kameror', {
+      get: openLevel,
+      set: setLevel,
+    });
     navbar =
       globalThis.lugnQuickMenu?.attach({
         id: 'kameror',

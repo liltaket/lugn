@@ -259,6 +259,7 @@ function displayResourceCategory(
     case '/page-views.js':
     case '/lyrics-view.css':
     case '/lyrics-view.js':
+    case '/hub-history.js':
     case '/cameras-page.css':
     case '/cameras-page.js':
     case '/hub-probe.js':
@@ -1791,6 +1792,7 @@ type UiAssetName =
   | 'page-views.js'
   | 'lyrics-view.css'
   | 'lyrics-view.js'
+  | 'hub-history.js'
   | 'cameras-page.css'
   | 'cameras-page.js'
   | 'hub-probe.js';
@@ -1802,6 +1804,10 @@ const PAGE_ASSETS: ReadonlyMap<
 > = new Map([
   ['/pages.css', { file: 'pages.css', type: 'text/css; charset=utf-8' }],
   ['/pages.js', { file: 'pages.js', type: 'text/javascript; charset=utf-8' }],
+  [
+    '/hub-history.js',
+    { file: 'hub-history.js', type: 'text/javascript; charset=utf-8' },
+  ],
   [
     '/page-views.js',
     { file: 'page-views.js', type: 'text/javascript; charset=utf-8' },

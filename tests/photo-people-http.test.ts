@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
+import { createContext, runInContext } from 'node:vm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SimulatedLightingAdapter } from '../src/adapters/simulated-lighting.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
@@ -14,25 +16,31 @@ import type {
 const PHOTO = 'a'.repeat(24);
 const FACE = `${PHOTO}.0`;
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+const REVIEW_PHOTO = {
+  id: PHOTO,
+  skipped: false,
+  faces: [
+    {
+      id: FACE,
+      photoId: PHOTO,
+      x: 0.1,
+      y: 0.1,
+      w: 0.2,
+      h: 0.2,
+      state: 'open' as const,
+      person: null,
+      auto: false,
+      moved: false,
+    },
+  ],
+};
 
 function fakeApi(calls: unknown[][]): PhotoPeopleApi {
   return {
     status: () => ({
       available: true,
       reason: null,
-      analyzer: {
-        state: 'idle',
-        reason: null,
-        pending: 0,
-        done: 1,
-        failed: 0,
-        lastMs: 5,
-      },
-      photos: 1,
-      analysed: 1,
-      faces: 1,
-      modelsDir: '/models',
-      missingModels: [],
+      brain: { intelAt: 1_763_900_000_000, analysed: 1, photos: 1, faces: 1 },
     }),
     summary: () => ({ people: 1, pending: 0 }),
     peopleView: () => ({
@@ -51,6 +59,7 @@ function fakeApi(calls: unknown[][]): PhotoPeopleApi {
       ],
       unassigned: { count: 0, samples: [] },
       ignored: 0,
+      skippedPhotos: [],
     }),
     rename: (...args) => {
       if (args[0] === 'p9')
@@ -61,6 +70,17 @@ function fakeApi(calls: unknown[][]): PhotoPeopleApi {
     setHidden: (...args) => void calls.push(['hide', ...args]),
     moveFace: (...args) => void calls.push(['move', ...args]),
     merge: (...args) => void calls.push(['merge', ...args]),
+    setFaceBox: (...args) => void calls.push(['box', ...args]),
+    skipPhoto: (...args) => {
+      if (args[0] === 'z'.repeat(24))
+        throw new PeopleError('not_found', 'No such picture.');
+      calls.push(['skip', ...args]);
+    },
+    review: () => ({ people: [], photos: [REVIEW_PHOTO] }),
+    photoReview: (id) => {
+      if (id !== PHOTO) throw new PeopleError('not_found', 'No such picture.');
+      return { people: [], photo: REVIEW_PHOTO };
+    },
     faceCrop: async (id) => (id === FACE ? JPEG : null),
     faceContext: () => ({ photoId: PHOTO }),
   };
@@ -153,11 +173,11 @@ describe('the photo people panel API', () => {
     const list = (await (
       await fetch(`${base}/ui/api/photo-people`, { headers })
     ).json()) as {
-      status: { photos: number };
+      status: { brain: { photos: number } };
       people: Array<{ id: string }>;
     };
     expect(list.people[0]?.id).toBe('p1');
-    expect(list.status.photos).toBe(1);
+    expect(list.status.brain.photos).toBe(1);
     const crop = await fetch(`${base}/ui/api/photo-people/faces/${FACE}.jpg`, {
       headers,
     });
@@ -169,6 +189,19 @@ describe('the photo people panel API', () => {
     expect(Array.from(new Uint8Array(await crop.arrayBuffer()))).toEqual(
       Array.from(JPEG),
     );
+    // A crop is checked each time (its box can be moved); an unchanged one is not sent again.
+    expect(crop.headers.get('cache-control')).toBe('private, no-cache');
+    const etag = crop.headers.get('etag')!;
+    expect(etag).toMatch(/^"[\w-]+"$/);
+    const again = await fetch(`${base}/ui/api/photo-people/faces/${FACE}.jpg`, {
+      headers: { ...headers, 'If-None-Match': etag },
+    });
+    expect(again.status).toBe(304);
+    const picture = await fetch(
+      `${base}/ui/api/photo-people/photos/${PHOTO}.jpg`,
+      { headers },
+    );
+    expect(picture.headers.get('cache-control')).toBe('private, max-age=3600');
     expect(
       (
         await fetch(
@@ -212,6 +245,58 @@ describe('the photo people panel API', () => {
     expect(cross.status).toBe(403);
   });
 
+  it('hands a review the pictures waiting for somebody and any one picture, and answers each correction with its picture', async () => {
+    const { base, cookie, post } = await start();
+    const headers = { Cookie: cookie };
+    const queue = (await (
+      await fetch(`${base}/ui/api/photo-people/review`, { headers })
+    ).json()) as { photos: Array<{ id: string }> };
+    expect(queue.photos.map((p) => p.id)).toEqual([PHOTO]);
+    const one = await fetch(
+      `${base}/ui/api/photo-people/photos/${PHOTO}.json`,
+      {
+        headers,
+      },
+    );
+    expect(one.status).toBe(200);
+    expect(((await one.json()) as { photo: { id: string } }).photo.id).toBe(
+      PHOTO,
+    );
+    expect(
+      (
+        await fetch(
+          `${base}/ui/api/photo-people/photos/${'c'.repeat(24)}.json`,
+          { headers },
+        )
+      ).status,
+    ).toBe(404);
+    // Not for another site, and not without signing in.
+    expect((await fetch(`${base}/ui/api/photo-people/review`)).status).toBe(
+      401,
+    );
+    expect(
+      (
+        await fetch(`${base}/ui/api/photo-people/review`, {
+          headers: { ...headers, Origin: 'http://attacker.example' },
+        })
+      ).status,
+    ).toBe(403);
+    // A correction comes back with the picture it was made in.
+    const moved = (await (
+      await post(`/faces/${FACE}`, { none: true })
+    ).json()) as { review: { photo: { id: string }; people: unknown[] } };
+    expect(moved.review.photo.id).toBe(PHOTO);
+    expect(moved.review.people).toEqual([]);
+    const skipped = (await (
+      await post(`/photos/${PHOTO}`, { skip: true })
+    ).json()) as { review: { photo: { id: string } } };
+    expect(skipped.review.photo.id).toBe(PHOTO);
+    const named = (await (
+      await post('/people/p1', { name: 'Anna' })
+    ).json()) as { review?: unknown };
+    expect(named.review).toBeUndefined();
+  });
+
   it('makes each correction through the one door, with the same checks as the rest of the panel', async () => {
     const { calls, post, base, cookie } = await start();
     expect((await post('/people/p1', { name: 'Anna' })).status).toBe(200);
@@ -221,6 +306,14 @@ describe('the photo people panel API', () => {
     expect((await post(`/faces/${FACE}`, { person: 'p1' })).status).toBe(200);
     expect((await post(`/faces/${FACE}`, { new: true })).status).toBe(200);
     expect((await post(`/faces/${FACE}`, { none: true })).status).toBe(200);
+    expect((await post(`/faces/${FACE}`, { open: true })).status).toBe(200);
+    expect((await post(`/faces/${FACE}`, { named: 'Anna' })).status).toBe(200);
+    expect(
+      (await post(`/faces/${FACE}`, { box: [0.2, 0.3, 0.1, 0.1] })).status,
+    ).toBe(200);
+    expect((await post(`/faces/${FACE}`, { box: null })).status).toBe(200);
+    expect((await post(`/photos/${PHOTO}`, { skip: true })).status).toBe(200);
+    expect((await post(`/photos/${PHOTO}`, { skip: false })).status).toBe(200);
     expect(calls).toEqual([
       ['rename', 'p1', 'Anna'],
       ['confirm', 'p1'],
@@ -229,6 +322,12 @@ describe('the photo people panel API', () => {
       ['move', FACE, { person: 'p1' }],
       ['move', FACE, 'new'],
       ['move', FACE, 'none'],
+      ['move', FACE, 'open'],
+      ['move', FACE, { named: 'Anna' }],
+      ['box', FACE, [0.2, 0.3, 0.1, 0.1]],
+      ['box', FACE, null],
+      ['skip', PHOTO, true],
+      ['skip', PHOTO, false],
     ]);
     // Unknown things and bad bodies are refused without touching anything.
     calls.length = 0;
@@ -244,6 +343,20 @@ describe('the photo people panel API', () => {
       (await post(`/faces/${FACE}`, { person: 'p1', none: true })).status,
     ).toBe(400);
     expect((await post('/nothing', {})).status).toBe(404);
+    expect(
+      (await post(`/faces/${FACE}`, { box: [0.1, 0.1, 0.2] })).status,
+    ).toBe(400);
+    expect((await post(`/faces/${FACE}`, { box: [0, 0, 'a', 1] })).status).toBe(
+      400,
+    );
+    expect((await post(`/faces/${FACE}`, { named: '' })).status).toBe(400);
+    expect(
+      (await post(`/faces/${FACE}`, { open: true, none: true })).status,
+    ).toBe(400);
+    expect((await post(`/photos/${PHOTO}`, { skip: 'yes' })).status).toBe(400);
+    expect(
+      (await post(`/photos/${'z'.repeat(24)}`, { skip: true })).status,
+    ).toBe(404);
     expect(calls).toEqual([]);
     // CSRF, origin and content type.
     expect(
@@ -271,5 +384,65 @@ describe('the photo people panel API', () => {
       headers: { Origin: base, Cookie: cookie },
     });
     expect(put.status).toBe(405);
+  });
+});
+
+describe('the panel status chip', () => {
+  type Status = {
+    available: boolean;
+    brain?: { intelAt: number | null; analysed: number; photos: number };
+  } | null;
+  function load(): (status: Status, now?: number) => [string, string] {
+    const noop = () => undefined;
+    const sandbox: Record<string, unknown> = {
+      window: { addEventListener: noop, setTimeout: noop, clearTimeout: noop },
+      document: { addEventListener: noop, getElementById: () => null },
+      Intl,
+      Date,
+    };
+    const context = createContext(sandbox);
+    runInContext(
+      `${readFileSync(new URL('../web/photo-people.js', import.meta.url), 'utf8')}
+globalThis.statusText = statusText;`,
+      context,
+    );
+    return sandbox['statusText'] as (s: Status, n?: number) => [string, string];
+  }
+  const statusText = load();
+  const now = Date.UTC(2026, 10, 23, 12);
+
+  it('says what Kuffe has done, that it is awaited, or that it has gone quiet', () => {
+    expect(statusText(null)).toEqual(['Läser …', 'warn']);
+    expect(statusText({ available: false })[0]).toBe('Bildanalysen är av');
+    expect(
+      statusText(
+        { available: true, brain: { intelAt: null, analysed: 0, photos: 9 } },
+        now,
+      ),
+    ).toEqual(['Väntar på Kuffe', 'warn']);
+    expect(
+      statusText(
+        {
+          available: true,
+          brain: { intelAt: now - 60_000, analysed: 412, photos: 418 },
+        },
+        now,
+      ),
+    ).toEqual(['Kuffe: 412 av 418 bilder analyserade', 'warn']);
+    expect(
+      statusText(
+        { available: true, brain: { intelAt: now, analysed: 1, photos: 1 } },
+        now,
+      ),
+    ).toEqual(['Kuffe: 1 av 1 bild analyserad', 'ok']);
+    const [quiet, tone] = statusText(
+      {
+        available: true,
+        brain: { intelAt: now - 7 * 3_600_000, analysed: 1, photos: 1 },
+      },
+      now,
+    );
+    expect(quiet).toMatch(/^Kuffe har inte hörts av sedan \d/);
+    expect(tone).toBe('warn');
   });
 });

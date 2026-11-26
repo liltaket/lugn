@@ -4493,7 +4493,16 @@ document.addEventListener('keydown', (event) => {
     bedtimeKeydown(event);
     return;
   }
-  if (event.key !== 'Escape') return;
+  if (event.key === 'Escape') closeHubOverlay();
+});
+
+// Closes what lies open over the dashboard, topmost first; false when nothing
+// is. Escape and the mouse's back button (hub-history.js) share it.
+function closeHubOverlay() {
+  if (bedtimeDraft) {
+    closeBedtime();
+    return true;
+  }
   if (cameraActive || cameraChoicesOpen || cameraPendingShow) {
     void cameraAction('hide');
     refs.cameraMenu.focus?.();
@@ -4503,8 +4512,9 @@ document.addEventListener('keydown', (event) => {
   } else if (musicDetailsOpen) {
     setMusicDetailsOpen(false);
     refs.musicDetailsButton.focus?.();
-  }
-});
+  } else return false;
+  return true;
+}
 
 document.addEventListener('keyup', (event) => {
   if (

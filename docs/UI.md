@@ -278,6 +278,13 @@ dimming of the whole page make the buttons readable. The buttons are glass; the
 lit scene is the page's own colour in glass (Musik: the cover's), not a solid
 fill.
 
+**Back and forward** (`hub-history.js`): the mouse's side buttons, on the Hub
+through the pointer bridge or with a real mouse in a browser. Back first closes
+what lies open over Hem (camera view, details pane, morning form), then leaves
+one large camera for all cameras, then returns to the previously visited page,
+ending on Hem. Forward takes the last step again; a closed overlay stays closed.
+Swiping or pressing the way back by hand counts as going back.
+
 How it opens decides how it closes. Opened by the mouse, it goes when the mouse
 leaves the screen (a real mouse's `mouseleave`, or the bridge's
 `lugn:pointer-leave`) or has been still for four seconds. Opened by a tap it
