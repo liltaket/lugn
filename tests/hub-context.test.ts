@@ -311,6 +311,21 @@ describe('Hub optional Lugn 2 presentation', () => {
     expect(frames).toHaveLength(1);
   });
 
+  it('keeps the clock current while another page is on screen, and nothing else', () => {
+    const home = ui.get('#app-root');
+    (home as unknown as { closest: unknown }).closest = () => ({
+      dataset: { state: 'near' },
+    });
+    ui.get('#clock-time').textContent = 'gammal';
+    ui.get('#clock-date').textContent = 'gammal';
+    const status = ui.get('#music-command-state');
+    status.textContent = 'orörd';
+    runInContext('setClock()', ui.context);
+    expect(ui.get('#clock-time').textContent).toMatch(/^\d\d:\d\d$/);
+    expect(ui.get('#clock-date').textContent).not.toBe('gammal');
+    expect(status.textContent).toBe('orörd');
+  });
+
   it('never starts routines or accepts suggestions on load; missing projections retain manual controls', () => {
     expect(ui.calls).toEqual([]);
     const legacy = ui.payload();

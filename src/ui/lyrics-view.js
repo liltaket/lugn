@@ -233,6 +233,7 @@
       sync.still = answer.position;
       sync.start = null;
       sync.samples = [];
+      hurryUntil = 0;
       return;
     }
     sync.still = null;
@@ -320,6 +321,15 @@
   }
 
   const wanted = () => Boolean(info?.shown && info.active && info.target);
+  // Keep polling once a second only while playback is running (or briefly
+  // after a seek/track step, or until the first answer arrives). When paused,
+  // SSE notifies draw() as soon as playback resumes or the track changes.
+  const shouldKeepPolling = () =>
+    wanted() &&
+    (!sync.answered ||
+      playing() ||
+      Boolean(info?.playing) ||
+      performance.now() < hurryUntil);
 
   async function poll() {
     stopPolling();
@@ -356,10 +366,10 @@
     if (target === sync.target) sync.answered = true;
     if (view !== 'off') report();
     if (identity() !== before) {
-      // A new track without its cover yet: it follows shortly.
-      if (sync.heard && !sync.art)
+      // A new track without its cover yet: it follows shortly while playing.
+      if (sync.heard && sync.playing && !sync.art)
         hurryUntil = performance.now() + HURRY_FOR_MS;
-      else if (sync.art) hurryUntil = 0;
+      else if (sync.art || !sync.playing) hurryUntil = 0;
       for (const listener of listeners) listener();
     }
     render();
@@ -367,7 +377,8 @@
     if (pollAgain) {
       pollAgain = false;
       void poll();
-    } else if (!pollTimer) pollTimer = window.setTimeout(poll, nextPoll());
+    } else if (!pollTimer && shouldKeepPolling())
+      pollTimer = window.setTimeout(poll, nextPoll());
   }
 
   // Once a minute the Hub says how well it keeps time (Lugn's journal).
@@ -1038,7 +1049,7 @@
       // Ask at once when the page appears, and after a pause or a new title.
       if (!wanted()) stopPolling();
       else if (!wasWanted || changed) void poll();
-      else if (!pollTimer && !polling) void poll();
+      else if (!pollTimer && !polling && shouldKeepPolling()) void poll();
     },
     sleep() {
       if (info) info = { ...info, shown: false };
