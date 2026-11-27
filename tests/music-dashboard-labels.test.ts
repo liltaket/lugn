@@ -436,6 +436,15 @@ describe('web music observation labels', () => {
     expect(runInContext('overview.state.revision', ui.context)).toBe(1);
   });
 
+  it('remembers only a few retired instances however often Lugn restarts', () => {
+    const ui = liveWebPanel();
+    for (let restart = 1; restart <= 40; restart += 1)
+      ui.emit(overviewPayload(1, 1, 'paused', `runtime-${restart}`));
+    expect(runInContext('retiredOverviewInstances.size', ui.context)).toBe(16);
+    ui.emit(overviewPayload(2, 2, 'paused', 'runtime-39'));
+    expect(runInContext('overview.instanceId', ui.context)).toBe('runtime-40');
+  });
+
   it('qualifies HA-disconnected observations while keeping commands available', () => {
     const ui = webPanel();
     runInContext(

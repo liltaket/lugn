@@ -1054,6 +1054,10 @@ function acceptOverview(next) {
   ) {
     if (retiredOverviewInstances.has(next.instanceId)) return false;
     if (overviewInstanceId) retiredOverviewInstances.add(overviewInstanceId);
+    if (retiredOverviewInstances.size > 16)
+      retiredOverviewInstances.delete(
+        retiredOverviewInstances.values().next().value,
+      );
     overviewInstanceId = next.instanceId;
     overviewInstanceGeneration += 1;
     overview = null;
@@ -5735,7 +5739,9 @@ function decodeCameraFrame(url, signal) {
       candidate.onload = null;
       candidate.onerror = null;
       signal.removeEventListener('abort', aborted);
-      candidate.removeAttribute('src');
+      // Chrome keeps a detached image whose src attribute was only removed;
+      // an empty src lets it go.
+      candidate.src = '';
       if (error) reject(error);
       else resolve();
     };

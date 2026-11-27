@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import {
+  BEDTIME_MORNING_ID,
+  BedtimeController,
+} from '../src/application/bedtime.js';
 import { RoutineService } from '../src/application/routines.js';
 import { RoutineApi } from '../src/runtime/routine-api.js';
 import { RoutineStore } from '../src/runtime/routine-store.js';
@@ -1478,4 +1482,25 @@ it('after midnight selects the coming morning, while a passed time advances to t
       tomorrowStockholm('02:30', Date.parse('2026-10-25T00:15:00+02:00')),
     ).toISOString(),
   ).toBe('2026-10-25T00:30:00.000Z');
+});
+
+it('remembers only a few dismissed morning plans', () => {
+  let at = 0;
+  const controller = new BedtimeController(
+    new FakeClock(0),
+    {} as LugnEngine,
+    {
+      beginSession() {},
+      snapshot: () => ({
+        definitions: [{ id: BEDTIME_MORNING_ID, bedtime: { plan: { at } } }],
+      }),
+    } as unknown as RoutineStore,
+    { lightTargets: [] },
+    {} as ConstructorParameters<typeof BedtimeController>[4],
+  );
+  for (at = 1; at <= 40; at += 1) controller.dismissReady();
+  const { dismissed } = controller as unknown as { dismissed: Set<number> };
+  expect([...dismissed]).toEqual(
+    Array.from({ length: 16 }, (_, index) => index + 25),
+  );
 });

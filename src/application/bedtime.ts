@@ -76,7 +76,7 @@ export class BedtimeController {
     const readyAt =
       plan && this.buttonOriginalAt === plan.at ? this.buttonAt : undefined;
     if (plan && readyAt !== undefined && now >= readyAt + 3_600_000)
-      this.dismissed.add(plan.at);
+      this.dismiss(plan.at);
     const { available, skipped } = this.lights();
     return {
       nightRoutineId: BEDTIME_NIGHT_ID,
@@ -118,7 +118,13 @@ export class BedtimeController {
     const at = this.store
       .snapshot()
       .definitions.find((d) => d.id === BEDTIME_MORNING_ID)?.bedtime?.plan?.at;
-    if (at !== undefined) this.dismissed.add(at);
+    if (at !== undefined) this.dismiss(at);
+  }
+  /** Only the plan on file is ever asked about, so a few past ones are kept. */
+  private dismiss(at: number): void {
+    this.dismissed.add(at);
+    if (this.dismissed.size > 16)
+      this.dismissed.delete(this.dismissed.values().next().value!);
   }
   private lights(): { available: string[]; skipped: string[] } {
     const targets = [...new Set(this.options.lightTargets)];

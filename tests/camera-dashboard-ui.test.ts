@@ -242,18 +242,21 @@ function setup(surface: 'hub' | 'web') {
 }
 afterEach(() => vi.useRealTimers());
 
-it('empties a decoded Hub camera candidate rather than removing its src', async () => {
-  // Chrome never frees a detached picture whose `src` attribute was removed.
-  const ui = setup('hub');
-  ui.setActive();
-  ui.render();
-  await vi.waitFor(() => expect(typeof ui.decoder().onload).toBe('function'));
-  const candidate = ui.decoder();
-  const removed = vi.spyOn(candidate, 'removeAttribute');
-  await ui.decode();
-  expect(candidate.src).toBe('');
-  expect(removed).not.toHaveBeenCalled();
-});
+it.each(['hub', 'web'] as const)(
+  'empties a decoded %s camera candidate rather than removing its src',
+  async (surface) => {
+    // Chrome never frees a detached picture whose `src` attribute was removed.
+    const ui = setup(surface);
+    ui.setActive();
+    ui.render();
+    await vi.waitFor(() => expect(typeof ui.decoder().onload).toBe('function'));
+    const candidate = ui.decoder();
+    const removed = vi.spyOn(candidate, 'removeAttribute');
+    await ui.decode();
+    expect(candidate.src).toBe('');
+    expect(removed).not.toHaveBeenCalled();
+  },
+);
 
 describe.each(['hub', 'web'] as const)(
   '%s camera media lifecycle with simulated APIs',
