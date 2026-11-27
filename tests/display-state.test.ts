@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { FakeClock } from '../src/core/clock.js';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import {
+  unknownComputerReadings,
+  type ComputerObservation,
+} from '../src/core/computer.js';
+import type { MusicCommandRecord } from '../src/core/schemas.js';
+import {
   DISPLAY_DECISIONS_PER_TARGET,
   displayPayloadKey,
   displayState,
@@ -66,6 +71,119 @@ describe('displayState', () => {
     const times = kept.map((item) => item.at);
     expect(times).toEqual([...times].sort((a, b) => a - b));
     expect(state.music.decisions).toHaveLength(25);
+  });
+
+  it('keeps only the music commands a Hub can show, in ledger order', () => {
+    const { state } = engineState();
+    const room = state.music.devices['music.room']!;
+    room.observedAt = 1_000;
+    const command = (
+      id: string,
+      issuedAt: number,
+      over: Partial<MusicCommandRecord> = {},
+    ): MusicCommandRecord => ({
+      id,
+      target: 'music.room',
+      requested: { property: 'volume', value: 0.3 },
+      issuedAt,
+      status: 'confirmed',
+      provenance: {
+        actor: { type: 'user', id: 'user' },
+        source: 'test',
+        reason: 'test',
+      },
+      ...over,
+    });
+    const readBack = (
+      verifiedAt: number,
+      reported = true,
+    ): Partial<MusicCommandRecord> => ({
+      recovery: {
+        stage: 'stopped',
+        attemptCount: 1,
+        lastAttemptAt: 1,
+        deadlineAt: 2,
+        nextAttemptAt: null,
+        stopReason: 'newer_report',
+        verifiedAt,
+        ...(reported ? { reported: { ...room.observed, volume: 0.5 } } : {}),
+      },
+    });
+    state.music.commands = [
+      command('old', 1),
+      command('pending', 2, { status: 'pending' }),
+      command('read-back', 3, readBack(1_001)),
+      command('stale-read-back', 4, readBack(1_000)),
+      command('read-without-report', 5, readBack(1_001, false)),
+      command('latest', 9, { status: 'failed' }),
+      command('later-in-ledger', 8),
+      command('skip', 10, { requested: { property: 'track', value: 'next' } }),
+      command('seek', 11, { requested: { property: 'seek', value: 5 } }),
+      command('other-first', 7, { target: 'music.other' }),
+      command('other-tie', 7, { target: 'music.other' }),
+    ];
+    const ids = () => displayState(state).music.commands.map((item) => item.id);
+    expect(ids()).toEqual(['pending', 'read-back', 'latest', 'other-tie']);
+    // A player never observed is older than any read-back.
+    room.observedAt = null;
+    expect(ids()).toEqual([
+      'pending',
+      'read-back',
+      'stale-read-back',
+      'latest',
+      'other-tie',
+    ]);
+    // The ledger itself is untouched.
+    expect(state.music.commands).toHaveLength(11);
+  });
+
+  it('sends desktop media without its inline cover', () => {
+    const { state } = engineState();
+    const media = {
+      player: 'browser',
+      identity: 'Browser',
+      desktopEntry: 'browser',
+      playback: 'playing' as const,
+      title: 'A video',
+      artists: ['Channel'],
+      album: null,
+      contentType: null,
+    };
+    const device = (
+      list: ComputerObservation['observed']['media'],
+    ): ComputerObservation => ({
+      deviceId: 'desktop',
+      availability: 'online',
+      freshness: 'fresh',
+      reason: 'live',
+      observedAt: 1,
+      receivedAt: 1,
+      sessionId: 'session',
+      sequence: 1,
+      observed: { ...unknownComputerReadings(), media: list },
+      activity: {
+        classification: 'video',
+        source: 'desktop-agent',
+        basis: null,
+      },
+      lastEvent: null,
+    });
+    state.computer.devices = {
+      desktop: device([
+        { ...media, artwork: { provider: 'inline', data: 'aGVsbG8=' } },
+      ]),
+      unknown: device(null),
+    };
+    const shown = displayState(state).computer.devices;
+    expect(shown['desktop']!.observed.media).toEqual([media]);
+    // Unknown media stays unknown, which the page tells apart from none.
+    expect(shown['unknown']!.observed.media).toBeNull();
+    expect(
+      state.computer.devices['desktop']!.observed.media![0],
+    ).toHaveProperty('artwork');
+    // Without covers there is nothing to copy.
+    state.computer.devices = { desktop: device([media]) };
+    expect(displayState(state).computer).toBe(state.computer);
   });
 
   it('leaves a state without decisions alone', () => {

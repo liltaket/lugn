@@ -5,10 +5,10 @@ export const DISPLAY_DECISIONS_PER_TARGET = 8;
 
 /**
  * Room state as a Hub page needs it. The page never reads the diagnostics
- * and fast-path timing logs and only asks the command ledger whether a
- * command is still pending, so those make up most of the raw state (about
- * 190 of 267 KB on the live system) and cost a Hub a JSON parse and a draw
- * every time. Everything else is passed through unchanged.
+ * and fast-path timing logs, only asks the command ledger whether a command
+ * is still pending, shows little of the music ledger and gets covers from
+ * the artwork route, so the rest only costs transfer and a JSON parse on
+ * every message. Everything else is passed through unchanged.
  */
 export function displayState(
   state: RoomState,
@@ -31,10 +31,77 @@ export function displayState(
     }
     music = { ...music, decisions: kept.reverse() };
   }
+  const commands = shownMusicCommands(state.music);
+  if (commands.length < state.music.commands.length)
+    music = { ...music, commands };
   return {
     ...rest,
     music,
+    computer: withoutArtwork(rest.computer),
     commands: state.commands.filter((command) => command.status === 'pending'),
+  };
+}
+
+/**
+ * The music commands a Hub page can show, in ledger order: those pending, the
+ * latest request to each player (track steps and seeks are never shown), and
+ * those whose read-back is newer than the player's last observation, which
+ * the page uses to mark that observation as old.
+ */
+function shownMusicCommands(music: RoomState['music']) {
+  const latest = new Map<string, RoomState['music']['commands'][number]>();
+  for (const command of music.commands) {
+    const { property } = command.requested;
+    if (property === 'track' || property === 'seek') continue;
+    const current = latest.get(command.target);
+    // Of two issued at once, the later in the ledger counts.
+    if (!current || command.issuedAt >= current.issuedAt)
+      latest.set(command.target, command);
+  }
+  return music.commands.filter((command) => {
+    if (command.status === 'pending') return true;
+    if (latest.get(command.target) === command) return true;
+    const verifiedAt = command.recovery?.reported
+      ? command.recovery.verifiedAt
+      : undefined;
+    return (
+      verifiedAt !== undefined &&
+      verifiedAt > (music.devices[command.target]?.observedAt ?? -1)
+    );
+  });
+}
+
+/**
+ * Desktop media can carry its cover inline (up to 32 KB each). A Hub loads
+ * covers from the artwork route and never reads these.
+ */
+function withoutArtwork(computer: RoomState['computer']) {
+  const devices = Object.entries(computer.devices);
+  if (
+    !devices.some(([, device]) =>
+      device.observed.media?.some((media) => media.artwork),
+    )
+  )
+    return computer;
+  return {
+    ...computer,
+    devices: Object.fromEntries(
+      devices.map(([id, device]) => [
+        id,
+        {
+          ...device,
+          observed: {
+            ...device.observed,
+            media:
+              device.observed.media?.map((media) => {
+                const shown = { ...media };
+                delete shown.artwork;
+                return shown;
+              }) ?? null,
+          },
+        },
+      ]),
+    ),
   };
 }
 
