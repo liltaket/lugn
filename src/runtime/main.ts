@@ -114,6 +114,7 @@ import {
   type MqttSubscriberStatus,
 } from './mqttjs-subscriber.js';
 import { loadRuntimeConfig, RuntimeConfigError } from './config.js';
+import { exitWhenLingering } from './exit-when-lingering.js';
 
 export type LugnRuntime = {
   engine: LugnEngine;
@@ -1492,7 +1493,7 @@ export async function startRuntime(
       unsubscribeOpticalSettings();
       routines.dispose();
       computerIntelligence.dispose();
-      photoLibrary?.dispose();
+      const photosSaved = photoLibrary?.dispose();
       dynamicLighting?.dispose();
       artworkPalette?.dispose();
       gameCoverPalette?.dispose();
@@ -1504,6 +1505,7 @@ export async function startRuntime(
       await http.stop();
       presenceSensorStream?.close();
       await presenceBlackbox?.flush();
+      await photosSaved;
       sensorAdapter?.stop();
       presenceFeedback.dispose();
       for (const adapter of playbackAdapters.values()) adapter.stop();
@@ -1623,7 +1625,10 @@ async function main(): Promise<void> {
     shutdownStarted = true;
     void runtime
       .stop()
-      .then(() => console.info('[lugn] stopped'))
+      .then(() => {
+        console.info('[lugn] stopped');
+        exitWhenLingering();
+      })
       .catch(() => {
         console.error('[lugn] shutdown encountered an error');
         process.exitCode = 1;

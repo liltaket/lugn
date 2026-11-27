@@ -146,6 +146,7 @@ const LightCommandSchema = z
   .passthrough();
 
 const MaxPayloadBytes = 1024;
+const farewellDeadlineMs = 2_000;
 
 export class AssistantEntitiesMqttAdapter {
   private readonly config: ResolvedAssistantEntitiesConfig;
@@ -211,19 +212,30 @@ export class AssistantEntitiesMqttAdapter {
   async stop(): Promise<void> {
     if (this.stopped) return;
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe();
-    if (this.connected)
-      await this.options.mqtt
+    if (this.connected) await this.publishFarewell();
+    this.stopped = true;
+    this.connected = false;
+  }
+
+  /**
+   * A broker that never acknowledges must not hold up shutdown, which still
+   * has state to save; the connection's will then reports Lugn offline.
+   */
+  private async publishFarewell(): Promise<void> {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.options.mqtt
         .publish(
           this.availabilityTopic,
           AssistantEntitiesMqttAdapter.offlinePayload,
-          {
-            qos: 1,
-            retain: true,
-          },
+          { qos: 1, retain: true },
         )
-        .catch(() => undefined);
-    this.stopped = true;
-    this.connected = false;
+        .catch(() => undefined),
+      new Promise<void>((resolve) => {
+        deadline = setTimeout(resolve, farewellDeadlineMs);
+      }),
+    ]);
+    clearTimeout(deadline);
   }
 
   /** Entity states for the current room state; exported for diagnostics. */

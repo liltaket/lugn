@@ -255,8 +255,10 @@ Commands and state use separate topics under `baseTopic`
 cannot return as a command. Commands run one at a time in arrival order,
 retained commands are ignored, and every command is answered with a fresh
 state publication, also when it changed nothing or failed. Discovery, state
-and `<baseTopic>/availability` are retained. The connection's last will
-marks the entities unavailable when Lugn stops or loses the broker.
+and `<baseTopic>/availability` are retained. Lugn publishes `offline` when it
+stops and waits at most 2 seconds for the broker to acknowledge it; the
+connection's last will marks the entities unavailable when that message does not
+get through or Lugn loses the broker.
 
 ```json
 "assistantEntities": {
