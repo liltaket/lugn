@@ -112,10 +112,6 @@ export class GoveeSocketClient implements GoveeControlClient {
 /** One queue per physical target spans baseline, effects, masks and subsequent static/OFF. */
 export class GoveePresetLightingAdapter implements LightingAdapter {
   private readonly tails = new Map<string, Promise<void>>();
-  private readonly powerWaiters = new Set<{
-    target: string;
-    resolve: () => void;
-  }>();
   async refreshCapabilities(): Promise<void> {
     const next = await this.client.capabilities();
     // Keep known capabilities through an outage so static/OFF still uses its barrier.
@@ -127,13 +123,7 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     readonly goveeCapabilities: GoveeCapabilities,
     private readonly stagedPowerTimeoutMs = 4_000,
     private readonly stagedSettleMs = 1_500,
-  ) {
-    this.ordinary.subscribe((observation) => {
-      if (observation.values.power !== true) return;
-      for (const waiter of this.powerWaiters)
-        if (waiter.target === observation.target) waiter.resolve();
-    });
-  }
+  ) {}
   subscribe(listener: (observation: LightingObservation) => void): () => void {
     return this.ordinary.subscribe(listener);
   }
@@ -347,25 +337,34 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
     }
   }
 
-  /** Resolves on a fresh native ON report, a timeout or a lost generation. */
+  /**
+   * Resolves on a fresh native ON report, a timeout or a lost generation. It
+   * listens only while waiting: a subscription held for the adapter's lifetime
+   * keeps the ordinary adapter's polling running after the engine lets go.
+   */
   private waitForPower(
     target: string,
     current: () => boolean,
   ): { wait: Promise<boolean>; stop: () => void } {
     let finish!: (powered: boolean) => void;
     const wait = new Promise<boolean>((resolve) => {
-      const waiter = { target, resolve: () => finish(true) };
+      const unsubscribe = this.ordinary.subscribe((observation) => {
+        if (observation.target === target && observation.values.power === true)
+          finish(true);
+      });
       const timer = setTimeout(() => finish(false), this.stagedPowerTimeoutMs);
       const poll = setInterval(() => {
         if (!current()) finish(false);
       }, 20);
+      let finished = false;
       finish = (powered) => {
+        if (finished) return;
+        finished = true;
         clearTimeout(timer);
         clearInterval(poll);
-        this.powerWaiters.delete(waiter);
+        unsubscribe();
         resolve(powered);
       };
-      this.powerWaiters.add(waiter);
     });
     return { wait, stop: () => finish(false) };
   }

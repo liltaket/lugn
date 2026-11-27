@@ -185,8 +185,9 @@ node --env-file=./lugn.env dist/runtime/main.js
 
 Set `LUGN_CONFIG_PATH` to use a config file elsewhere, or pass a file path to
 `npm start -- /path/to/config.json`. The service handles `SIGINT` and
-`SIGTERM` by closing HTTP, MQTT, and Home Assistant WebSocket connections.
-Startup and operational logs omit tokens and raw broker/HA errors.
+`SIGTERM` by closing HTTP, MQTT, and Home Assistant WebSocket connections and
+saving its state; see [stopping](#stopping). Startup and operational logs omit
+tokens and raw broker/HA errors.
 
 ## Lighting intent persistence
 
@@ -304,6 +305,35 @@ administrator must enable lingering for the account using
 `loginctl enable-linger <user>`. The service runs as the installing user and
 keeps the HTTP API bound to loopback. Re-run the installer after moving the
 checkout or changing the Node.js executable path.
+
+### Stopping
+
+On `SIGTERM` Lugn stops its adapters, saves its state, logs `[lugn] stopped`
+and exits, normally within a second. Waiting for the broker to acknowledge the
+assistant entities' offline message is limited to 2 seconds.
+
+A process that is still running 5 seconds after `stopped` is ended, with a
+warning such as:
+
+```text
+[lugn] still running 5 s after stopping (TCPSocketWrap); exiting
+```
+
+This is expected when Home Assistant or the presence sensor stopped answering,
+because Node.js cannot terminate a WebSocket whose peer never answers the
+close. If it appears while both respond, something was left running: the names
+in the parentheses are what Node.js still held. `State 'stop-sigterm' timed
+out` in the journal means Lugn never reached `stopped` or the fallback did not
+run, and systemd killed it.
+
+To see how a unit ended earlier, search the system journal for its messages:
+
+```sh
+journalctl USER_UNIT=lugn.service + _SYSTEMD_USER_UNIT=lugn.service
+```
+
+Where the journal is kept in memory (`Storage=volatile`), it covers only the
+time since the last boot, and less once it has rotated.
 
 ## Room control panel
 

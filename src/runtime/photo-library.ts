@@ -121,7 +121,7 @@ export type PhotoInsightLike = Partial<PhotoPeopleApi> &
     decorate(): InsightExtras;
     revision(): string;
     subscribe(listener: () => void): () => void;
-    dispose(): void;
+    dispose(): void | Promise<void>;
   };
 
 /** The body of `GET /photo-brain/v1/album` (docs/PHOTO-BRAIN.md). */
@@ -436,7 +436,8 @@ export class PhotoLibrary {
     return this.read(id, 'main');
   }
 
-  dispose(): void {
+  /** Stops; resolves once what was decided about people is written. */
+  async dispose(): Promise<void> {
     this.disposed = true;
     if (this.timer !== undefined)
       (this.options.clearTimer ?? clearTimeout)(
@@ -444,7 +445,7 @@ export class PhotoLibrary {
       );
     this.listeners.clear();
     this.unsubscribeInsight?.();
-    this.options.insight?.dispose();
+    await this.options.insight?.dispose();
   }
 
   subscribe(listener: () => void): () => void {
