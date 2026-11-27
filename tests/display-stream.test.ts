@@ -17,15 +17,19 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setup(streaming = true, music = false, computerAudio = false) {
+async function freePort(): Promise<number> {
   const portFinder = createServer();
   await new Promise<void>((resolve) =>
     portFinder.listen(0, '127.0.0.1', resolve),
   );
   const address = portFinder.address();
   if (!address || typeof address === 'string') throw new Error('No test port');
-  const port = address.port;
   await new Promise<void>((resolve) => portFinder.close(() => resolve()));
+  return address.port;
+}
+
+async function setup(streaming = true, music = false, computerAudio = false) {
+  const port = await freePort();
   const engine = new LugnEngine(
     new FakeClock(Date.parse('2026-10-04T12:00:00+02:00')),
     music ? { music: { targets: { 'music.room': [] } } } : {},
@@ -414,5 +418,45 @@ it('carries upstream observation trust independently of cached player availabili
   const stream = await s.open();
   expect(await stream.next()).toMatchObject({
     musicObservationConnected: false,
+  });
+});
+
+describe('the display server and state publications', () => {
+  it('reads a publication patch only for computer observations', async () => {
+    const engine = new LugnEngine(new FakeClock(1_000_000));
+    let listener: ((update: never) => void) | undefined;
+    const server = new LugnDisplayServer({
+      host: '127.0.0.1',
+      port: await freePort(),
+      hubs: [{ id: 'bed', role: 'bed', token, castHost: '127.0.0.1' }],
+      capabilities: new CapabilityRegistry(engine),
+      scenes: [...engine.scenes.values()],
+      stateProvider: () => engine.state,
+      stateStream: {
+        subscribe: (next: (update: never) => void) => {
+          listener = next;
+          return () => undefined;
+        },
+      } as never,
+    });
+    await server.start();
+    cleanups.push(async () => {
+      await server.stop();
+      engine.dispose();
+    });
+    // Reading it copies the whole patch, logs and command ledger included.
+    const read = vi.fn(() => ({ computer: engine.state.computer }));
+    const publish = (domains: string[]) =>
+      listener!({
+        domains,
+        get patch() {
+          return read();
+        },
+      } as never);
+
+    publish(['lighting', 'commands', 'diagnostics']);
+    expect(read).not.toHaveBeenCalled();
+    publish(['computer']);
+    expect(read).toHaveBeenCalled();
   });
 });

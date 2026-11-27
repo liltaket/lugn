@@ -151,10 +151,11 @@ times a second for a moment after a step, at a track's end and while a new cover
 is on its way. A named WiiM's track leads the page: its title, artist and cover
 show before Home Assistant reports them, and so does the computer's playing
 Spotify media behind its input. A player someone is asking about is watched four
-times a second, and a change of track or cover is pushed to the Hubs
-(`nowPlaying` in the state). Lugn reads a WiiM's cover address from
-`getMetaInfo`; the computer's comes with its media, where the input's
-`computerAudio.artwork` allows it. Covers are fetched only from
+times a second while it plays and once a second while it does not (a Hub's own
+question is still put to the player at once), and a change of track or cover is
+pushed to the Hubs (`nowPlaying` in the state). Lugn reads a WiiM's cover
+address from `getMetaInfo`; the computer's comes with its media, where the
+input's `computerAudio.artwork` allows it. Covers are fetched only from
 `https://i.scdn.co/image/`, as JPEGs of at most 2 MiB, over a connection kept
 open while a Hub looks, and served as `display-api/player-art/<id>`; other
 sources keep Home Assistant's artwork. With lyrics on the page (the playhead

@@ -374,6 +374,9 @@ export async function startRuntime(
         })
       : undefined;
   const engine = new LugnEngine(systemClock, {
+    // Every client here is sent whole state, never past updates. Each kept
+    // update holds its own copy of the command ledger and diagnostics.
+    stateHistoryLimit: 1,
     ...(computerPlayback ? { computerPlayback } : {}),
     // Every computer-audio input, with or without playback control: the
     // same rule the Hub's Nästa låt follows (musicTrackControl).
@@ -664,7 +667,8 @@ export async function startRuntime(
   );
   computerNowPlaying.observe(engine.state.computer.devices);
   const unsubscribeComputerNowPlaying = engine.stream.subscribe((update) => {
-    if (update.patch.computer)
+    // Reading `patch` copies all of it: only a computer publication needs that.
+    if (update.domains.includes('computer') && update.patch.computer)
       computerNowPlaying.observe(update.patch.computer.devices);
   });
   // Presence and computer changes re-evaluate display power; the controller's

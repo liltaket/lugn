@@ -10,12 +10,15 @@ than replaying obsolete commands. The same Host, path credential and Origin
 checks protect the stream; connections are limited to two per configured Hub.
 
 A snapshot carries what the pages draw. It leaves out the diagnostic and timing
-logs, finished lighting commands and inline desktop covers (covers come from the
-artwork route). Of the music commands it keeps those pending, the latest request
-to each player and any read-back newer than the player's last observation, and
-of each player's decisions the latest eight. A page that needs more must widen
-`src/runtime/display-state.ts`. Page files are sent gzip-compressed to a client
-that accepts it, still read from disk on every request and never cached.
+logs, automation holds, finished lighting commands and inline desktop covers
+(covers come from the artwork route). Of each lamp it keeps what it reports,
+what it is asked to show and its availability and presets, not the scene baseline
+or who set each property. Of the music commands it keeps those pending, the
+latest request to each player and any read-back newer than the player's last
+observation, and of each player's decisions the latest eight. A page that needs
+more must widen `src/runtime/display-state.ts`. Page files are sent
+gzip-compressed to a client that accepts it, still read from disk on every
+request and never cached.
 
 The display rejects older state/delivery revisions within a server instance.
 An instance ID allows recovery after runtime restart while delayed reads from
