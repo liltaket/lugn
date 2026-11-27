@@ -273,9 +273,17 @@ function setup(count = 5, { history = false } = {}) {
   );
   let objectUrls = 0;
   const revoked: string[] = [];
+  // Pictures made off screen to decode a frame, and attributes taken off them.
+  const probes: El[] = [];
+  const stripped: string[] = [];
   class FakeImage extends El {
     constructor() {
       super('img');
+      probes.push(this);
+    }
+    override removeAttribute(name: string) {
+      stripped.push(name);
+      super.removeAttribute(name);
     }
     async decode() {
       return undefined;
@@ -368,6 +376,8 @@ function setup(count = 5, { history = false } = {}) {
     fetches,
     fetchMock,
     revoked,
+    probes,
+    stripped,
     classes,
     windowListeners,
     flush,
@@ -412,6 +422,10 @@ describe('camera grid page', () => {
     await s.flush(0);
     expect(s.picture(tile).src).toBe('blob:2');
     expect(s.revoked).toContain('blob:1');
+    // The decoders are emptied; Chrome never frees a detached picture whose
+    // `src` attribute was removed.
+    expect(s.probes.map((probe) => probe.src)).toEqual(['', '']);
+    expect(s.stripped).toEqual([]);
   });
 
   it('holds pictures while the pages move and shows them when they stop', async () => {

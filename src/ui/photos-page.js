@@ -1069,6 +1069,7 @@
   // (localStorage 'lugn.photos.kenburns' = 'off') or asks for less motion.
   const DRIFT_SCALE = 1.11;
   const DRIFT_MAX = 2.4; // percent
+  const drifts = new WeakMap(); // picture → its drift
   function driftOn() {
     try {
       if (window.localStorage?.getItem('lugn.photos.kenburns') === 'off')
@@ -1086,13 +1087,14 @@
       if (typeof image?.animate !== 'function') continue;
       const dx = (random() * 2 - 1) * DRIFT_MAX;
       const dy = (random() * 2 - 1) * DRIFT_MAX;
-      image.animate(
+      const drift = image.animate(
         [
           { transform: 'scale(1) translate(0%, 0%)' },
           { transform: `scale(${DRIFT_SCALE}) translate(${dx}%, ${dy}%)` },
         ],
         { duration: SHOW_MS + 2 * FADE_MS, easing: 'linear', fill: 'forwards' },
       );
+      drifts.set(image, drift);
     }
   }
   function setDriftPlaying(playing) {
@@ -1104,10 +1106,17 @@
 
   // ── Showing ──
 
+  // A drift outlives its removed picture: one still under way would tick on
+  // the main thread every frame until it ends, and a paused one (the page was
+  // left) would keep the whole slide in memory for good.
   function drop(slide) {
     if (!slide) return;
-    for (const image of slide.querySelectorAll('img'))
-      image.removeAttribute('src');
+    for (const image of slide.querySelectorAll('img')) {
+      drifts.get(image)?.cancel();
+      // Emptied, not removed: Chrome never frees a detached picture whose
+      // `src` attribute was taken away (a slide dropped before it was shown).
+      image.src = '';
+    }
     slide.remove();
   }
 

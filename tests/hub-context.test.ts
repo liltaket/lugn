@@ -729,6 +729,53 @@ describe('Hub optional Lugn 2 presentation', () => {
       vi.useRealTimers();
     }
   });
+  it('writes no text or visibility again on a clock tick that changes nothing', () => {
+    ui.render();
+    const name = runInContext(
+      "sceneButtons.get('scene.everyday_light').querySelector('.scene-name')",
+      ui.context,
+    ) as Element;
+    const status = runInContext(
+      "sceneButtons.get('scene.everyday_light').querySelector('.scene-status')",
+      ui.context,
+    ) as Element;
+    const written: string[] = [];
+    const watch = (element: Element, property: string, label: string) => {
+      const record = element as unknown as Record<string, unknown>;
+      let value = record[property];
+      Object.defineProperty(record, property, {
+        get: () => value,
+        set: (next: unknown) => {
+          written.push(`${label}.${property}`);
+          value = next;
+        },
+      });
+    };
+    watch(name, 'textContent', 'scene name');
+    watch(status, 'hidden', 'scene status');
+    for (const id of [
+      '#scene-pagination',
+      '#context-strip',
+      '#music-authority-state',
+      '#music-command-state',
+      '#print-activity',
+      '#activity-swap',
+      '#camera-pagination',
+      '#camera-panel',
+      '#camera-choices',
+    ])
+      watch(ui.get(id), 'hidden', id);
+    runInContext('setClock()', ui.context);
+    expect(written).toEqual([]);
+    // A change is still written.
+    const changed = structuredClone(ui.payload());
+    changed.scenes.find(
+      (scene: { id: string }) => scene.id === 'scene.everyday_light',
+    ).name = 'Dagsljus';
+    ui.render(changed);
+    expect(written).toContain('scene name.textContent');
+    expect(name.textContent).toBe('Dagsljus');
+  });
   it('loads the on-device profile only for a Hub opened with #probe', () => {
     expect(ui.scripts).toEqual([]);
     const probed = dashboard('#probe');

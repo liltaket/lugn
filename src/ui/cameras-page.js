@@ -488,7 +488,9 @@
       // Decoded off screen first, so the visible picture is never replaced by
       // one that is not ready.
       if (typeof probe.decode === 'function') await probe.decode();
-      probe.removeAttribute('src');
+      // Emptied, not removed: Chrome never frees a detached picture whose `src`
+      // attribute was taken away, and a new one is made for every frame.
+      probe.src = '';
       if (token !== generation) {
         URL.revokeObjectURL(url);
         return;
