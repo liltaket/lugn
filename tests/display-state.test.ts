@@ -35,11 +35,37 @@ describe('displayState', () => {
     expect('timings' in shown).toBe(false);
     expect(shown.commands.map((command) => command.id)).toEqual(['b']);
     // Everything else is the same state.
-    expect(shown.lighting).toBe(state.lighting);
     expect(shown.presence).toBe(state.presence);
     expect(shown.revision).toBe(state.revision);
     // The source is untouched.
     expect(state.commands).toHaveLength(3);
+  });
+
+  it('keeps what a Hub draws of the lamps, not who set them', () => {
+    const { state } = engineState();
+    const lamp = state.lighting.devices['lighting.desk']!;
+    lamp.observed = { power: true, brightness: 30 };
+    lamp.effectiveDesired = { power: true, brightness: 40 };
+    lamp.baselineDesired = { power: true, brightness: 60 };
+    lamp.ownership = { brightness: { kind: 'scene', revision: 1 } };
+    state.intent.holds = [{ scope: 'lighting.property' } as never];
+
+    const shown = displayState(state);
+
+    expect('intent' in shown).toBe(false);
+    expect(shown.lighting.devices['lighting.desk']).toStrictEqual({
+      observed: { power: true, brightness: 30 },
+      effectiveDesired: { power: true, brightness: 40 },
+      availability: 'available',
+    });
+    expect(Object.keys(shown.lighting.devices)).toEqual(
+      Object.keys(state.lighting.devices),
+    );
+    expect(shown.lighting.currentScene).toBe(state.lighting.currentScene);
+    // The source is untouched.
+    expect(lamp.ownership.brightness).toBeDefined();
+    expect(lamp.baselineDesired.brightness).toBe(60);
+    expect(state.intent.holds).toHaveLength(1);
   });
 
   it('keeps the latest decisions of each music target, in order', () => {

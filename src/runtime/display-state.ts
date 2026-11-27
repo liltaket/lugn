@@ -5,18 +5,18 @@ export const DISPLAY_DECISIONS_PER_TARGET = 8;
 
 /**
  * Room state as a Hub page needs it. The page never reads the diagnostics
- * and fast-path timing logs, only asks the command ledger whether a command
- * is still pending, shows little of the music ledger and gets covers from
- * the artwork route, so the rest only costs transfer and a JSON parse on
- * every message. Everything else is passed through unchanged.
+ * and fast-path timing logs, the automation holds or who owns a lamp
+ * property, only asks the command ledger whether a command is still pending,
+ * shows little of the music ledger and gets covers from the artwork route, so
+ * the rest only costs transfer and a JSON parse on every message. Everything
+ * else is passed through unchanged.
  */
-export function displayState(
-  state: RoomState,
-): Omit<RoomState, 'diagnostics' | 'timings'> {
-  const { diagnostics, timings, ...rest } = state;
+export function displayState(state: RoomState) {
+  const { diagnostics, timings, intent, ...rest } = state;
   // Named only to leave them out.
   void diagnostics;
   void timings;
+  void intent;
   const decisions = state.music.decisions;
   let music = rest.music;
   if (decisions && decisions.length > 0) {
@@ -36,9 +36,28 @@ export function displayState(
     music = { ...music, commands };
   return {
     ...rest,
+    lighting: withoutOwnership(rest.lighting),
     music,
     computer: withoutArtwork(rest.computer),
     commands: state.commands.filter((command) => command.status === 'pending'),
+  };
+}
+
+/**
+ * A Hub draws what each lamp reports and what it was asked to show, not the
+ * baseline underneath or the record of who set each property.
+ */
+function withoutOwnership(lighting: RoomState['lighting']) {
+  return {
+    ...lighting,
+    devices: Object.fromEntries(
+      Object.entries(lighting.devices).map(([id, device]) => {
+        const { ownership, baselineDesired, ...shown } = device;
+        void ownership;
+        void baselineDesired;
+        return [id, shown];
+      }),
+    ),
   };
 }
 

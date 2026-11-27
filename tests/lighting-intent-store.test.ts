@@ -336,6 +336,71 @@ describe('lighting intent persistence', () => {
   });
 });
 
+describe('saving unchanged intent', () => {
+  async function started() {
+    const directory = await temporaryDirectory();
+    const filePath = join(directory, 'lighting-intent.json');
+    const clock = new FakeClock(Date.parse('2026-09-28T12:00:00+02:00'));
+    const engine = new LugnEngine(clock, {
+      deviceIds,
+      scenes,
+      adapter: new SimulatedLightingAdapter(clock),
+    });
+    let listener: (update: { domains: string[] }) => void = () => undefined;
+    const store = createStore(filePath, { debounceMs: 60_000 });
+    await store.load();
+    store.start({
+      stream: {
+        subscribe: (next) => {
+          listener = next as typeof listener;
+          return () => undefined;
+        },
+      },
+      getLightingIntentSnapshot: () => engine.getLightingIntentSnapshot(),
+    });
+    const publish = async () => {
+      listener({ domains: ['music'] });
+      await store.flush();
+    };
+    return { engine, filePath, publish, store };
+  }
+
+  it('leaves the file alone', async () => {
+    const { engine, filePath, publish, store } = await started();
+    await publish();
+    const first = await stat(filePath);
+    await publish();
+    await publish();
+    const later = await stat(filePath);
+    // A rewrite replaces the file, so the same one means none happened.
+    expect([later.ino, later.mtimeMs]).toEqual([first.ino, first.mtimeMs]);
+
+    await engine.activateScene(scene.id, user);
+    await publish();
+    expect(JSON.parse(await readFile(filePath, 'utf8'))).toMatchObject({
+      snapshot: { currentScene: scene.id },
+    });
+    await store.stop();
+    engine.dispose();
+  });
+
+  it('restores a file that was removed or edited meanwhile', async () => {
+    const { engine, filePath, publish, store } = await started();
+    await publish();
+    const saved = await readFile(filePath, 'utf8');
+
+    await rm(filePath);
+    await publish();
+    await expect(readFile(filePath, 'utf8')).resolves.toBe(saved);
+
+    await writeFile(filePath, '{}\n');
+    await publish();
+    await expect(readFile(filePath, 'utf8')).resolves.toBe(saved);
+    await store.stop();
+    engine.dispose();
+  });
+});
+
 async function temporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'lugn-intent-'));
   directories.push(directory);

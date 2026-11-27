@@ -69,6 +69,8 @@ export class LightingIntentStore {
   private debounceTimer: NodeJS.Timeout | undefined;
   private writeInFlight: Promise<void> = Promise.resolve();
   private dirty = false;
+  /** The last text saved in full, and the file it ended up in. */
+  private saved: { text: string; file: string } | undefined;
   private stopped = false;
 
   constructor(private readonly options: LightingIntentStoreOptions) {
@@ -287,6 +289,21 @@ export class LightingIntentStore {
           );
       }
 
+      const text = `${JSON.stringify(
+        music === undefined
+          ? { version: 1, snapshot }
+          : { version: currentVersion, snapshot, music },
+      )}\n`;
+      // Most publications change no intent (a playing track moves music state
+      // every few seconds); an untouched file with this text needs no rewrite.
+      if (
+        this.saved?.text === text &&
+        this.saved.file === (await fileIdentity(this.options.filePath))
+      ) {
+        this.lastValidMusic = music;
+        return;
+      }
+
       const directory = dirname(this.options.filePath);
       await mkdir(directory, { recursive: true, mode: 0o700 });
       const directoryInfo = await lstat(directory);
@@ -321,14 +338,7 @@ export class LightingIntentStore {
       );
       handle = await open(temporaryPath, 'wx', 0o600);
       await handle.chmod(0o600);
-      await handle.writeFile(
-        `${JSON.stringify(
-          music === undefined
-            ? { version: 1, snapshot }
-            : { version: currentVersion, snapshot, music },
-        )}\n`,
-        'utf8',
-      );
+      await handle.writeFile(text, 'utf8');
       await handle.sync();
       await handle.close();
       handle = undefined;
@@ -350,6 +360,8 @@ export class LightingIntentStore {
       this.lastValidMusic = music;
       try {
         await directoryHandle.sync();
+        const file = await fileIdentity(this.options.filePath);
+        this.saved = file === undefined ? undefined : { text, file };
       } catch {
         this.warn(
           'Lugn lighting intent state was saved, but directory sync failed.',
@@ -421,6 +433,19 @@ export class LightingIntentStore {
       snapshot.currentScene === null ||
       this.knownSceneIds.has(snapshot.currentScene)
     );
+  }
+}
+
+/** Changes whenever a regular file is replaced, edited or has its mode set. */
+async function fileIdentity(path: string): Promise<string | undefined> {
+  try {
+    const info = await lstat(path);
+    if (!info.isFile()) return undefined;
+    return [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(
+      ':',
+    );
+  } catch {
+    return undefined;
   }
 }
 

@@ -264,6 +264,37 @@ describe('the WiiM playhead', () => {
     }
   });
 
+  it('watches a paused player once a second', async () => {
+    vi.useFakeTimers();
+    try {
+      let playing = false;
+      const sendCommand = vi.fn(async () =>
+        status({ status: playing ? 'play' : 'pause' }),
+      );
+      const playhead = new WiimPlayhead(
+        { 'music.room': '192.168.1.5' },
+        { sendCommand },
+        () => Date.now(),
+      );
+      players.push(playhead);
+      await playhead.read('music.room');
+      await vi.advanceTimersByTimeAsync(3_000);
+      // The first answer and one a second after it.
+      expect(sendCommand).toHaveBeenCalledTimes(4);
+      // A page that asks is still answered by the player at once.
+      playing = true;
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(playhead.read('music.room')).resolves.toMatchObject({
+        playing: true,
+      });
+      const resumed = sendCommand.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(sendCommand).toHaveBeenCalledTimes(resumed + 4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("waits for the metadata to be the track's", async () => {
     let title = 'The last song';
     const s = watched(() => meta(title, spotify));

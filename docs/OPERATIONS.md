@@ -195,7 +195,9 @@ ownership, and confirmed-empty continuity deadline to
 `$HOME/.local/state/lugn/lighting-intent.json`. The optional `statePath` config
 field or `LUGN_STATE_PATH` environment variable may choose another direct-child
 file in that writable state directory. The file is versioned, written
-atomically, and restricted to mode `0600`.
+atomically, and restricted to mode `0600`. A change that leaves the saved intent
+as it was does not rewrite the file, unless the file has since been replaced,
+removed or changed.
 
 Physical observations, presence counts, command history, and pending commands
 are not restored. After restart, saved lighting intent is reconciled only when

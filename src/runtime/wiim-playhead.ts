@@ -34,6 +34,8 @@ const REUSE_MS = 200;
 /** A player someone asked about is watched this long, this often. */
 const WATCH_FOR_MS = 4_000;
 const WATCH_EVERY_MS = 250;
+/** A player that said it is not playing is watched this often instead. */
+const IDLE_EVERY_MS = 1_000;
 /** An answer older than this says nothing about now. */
 const RECENT_MS = 4_000;
 /** Metadata that was not yet the track's is asked for again after this. */
@@ -143,7 +145,7 @@ export class WiimPlayhead implements PlayheadProvider {
       this.timer = undefined;
       for (const [target, until] of this.watched) {
         if (this.now() >= until) this.watched.delete(target);
-        else void this.current(target);
+        else if (!this.resting(target)) void this.current(target);
       }
       if (this.watched.size) {
         this.covers?.keepWarm();
@@ -151,6 +153,16 @@ export class WiimPlayhead implements PlayheadProvider {
       }
     }, WATCH_EVERY_MS);
     this.timer.unref?.();
+  }
+
+  /** A paused player answered recently enough: nothing moves to follow. */
+  private resting(target: string): boolean {
+    const latest = this.latest.get(target);
+    return (
+      latest !== undefined &&
+      !latest.playing &&
+      this.now() - latest.measuredAt < IDLE_EVERY_MS
+    );
   }
 
   private current(target: string): Promise<PlayerPlayhead | null> {

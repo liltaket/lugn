@@ -357,7 +357,8 @@ export class LugnDisplayServer {
     );
     this.unsubscribeComputerObservations = this.options.stateStream?.subscribe(
       (update) => {
-        if (update.patch.computer)
+        // Reading `patch` copies all of it: only a computer publication does.
+        if (update.domains.includes('computer') && update.patch.computer)
           this.computerNowPlaying.observe(update.patch.computer.devices);
       },
     );

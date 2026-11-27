@@ -5352,16 +5352,9 @@ export class LugnEngine {
       for (const domain of domains) this.pendingPublicationDomains.add(domain);
       return;
     }
+    // A desktop observation changes nothing else, so no other bookkeeping runs.
     if (domains.length === 1 && domains[0] === 'computer') {
-      this.state.revision += 1;
-      this.state.updatedAt = this.clock.now();
-      RoomStateSchema.parse(this.state);
-      this.stream.publish({
-        revision: this.state.revision,
-        at: this.state.updatedAt,
-        domains: ['computer'],
-        patch: { computer: structuredClone(this.state.computer) },
-      });
+      this.publishUpdate(domains);
       return;
     }
     // Decide from the originating domains, before lighting ownership adds intent.
