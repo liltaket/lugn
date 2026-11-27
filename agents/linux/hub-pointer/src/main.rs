@@ -533,7 +533,7 @@ impl<'p> App<'p> {
     fn send(&mut self, msg: &AgentMsg) {
         if let Some(page) = &mut self.page
             && page.dead.is_none()
-            && !page.conn.send(msg.encode())
+            && !page.conn.send(msg)
         {
             page.dead = Some("page stopped reading");
         }
