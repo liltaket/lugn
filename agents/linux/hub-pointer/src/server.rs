@@ -21,7 +21,7 @@ use tokio_tungstenite::{
 use crate::{
     config::normalize_origin,
     log,
-    protocol::{PageMsg, decode_page},
+    protocol::{AgentMsg, PageMsg, decode_page},
 };
 
 pub const PATH: &str = "/hub-pointer";
@@ -186,12 +186,57 @@ pub enum PageEvent {
     Closed(u64, String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OutFrame {
+    Move(String),
+    Other(String),
+}
+
+impl OutFrame {
+    fn from_msg(msg: &AgentMsg) -> Self {
+        let text = msg.encode();
+        match msg {
+            AgentMsg::Move { .. } => Self::Move(text),
+            _ => Self::Other(text),
+        }
+    }
+
+    fn into_message(self) -> Message {
+        match self {
+            Self::Move(text) | Self::Other(text) => Message::text(text),
+        }
+    }
+}
+
+/// Collapses consecutive queued `move` frames down to the newest position
+/// while stopping before any non-move frame (`button`, `wheel`, `leave`,
+/// `enter`, `warm`, `ping`) so event ordering is preserved across Wi-Fi stalls.
+fn coalesce_queued(
+    first: OutFrame,
+    rx: &mut mpsc::Receiver<OutFrame>,
+    deferred: &mut Option<OutFrame>,
+) -> OutFrame {
+    let OutFrame::Move(mut latest) = first else {
+        return first;
+    };
+    while let Ok(next) = rx.try_recv() {
+        match next {
+            OutFrame::Move(newer) => latest = newer,
+            other @ OutFrame::Other(_) => {
+                *deferred = Some(other);
+                break;
+            }
+        }
+    }
+    OutFrame::Move(latest)
+}
+
 /// Handle to a running page connection. Dropping it lets the task flush
 /// what is queued (bounded by `SEND_TIMEOUT`) and close the socket.
 pub struct PageConn {
     pub id: u64,
     pub peer: SocketAddr,
-    tx: mpsc::Sender<Message>,
+    tx: mpsc::Sender<OutFrame>,
 }
 
 impl PageConn {
@@ -207,45 +252,53 @@ impl PageConn {
 
     /// Never waits: a full queue means the page stopped reading, and the
     /// caller must drop it rather than stall the input path.
-    pub fn send(&self, text: String) -> bool {
-        self.tx.try_send(Message::text(text)).is_ok()
+    pub fn send(&self, msg: &AgentMsg) -> bool {
+        self.tx.try_send(OutFrame::from_msg(msg)).is_ok()
     }
 }
 
 async fn run_page(
     id: u64,
     ws: WebSocketStream<TcpStream>,
-    mut rx: mpsc::Receiver<Message>,
+    mut rx: mpsc::Receiver<OutFrame>,
     events: mpsc::Sender<PageEvent>,
 ) {
     let (mut sink, mut stream) = ws.split();
+    let mut deferred: Option<OutFrame> = None;
     let reason = loop {
-        tokio::select! {
-            out = rx.recv() => {
-                let Some(msg) = out else {
-                    let _ = timeout(SEND_TIMEOUT, sink.send(Message::Close(None))).await;
-                    return;
-                };
-                match timeout(SEND_TIMEOUT, sink.send(msg)).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => break format!("send failed: {e}"),
-                    Err(_) => break "send timed out".to_string(),
+        let next = if let Some(frame) = deferred.take() {
+            Some(frame)
+        } else {
+            tokio::select! {
+                out = rx.recv() => out,
+                frame = stream.next() => {
+                    match frame {
+                        Some(Ok(Message::Text(text))) => match decode_page(&text) {
+                            Ok(Some(msg)) => {
+                                if events.send(PageEvent::Msg(id, msg)).await.is_err() {
+                                    return;
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => log!("page {id}: {e}"),
+                        },
+                        Some(Ok(Message::Close(_))) | None => break "closed by page".to_string(),
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => break format!("read failed: {e}"),
+                    }
+                    continue;
                 }
             }
-            frame = stream.next() => match frame {
-                Some(Ok(Message::Text(text))) => match decode_page(&text) {
-                    Ok(Some(msg)) => {
-                        if events.send(PageEvent::Msg(id, msg)).await.is_err() {
-                            return;
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => log!("page {id}: {e}"),
-                },
-                Some(Ok(Message::Close(_))) | None => break "closed by page".to_string(),
-                Some(Ok(_)) => {}
-                Some(Err(e)) => break format!("read failed: {e}"),
-            },
+        };
+        let Some(first) = next else {
+            let _ = timeout(SEND_TIMEOUT, sink.send(Message::Close(None))).await;
+            return;
+        };
+        let frame = coalesce_queued(first, &mut rx, &mut deferred);
+        match timeout(SEND_TIMEOUT, sink.send(frame.into_message())).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => break format!("send failed: {e}"),
+            Err(_) => break "send timed out".to_string(),
         }
     };
     let _ = events.send(PageEvent::Closed(id, reason)).await;
@@ -318,5 +371,145 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn coalesces_queued_moves_and_preserves_order_around_non_moves() {
+        use crate::protocol::ButtonName;
+
+        let (tx, mut rx) = mpsc::channel(OUT_QUEUE);
+        for i in 1..=20 {
+            tx.try_send(OutFrame::from_msg(&AgentMsg::Move {
+                x: i as f64,
+                y: 10.0,
+            }))
+            .unwrap();
+        }
+        let press = AgentMsg::Button {
+            button: ButtonName::Left,
+            down: true,
+            x: 20.0,
+            y: 10.0,
+        };
+        tx.try_send(OutFrame::from_msg(&press)).unwrap();
+        for i in 21..=30 {
+            tx.try_send(OutFrame::from_msg(&AgentMsg::Move {
+                x: i as f64,
+                y: 10.0,
+            }))
+            .unwrap();
+        }
+        tx.try_send(OutFrame::from_msg(&AgentMsg::Leave)).unwrap();
+        drop(tx);
+
+        let mut deferred = None;
+        let mut drained = Vec::new();
+        loop {
+            let next = deferred.take().or_else(|| rx.try_recv().ok());
+            let Some(first) = next else { break };
+            let frame = coalesce_queued(first, &mut rx, &mut deferred);
+            drained.push(frame);
+        }
+
+        // 20 moves -> 1 latest move before button; button; 10 moves -> 1 latest move; leave.
+        assert_eq!(
+            drained,
+            vec![
+                OutFrame::from_msg(&AgentMsg::Move { x: 20.0, y: 10.0 }),
+                OutFrame::from_msg(&press),
+                OutFrame::from_msg(&AgentMsg::Move { x: 30.0, y: 10.0 }),
+                OutFrame::from_msg(&AgentMsg::Leave),
+            ]
+        );
+    }
+
+    #[test]
+    fn non_move_frames_pass_through_unchanged() {
+        let (tx, mut rx) = mpsc::channel(OUT_QUEUE);
+        let enter = OutFrame::from_msg(&AgentMsg::Enter { x: 1.0, y: 2.0 });
+        let ping = OutFrame::from_msg(&AgentMsg::Ping { id: 7 });
+        tx.try_send(enter.clone()).unwrap();
+        tx.try_send(ping.clone()).unwrap();
+        drop(tx);
+
+        let mut deferred = None;
+        let first = rx.try_recv().unwrap();
+        assert_eq!(coalesce_queued(first, &mut rx, &mut deferred), enter);
+        assert_eq!(deferred, None);
+        let second = rx.try_recv().unwrap();
+        assert_eq!(coalesce_queued(second, &mut rx, &mut deferred), ping);
+        assert_eq!(deferred, None);
+    }
+
+    #[tokio::test]
+    async fn page_conn_coalesces_backlogged_moves_over_websocket() {
+        use crate::protocol::ButtonName;
+        use tokio_tungstenite::client_async;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let auth = Arc::new(Auth {
+            token: "tok".into(),
+            allowed_origins: vec![],
+        });
+        let (pages_tx, mut pages_rx) = mpsc::channel(4);
+        let accept = tokio::spawn(accept_loop(listener, auth, pages_tx));
+
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let (mut client, _) = client_async(format!("ws://{addr}/hub-pointer?token=tok"), tcp)
+            .await
+            .unwrap();
+        let new_page = pages_rx.recv().await.unwrap();
+        let (events_tx, _events_rx) = mpsc::channel(8);
+        let conn = PageConn::spawn(1, new_page, events_tx);
+
+        // Queue a burst synchronously before yielding to the page task.
+        for i in 1..=20 {
+            assert!(conn.send(&AgentMsg::Move {
+                x: i as f64,
+                y: 5.0,
+            }));
+        }
+        let press = AgentMsg::Button {
+            button: ButtonName::Left,
+            down: true,
+            x: 20.0,
+            y: 5.0,
+        };
+        assert!(conn.send(&press));
+        for i in 21..=30 {
+            assert!(conn.send(&AgentMsg::Move {
+                x: i as f64,
+                y: 5.0,
+            }));
+        }
+        assert!(conn.send(&AgentMsg::Leave));
+        drop(conn);
+
+        let mut received = Vec::new();
+        while let Some(Ok(msg)) = client.next().await {
+            match msg {
+                Message::Text(text) => received.push(text.to_string()),
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+        accept.abort();
+
+        // At most one move before press (latest x=20), press, at most one move
+        // after press (latest x=30), and leave — never all 30 raw moves.
+        assert!(
+            received.len() <= 4,
+            "received too many frames: {received:?}"
+        );
+        assert_eq!(
+            received,
+            vec![
+                AgentMsg::Move { x: 20.0, y: 5.0 }.encode(),
+                press.encode(),
+                AgentMsg::Move { x: 30.0, y: 5.0 }.encode(),
+                AgentMsg::Leave.encode(),
+            ]
+        );
     }
 }
