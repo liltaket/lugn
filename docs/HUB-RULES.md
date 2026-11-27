@@ -3,7 +3,9 @@
 Hub rules decide what each Hub screen shows from the situation: which pages
 exist, which one to bring up, how bright the screen is, and which labels the
 page can react to. They are configuration, not code, and a Hub without rules
-behaves exactly as before.
+behaves exactly as before. With or without rules, a Hub
+[leaves a quiet Musik page](UI.md#leaving-a-quiet-musik) after five minutes; the
+rules in force decide where it goes.
 
 Examples of what they express:
 

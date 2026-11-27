@@ -441,6 +441,37 @@ view fetches no frames; the last frame stays and fetching resumes when Hem is
 shown again. Hem's playback ring keeps running, which costs nothing while it
 is not painted.
 
+### Leaving a quiet Musik
+
+A Hub on Musik leaves it after five minutes in which nothing has played and
+nobody has used the Hub. This needs no [Hub rules](HUB-RULES.md). It goes to Hem,
+or where the rules in force say it would otherwise be: the page their `focus`
+brings up (if its `fromPages` and `idleSeconds` let it take the Hub from Musik),
+and without Hem the first other page the rules leave. While a rule brings up
+Musik, or Musik is the only page, the Hub stays. It does not go back to Musik by
+itself when music starts again; only a rule does that.
+
+The wait starts over:
+
+- when something plays, on any configured player or on a computer behind a
+  player's input;
+- on a touch, a mouse press or movement (also the bridged mouse), a key or the
+  wheel;
+- when Musik is opened, however long it has been quiet before;
+- while the Hub cannot tell that it is quiet: Lugn is unreachable or has sent
+  nothing for 30 seconds, no music source is connected, or the shown player is
+  unavailable, untrusted or reports an unknown playback;
+- when the page has not run for more than 30 seconds (hidden or asleep). A
+  reload starts on Hem as always.
+
+Behind the computer input a player reports `playing` for the open input, so the
+computer's media decides: with nothing playing there the page is quiet, and with
+the computer's media unknown (for example the computer is off while the player
+still reports `playing`) the Hub stays. A change of track, or a pause shorter
+than the wait, never leaves the page; the two minutes a paused track stays shown
+count towards the wait. The delay is `MUSIC_LEAVE_MS` in
+`src/ui/hub-policy.js`; it is not a setting.
+
 ### Musik with lyrics
 
 A button in the navbar's top row switches lyrics on and off, and with them on a
