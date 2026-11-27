@@ -174,9 +174,64 @@ describe('secret-path Hub state stream', () => {
       const beat = await pending;
       expect(beat.state.revision).toBe(first.state.revision + 5);
       expect(beat.deliveryRevision).toBeGreaterThan(first.deliveryRevision);
+      expect((beat as { heartbeat?: boolean }).heartbeat).toBe(true);
+      expect('scenes' in beat).toBe(false);
     } finally {
       vi.useRealTimers();
     }
+  });
+  it('serves computerStats on demand without embedding it in state snapshots', async () => {
+    const engine = new LugnEngine(new FakeClock(1_000_000));
+    let cpuPercent = 12;
+    const port = await freePort();
+    const server = new LugnDisplayServer({
+      host: '127.0.0.1',
+      port,
+      hubs: [{ id: 'bed', role: 'bed', token, castHost: '127.0.0.1' }],
+      capabilities: new CapabilityRegistry(engine),
+      scenes: [...engine.scenes.values()],
+      stateProvider: () => engine.state,
+      stateStream: engine.stream,
+      computerStatsProvider: () => ({
+        workstation: {
+          cpu: { percent: cpuPercent },
+        } as never,
+      }),
+    });
+    await server.start();
+    cleanups.push(async () => {
+      await server.stop();
+      engine.dispose();
+    });
+    const base = `http://127.0.0.1:${port}/k/${token}/display-api`;
+    const state = (await (await fetch(`${base}/state`)).json()) as Record<
+      string,
+      unknown
+    >;
+    expect('computerStats' in state).toBe(false);
+    const first = (await (await fetch(`${base}/computer-stats`)).json()) as {
+      computerStats: { workstation: { cpu: { percent: number } } };
+    };
+    expect(first.computerStats.workstation.cpu.percent).toBe(12);
+    cpuPercent = 67;
+    const second = (await (await fetch(`${base}/computer-stats`)).json()) as {
+      computerStats: { workstation: { cpu: { percent: number } } };
+    };
+    expect(second.computerStats.workstation.cpu.percent).toBe(67);
+    expect(
+      (
+        await fetch(`${base}/computer-stats`, {
+          headers: { 'sec-fetch-site': 'cross-site' },
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await fetch(`${base}/computer-stats`, {
+          headers: { Origin: 'http://untrusted.test' },
+        })
+      ).status,
+    ).toBe(403);
   });
   it('sends no diagnostics or timing logs to a Hub', async () => {
     const { open, engine } = await setup();

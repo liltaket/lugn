@@ -1,4 +1,6 @@
+import { request } from 'node:http';
 import { createServer } from 'node:net';
+import { gunzipSync } from 'node:zlib';
 import { afterEach, expect, it } from 'vitest';
 import { LugnEngine } from '../src/application/lugn-engine.js';
 import { CapabilityRegistry } from '../src/application/capabilities.js';
@@ -86,4 +88,42 @@ it('refuses a cross-site request', async () => {
   expect(
     (await fetch(base, { headers: { origin: 'http://evil.example' } })).status,
   ).toBe(403);
+});
+
+it('serves gzipped photo listings cached per revision', async () => {
+  const base = await setup(true);
+  const raw = await new Promise<{
+    status: number | undefined;
+    encoding: string | undefined;
+    vary: string | undefined;
+    body: Buffer;
+  }>((resolve, reject) => {
+    const req = request(
+      base,
+      { headers: { 'accept-encoding': 'gzip' } },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode,
+            encoding: res.headers['content-encoding'],
+            vary: res.headers.vary,
+            body: Buffer.concat(chunks),
+          }),
+        );
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+  expect(raw.status).toBe(200);
+  expect(raw.encoding).toBe('gzip');
+  expect(raw.vary).toBe('accept-encoding');
+  const parsed = JSON.parse(gunzipSync(raw.body).toString('utf8')) as {
+    revision: string;
+    photos: Array<{ id: string }>;
+  };
+  expect(parsed.revision).toBe('r1');
+  expect(parsed.photos[0]?.id).toBe(id);
 });

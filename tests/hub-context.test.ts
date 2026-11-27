@@ -626,6 +626,17 @@ describe('Hub optional Lugn 2 presentation', () => {
     // A heartbeat with a newer state revision and nothing else new.
     stream.emit({ ...at(12), deliveryRevision: 2, generatedAt: 6000 }, '12');
     expect(runInContext('latestPayload.state.revision', ui.context)).toBe(12);
+    // A compact heartbeat from the server advances revision and clock too.
+    stream.emit(
+      {
+        heartbeat: true,
+        state: { revision: 13 },
+        deliveryRevision: 3,
+        generatedAt: 9000,
+      },
+      '13',
+    );
+    expect(runInContext('latestPayload.state.revision', ui.context)).toBe(13);
     // A read that started before it and finishes after it is refused.
     expect(
       runInContext(
@@ -633,7 +644,7 @@ describe('Hub optional Lugn 2 presentation', () => {
         ui.context,
       ),
     ).toBe(false);
-    expect(runInContext('latestPayload.generatedAt', ui.context)).toBe(6000);
+    expect(runInContext('latestPayload.generatedAt', ui.context)).toBe(9000);
   });
   it('sets the cover colors on the music column, never on the root, and fades the background between two layers', () => {
     const themed = dashboard('', true);

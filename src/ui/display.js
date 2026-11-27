@@ -340,6 +340,32 @@ function acceptPayload(payload, streamKey = '') {
   return true;
 }
 
+function acceptCompactHeartbeat(data) {
+  if (!latestPayload || refs.connection.dataset.state !== 'connected') {
+    void refresh();
+    return false;
+  }
+  const beat = JSON.parse(data);
+  const revision = beat?.state?.revision;
+  const delivery = beat?.deliveryRevision;
+  const generatedAt = beat?.generatedAt;
+  if (!Number.isFinite(generatedAt)) return false;
+  if (
+    Number.isInteger(revision) &&
+    revision < (latestPayload.state?.revision ?? -1)
+  )
+    return false;
+  if (Number.isInteger(delivery) && delivery < latestDeliveryRevision)
+    return false;
+  if (Number.isInteger(delivery)) latestDeliveryRevision = delivery;
+  if (Number.isInteger(revision) && latestPayload.state)
+    latestPayload.state.revision = revision;
+  latestPayload.generatedAt = Number(generatedAt);
+  payloadReceivedAt = monotonicNow();
+  lastFreshAt = Date.now();
+  return true;
+}
+
 function acceptUnchangedHeartbeat(data, key, eventId) {
   if (!key || key !== drawnStreamKey || !latestPayload) return false;
   // Anything but a settled connection takes the full path that restores it.
@@ -406,12 +432,16 @@ function connectStream() {
   source.onmessage = (event) => {
     if (source !== eventSource || stopped) return;
     try {
-      const key = event.data.replace(UNSTABLE_FIELDS, '');
-      if (
-        !acceptUnchangedHeartbeat(event.data, key, event.lastEventId) &&
-        !acceptPayload(JSON.parse(event.data), key)
-      )
-        return;
+      if (event.data.startsWith('{"heartbeat":true,')) {
+        if (!acceptCompactHeartbeat(event.data)) return;
+      } else {
+        const key = event.data.replace(UNSTABLE_FIELDS, '');
+        if (
+          !acceptUnchangedHeartbeat(event.data, key, event.lastEventId) &&
+          !acceptPayload(JSON.parse(event.data), key)
+        )
+          return;
+      }
       const wasHealthy = streamHealthy;
       streamHealthy = true;
       reconnectDelay = 1000;
@@ -3314,7 +3344,10 @@ async function getState() {
       error.status = response.status;
       throw error;
     }
-    return await response.json();
+    if (typeof response.text === 'function') {
+      return { text: await response.text(), payload: null };
+    }
+    return { text: '', payload: await response.json() };
   } finally {
     window.clearTimeout(timeout);
   }
@@ -3357,13 +3390,26 @@ async function refresh(afterCommand = false) {
 async function readState() {
   const readGeneration = instanceGeneration;
   try {
-    const payload = await getState();
-    if (
-      readGeneration !== instanceGeneration &&
-      payload?.instanceId !== currentInstanceId
-    )
-      return;
-    acceptPayload(payload);
+    const result = await getState();
+    if (result.text) {
+      const key = result.text.replace(UNSTABLE_FIELDS, '');
+      if (acceptUnchangedHeartbeat(result.text, key)) return;
+      const payload = JSON.parse(result.text);
+      if (
+        readGeneration !== instanceGeneration &&
+        payload?.instanceId !== currentInstanceId
+      )
+        return;
+      acceptPayload(payload, key);
+    } else {
+      const payload = result.payload;
+      if (
+        readGeneration !== instanceGeneration &&
+        payload?.instanceId !== currentInstanceId
+      )
+        return;
+      acceptPayload(payload);
+    }
   } catch (error) {
     if (streamHealthy && error?.status !== 401 && error?.status !== 403) return;
     if (error?.status === 401 || error?.status === 403) {
