@@ -227,7 +227,13 @@ clicks and the pointer bridge responsive while something plays:
   reconnect draws in full.
 - `pulse()` restarts an animation class once per frame at the start of the next
   frame, not with a forced reflow in the middle of the render. A command only
-  redraws the controls of its own kind while pending.
+  redraws the controls of its own kind while pending. Hub command POSTs send
+  `x-lugn-snapshot: 1` so the server returns the fresh snapshot in the same
+  response, avoiding a second `GET /display-api/state` round-trip. For Hub
+  scene taps (`POST /display-api/scene`), the server answers as soon as the
+  engine commits the scene intent and starts dispatching to the lamps, so the
+  tile moves immediately to its `awaiting` (`Valt · väntar på lampor`) state
+  and only shows `confirmed` (`Bekräftat`) once lamp observations confirm it.
 - Releasing a press redraws only if a render was held back during the press.
 - Animations change only `opacity` and `transform`, never in their keyframes a
   `transform-origin`, a filter or a background position (those cannot be

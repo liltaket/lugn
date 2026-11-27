@@ -1216,8 +1216,9 @@ async function postBedtime(action) {
   pending.add('bedtime');
   refs.bedtimeError.hidden = true;
   renderContext(latestPayload);
+  let settledBySnapshot = false;
   try {
-    await postJson(BEDTIME_URL, body);
+    const result = await postJson(BEDTIME_URL, body, true);
     if (formAction && bedtimeDraft === draft) closeBedtime(true);
     showToast(
       action === 'clear'
@@ -1229,7 +1230,12 @@ async function postBedtime(action) {
             : 'Morgonvalet är sparat.',
       'success',
     );
-    await refresh(true);
+    if (result?.snapshot?.state) {
+      pending.delete('bedtime');
+      settledBySnapshot = acceptPayload(result.snapshot);
+    } else {
+      await refresh(true);
+    }
   } catch (error) {
     const message =
       error?.status === 409
@@ -1252,8 +1258,8 @@ async function postBedtime(action) {
       refs.bedtimeError.hidden = false;
     } else showToast(message, 'error');
   } finally {
-    pending.delete('bedtime');
-    renderContext(latestPayload);
+    const wasPending = pending.delete('bedtime');
+    if (wasPending || !settledBySnapshot) renderContext(latestPayload);
   }
 }
 
@@ -3403,7 +3409,7 @@ function isUnavailable() {
   );
 }
 
-async function postJson(url, body) {
+async function postJson(url, body, includeSnapshot = false) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 8_000);
   try {
@@ -3414,6 +3420,7 @@ async function postJson(url, body) {
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
+        ...(includeSnapshot ? { 'x-lugn-snapshot': '1' } : {}),
       },
       body: JSON.stringify(body),
       signal: controller.signal,
@@ -3438,6 +3445,7 @@ async function runCommand(key, body) {
   syncFeedback();
   pending.add(key);
   renderPendingCommand(key);
+  let settledBySnapshot = false;
   try {
     const url = key.startsWith('routine:')
       ? ROUTINE_URL
@@ -3452,7 +3460,7 @@ async function runCommand(key, body) {
               : key.startsWith('volume-authority:')
                 ? VOLUME_AUTHORITY_URL
                 : MUSIC_URL;
-    await postJson(url, body);
+    const result = await postJson(url, body, true);
     if (key === 'presence:one') {
       presenceAcknowledgedKey = JSON.stringify(latestPayload?.state?.presence);
       showToast(
@@ -3460,7 +3468,13 @@ async function runCommand(key, body) {
         'success',
       );
     }
-    await refresh(true);
+    if (result?.snapshot?.state) {
+      pending.delete(key);
+      settledBySnapshot = acceptPayload(result.snapshot);
+      if (!settledBySnapshot) renderPendingCommand(key);
+    } else {
+      await refresh(true);
+    }
   } catch (error) {
     if (error?.status === 401 || error?.status === 403) {
       setConnection(
@@ -3494,8 +3508,8 @@ async function runCommand(key, body) {
       showToast('Kommandot nådde inte Lugn. Försök igen.', 'error');
     }
   } finally {
-    pending.delete(key);
-    renderPendingCommand(key);
+    const wasPending = pending.delete(key);
+    if (wasPending || !settledBySnapshot) renderPendingCommand(key);
   }
 }
 

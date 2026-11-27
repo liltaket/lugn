@@ -129,6 +129,8 @@ function dashboard(hash = '', themed = false) {
   let offline = false;
   let postGate: Promise<void> | undefined;
   let postStatus = 200;
+  let postResponse: Record<string, unknown> = { accepted: true };
+  let stateGets = 0;
   const elements = new Map<string, Element>();
   const get = (selector: string) => {
     if (!elements.has(selector)) elements.set(selector, new Element());
@@ -217,9 +219,10 @@ function dashboard(hash = '', themed = false) {
         return {
           ok: postStatus === 200,
           status: postStatus,
-          json: async () => ({ accepted: true }),
+          json: async () => structuredClone(postResponse),
         };
       }
+      stateGets += 1;
       if (offline) throw new Error('simulated offline');
       return { ok: true, json: async () => structuredClone(payload) };
     },
@@ -259,6 +262,10 @@ function dashboard(hash = '', themed = false) {
     failPost: (status: number) => {
       postStatus = status;
     },
+    setPostResponse: (value: Record<string, unknown>) => {
+      postResponse = value;
+    },
+    stateGets: () => stateGets,
     dispose: () => windowListeners.get('pagehide')?.(),
   };
 }
@@ -1046,6 +1053,30 @@ describe('Hub lighting pictograms', () => {
     expect(button.dataset['state']).toBe('offline');
     expect(button.disabled).toBe(true);
     expect(button.getAttribute('aria-label')).toContain('Frånkopplad');
+    expect(button.getAttribute('aria-label')).not.toContain('Bekräftat');
+  });
+
+  it('applies a command response snapshot directly without a second GET /display-api/state', async () => {
+    const button = ui
+      .get('#scene-grid')
+      .children.find(
+        (item) => item.dataset['scene'] === 'scene.everyday_light',
+      )!;
+    const next = ui.payload();
+    next.state.revision += 1;
+    next.deliveryRevision += 1;
+    next.state.lighting.currentScene = 'scene.everyday_light';
+    next.state.lighting.sceneRevision = 4;
+    next.state.commands = [{ revision: 4, status: 'pending' }];
+    ui.setPostResponse({ sceneRevision: 4, snapshot: next });
+    const getsBefore = ui.stateGets();
+    button.click();
+    await settle();
+    expect(ui.stateGets()).toBe(getsBefore);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.dataset['state']).toBe('awaiting');
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-label')).toContain('väntar på lampor');
     expect(button.getAttribute('aria-label')).not.toContain('Bekräftat');
   });
 });

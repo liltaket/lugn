@@ -600,6 +600,9 @@ export class CapabilityRegistry {
             provenance.source,
             provenance.requestId,
             isCurrent,
+            provenance.source?.startsWith('lugn.cast_dashboard.')
+              ? { awaitReconcile: false }
+              : undefined,
           ),
         };
         break;
