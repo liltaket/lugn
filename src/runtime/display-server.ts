@@ -18,6 +18,8 @@ import {
 } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { gzip } from 'node:zlib';
 import { z, ZodError } from 'zod';
 import {
   CapabilityInputError,
@@ -77,6 +79,7 @@ const CameraActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('grid-close') }).strict(),
 ]);
 const MAX_REQUEST_BYTES = 8 * 1024;
+const gzipAsset = promisify(gzip);
 /** One phase of the on-device profile (src/ui/hub-probe.js), logged as is. */
 const PROBE_PHASES = [
   'info',
@@ -315,6 +318,11 @@ export class LugnDisplayServer {
   private readonly hubPolicy: HubPolicyEngine;
   private unsubscribeComputerObservations: (() => void) | undefined;
   private readonly computerTracks = new Map<string, LyricsTrack>();
+  /** Each page file's last compressed form, reused while its bytes match. */
+  private readonly packedAssets = new Map<
+    UiAssetName,
+    { source: Buffer; packed: Buffer }
+  >();
   private readonly prefetched = new Map<string, string>();
 
   constructor(private readonly options: LugnDisplayServerOptions) {
@@ -585,6 +593,7 @@ export class LugnDisplayServer {
 
       if (request.method === 'GET' && hubRequest.route === '/') {
         await this.serveAsset(
+          request,
           response,
           'display.html',
           'text/html; charset=utf-8',
@@ -593,6 +602,7 @@ export class LugnDisplayServer {
       }
       if (request.method === 'GET' && hubRequest.route === '/display.css') {
         await this.serveAsset(
+          request,
           response,
           'display.css',
           'text/css; charset=utf-8',
@@ -601,6 +611,7 @@ export class LugnDisplayServer {
       }
       if (request.method === 'GET' && hubRequest.route === '/display.js') {
         await this.serveAsset(
+          request,
           response,
           'display.js',
           'text/javascript; charset=utf-8',
@@ -612,6 +623,7 @@ export class LugnDisplayServer {
         hubRequest.route === '/pointer-bridge.js'
       ) {
         await this.serveAsset(
+          request,
           response,
           'pointer-bridge.js',
           'text/javascript; charset=utf-8',
@@ -620,7 +632,12 @@ export class LugnDisplayServer {
       }
       const pageAsset = PAGE_ASSETS.get(hubRequest.route);
       if (request.method === 'GET' && pageAsset) {
-        await this.serveAsset(response, pageAsset.file, pageAsset.type);
+        await this.serveAsset(
+          request,
+          response,
+          pageAsset.file,
+          pageAsset.type,
+        );
         return;
       }
       if (
@@ -1423,6 +1440,7 @@ export class LugnDisplayServer {
   }
 
   private async serveAsset(
+    request: IncomingMessage,
     response: ServerResponse,
     filename: UiAssetName,
     contentType: string,
@@ -1433,6 +1451,8 @@ export class LugnDisplayServer {
       return;
     }
     let body: Buffer;
+    // A reload fetches every file; as text they shrink to under a third.
+    const compressed = acceptsGzip(request);
     try {
       body = await readFile(file);
       if (filename === 'display.js')
@@ -1440,6 +1460,7 @@ export class LugnDisplayServer {
           Buffer.from(lightingFeedbackBrowserScript),
           body,
         ]);
+      if (compressed) body = await this.packAsset(filename, body);
     } catch {
       sendJson(response, 503, { error: 'display_assets_unavailable' });
       return;
@@ -1448,9 +1469,23 @@ export class LugnDisplayServer {
       'cache-control': 'no-store',
       'content-length': body.byteLength,
       'content-type': contentType,
+      ...(compressed ? { 'content-encoding': 'gzip' } : {}),
+      vary: 'accept-encoding',
       'x-content-type-options': 'nosniff',
     });
     response.end(body);
+  }
+
+  /** Compressing costs far more than comparing, so it is done once a version. */
+  private async packAsset(
+    filename: UiAssetName,
+    source: Buffer,
+  ): Promise<Buffer> {
+    const last = this.packedAssets.get(filename);
+    if (last?.source.equals(source)) return last.packed;
+    const packed = await gzipAsset(source);
+    this.packedAssets.set(filename, { source, packed });
+    return packed;
   }
 
   private async invokeScene(
@@ -2008,6 +2043,19 @@ function findUiAsset(filename: UiAssetName): string | undefined {
     }
   }
   return undefined;
+}
+
+/** `gzip` listed in Accept-Encoding and not refused with `q=0`. */
+function acceptsGzip(request: IncomingMessage): boolean {
+  const header = request.headers['accept-encoding'];
+  if (typeof header !== 'string') return false;
+  return header.split(',').some((entry) => {
+    const [coding, ...parameters] = entry.split(';').map((part) => part.trim());
+    return (
+      coding?.toLowerCase() === 'gzip' &&
+      !parameters.some((parameter) => /^q=0(?:\.0*)?$/i.test(parameter))
+    );
+  });
 }
 
 function isJsonRequest(request: IncomingMessage): boolean {
