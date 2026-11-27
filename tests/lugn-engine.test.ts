@@ -398,6 +398,40 @@ describe('Lugn deterministic lighting slice', () => {
     }
   });
 
+  it('keeps no force-off bookkeeping for superseded scene revisions', async () => {
+    const scene = (id: string, power: boolean) => ({
+      id,
+      name: id,
+      lighting: { 'lighting.desk': { power } },
+    });
+    const { engine } = setup({
+      deviceIds: ['lighting.desk'],
+      scenes: [scene('scene.all_off', false), scene('scene.read', true)],
+      defaultSceneId: 'scene.read',
+    });
+    const internals = engine as unknown as {
+      forceOffTargetsByRevision: Map<number, Set<string>>;
+    };
+    for (let visit = 0; visit < 20; visit += 1) {
+      // The request is withdrawn before the forced off is sent, so this
+      // revision never settles its own entry.
+      let checks = 0;
+      await expect(
+        engine.activateScene(
+          'scene.all_off',
+          user,
+          'dashboard',
+          undefined,
+          () => ++checks < 4,
+        ),
+      ).resolves.toBeTypeOf('number');
+      await engine.activateScene('scene.read', user);
+      await flushMicrotasks();
+    }
+    expect(internals.forceOffTargetsByRevision.size).toBe(0);
+    engine.dispose();
+  });
+
   it('does not move an existing same-mode retry deadline later', async () => {
     const { clock, engine } = setup();
     const internals = engine as unknown as {

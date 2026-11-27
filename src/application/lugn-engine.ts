@@ -5450,6 +5450,9 @@ export class LugnEngine {
     for (const revision of this.intentByRevision.keys())
       if (revision !== this.state.lighting.sceneRevision)
         this.intentByRevision.delete(revision);
+    for (const revision of this.forceOffTargetsByRevision.keys())
+      if (revision !== this.state.lighting.sceneRevision)
+        this.forceOffTargetsByRevision.delete(revision);
     this.state.commands = this.ledger.records;
     if (
       refreshMusic &&
