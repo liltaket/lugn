@@ -291,6 +291,7 @@ export class GoveePresetLightingAdapter implements LightingAdapter {
           id: command.id,
           target: command.target,
           values,
+          ...(command.immediate ? { immediate: true } : {}),
         });
       } catch (error) {
         await restore?.catch(() => undefined);

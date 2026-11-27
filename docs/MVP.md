@@ -12,7 +12,7 @@ still needs work before Lugn is a broadly configurable, finished product.
   service.
 - Room state keeps `occupied`, `confirmed_empty` and `unknown` distinct.
 - A confirmed empty room turns configured lights off immediately while
-  preserving the logical scene and selected overrides for continuity.
+  preserving the logical scene and overrides for the next entry.
 - A short confirmed return reconciles the current effective light intent.
 - Prelight is a bounded overlay and does not imply occupancy.
 - Home Assistant home/away is tracked separately through a configured
@@ -87,7 +87,8 @@ still needs work before Lugn is a broadly configurable, finished product.
   preset and playback controls remain manual actions.
 - The fast entry-light command is dispatched without waiting for persistence or
   UI work. Confirmed empty turns lights off immediately while retaining the
-  logical scene; a short return restores the effective scene and overrides.
+  logical scene; a return restores the effective scene and overrides, however
+  long the room was empty.
 - Scene selection converges all configured targets. A manual change is tracked
   only for the property changed when possible, and an unreachable target does
   not create a false manual override.

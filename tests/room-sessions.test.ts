@@ -189,17 +189,15 @@ describe('room session lifecycle', () => {
       sessionMs: 5_000,
       lightingMs: 10_000,
       sameSession: false,
-      retained: true,
     },
     {
       sessionMs: 10_000,
       lightingMs: 5_000,
       sameSession: true,
-      retained: false,
     },
   ])(
     'retains independent lighting and music continuity with sessionMs=$sessionMs',
-    async ({ sessionMs, lightingMs, sameSession, retained }) => {
+    async ({ sessionMs, lightingMs, sameSession }) => {
       const clock = new FakeClock(startAt);
       const adapter = new SimulatedLightingAdapter(clock);
       const music = new SimulatedMusicAdapter(clock);
@@ -245,12 +243,11 @@ describe('room session lifecycle', () => {
       clock.advanceBy(1);
       music.observe('music.room', { ...playing, playback: 'paused' });
       clock.advanceBy(5_999);
-      expect(engine.state.lighting.currentScene).toBe(
-        retained ? scene.id : null,
-      );
+      // Lighting is remembered whether or not its continuity has ended.
+      expect(engine.state.lighting.currentScene).toBe(scene.id);
       expect(
         engine.state.lighting.devices['lighting.desk']!.effectiveDesired,
-      ).toEqual(retained ? { power: true, brightness: 47 } : {});
+      ).toEqual({ power: true, brightness: 47 });
       expect(
         engine.getMusicVolumePolicySnapshots()['music.room'],
       ).toMatchObject({

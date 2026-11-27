@@ -2885,7 +2885,7 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
-  it('expires continuity on time while unknown and publishes the cleared state', async () => {
+  it('expires continuity on time while unknown and keeps the remembered lighting', async () => {
     const { clock, engine } = setup({ continuityMs: 1_000 });
     await engine.activateScene('scene.cozy', user);
     await engine.handlePresence({
@@ -2911,27 +2911,17 @@ describe('Lugn deterministic lighting slice', () => {
     expect(engine.state.presence.state).toBe('unknown');
     expect(expiration).toBe(clock.now());
     expect(engine.state.presence.continuityExpiresAt).toBeNull();
-    expect(engine.state.lighting.currentScene).toBeNull();
+    expect(engine.state.lighting.currentScene).toBe('scene.cozy');
     expect(
-      Object.values(engine.state.lighting.devices).every(
-        (device) =>
-          Object.keys(device.baselineDesired).length === 0 &&
-          Object.keys(device.effectiveDesired).length === 0 &&
-          Object.keys(device.ownership).length === 0,
-      ),
-    ).toBe(true);
+      engine.state.lighting.devices['lighting.ceiling']?.effectiveDesired,
+    ).not.toEqual({});
     const expiryUpdate = updates.find((update) =>
       update.patch.diagnostics?.some(
         (diagnostic) => diagnostic.kind === 'continuity.expired',
       ),
     );
     expect(expiryUpdate?.domains).toEqual(
-      expect.arrayContaining([
-        'presence',
-        'lighting',
-        'commands',
-        'diagnostics',
-      ]),
+      expect.arrayContaining(['presence', 'diagnostics']),
     );
     expect(
       expiryUpdate && applyStateUpdate(snapshot.state, expiryUpdate),
@@ -2941,7 +2931,7 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
-  it('drops visit overrides at continuity expiry and applies the configured default on the next entry', async () => {
+  it('restores the last scene and its adjustments after a long absence, not the default', async () => {
     const { clock, adapter, engine } = setup({
       continuityMs: 1_000,
       deviceIds: ['lighting.desk'],
@@ -2972,13 +2962,11 @@ describe('Lugn deterministic lighting slice', () => {
       personCount: 0,
     });
 
-    clock.advanceBy(1_000);
+    clock.advanceBy(6 * 60 * 60_000);
     await flushMicrotasks();
-    expect(engine.state.lighting.currentScene).toBeNull();
-    expect(engine.defaultScenePending).toBe(true);
-    expect(
-      engine.state.lighting.devices['lighting.desk']?.effectiveDesired,
-    ).toEqual({});
+    expect(engine.state.lighting.currentScene).toBe('scene.cozy');
+    expect(engine.defaultScenePending).toBe(false);
+    expect(adapter.observed.get('lighting.desk')?.power).toBe(false);
 
     await engine.handlePresence({
       type: 'presence.changed',
@@ -2986,11 +2974,10 @@ describe('Lugn deterministic lighting slice', () => {
       personCount: 1,
     });
 
-    expect(engine.state.lighting.currentScene).toBe('scene.default');
-    expect(engine.defaultScenePending).toBe(false);
+    expect(engine.state.lighting.currentScene).toBe('scene.cozy');
     expect(adapter.observed.get('lighting.desk')).toMatchObject({
       power: true,
-      brightness: 55,
+      brightness: 47,
     });
     engine.dispose();
   });
@@ -3106,7 +3093,8 @@ describe('Lugn deterministic lighting slice', () => {
     expect(engine.defaultScenePending).toBe(false);
     expect(
       engine.state.lighting.devices['lighting.desk']?.effectiveDesired,
-    ).toEqual({ power: true, brightness: 2 });
+    ).toEqual({ power: true, brightness: 17 });
+    expect(adapter.dispatched).toEqual([]);
     await engine.handlePresence({
       type: 'presence.changed',
       presence: 'occupied',
@@ -3114,7 +3102,7 @@ describe('Lugn deterministic lighting slice', () => {
     });
     expect(adapter.observed.get('lighting.desk')).toMatchObject({
       power: true,
-      brightness: 2,
+      brightness: 17,
     });
     engine.dispose();
   });
@@ -3283,7 +3271,7 @@ describe('Lugn deterministic lighting slice', () => {
     engine.dispose();
   });
 
-  it('expires remembered state exactly at the continuity deadline', async () => {
+  it('ends the visit exactly at the continuity deadline and keeps the lighting', async () => {
     const { clock, adapter, engine } = setup({ continuityMs: 1_000 });
     await engine.activateScene('scene.cozy', user);
     await engine.handlePresence({
@@ -3295,8 +3283,8 @@ describe('Lugn deterministic lighting slice', () => {
       type: 'presence.changed',
       presence: 'occupied',
     });
-    expect(engine.state.lighting.currentScene).toBeNull();
-    expect(adapter.observed.get('lighting.ceiling')?.power).toBe(false);
+    expect(engine.state.lighting.currentScene).toBe('scene.cozy');
+    expect(adapter.observed.get('lighting.ceiling')?.power).toBe(true);
     expect(
       engine.state.diagnostics.some(
         (entry) => entry.kind === 'continuity.expired',

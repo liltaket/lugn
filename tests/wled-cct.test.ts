@@ -199,6 +199,26 @@ describe('dedicated WLED CCT control', () => {
     expect(posts).toBe(0);
   });
 
+  it('skips the crossfade for an immediate command only', async () => {
+    const s = setup();
+    await s.adapter.dispatch({
+      id: 'preview',
+      target,
+      values: { power: true, brightness: 61 },
+      immediate: true,
+    });
+    await s.adapter.dispatch({
+      id: 'ordinary',
+      target,
+      values: { power: true, brightness: 62 },
+    });
+    const writes = s.requests
+      .filter((request) => request.init?.body !== undefined)
+      .map((request) => JSON.parse(String(request.init!.body)));
+    expect(writes[0]).toMatchObject({ tt: 0 });
+    expect(writes[1]).not.toHaveProperty('tt');
+  });
+
   it('restores white and segment levels while setting global brightness and CCT atomically', async () => {
     const s = setup();
     s.current.seg[0]!.col[0]![3] = 0;

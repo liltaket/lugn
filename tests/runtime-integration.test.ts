@@ -963,7 +963,7 @@ describe('composed runtime integration', () => {
       expect(
         runtime.engine.state.lighting.devices['lighting.entry']
           ?.effectiveDesired,
-      ).toEqual({ power: true, brightness: 2 });
+      ).toEqual({ power: true, brightness: 17 });
       expect(serviceCalls).toEqual([]);
 
       await runtime.engine.handlePresence({
@@ -980,7 +980,10 @@ describe('composed runtime integration', () => {
       expect(serviceCalls).toEqual([
         {
           url: 'http://home-assistant.invalid:8123/api/services/light/turn_on',
-          body: JSON.stringify({ entity_id: 'light.entry', brightness_pct: 2 }),
+          body: JSON.stringify({
+            entity_id: 'light.entry',
+            brightness_pct: 17,
+          }),
         },
       ]);
     } finally {
@@ -1069,6 +1072,7 @@ describe('composed runtime integration', () => {
           entity_id: 'light.entry',
           brightness_pct: 55,
           color_temp_kelvin: 2700,
+          transition: 0.1,
         }),
       );
     } finally {

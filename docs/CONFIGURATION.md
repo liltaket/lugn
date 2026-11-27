@@ -77,8 +77,10 @@ invoke the buttons. See [IKEA BILRESA](INTEGRATIONS.md#ikea-bilresa) and
 ## Default scene and lighting intent
 
 `defaultSceneId` is optional and must name one of the configured scenes. When
-set, Lugn selects it as the default scene but waits for confirmed occupancy
-before applying its lighting values. Unknown presence and startup observations
+set, Lugn selects it as the default scene while there is no remembered
+lighting (a first start, or no stored intent) and waits for confirmed occupancy
+before applying its lighting values. It does not replace the last selected scene
+after an absence, however long. Unknown presence and startup observations
 alone do not turn lights on. A confirmed-empty event continues to apply the
 normal physical-off policy; a live preview may also apply configured prelight.
 The onboarding wizard writes `scenes: []`; the runtime expands this to its
@@ -201,8 +203,8 @@ that state directory.
 After restart, Lugn restores logical lighting intent and its absolute
 continuity expiry, starts with unknown presence and no prior observations or
 command ledger, and obtains fresh Home Assistant observations without issuing
-commands. It reconciles restored intent on the next confirmed occupancy unless
-continuity has expired. A confirmed-empty heartbeat immediately after restart
+commands. It reconciles restored lighting intent on the next confirmed
+occupancy, also after the continuity deadline has passed. A confirmed-empty heartbeat immediately after restart
 still switches lights off but does not extend the restored deadline. Corrupt,
 unsupported, or device/scene-mismatched state is ignored safely. Invalid music is
 ignored independently of valid lighting. Music intent is restored before HA

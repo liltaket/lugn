@@ -261,7 +261,7 @@ describe('engine-owned Govee rotation', () => {
     await first.engine.activateScene('scene.loop', user);
     await presence(first.engine, 'confirmed_empty');
     await tick(first.clock, 1001);
-    expect(first.engine.state.lighting.currentScene).toBeNull();
+    expect(first.engine.state.lighting.currentScene).toBe('scene.loop');
     await tick(first.clock, 13_999);
     expect(
       first.engine.state.lighting.devices[target]?.govee?.activeEffect,
