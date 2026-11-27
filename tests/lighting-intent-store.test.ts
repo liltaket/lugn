@@ -164,7 +164,7 @@ describe('lighting intent persistence', () => {
 
     clock.advanceBy(3_000);
     expect(engine.state.presence.continuityExpiresAt).toBeNull();
-    expect(engine.state.lighting.currentScene).toBeNull();
+    expect(engine.state.lighting.currentScene).toBe(scene.id);
     engine.dispose();
   });
 
@@ -190,10 +190,10 @@ describe('lighting intent persistence', () => {
       },
     });
 
-    expect(engine.state.lighting.currentScene).toBeNull();
+    expect(engine.state.lighting.currentScene).toBe(scene.id);
     expect(
       engine.state.lighting.devices['lighting.entry']?.effectiveDesired,
-    ).toEqual({});
+    ).toEqual({ power: true });
     await engine.handlePresence({
       type: 'presence.changed',
       presence: 'confirmed_empty',
@@ -203,7 +203,7 @@ describe('lighting intent persistence', () => {
     engine.dispose();
   });
 
-  it('keeps the default scene pending across repeated restarts after expiry', async () => {
+  it('keeps the remembered lighting across repeated restarts after expiry', async () => {
     const directory = await temporaryDirectory();
     const filePath = join(directory, 'lighting-intent.json');
     const daytime = Date.parse('2026-09-28T12:00:00+02:00');
@@ -238,7 +238,7 @@ describe('lighting intent persistence', () => {
     firstEngine.dispose();
 
     const firstRestore = await createStore(filePath).load();
-    expect(firstRestore?.currentScene).toBeNull();
+    expect(firstRestore?.currentScene).toBe(scene.id);
     if (!firstRestore) throw new Error('First restored intent is missing');
 
     const secondClock = new FakeClock(daytime + 2);
@@ -259,7 +259,7 @@ describe('lighting intent persistence', () => {
     secondEngine.dispose();
 
     const secondRestore = await createStore(filePath).load();
-    expect(secondRestore?.currentScene).toBeNull();
+    expect(secondRestore?.currentScene).toBe(scene.id);
     if (!secondRestore) throw new Error('Second restored intent is missing');
 
     const thirdClock = new FakeClock(daytime + 3);

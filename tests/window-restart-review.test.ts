@@ -91,7 +91,7 @@ describe('window lighting restart review regressions', () => {
       restarted.adapter.dispatched.filter((command) => command.target === desk),
     ).toEqual([]);
   });
-  it('returns an expired window colour to the configured default', async () => {
+  it('keeps the last scene window colour after a long absence', async () => {
     const { engine, clock, adapter } = setup({
       scenes: [
         {
@@ -119,7 +119,6 @@ describe('window lighting restart review regressions', () => {
     clock.advanceBy(1001);
     await engine.handleSunElevation(5);
     await engine.handleSunElevation(-5);
-    expect(adapter.observed.get(windowTarget)?.colorTemperature).toBe(2700);
-    expect(adapter.observed.get(windowTarget)?.rgb).toBeUndefined();
+    expect(adapter.observed.get(windowTarget)?.rgb).toEqual([200, 0, 100]);
   });
 });

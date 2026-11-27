@@ -68,6 +68,21 @@ describe('Home Assistant lighting adapter', () => {
     });
   });
 
+  it('asks for a minimal transition on immediate turn-on only', async () => {
+    const { adapter, requests } = setup();
+
+    await adapter.dispatch({ ...command({ power: true }), immediate: true });
+    await adapter.dispatch({ ...command({ power: false }), immediate: true });
+
+    expect(JSON.parse(requestBody(requests[0]?.init?.body))).toEqual({
+      entity_id: 'light.study_desk',
+      transition: 0.1,
+    });
+    expect(JSON.parse(requestBody(requests[1]?.init?.body))).toEqual({
+      entity_id: 'light.study_desk',
+    });
+  });
+
   it('publishes a normalized observation from a WebSocket state_changed event', () => {
     const { adapter, clock } = setup();
     const observations: unknown[] = [];

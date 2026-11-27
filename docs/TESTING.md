@@ -34,9 +34,9 @@ Core scenarios:
 ### Long absence
 
 Same setup, first confirm the room empty, then advance the original continuity
-deadline while presence becomes `unknown`. Verify remembered scene/overrides
-are cleared and a state-stream update is published; an early occupied return
-cancels expiry. Unknown presence alone must never start that deadline.
+deadline while presence becomes `unknown`. Verify the visit expires with a
+published state-stream update while the remembered scene and overrides stay and
+are restored on the next entry; an early occupied return cancels expiry. Unknown presence alone must never start that deadline.
 
 ### Presence uncertainty
 

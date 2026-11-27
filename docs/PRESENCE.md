@@ -252,10 +252,14 @@ If the user returns shortly:
 
 If confirmed absence lasts long enough:
 
-    selected state expires according to its policy
-    next entry can behave as a fresh visit
+    the visit's continuity ends (room session and media context expire
+    according to their policies)
+    selected scene and light adjustments stay
+    next entry brings the room back the way it was left
 
-A short bathroom break should therefore not be treated as returning home hours later.
+A short bathroom break should therefore not be treated as returning home hours
+later, but lighting never changes only because time passed. The configured
+default scene applies when there is no remembered lighting at all.
 
 ## Decay only from trustworthy absence
 
@@ -273,9 +277,10 @@ Sensor tracking loss must not cause:
 - unwanted Spotify autostart on rediscovery
 - shutting down a monitor while someone is watching or playing
 
-After a restart, a retained expired sleep scene may remain the logical scene,
+After a restart, remembered lighting is restored however long Lugn was down,
 but its positive light output waits for a fresh confirmed occupied event.
-Explicit all-off intent remains safe to reassert while presence is unknown.
+After the continuity deadline, intent that is off everywhere is safe to
+reassert while presence is unknown.
 
 ## Last known position
 
@@ -295,19 +300,24 @@ Prelight is separate from confirmed occupancy.
 
 Desired behavior:
 
-    possible entry -> preview the selected scene's on-lights only
-    confirmed entry -> apply the selected scene, including explicit off states
+    possible entry -> preview the on-lights of the remembered light only
+    confirmed entry -> apply the remembered light, including explicit off states
     preview OFF -> keep the temporary output until entry is confirmed or the
                     existing maximum duration expires
     no confirmation by timeout -> restore the physical state observed before prelight
 
-When no scene is selected, prelight uses the Vardagsljus preset. It must never
-use a static target list that can turn on a light excluded by that scene. The
-prelight snapshot gives current device observations precedence over remembered
-desired state, and timeout restoration is sent even when the preview receives
-no device feedback. Occupancy and explicit user intent take over only after any
-restore already in flight completes, then reconcile the final scene so an old
-restore cannot leave the room off.
+Prelight shows what a confirmed entry will apply: the selected scene with its
+adjustments (or the configured default scene while that is still pending), so
+arrival changes nothing on the lamps already previewed. It switches with as
+little fade as each lamp allows: a 0.1 s Home Assistant transition and no WLED
+crossfade. Lamps running a Govee effect or zone mode wait for the confirmed
+entry. When nothing is remembered, prelight uses the Vardagsljus preset. It
+must never use a static target list that can turn on a light excluded by that
+scene. The prelight snapshot gives current device observations precedence over
+remembered desired state, and timeout restoration is sent even when the preview
+receives no device feedback. Occupancy and explicit user intent take over only
+after any restore already in flight completes, then reconcile the final scene
+so an old restore cannot leave the room off.
 
 Prelight must not:
 

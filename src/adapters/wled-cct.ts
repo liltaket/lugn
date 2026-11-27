@@ -139,7 +139,12 @@ export class WledCctController {
     if (this.generations.get(target) !== generation) return;
     const off =
       command.values.power === false || command.values.brightness === 0;
-    const body: Record<string, unknown> = { on: !off, v: true };
+    const body: Record<string, unknown> = {
+      on: !off,
+      v: true,
+      // `tt` replaces the strip's crossfade for this request only.
+      ...(command.immediate ? { tt: 0 } : {}),
+    };
     let requestedTemperature: { kelvin: number; cct: number } | undefined;
     if (!off) {
       const segment: Record<string, unknown> = {

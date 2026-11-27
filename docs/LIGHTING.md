@@ -151,7 +151,8 @@ change from the room sensor. An explicitly selected all-off or sleep scene
 continues to apply its configured values on entry. Nighttime does not block
 confirmed-entry lighting, device recovery or convergence retries.
 
-Temporary prelight lights what a confirmed entry would light, at any hour.
+Temporary prelight lights what a confirmed entry would light, with the
+remembered brightness and colour and with (near) no fade, at any hour.
 It is suppressed when the room is occupied, any configured light is already
 on, the current scene requests every configured light off (all-off or sleep),
 or the home-presence entity reports away. Lights the resident switched off by
@@ -321,9 +322,8 @@ But keep logical state:
     per-property overrides
     continuity metadata
 
-A short return restores the prior effective scene.
-
-A long enough confirmed absence can expire selected overrides according to configuration.
+A return restores the prior effective scene and overrides, after a short break
+and after a long absence alike. Selecting a scene replaces older overrides.
 
 ## Fast path
 

@@ -871,6 +871,8 @@ export class LugnEngine {
               }
             : undefined))
         : undefined;
+    // A deadline that passed while Lugn was down no longer applies, but the
+    // lighting it belonged to is still what the room returns to.
     const restoredContinuityExpired =
       restoredIntent?.continuityExpiresAt !== null &&
       restoredIntent?.continuityExpiresAt !== undefined &&
@@ -897,34 +899,8 @@ export class LugnEngine {
             ),
           }
         : undefined;
-    const expiredRestoredScene = restoredContinuityExpired
-      ? (preservedAppliedScene ??
-        (restoredIntent?.currentScene
-          ? this.scenes.get(restoredIntent.currentScene)
-          : detachedOffDefinition))
-      : undefined;
-    const expiredRestoredSceneIsExplicitlyOffOrSleep =
-      expiredRestoredScene !== undefined &&
-      (expiredRestoredScene.id === 'scene.all_off' ||
-        expiredRestoredScene.id === 'scene.sleep' ||
-        (Object.keys(devices).length > 0 &&
-          Object.keys(devices).every(
-            (target) => expiredRestoredScene.lighting[target]?.power === false,
-          )));
-    const expiredRestoredSceneToPreserve =
-      expiredRestoredSceneIsExplicitlyOffOrSleep
-        ? expiredRestoredScene
-        : undefined;
-    const expiredRestoredSceneHasPositiveOutput =
-      expiredRestoredSceneToPreserve !== undefined &&
-      Object.values(expiredRestoredSceneToPreserve.lighting).some(
-        (values) => values.power === true || (values.brightness ?? 0) > 0,
-      );
-    if (expiredRestoredSceneToPreserve)
-      this.defaultSceneOnOccupancy = undefined;
     const hasRestoredIntent =
       restoredIntent !== undefined &&
-      !restoredContinuityExpired &&
       ((restoredIntent.sceneRevision > 0 &&
         restoredIntent.currentScene !== null) ||
         Object.entries(restoredIntent.devices).some(
@@ -934,20 +910,26 @@ export class LugnEngine {
               Object.keys(device.effectiveDesired).length > 0 ||
               Object.keys(device.ownership).length > 0),
         ));
-    if (hasRestoredIntent || expiredRestoredSceneHasPositiveOutput)
-      this.restoredIntentAwaitingOccupancy = true;
+    if (hasRestoredIntent) {
+      // After a long gap, intent that is off everywhere is safe to reassert
+      // at once. Anything that lights a lamp waits for a confirmed entry.
+      this.restoredIntentAwaitingOccupancy =
+        !restoredContinuityExpired ||
+        Object.values(restoredIntent!.devices).some(
+          ({ effectiveDesired }) =>
+            effectiveDesired.power === true ||
+            (effectiveDesired.power !== false &&
+              (effectiveDesired.brightness ?? 0) > 0),
+        );
+      this.defaultSceneOnOccupancy = undefined;
+    }
     this.restoredContinuityPending =
       restoredIntent !== undefined &&
       !restoredContinuityExpired &&
       restoredIntent.continuityExpiresAt !== null;
     this.suppressInitialEmptyContinuity = restoredContinuityExpired;
-    if (
-      restoredIntent &&
-      (!restoredContinuityExpired || restoredWindowEffect)
-    ) {
+    if (restoredIntent) {
       for (const [target, intent] of Object.entries(restoredIntent.devices)) {
-        if (restoredContinuityExpired && target !== this.windowLighting?.target)
-          continue;
         const device = devices[target];
         if (!device)
           throw new Error(`Unknown restored lighting device: ${target}`);
@@ -1254,19 +1236,12 @@ export class LugnEngine {
       },
       lighting: {
         currentScene:
-          restoredIntent !== undefined
-            ? hasRestoredIntent
-              ? restoredIntent.currentScene
-              : restoredIntent.currentScene === null
-                ? null
-                : (expiredRestoredSceneToPreserve?.id ?? null)
-            : (this.defaultSceneOnOccupancy?.id ?? null),
-        sceneRevision:
           restoredIntent === undefined
-            ? 0
-            : restoredContinuityExpired
-              ? restoredIntent.sceneRevision + 1
-              : restoredIntent.sceneRevision,
+            ? (this.defaultSceneOnOccupancy?.id ?? null)
+            : hasRestoredIntent
+              ? restoredIntent.currentScene
+              : null,
+        sceneRevision: restoredIntent?.sceneRevision ?? 0,
         devices,
       },
       switches: { devices: switches, commands: [] },
@@ -1335,32 +1310,10 @@ export class LugnEngine {
     ).find((intent) => intent.pause?.sessionBoundary !== undefined)?.pause;
     if (restoredPause?.sessionBoundary !== undefined)
       this.roomSessions.restorePauseBoundary(restoredPause.sessionBoundary);
-    if (expiredRestoredSceneToPreserve) {
-      const revision = this.state.lighting.sceneRevision;
-      this.intentByRevision.set(revision, {
-        actor: systemActor,
-        source: 'continuity',
-        reason:
-          'Explicit all-off or sleep scene retained after continuity expiry',
-      });
-      for (const [target, values] of Object.entries(
-        expiredRestoredSceneToPreserve.lighting,
-      )) {
-        const device = devices[target];
-        if (!device) continue;
-        device.baselineDesired = { ...values };
-        device.effectiveDesired = { ...values };
-        for (const property of LightingProperties) {
-          if (values[property] !== undefined)
-            device.ownership[property] = { kind: 'scene', revision };
-        }
-      }
-    }
     const restoredScene = this.state.lighting.currentScene;
-    const appliedSceneToRestore =
-      hasRestoredIntent || expiredRestoredSceneToPreserve
-        ? preservedAppliedScene
-        : undefined;
+    const appliedSceneToRestore = hasRestoredIntent
+      ? preservedAppliedScene
+      : undefined;
     this.activeSceneDefinition = restoredScene
       ? (appliedSceneToRestore ?? this.scenes.get(restoredScene))
       : appliedSceneToRestore;
@@ -3015,15 +2968,8 @@ export class LugnEngine {
       this.lastConfirmedPresence = normalizedEvent.presence;
       this.roomSessions.handlePresence(normalizedEvent.presence);
       this.prelightPreviewActive = false;
-      const scene =
-        this.scenes.get(
-          this.defaultSceneOnOccupancy?.id ??
-            this.state.lighting.currentScene ??
-            this.lastNonOffSceneId ??
-            '',
-        ) ?? this.scenes.get('scene.everyday_light');
       if (this.prelightActive || this.prelightFinishPromise) {
-        void this.finishPrelight(true, scene);
+        void this.finishPrelight(true, this.entryLighting());
         restoredTargets = new Set(this.prelightFinishTargets);
       }
     }
@@ -3335,28 +3281,31 @@ export class LugnEngine {
       return;
     }
 
-    const scene =
-      this.scenes.get(
-        this.state.lighting.currentScene ??
-          this.defaultSceneOnOccupancy?.id ??
-          this.lastNonOffSceneId ??
-          '',
-      ) ?? this.scenes.get('scene.everyday_light');
+    const scene = this.entryLighting();
     const targetValues = scene
       ? Object.fromEntries(
-          Object.entries(scene.lighting).filter(
-            ([target, values]) =>
-              target !== this.windowLighting?.target && values.power === true,
-          ),
+          Object.entries(scene.lighting)
+            .filter(
+              ([target, values]) =>
+                target !== this.windowLighting?.target && values.power === true,
+            )
+            .map(([target, values]) => [target, { ...values }]),
         )
       : Object.fromEntries(
           Object.entries(this.prelightTargets).filter(
             ([target]) => target !== this.windowLighting?.target,
           ),
         );
+    // Judged on the selected scene: lamps that are off in the remembered
+    // light only through the resident's own adjustments are `explicitly_off`.
+    const selected = this.activeSceneDefinition ?? scene;
     const allLightsOffScene =
       this.hasExplicitAllLightsOffScene() ||
-      (scene !== undefined && Object.keys(targetValues).length === 0);
+      (selected !== undefined &&
+        !Object.entries(selected.lighting).some(
+          ([target, values]) =>
+            target !== this.windowLighting?.target && values.power === true,
+        ));
     // Prelight lights what a confirmed entry would light, at any hour. Lamps
     // the resident switched off by hand (a retained activation hold or an
     // external OFF override) stay dark, like they do on entry.
@@ -3365,6 +3314,7 @@ export class LugnEngine {
       if (
         scene?.govee?.[target] !== undefined ||
         device?.govee !== undefined ||
+        device?.externalControl !== undefined ||
         this.holds.blocks('lighting.activation', target) ||
         (device?.ownership.power?.kind === 'override' &&
           device.effectiveDesired.power === false)
@@ -3461,6 +3411,29 @@ export class LugnEngine {
     });
     await Promise.all(dispatches);
     this.tryCompletePrelightFastPath(eventId);
+  }
+
+  /**
+   * The light a confirmed entry will apply: the pending default scene, else
+   * the remembered intent including its adjustments. Only a room with neither
+   * falls back to a scene definition.
+   */
+  private entryLighting(): LightingScene | undefined {
+    if (this.defaultSceneOnOccupancy && !this.restoredIntentAwaitingOccupancy)
+      return this.defaultSceneOnOccupancy;
+    const currentScene = this.scenes.get(
+      this.state.lighting.currentScene ?? this.lastNonOffSceneId ?? '',
+    );
+    const remembered = Object.entries(this.state.lighting.devices)
+      .filter(([, device]) => Object.keys(device.effectiveDesired).length > 0)
+      .map(([target, device]) => [target, { ...device.effectiveDesired }]);
+    if (remembered.length === 0)
+      return currentScene ?? this.scenes.get('scene.everyday_light');
+    return {
+      id: this.state.lighting.currentScene ?? 'scene.remembered',
+      name: currentScene?.name ?? 'Senaste ljuset',
+      lighting: Object.fromEntries(remembered),
+    };
   }
 
   private startConvergenceAttempt(revision: number, target?: string): void {
@@ -4322,6 +4295,11 @@ export class LugnEngine {
         (!executionGuard || executionGuard()) &&
         (values.power === false ||
           !this.shouldRemainPhysicallyEmpty() ||
+          // The preview exists to light a still-empty room. Once it has ended,
+          // its delayed writes are stale.
+          (reason === prelightCommandReason &&
+            this.prelightActive &&
+            eventId === this.activePrelightFastPathEventId) ||
           (rotationWhileEmpty ??
             this.targetIntentCanRunWhileEmpty(revision, target)));
       if (govee && isCurrent() && !govee.controlId) {
@@ -4380,6 +4358,8 @@ export class LugnEngine {
           id: command.id,
           target,
           values,
+          // A preview is only useful if it is there before the person is.
+          ...(reason === prelightCommandReason ? { immediate: true } : {}),
           // Existing adapters retain their command shape; only the Govee composite consumes guards.
           ...(this.adapter.goveeCapabilities ? { isCurrent } : {}),
           ...(staticControlId && staticColor
@@ -5072,73 +5052,26 @@ export class LugnEngine {
     return this.ledger.latestCommandId(target);
   }
 
+  /**
+   * A long absence ends the visit, not the room's lighting: the selected scene
+   * and its adjustments stay for the next confirmed entry.
+   */
   private expireContinuity(): void {
     if (this.state.presence.state === 'unknown')
       this.suppressInitialEmptyContinuity = true;
     this.cancelContinuityTimer();
     this.restoredContinuityPending = false;
-    this.restoredIntentAwaitingOccupancy = false;
-    const previousRevision = this.state.lighting.sceneRevision;
-    const retainedExplicitScene = this.continuitySceneToPreserve();
-    this.state.lighting.sceneRevision = previousRevision + 1;
-    this.ledger.cancelRevision(previousRevision, 'Continuity expired');
-    this.forceOffTargetsByRevision.delete(previousRevision);
-    if (retainedExplicitScene) {
-      this.defaultSceneOnOccupancy = undefined;
-      this.intentByRevision.set(this.state.lighting.sceneRevision, {
-        actor: systemActor,
-        source: 'continuity',
-        reason:
-          'Explicit all-off or sleep scene retained after continuity expiry',
-      });
-    } else {
-      this.state.lighting.currentScene = null;
-      this.activeSceneDefinition = undefined;
-      this.defaultSceneOnOccupancy = this.normalDefaultScene;
-      this.lastNonOffSceneId = null;
-    }
-    for (const [target, device] of Object.entries(
-      this.state.lighting.devices,
-    )) {
-      // The room's continuity deadline does not own the outward-facing effect.
-      // Keep its scene mode/color, while ordinary temporary overrides expire.
-      if (device.govee && this.windowCanRunWhileEmpty(target)) {
-        device.ownership = {};
-        continue;
-      }
-      device.baselineDesired = {};
-      device.effectiveDesired = {};
-      device.ownership = {};
-    }
-    if (retainedExplicitScene) {
-      const revision = this.state.lighting.sceneRevision;
-      for (const [target, values] of Object.entries(
-        retainedExplicitScene.lighting,
-      )) {
-        const device = this.state.lighting.devices[target];
-        if (!device) continue;
-        device.baselineDesired = { ...values };
-        device.effectiveDesired = { ...values };
-        for (const property of LightingProperties) {
-          if (values[property] !== undefined)
-            device.ownership[property] = { kind: 'scene', revision };
-        }
-      }
-    }
-    this.applyWindowLightingPolicy();
     this.state.presence.continuityExpiresAt = null;
     this.addDiagnostic(
       'continuity.expired',
-      retainedExplicitScene
-        ? 'Temporary lighting overrides expired; explicit all-off or sleep scene remains active'
-        : 'Remembered scene and lighting overrides expired; the configured default will apply on the next confirmed entry',
+      'Visit continuity expired; the remembered lighting stays for the next confirmed entry',
       {
-        retainedScene: retainedExplicitScene?.id ?? null,
+        retainedScene: this.state.lighting.currentScene,
         nextDefaultScene: this.defaultSceneOnOccupancy?.id ?? null,
         sessionId: this.state.session?.id ?? null,
       },
     );
-    this.publish(['presence', 'lighting', 'commands', 'diagnostics']);
+    this.publish(['presence', 'diagnostics']);
   }
 
   private createFastPathTiming(
@@ -5328,18 +5261,6 @@ export class LugnEngine {
       targets.length > 0 &&
       targets.every((target) => scene.lighting[target]?.power === false)
     );
-  }
-
-  private continuitySceneToPreserve(): LightingScene | undefined {
-    const scene = this.activeSceneDefinition;
-    if (!scene) return undefined;
-    if (scene.id === 'scene.all_off' || scene.id === 'scene.sleep')
-      return scene;
-    const targets = Object.keys(this.state.lighting.devices);
-    return targets.length > 0 &&
-      targets.every((target) => scene.lighting[target]?.power === false)
-      ? scene
-      : undefined;
   }
 
   private hasAnyLightOn(): boolean {

@@ -22,6 +22,12 @@ export type HomeAssistantServiceCaller = {
   callService(call: HomeAssistantServiceCall): Promise<void> | undefined;
 };
 
+/**
+ * Home Assistant `transition` for immediate commands, in seconds. Not zero:
+ * some integrations require a short minimum duration.
+ */
+const immediateTransitionSeconds = 0.1;
+
 /** HA WebSocket error codes that REST reports as 4xx: HA did not execute. */
 const rejectedServiceCallCodes = new Set([
   'invalid_format',
@@ -204,6 +210,8 @@ export class HomeAssistantLightingAdapter implements LightingAdapter {
         data['rgb_color'] = command.values.rgb;
       if (command.values.colorTemperature !== undefined)
         data['color_temp_kelvin'] = command.values.colorTemperature;
+      // Home Assistant drops this for lights without transition support.
+      if (command.immediate) data['transition'] = immediateTransitionSeconds;
     }
 
     const isUnreliableCleverioOff =

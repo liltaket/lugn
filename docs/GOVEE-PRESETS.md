@@ -294,6 +294,6 @@ existing priority.
 A permitted outward-facing effect keeps its generation and rotation timer on
 room exit. Other room fixtures are switched OFF normally. Daylight or loss of
 home permission revokes pending steps before OFF; dusk/new permission can resume
-the saved mode at its first effect. Room continuity expiry preserves only this
-window mode, and restart restores it only after the window policy permits ON.
+the saved mode at its first effect. The window mode survives room continuity
+expiry, and restart restores it only after the window policy permits ON.
 Other fixtures still wait for ordinary entry permission.

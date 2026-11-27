@@ -42,6 +42,8 @@ export type LightingCommand = {
   id: string;
   target: string;
   values: LightingValues;
+  /** Switch with (near) no fade, where the lamp's transport offers a choice. */
+  immediate?: true;
 };
 
 /** Delivery is unknown when a request may have reached a device without a usable reply. */
