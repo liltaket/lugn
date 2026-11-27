@@ -422,6 +422,36 @@ describe('Foto page lifecycle', () => {
     expect(world.slides()).toHaveLength(0);
   });
 
+  it('ends a picture’s drift with its slide, when replaced and when the page sleeps', async () => {
+    const world = makeWorld();
+    const drifts: Array<{ cancelled: boolean }> = [];
+    const picture = world.win['Image'] as { prototype: { animate?: unknown } };
+    picture.prototype.animate = () => {
+      const drift = {
+        cancelled: false,
+        cancel() {
+          drift.cancelled = true;
+        },
+      };
+      drifts.push(drift);
+      return drift;
+    };
+    world.hooks['enter']!();
+    await world.advance(100);
+    const first = [...drifts];
+    expect(first.length).toBeGreaterThan(0);
+    expect(first.some((drift) => drift.cancelled)).toBe(false);
+    // The next slide takes over: the first one's drift goes with it, the new
+    // one's keeps running.
+    await world.advance(25_000);
+    expect(drifts.length).toBeGreaterThan(first.length);
+    expect(first.every((drift) => drift.cancelled)).toBe(true);
+    expect(drifts.at(-1)!.cancelled).toBe(false);
+    world.hooks['leave']!();
+    world.hooks['sleep']!();
+    expect(drifts.every((drift) => drift.cancelled)).toBe(true);
+  });
+
   it('waits with a pending change while the pager moves', async () => {
     const world = makeWorld();
     world.hooks['enter']!();

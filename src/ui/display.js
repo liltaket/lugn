@@ -436,6 +436,12 @@ function setText(element, value) {
   if (element.textContent !== text) element.textContent = text;
 }
 
+// The clock tick draws much of Hem again every second. Setting `hidden` to the
+// value it already has still restyles the element, so only a change is written.
+function setHidden(element, hidden) {
+  if (element.hidden !== hidden) element.hidden = hidden;
+}
+
 // Restart a one-shot CSS animation class, so a change is felt, not just seen.
 // The restart needs one style flush between removing and re-adding the class.
 // Doing that inside the render that just dirtied the page forces the whole
@@ -809,8 +815,10 @@ function renderScenes(payload) {
   // Grid and pagination resize together, and never under a finger.
   if (interactionPointers.size) presentationDeferred = true;
   else {
-    refs.scenePagination.hidden =
-      pages <= 1 || contextDetailsOpen || musicDetailsOpen;
+    setHidden(
+      refs.scenePagination,
+      pages <= 1 || contextDetailsOpen || musicDetailsOpen,
+    );
     refs.sceneGrid.dataset.paged = String(pages > 1);
     refs.sceneGrid.dataset.count = String(
       Math.min(presets.length - scenePage * pageSize, pageSize),
@@ -849,8 +857,10 @@ function renderScenes(payload) {
   const ordered = [];
   for (const [index, scene] of [...(off ? [off] : []), ...scenes].entries()) {
     const button = sceneButtonFor(scene);
-    button.querySelector('.scene-name').textContent =
-      scene.id === 'scene.all_off' ? 'Släck' : scene.name;
+    setText(
+      button.querySelector('.scene-name'),
+      scene.id === 'scene.all_off' ? 'Släck' : scene.name,
+    );
     button.dataset.kind = scene.id === 'scene.all_off' ? 'off' : 'scene';
     button.dataset.featured = String(
       scenes.length % 2 === 1 && index === (off ? 1 : 0),
@@ -917,7 +927,7 @@ function renderScenes(payload) {
               ? 'confirmed'
               : 'selected';
     setText(button.querySelector('.scene-status'), status);
-    button.querySelector('.scene-status').hidden = !status;
+    setHidden(button.querySelector('.scene-status'), !status);
     if (button.getAttribute('aria-pressed') !== String(selected)) {
       button.setAttribute('aria-pressed', String(selected));
       if (selected) pulse(button, 'lit');
@@ -993,19 +1003,21 @@ function renderBedtime(payload) {
     datePartsFormat.format(new Date(buttonPlan.at)) ===
       datePartsFormat.format(new Date(now));
   const plan = bedtime?.plan ?? (scheduledWindow ? ownedPlan : null);
-  refs.bedtimeDock.hidden =
+  setHidden(
+    refs.bedtimeDock,
     !bedtime ||
-    contextDetailsOpen ||
-    musicDetailsOpen ||
-    !!refs.contextTitle.textContent;
-  refs.bedtimeNight.hidden = !(hour >= 18 || hour < 4);
-  refs.bedtimeMorning.hidden = !(
-    scheduledWindow ||
-    (!scheduledToday && hour >= 6 && hour < 11)
+      contextDetailsOpen ||
+      musicDetailsOpen ||
+      !!refs.contextTitle.textContent,
+  );
+  setHidden(refs.bedtimeNight, !(hour >= 18 || hour < 4));
+  setHidden(
+    refs.bedtimeMorning,
+    !(scheduledWindow || (!scheduledToday && hour >= 6 && hour < 11)),
   );
   refs.bedtimeNight.disabled = disabled || bedtime?.nightAvailable !== true;
   refs.bedtimeMorning.disabled = disabled || bedtime?.morningAvailable !== true;
-  refs.bedtimePlan.hidden = !plan;
+  setHidden(refs.bedtimePlan, !plan);
   setText(
     refs.bedtimeEdit,
     plan
@@ -1036,7 +1048,7 @@ function renderBedtime(payload) {
           ? `${skipped} ${skipped === 1 ? 'lampa saknar' : 'lampor saknar'} status`
           : '',
   );
-  refs.bedtimeStatus.hidden = !refs.bedtimeStatus.textContent;
+  setHidden(refs.bedtimeStatus, !refs.bedtimeStatus.textContent);
   for (const button of [
     refs.bedtimeNight,
     refs.bedtimeMorning,
@@ -1486,7 +1498,7 @@ function renderContext(payload) {
     );
     contextRenderKey = key;
   }
-  refs.contextStrip.hidden = contextDetailsOpen || !title;
+  setHidden(refs.contextStrip, contextDetailsOpen || !title);
   syncContextButtons(refs.contextActions, data);
   renderBedtime(payload);
   const listKey = JSON.stringify([data, bedtimeProjection, isUnavailable()]);
@@ -2174,7 +2186,7 @@ function renderVolumeAuthority(payload, target) {
                   ? 'Manuellt läge · behålls tills du väljer Auto'
                   : '';
   setText(refs.musicAuthorityState, reason);
-  refs.musicAuthorityState.hidden = !reason;
+  setHidden(refs.musicAuthorityState, !reason);
   // The selector itself shows the mode; only a blocked selector earns a line.
   volumeAuthorityNotice =
     Boolean(reason) && (unavailable || !policy || (!busy && Boolean(blocked)));
@@ -2731,7 +2743,7 @@ function renderMusicExplanations(payload, target) {
         }[command.status] ?? 'Begärans status okänd')
       : '');
   setText(refs.musicCommandState, commandText);
-  refs.musicCommandState.hidden = !commandText;
+  setHidden(refs.musicCommandState, !commandText);
   // This preset acknowledgement is not an actionable failure and the Hub
   // deliberately keeps it out of the compact music surface.
   const presetUnverified =
@@ -3551,9 +3563,9 @@ function syncExpandedLighting() {
   root.dataset.stacked = String(camera || print);
   root.dataset.lowerCard = lower;
   if (refs.printActivity)
-    refs.printActivity.hidden = root.dataset.printSlot === 'none';
+    setHidden(refs.printActivity, root.dataset.printSlot === 'none');
   if (refs.activitySwap) {
-    refs.activitySwap.hidden = !(camera && print);
+    setHidden(refs.activitySwap, !(camera && print));
     if (camera && print) {
       const other = lower === 'print' ? 'music' : 'print';
       refs.activitySwap.dataset.shows = other;
@@ -3724,7 +3736,7 @@ function renderPrintLight() {
       monotonicNow() > printLightRequest.until)
   )
     printLightRequest = null;
-  button.hidden = reported === null;
+  setHidden(button, reported === null);
   const on = printLightRequest ? printLightRequest.on : reported === true;
   button.setAttribute('aria-pressed', String(on));
   if (refs.printActivity)
@@ -3948,7 +3960,9 @@ function decodeCameraFrame(url, signal) {
       candidate.onload = null;
       candidate.onerror = null;
       signal.removeEventListener('abort', aborted);
-      candidate.removeAttribute('src');
+      // Emptied, not removed: Chrome never frees a detached picture whose
+      // `src` attribute was taken away, and a new one is made for every frame.
+      candidate.src = '';
       if (error) reject(error);
       else resolve();
     };
@@ -4002,7 +4016,7 @@ function startCameraImages(active, epoch) {
       if (previousUrl) URL.revokeObjectURL(previousUrl);
       failures = 0;
       refs.cameraImage.hidden = false;
-      refs.cameraPlaceholder.hidden = true;
+      setHidden(refs.cameraPlaceholder, true);
       window.setTimeout(paintCameraUnderlay, 80);
       refs.cameraStatus.textContent = `Uppdaterad bild kl. ${new Date().toLocaleTimeString('sv-SE')}`;
       cameraImageTimer = window.setTimeout(frame, 1000);
@@ -4071,7 +4085,7 @@ function renderCamera(payload) {
   const cameraPages = Math.max(1, Math.ceil(definitions.length / 2));
   cameraPage = Math.min(cameraPage, cameraPages - 1);
   if (refs.cameraPagination) {
-    refs.cameraPagination.hidden = !cameraChoicesOpen || cameraPages <= 1;
+    setHidden(refs.cameraPagination, !cameraChoicesOpen || cameraPages <= 1);
     refs.cameraPrevious.disabled = cameraPage === 0;
     refs.cameraNext.disabled = cameraPage === cameraPages - 1;
     setText(refs.cameraPageLabel, `${cameraPage + 1} / ${cameraPages}`);
@@ -4139,12 +4153,12 @@ function renderCamera(payload) {
       'aria-pressed',
       String(!!active && button.dataset.cameraId === active.cameraId),
     );
-  refs.cameraPanel.hidden = !active && !showingPending;
+  setHidden(refs.cameraPanel, !active && !showingPending);
   if (!allowed || !viewerAllowed) cameraChoicesOpen = false;
   if (refs.cameraPagination)
-    refs.cameraPagination.hidden = !cameraChoicesOpen || cameraPages <= 1;
+    setHidden(refs.cameraPagination, !cameraChoicesOpen || cameraPages <= 1);
   // The cameras live in the bottom bar as direct choices.
-  refs.cameraChoices.hidden = false;
+  setHidden(refs.cameraChoices, false);
   refs.cameraMenu.setAttribute('aria-expanded', String(cameraChoicesOpen));
   refs.cameraMenu.textContent =
     cameraActionRequests > 0
