@@ -2073,6 +2073,7 @@ export class LugnEngine {
     source = 'capability',
     requestId?: string,
     isCurrent?: ExecutionGuard,
+    options?: { awaitReconcile?: boolean },
   ): Promise<number> {
     this.assertExecution(isCurrent);
     const scene = this.scenes.get(sceneId);
@@ -2132,10 +2133,22 @@ export class LugnEngine {
             .map(([target]) => target),
         ),
       );
-    await this.reconcileScene(revision, undefined, restoredTargets, {
-      allowInFlight: isHumanActor(actor),
-      ...(isCurrent ? { isCurrent } : {}),
-    });
+    const reconciling = this.reconcileScene(
+      revision,
+      undefined,
+      restoredTargets,
+      {
+        allowInFlight: isHumanActor(actor),
+        ...(isCurrent ? { isCurrent } : {}),
+      },
+    );
+    if (options?.awaitReconcile === false) {
+      // Every target's pending command is already in the ledger and its adapter
+      // dispatch has started before the first await inside reconcileScene.
+      void reconciling.catch(() => undefined);
+    } else {
+      await reconciling;
+    }
     return revision;
   }
 

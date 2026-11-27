@@ -491,7 +491,7 @@ export class LugnDisplayServer {
             body,
             hubProvenance(hubRequest.hub),
           );
-          sendJson(response, 200, result);
+          this.sendCommandResult(request, response, hubRequest.hub, result);
         } catch (error) {
           if (error instanceof ZodError) throw error;
           if (error instanceof ExperienceRequestError)
@@ -1024,7 +1024,7 @@ export class LugnDisplayServer {
             input,
             hubProvenance(hubRequest.hub),
           );
-          sendJson(response, 200, result);
+          this.sendCommandResult(request, response, hubRequest.hub, result);
         } catch (error) {
           sendJson(
             response,
@@ -1562,6 +1562,7 @@ export class LugnDisplayServer {
     await this.invokeLightingCapability(
       'lighting.activateScene',
       input,
+      request,
       response,
       hub,
     );
@@ -1579,7 +1580,13 @@ export class LugnDisplayServer {
       return;
     }
     const input = DisplayLightRequestSchema.parse(await readJsonBody(request));
-    await this.invokeLightingCapability('lighting.set', input, response, hub);
+    await this.invokeLightingCapability(
+      'lighting.set',
+      input,
+      request,
+      response,
+      hub,
+    );
   }
 
   private async invokeMusic(
@@ -1610,7 +1617,7 @@ export class LugnDisplayServer {
         capability.input,
         hubProvenance(hub),
       );
-      sendJson(response, 200, result);
+      this.sendCommandResult(request, response, hub, result);
     } catch (error) {
       if (error instanceof ZodError) {
         sendJson(response, 400, {
@@ -1650,7 +1657,7 @@ export class LugnDisplayServer {
         },
         hubProvenance(hub),
       );
-      sendJson(response, 200, result);
+      this.sendCommandResult(request, response, hub, result);
     } catch (error) {
       if (error instanceof ZodError) {
         sendJson(response, 400, {
@@ -1670,6 +1677,7 @@ export class LugnDisplayServer {
   private async invokeLightingCapability(
     name: 'lighting.activateScene' | 'lighting.set',
     input: unknown,
+    request: IncomingMessage,
     response: ServerResponse,
     hub: LugnDisplayHub,
   ): Promise<void> {
@@ -1679,7 +1687,7 @@ export class LugnDisplayServer {
         input,
         hubProvenance(hub),
       );
-      sendJson(response, 200, result);
+      this.sendCommandResult(request, response, hub, result);
     } catch (error) {
       if (error instanceof ZodError) {
         sendJson(response, 400, {
@@ -1694,6 +1702,31 @@ export class LugnDisplayServer {
       }
       sendJson(response, 502, { error: 'capability_failed' });
     }
+  }
+
+  /**
+   * When the Hub asks for the current snapshot on a command POST, return it in
+   * the same response so the page does not pay a second round-trip to GET state.
+   */
+  private sendCommandResult(
+    request: IncomingMessage,
+    response: ServerResponse,
+    hub: LugnDisplayHub,
+    result: unknown,
+  ): void {
+    if (
+      request.headers['x-lugn-snapshot'] === '1' &&
+      result &&
+      typeof result === 'object' &&
+      !Array.isArray(result)
+    ) {
+      sendJson(response, 200, {
+        ...(result as Record<string, unknown>),
+        snapshot: this.snapshot(hub),
+      });
+      return;
+    }
+    sendJson(response, 200, result);
   }
 
   private authorizedPath(pathname: string): HubRequest | undefined {

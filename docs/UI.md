@@ -227,15 +227,25 @@ clicks and the pointer bridge responsive while something plays:
   reconnect draws in full.
 - `pulse()` restarts an animation class once per frame at the start of the next
   frame, not with a forced reflow in the middle of the render. A command only
-  redraws the controls of its own kind while pending.
+  redraws the controls of its own kind while pending. Hub command POSTs send
+  `x-lugn-snapshot: 1` so the server returns the fresh snapshot in the same
+  response, avoiding a second `GET /display-api/state` round-trip. For Hub
+  scene taps (`POST /display-api/scene`), the server answers as soon as the
+  engine commits the scene intent and starts dispatching to the lamps, so the
+  tile moves immediately to its `awaiting` (`Valt · väntar på lampor`) state
+  and only shows `confirmed` (`Bekräftat`) once lamp observations confirm it.
 - Releasing a press redraws only if a render was held back during the press.
 - Animations change only `opacity` and `transform`, never in their keyframes a
   `transform-origin`, a filter or a background position (those cannot be
   composited and run on the main thread in every frame). A lit scene tile's
   color, highlight and glow are a layer of their own (`::before`) that fades
   by opacity; the tile's text turns dark or light in one step a little into
-  the fade. The pending sweep is a band moved by `transform` and clipped by
-  the tile. New Hem artwork fades and settles without an animated blur.
+  the fade. The pending indicator is a soft opacity pulse inside the tile's own
+  rounded bounds (without toggling `overflow: hidden`). The two `.theme-bg`
+  cross-fade layers stay promoted (`will-change: opacity`) so theme swaps and
+  foreground updates inside the always-promoted pager track do not split and
+  re-rasterize the screen. New Hem artwork fades and settles without an
+  animated blur.
 - While Hem is not the page on screen it plays nothing: `pulse()` restarts
   nothing there (and takes a stale class off), the theme background swaps
   without its fade, the ring's halves do not transition, and Hem's endless
@@ -247,6 +257,15 @@ clicks and the pointer bridge responsive while something plays:
   picture's bytes with `createImageBitmap` of a Blob, which decodes off the
   main thread; drawing an `<img>` into a canvas decodes it again on the main
   thread.
+- While Hem is paged away, its 1 Hz clock tick keeps the connection watchdog
+  and the clock and date current (Hem shows them as it slides back into view)
+  and skips Hem's other redraws until Hem returns on screen.
+- On Foto, corner text legibility relies on static radial shades rather than
+  live `backdrop-filter` blur over drifting images, and neighbour preparation
+  waits for an active swipe to settle and skips building the fallback queue
+  when smart neighbour groups are present.
+- On Musik, playhead polling pauses once playback is paused and resumes on the
+  next play, seek or track change.
 - Computer telemetry (`computerStats`) is served on demand from
   `/display-api/computer-stats` only while the Dator page is prepared or open,
   so steady-state `/display-api/events` streams do not re-render every Hub when

@@ -789,4 +789,22 @@ describe('Foto corners', () => {
     await world.advance(100);
     expect(world.slides()[0]!.dataset['tr']).toBe('1');
   });
+
+  it('defers neighbour preparation until an active swipe settles', async () => {
+    const world = makeWorld();
+    world.pager.classes.add('paging');
+    world.hooks['prepare']!();
+    await world.advance(100);
+    expect(
+      world.fetches.some((url) => url.endsWith('/display-api/photos')),
+    ).toBe(false);
+    world.pager.classes.delete('paging');
+    (world.win['dispatchEvent'] as (event: FakeEvent) => void)(
+      new FakeEvent('lugn:pages-settled'),
+    );
+    await world.advance(100);
+    expect(
+      world.fetches.some((url) => url.endsWith('/display-api/photos')),
+    ).toBe(true);
+  });
 });

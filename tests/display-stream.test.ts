@@ -514,4 +514,96 @@ describe('the display server and state publications', () => {
     publish(['computer']);
     expect(read).toHaveBeenCalled();
   });
+
+  it('answers Hub scene taps once dispatch has started and includes a fresh snapshot when requested', async () => {
+    let releaseDispatch!: () => void;
+    const dispatched: string[] = [];
+    const adapter = {
+      dispatch: (command: { target: string }) => {
+        dispatched.push(command.target);
+        return new Promise<void>((resolve) => {
+          releaseDispatch = resolve;
+        });
+      },
+      subscribe: () => () => undefined,
+    };
+    const engine = new LugnEngine(new FakeClock(1_000_000), { adapter });
+    await engine.handlePresence({
+      type: 'presence.changed',
+      presence: 'occupied',
+      personCount: 1,
+    });
+    const port = await freePort();
+    const server = new LugnDisplayServer({
+      host: '127.0.0.1',
+      port,
+      hubs: [{ id: 'bed', role: 'bed', token, castHost: '127.0.0.1' }],
+      capabilities: new CapabilityRegistry(engine),
+      scenes: [...engine.scenes.values()],
+      stateProvider: () => engine.state,
+      stateStream: engine.stream,
+    });
+    await server.start();
+    cleanups.push(async () => {
+      releaseDispatch?.();
+      await server.stop();
+      engine.dispose();
+    });
+    const origin = `http://127.0.0.1:${port}`;
+    const sceneUrl = `${origin}/k/${token}/display-api/scene`;
+
+    // Without the snapshot header, the response keeps its compact shape and
+    // returns while the slow lamp adapter is still in flight.
+    const plain = await fetch(sceneUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin,
+      },
+      body: JSON.stringify({ sceneId: 'scene.cozy' }),
+    });
+    expect(plain.status).toBe(200);
+    const plainBody = (await plain.json()) as Record<string, unknown>;
+    expect(plainBody).toEqual({
+      sceneRevision: engine.state.lighting.sceneRevision,
+    });
+    expect(dispatched.length).toBeGreaterThan(0);
+    expect(
+      engine.state.commands.some((command) => command.status === 'pending'),
+    ).toBe(true);
+
+    // With x-lugn-snapshot: 1, the response carries the fresh snapshot so the
+    // Hub can show awaiting-lamps truth without a second GET round-trip.
+    const withSnapshot = await fetch(sceneUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin,
+        'x-lugn-snapshot': '1',
+      },
+      body: JSON.stringify({ sceneId: 'scene.movie' }),
+    });
+    expect(withSnapshot.status).toBe(200);
+    const body = (await withSnapshot.json()) as {
+      sceneRevision: number;
+      snapshot?: {
+        state: {
+          lighting: { currentScene: string; sceneRevision: number };
+          commands: Array<{ revision: number; status: string }>;
+        };
+      };
+    };
+    expect(body.snapshot?.state.lighting.currentScene).toBe('scene.movie');
+    expect(body.snapshot?.state.lighting.sceneRevision).toBe(
+      body.sceneRevision,
+    );
+    expect(
+      body.snapshot?.state.commands.some(
+        (command) =>
+          command.revision === body.sceneRevision &&
+          command.status === 'pending',
+      ),
+    ).toBe(true);
+    releaseDispatch?.();
+  });
 });

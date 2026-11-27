@@ -758,6 +758,9 @@
           return;
         }
         if (!response.ok) return;
+        // Wait for any active swipe to settle before parsing and indexing the
+        // full listing on the main thread.
+        if (paging()) await new Promise((resolve) => whenStill(resolve));
         const data = await response.json();
         if (!data || !Array.isArray(data.photos)) return;
         if (data.revision !== revision) {
@@ -770,15 +773,22 @@
               data.scenes && typeof data.scenes === 'object' ? data.scenes : {},
             people: Array.isArray(data.people) ? data.people : [],
           };
-          // Removed pictures leave the queue; new ones play next (the first
-          // list ever read is simply put in order).
-          const known = new Set(library.map((p) => p.id));
-          queue = queue.filter((p) => known.has(p.id));
-          const queued = new Set(queue.map((p) => p.id));
-          const fresh = library.filter((p) => !queued.has(p.id));
-          if (!seen) queue = orderQueue(library, random);
-          else if (fresh.length > 0)
-            queue = orderQueue(fresh, random).concat(queue);
+          if (smart) {
+            // Smart mode plays from neighbour groups, not the fallback queue;
+            // building and clustering a queue for the whole library here
+            // stalled cold swipes on the Hub.
+            queue = [];
+          } else {
+            // Removed pictures leave the queue; new ones play next (the first
+            // list ever read is simply put in order).
+            const known = new Set(library.map((p) => p.id));
+            queue = queue.filter((p) => known.has(p.id));
+            const queued = new Set(queue.map((p) => p.id));
+            const fresh = library.filter((p) => !queued.has(p.id));
+            if (!seen) queue = orderQueue(library, random);
+            else if (fresh.length > 0)
+              queue = orderQueue(fresh, random).concat(queue);
+          }
           seen = true;
         }
         setNotice(library.length === 0 ? 'Inga bilder ännu' : '');
@@ -1441,9 +1451,9 @@
 
   pagesApi.define('foto', {
     // Draws the first picture once while the page is a neighbour; later calls
-    // change nothing.
+    // change nothing. Waits for an active swipe to settle before fetching.
     prepare() {
-      void fillFirst(false);
+      whenStill(() => void fillFirst(false));
     },
     enter() {
       active = true;

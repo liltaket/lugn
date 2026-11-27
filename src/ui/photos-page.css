@@ -374,8 +374,8 @@
   height: 270px;
   background: radial-gradient(
     ellipse 90% 100% at 100% 0%,
-    rgba(0, 0, 0, 0.92) 0%,
-    rgba(0, 0, 0, 0.58) 45%,
+    rgba(0, 0, 0, 0.94) 0%,
+    rgba(0, 0, 0, 0.65) 48%,
     rgba(0, 0, 0, 0) 100%
   );
 }
@@ -386,8 +386,8 @@
   height: 350px;
   background: radial-gradient(
     ellipse 90% 100% at 100% 100%,
-    rgba(0, 0, 0, 0.94) 0%,
-    rgba(0, 0, 0, 0.6) 45%,
+    rgba(0, 0, 0, 0.95) 0%,
+    rgba(0, 0, 0, 0.68) 48%,
     rgba(0, 0, 0, 0) 100%
   );
 }
@@ -398,8 +398,8 @@
   height: 230px;
   background: radial-gradient(
     ellipse 90% 100% at 0% 100%,
-    rgba(0, 0, 0, 0.9) 0%,
-    rgba(0, 0, 0, 0.55) 45%,
+    rgba(0, 0, 0, 0.92) 0%,
+    rgba(0, 0, 0, 0.62) 48%,
     rgba(0, 0, 0, 0) 100%
   );
 }
@@ -415,7 +415,7 @@
 .ph-slide[data-tr='1'] .ph-shade.tr,
 .ph-slide[data-br='1'] .ph-shade.br,
 .ph-slide[data-bl='1'] .ph-shade.bl {
-  opacity: 0.62;
+  opacity: 0.72;
 }
 .ph-slide[data-tr='2'] .ph-shade.tr,
 .ph-slide[data-br='2'] .ph-shade.br,
@@ -423,54 +423,10 @@
   opacity: 1;
 }
 
-/* A small blur right in the corner, much smaller than the shade, only for
-   mid and bright pictures and only once the slide has settled (a blur behind
-   a fading layer would be recomputed on every frame of the fade). */
+/* Corner backdrop-filter + radial mask-image is intentionally kept off: the
+   photo behind the corners drifts on every frame, so live backdrop blur forced
+   3 masked blur passes at 60 Hz and dropped the Hub to ~42 fps. The corner
+   radial shades above keep text legible with zero per-frame blur cost. */
 .ph-blur {
   display: none;
-}
-.photos-page:not(.no-blur) .ph-slide.settled .ph-blur {
-  display: block;
-  backdrop-filter: blur(3px);
-}
-.ph-blur.tr {
-  top: 0;
-  right: 0;
-  width: 30%;
-  height: 140px;
-  mask-image: radial-gradient(
-    ellipse 100% 100% at 100% 0%,
-    #000 0%,
-    #000 35%,
-    transparent 100%
-  );
-}
-.ph-blur.br {
-  bottom: 0;
-  right: 0;
-  width: 38%;
-  height: 190px;
-  mask-image: radial-gradient(
-    ellipse 100% 100% at 100% 100%,
-    #000 0%,
-    #000 35%,
-    transparent 100%
-  );
-}
-.ph-blur.bl {
-  bottom: 0;
-  left: 0;
-  width: 30%;
-  height: 120px;
-  mask-image: radial-gradient(
-    ellipse 100% 100% at 0% 100%,
-    #000 0%,
-    #000 35%,
-    transparent 100%
-  );
-}
-.ph-slide[data-tr='0'] .ph-blur.tr,
-.ph-slide[data-br='0'] .ph-blur.br,
-.ph-slide[data-bl='0'] .ph-blur.bl {
-  display: none !important;
 }
