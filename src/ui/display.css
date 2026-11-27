@@ -3114,26 +3114,37 @@ h2 {
 #app-root[data-time='night'] .scene-button[aria-pressed='true'] {
   filter: brightness(0.62) saturate(0.85);
 }
+/* The sweep while a scene is on its way: a soft band one tile wide that is
+   moved by transform (the compositor's work), clipped by the tile. It used to
+   be a background-position animation, repainted on the main thread in every
+   frame; the band's path and speed are the same. A tile waits unlit, so the
+   clip takes no glow away (only a lit scene pressed again loses its outer
+   glow for the moment it waits). */
+#app-root .scene-button[data-state='pending'] {
+  overflow: hidden;
+}
 #app-root .scene-button[data-state='pending']::after {
   content: '';
   position: absolute;
-  inset: 0;
-  border-radius: inherit;
+  top: 0;
+  bottom: 0;
+  left: -105%;
+  width: 100%;
   background: linear-gradient(
     100deg,
-    transparent 30%,
+    transparent,
     rgba(255, 255, 255, 0.16) 50%,
-    transparent 70%
+    transparent
   );
-  background-size: 250% 100%;
   animation: redesign-shimmer 0.9s linear infinite;
+  pointer-events: none;
 }
 @keyframes redesign-shimmer {
   from {
-    background-position: 120% 0;
+    transform: translateX(0);
   }
   to {
-    background-position: -120% 0;
+    transform: translateX(360%);
   }
 }
 #app-root .scene-button[data-state='offline'] {
@@ -3662,6 +3673,20 @@ h2 {
   transform: rotate(calc(max(var(--progress) - 0.5, 0) * 360deg));
   transition: transform var(--ring-second-time, 1s) linear
     var(--ring-second-delay, 0s);
+}
+/* While Hem is not the page on screen its moving parts stand still: an
+   animation off screen is not handed to the compositor and would tick on the
+   main thread in every frame, for nobody. Each rule names its own element, so
+   the page's state change restyles only these, not the whole dashboard; the
+   ring simply shows the current position when Hem comes back. */
+.hub-page:not([data-state='active']) #app-root .progress-half::before {
+  transition: none;
+}
+.hub-page:not([data-state='active']) #app-root .scene-current-mark,
+.hub-page:not([data-state='active']) #app-root .scene-button::after,
+.hub-page:not([data-state='active']) #app-root #camera-placeholder,
+.hub-page:not([data-state='active']) #app-root .print-light {
+  animation-play-state: paused;
 }
 /* Hidden, not removed, so a returning position keeps animating from where the
    ring was. */
@@ -4262,7 +4287,11 @@ body {
   background: var(--glass-2);
 }
 
-/* Scenes: color flows in, a tap springs back, a new scene lights up. */
+/* Scenes: color flows in, a tap springs back, a new scene lights up. The
+   entry keeps its effect only before it starts (a finished `both` fill would
+   hold every tile's opacity and transform for good). The text turns dark or
+   light in one step halfway through the color's fade, not by a 0.35 s color
+   transition that repaints the tile in every frame. */
 #app-root .scene-button,
 #app-root .scene-button[data-icon='true'] {
   background-color: var(--glass);
@@ -4270,10 +4299,10 @@ body {
   transition:
     background-color 0.5s ease,
     box-shadow 0.5s ease,
-    color 0.35s ease,
+    color 0s linear 0.18s,
     filter 0.5s ease,
     transform 0.35s var(--spring);
-  animation: redesign-tile-in 0.55s var(--spring) both;
+  animation: redesign-tile-in 0.55s var(--spring) backwards;
 }
 #app-root .scene-button:nth-child(2) {
   animation-delay: 40ms;
@@ -4287,13 +4316,47 @@ body {
 #app-root .scene-button:nth-child(5) {
   animation-delay: 160ms;
 }
-#app-root .scene-button[aria-pressed='true'] {
+/* A lit scene's color, highlight and glow are a layer of their own under the
+   tile's content, painted once and faded in or out by opacity: the
+   compositor runs the change and the tile itself (background, shadow,
+   filter) stays as it is. Before, the tile's background color and its 40 px
+   glow were transitioned, a repaint of both tiles in every frame of a press.
+   Släck keeps its own quieter look. */
+#app-root .scene-button:not(.light-off) {
+  isolation: isolate;
+}
+#app-root .scene-button:not(.light-off)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
   background-color: var(--scene-color);
   background-image: radial-gradient(
     120% 140% at 0% 0%,
     rgba(255, 255, 255, 0.35),
     transparent 55%
   );
+  box-shadow: 0 10px 40px -10px var(--scene-color);
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  pointer-events: none;
+}
+#app-root .scene-button:not(.light-off)[aria-pressed='true']::before {
+  opacity: 1;
+}
+#app-root .scene-button:not(.light-off)[aria-pressed='true'] {
+  background-color: var(--glass);
+  background-image: none;
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
+/* At night the lit color dims as before; the dark text on it needs no filter. */
+#app-root[data-time='night']
+  .scene-button:not(.light-off)[aria-pressed='true'] {
+  filter: none;
+}
+#app-root[data-time='night'] .scene-button:not(.light-off)::before {
+  filter: brightness(0.62) saturate(0.85);
 }
 #app-root .scene-button:active:not(:disabled),
 #app-root .light-off:active:not(:disabled),
@@ -4358,7 +4421,9 @@ body {
 }
 
 /* Music: the play icon swaps with a turn, a new title rises in, new artwork
-   develops from its blur. */
+   develops over its own blurred copy (the sleeve's backdrop): it fades and
+   settles by opacity and transform alone. An animated blur filter cannot be
+   composited and was repainted in every frame of its 0.9 s. */
 #app-root .play-button {
   transition:
     left var(--move),
@@ -4395,7 +4460,6 @@ body {
 @keyframes redesign-art-in {
   from {
     opacity: 0;
-    filter: blur(14px);
     transform: scale(1.05);
   }
 }

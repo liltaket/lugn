@@ -27,7 +27,14 @@
   position: absolute;
   inset: 0;
 }
-.hub-pager.moving .hub-track {
+/* The track is always its own compositor layer. Lifted only while it moved,
+   its first frame had to raster the whole layer (the page and both
+   neighbours) and its lowering a repaint of the page: measured on a Hub, a
+   cold swipe with the layer already there ran at 60 fps with no frame over
+   33 ms, against one or two frames of 50 to 100 ms. The Hub draws text with
+   grayscale anti-aliasing either way (only a desktop with subpixel text sees
+   a difference). */
+.hub-track {
   will-change: transform;
 }
 /* The desk Hub's hover plate (pointer-bridge.js) is measured against a still

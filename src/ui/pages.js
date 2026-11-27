@@ -46,7 +46,7 @@
   const NEAR_DELAY_MS = 80; // after a settle, before neighbours are prepared
   const WARM_FIRST_MS = 1500; // after load, the neighbours are drawn once
   const WARM_EVERY_MS = 2000; // and kept current this often, when idle
-  const LOWER_DELAY_MS = 400; // then the track stops being its own layer
+  const LOWER_DELAY_MS = 400; // then the track is marked at rest
 
   const clock = () => performance.now();
   const pageEls = Array.from(track.querySelectorAll(':scope > .hub-page'));
@@ -104,9 +104,10 @@
       : `translate(${px}px, 0)`;
   }
 
-  // The track is its own compositor layer only while it moves (and briefly
-  // after). At rest it is painted with the page, exactly as without pages;
-  // as a layer it would draw text with different anti-aliasing.
+  // The track is always its own compositor layer (pages.css). While it moves
+  // its transform is a translate3d and the pager is marked `moving`; at rest
+  // (a little after) the mark goes and a plain translate is written, which
+  // changes nothing on screen.
   let lifted = false;
   let paging = false;
   let lowerTimer = 0;

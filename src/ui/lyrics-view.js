@@ -526,19 +526,17 @@
     const x = from.left - to.left;
     const y = from.middle - to.middle;
     if (!x && !y && scale === 1) return;
+    // The origin is set on the element, not in the keyframes: a
+    // transform-origin there would keep the animation off the compositor.
+    pane.style.transformOrigin = `0 ${to.middle}px`;
     pane.animate(
       [
         {
-          transformOrigin: `0 ${to.middle}px`,
           transform: `translate(${x}px, ${y}px) scale(${scale})`,
           // The lines break differently at another size.
           opacity: scale === 1 ? 1 : 0.1,
         },
-        {
-          transformOrigin: `0 ${to.middle}px`,
-          transform: 'none',
-          opacity: 1,
-        },
+        { transform: 'none', opacity: 1 },
       ],
       { duration: MODE_MS, easing: EASING },
     );

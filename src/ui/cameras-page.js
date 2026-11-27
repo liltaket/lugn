@@ -355,10 +355,10 @@
         transform: `translate(${mix(from.x - to.x, 0)}px, ${mix(from.y - to.y, 0)}px) scale(${sx}, ${sy})`,
       });
       frames.img.push({ transform: `scale(${cover / sx}, ${cover / sy})` });
-      frames.name.push({
-        transformOrigin: '0 0',
-        transform: `scale(${1 / sx}, ${1 / sy})`,
-      });
+      // The name scales about its own corner (transform-origin in the
+      // stylesheet): a transform-origin in the keyframes would keep the whole
+      // animation off the compositor.
+      frames.name.push({ transform: `scale(${1 / sx}, ${1 / sy})` });
     }
     const timing = { duration: MOVE_MS, easing: 'linear' };
     tile.animate(frames.tile, timing);

@@ -291,10 +291,12 @@ describe('Hub optional Lugn 2 presentation', () => {
     (home as unknown as { closest: unknown }).closest = () => ({
       dataset: { state: 'near' },
     });
+    ui.get('#x').classList.add('lit');
     run();
-    // Off screen: the class is simply there, nothing is queued for a flush.
+    // Off screen: nothing is queued for a flush, and a class left from before
+    // is taken off (an off-screen animation would tick on the main thread).
     expect(frames).toHaveLength(0);
-    expect(ui.get('#x').classList.contains('lit')).toBe(true);
+    expect(ui.get('#x').classList.contains('lit')).toBe(false);
     (home as unknown as { closest: unknown }).closest = () => ({
       dataset: { state: 'active' },
     });
@@ -681,6 +683,28 @@ describe('Hub optional Lugn 2 presentation', () => {
       '#333',
     );
     expect(layers()[0]!.className).toContain('fading');
+    themed.dispose();
+  });
+  it('swaps the theme background without a fade while the dashboard is off screen', () => {
+    const themed = dashboard('', true);
+    const set = (value: string) =>
+      runInContext(
+        `artTheme = { accent: '${value}', deep: '${value}d', panel: '${value}p', glow: '${value}g', glowSoft: '${value}s' }; root.dataset.artColor = 'true'; root.dataset.musicPlaying = 'true'; syncArtTheme();`,
+        themed.context,
+      );
+    set('#111');
+    (themed.get('#app-root') as unknown as { closest: unknown }).closest =
+      () => ({ dataset: { state: 'near' } });
+    set('#222');
+    const layers = themed.layers();
+    expect(layers[0]!.className).toBe('theme-bg themed');
+    expect(layers[1]!.className).toBe('theme-bg themed on');
+    // Nothing waits for a transition: the next change applies at once.
+    set('#333');
+    expect(themed.themeValues('.music-section').get('--art-accent')).toBe(
+      '#333',
+    );
+    expect(themed.layers()[0]!.className).toBe('theme-bg themed on');
     themed.dispose();
   });
   it('keeps a state message while the pager moves and draws it right after', () => {

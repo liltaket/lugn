@@ -458,24 +458,44 @@
     return out;
   }
 
+  // The rows are built once for a set of labels; every second only the values
+  // that changed are written (the page's uptime, the data's age), so a tick
+  // lays out one line instead of rebuilding and laying out the whole list.
   let infoKey = '';
+  let infoLabels = '';
+  let infoValues = [];
   function drawInfo() {
     const rows = facts();
     const key = JSON.stringify(rows);
     if (key === infoKey) return;
     infoKey = key;
-    view('info', 'facts')?.replaceChildren(
-      ...rows.map(([label, value, wide]) => {
-        const row = document.createElement('div');
-        if (wide) row.dataset.wide = 'true';
-        const dt = document.createElement('dt');
-        const dd = document.createElement('dd');
-        dt.textContent = label;
-        dd.textContent = value;
-        row.append(dt, dd);
-        return row;
-      }),
+    const list = view('info', 'facts');
+    if (!list) return;
+    const labels = JSON.stringify(
+      rows.map(([label, , wide]) => [label, !!wide]),
     );
+    if (labels !== infoLabels || infoValues.length !== rows.length) {
+      infoLabels = labels;
+      infoValues = [];
+      list.replaceChildren(
+        ...rows.map(([label, value, wide]) => {
+          const row = document.createElement('div');
+          if (wide) row.dataset.wide = 'true';
+          const dt = document.createElement('dt');
+          const dd = document.createElement('dd');
+          dt.textContent = label;
+          dd.textContent = value;
+          row.append(dt, dd);
+          infoValues.push(dd);
+          return row;
+        }),
+      );
+      return;
+    }
+    rows.forEach(([, value], i) => {
+      if (infoValues[i].textContent !== value)
+        infoValues[i].textContent = value;
+    });
   }
 
   pagesApi.define('info', {
