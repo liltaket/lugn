@@ -323,6 +323,10 @@ export class LugnDisplayServer {
     UiAssetName,
     { source: Buffer; packed: Buffer }
   >();
+  /** Last serialized/compressed photo listing, reused while revision matches. */
+  private cachedPhotoListing:
+    | { revision: string; count: number; raw: Buffer; packed?: Buffer }
+    | undefined;
   private readonly prefetched = new Map<string, string>();
 
   constructor(private readonly options: LugnDisplayServerOptions) {
@@ -706,6 +710,22 @@ export class LugnDisplayServer {
       }
       if (
         request.method === 'GET' &&
+        hubRequest.route === '/display-api/computer-stats'
+      ) {
+        if (
+          (request.headers.origin && !this.validatedOrigin(request, host)) ||
+          request.headers['sec-fetch-site'] === 'cross-site'
+        ) {
+          sendJson(response, 403, { error: 'invalid_origin' });
+          return;
+        }
+        sendJson(response, 200, {
+          computerStats: this.options.computerStatsProvider?.() ?? {},
+        });
+        return;
+      }
+      if (
+        request.method === 'GET' &&
         (hubRequest.route === '/display-api/photos' ||
           hubRequest.route.startsWith('/display-api/photos/'))
       ) {
@@ -722,7 +742,38 @@ export class LugnDisplayServer {
           return;
         }
         if (hubRequest.route === '/display-api/photos') {
-          sendJson(response, 200, library.snapshot());
+          const snapshot = library.snapshot();
+          const count = Array.isArray(snapshot.photos)
+            ? snapshot.photos.length
+            : 0;
+          let entry = this.cachedPhotoListing;
+          if (
+            !entry ||
+            entry.revision !== snapshot.revision ||
+            entry.count !== count
+          ) {
+            entry = {
+              revision: snapshot.revision,
+              count,
+              raw: Buffer.from(JSON.stringify(snapshot), 'utf8'),
+            };
+            this.cachedPhotoListing = entry;
+          }
+          const compressed = acceptsGzip(request);
+          if (compressed && !entry.packed) {
+            entry.packed = await gzipAsset(entry.raw);
+          }
+          const body = compressed && entry.packed ? entry.packed : entry.raw;
+          response.writeHead(200, {
+            'cache-control': 'no-store',
+            'content-type': 'application/json; charset=utf-8',
+            'content-length': body.byteLength,
+            ...(compressed ? { 'content-encoding': 'gzip' } : {}),
+            vary: 'accept-encoding',
+            'x-content-type-options': 'nosniff',
+            'cross-origin-resource-policy': 'same-origin',
+          });
+          response.end(body);
           return;
         }
         const image =
@@ -1325,9 +1376,6 @@ export class LugnDisplayServer {
       ...(this.options.weatherProvider
         ? { weather: this.options.weatherProvider() }
         : {}),
-      ...(this.options.computerStatsProvider
-        ? { computerStats: this.options.computerStatsProvider() }
-        : {}),
       ...(this.options.hubSettings
         ? { settings: this.options.hubSettings.list() }
         : {}),
@@ -1381,7 +1429,17 @@ export class LugnDisplayServer {
         const payload = this.snapshot(hub);
         const json = JSON.stringify(payload);
         const key = displayPayloadKey(json);
-        if (!heartbeat && key === lastKey) return;
+        if (key === lastKey) {
+          if (!heartbeat) return;
+          const beat = JSON.stringify({
+            heartbeat: true,
+            state: { revision: payload.state.revision },
+            deliveryRevision: payload.deliveryRevision,
+            generatedAt: payload.generatedAt,
+          });
+          response.write(`id: ${payload.state.revision}\ndata: ${beat}\n\n`);
+          return;
+        }
         lastKey = key;
         response.write(`id: ${payload.state.revision}\ndata: ${json}\n\n`);
       } catch {

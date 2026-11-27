@@ -1,10 +1,12 @@
 // Dator (dator): what the computer is doing right now: processor, graphics,
-// memory, swap, the busiest programs, the network and the disk. Only fresh
-// figures from latestPayload.computerStats are shown; nothing is made up.
+// memory, swap, the busiest programs, the network and the disk. Fresh figures
+// are fetched on demand from /display-api/computer-stats only while Dator is
+// prepared or shown, keeping steady-state SSE snapshots small and quiet.
 (() => {
   'use strict';
 
   const PROGRAMS = 5;
+  const STATS_URL = `${location.pathname.replace(/\/?$/, '/')}display-api/computer-stats`;
 
   const timeFmt = new Intl.DateTimeFormat('sv-SE', {
     hour: '2-digit',
@@ -27,6 +29,36 @@
   let dom = null;
   let timer = 0;
   let quickMenuAttached = false;
+  let fetchedStats = null;
+  let statsRequest = null;
+  let active = false;
+
+  const statsMap = (data) => fetchedStats ?? data?.computerStats ?? {};
+
+  async function refreshStats() {
+    if (statsRequest || typeof fetch !== 'function') return;
+    statsRequest = (async () => {
+      try {
+        const response = await fetch(STATS_URL, {
+          method: 'GET',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { accept: 'application/json' },
+        });
+        if (!response.ok) return;
+        const body = await response.json();
+        if (body && typeof body.computerStats === 'object') {
+          fetchedStats = body.computerStats;
+          if (active || dom) draw();
+        }
+      } catch {
+        // Next tick retries while Dator is open.
+      } finally {
+        statsRequest = null;
+      }
+    })();
+    return statsRequest;
+  }
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -57,7 +89,7 @@
       ([, d]) => d.freshness === 'fresh' && d.observed?.idle !== true,
     ) ??
       online[0] ??
-      devices[0] ?? [Object.keys(data?.computerStats ?? {})[0], null];
+      devices[0] ?? [Object.keys(statsMap(data))[0], null];
     return id ? { id, device } : null;
   }
 
@@ -199,7 +231,7 @@
 
     const data = payload();
     const chosen = choose(data);
-    const stats = chosen ? data?.computerStats?.[chosen.id] : null;
+    const stats = chosen ? statsMap(data)[chosen.id] : null;
     const id = chosen?.id ?? '';
     setText(
       dom.name,
@@ -265,22 +297,32 @@
   }
 
   function stop() {
+    active = false;
     window.clearInterval(timer);
     timer = 0;
   }
 
   if (globalThis.lugnPages?.define) {
     globalThis.lugnPages.define('dator', {
-      prepare: draw,
+      prepare() {
+        draw();
+        void refreshStats();
+      },
       enter() {
         stop();
+        active = true;
         draw();
-        timer = window.setInterval(draw, 1000);
+        void refreshStats();
+        timer = window.setInterval(() => {
+          void refreshStats();
+          draw();
+        }, 1000);
       },
       leave: stop,
       sleep: stop,
     });
   } else {
     draw();
+    void refreshStats();
   }
 })();

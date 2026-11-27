@@ -266,6 +266,17 @@ clicks and the pointer bridge responsive while something plays:
   when smart neighbour groups are present.
 - On Musik, playhead polling pauses once playback is paused and resumes on the
   next play, seek or track change.
+- Computer telemetry (`computerStats`) is served on demand from
+  `/display-api/computer-stats` only while the Dator page is prepared or open,
+  so steady-state `/display-api/events` streams do not re-render every Hub when
+  CPU/network stats tick.
+- When nothing visible has changed since the last SSE frame, the 5 s heartbeat
+  sends a compact `{ heartbeat: true, state: { revision }, deliveryRevision,
+generatedAt }` frame instead of repeating the full snapshot, and initial/wake
+  `/display-api/state` responses share the same stream-key deduplication so the
+  dashboard renders once rather than twice.
+- `/display-api/photos` caches its serialized and gzip-compressed listing per
+  library revision.
 
 ## Hub pages
 
