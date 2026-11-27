@@ -658,13 +658,6 @@ let cachedDateTime = '';
 function setClock(afterRender = false) {
   if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
     setConnection('offline', 'Inga färska uppdateringar från Lugn.');
-  // While another page is shown on screen, Hem's 1 Hz tick has nothing visible
-  // to update; returning to Hem runs setClock() immediately.
-  if (!afterRender && !homeOnScreen()) return;
-  renderMusicProgress();
-  updateCameraCountdown();
-  renderPrintTime();
-  renderPrintLight();
   const nowMs = latestPayload ? estimatedServerNow() : Date.now();
   const now = new Date(nowMs);
   const time = timeFormat.format(now);
@@ -688,6 +681,14 @@ function setClock(afterRender = false) {
   setText(refs.clockDate, cachedDateText);
   if (refs.clockDate.dateTime !== cachedDateTime)
     refs.clockDate.dateTime = cachedDateTime;
+  // Past here is work nobody sees while another page is on screen; returning to
+  // Hem runs setClock() again. The clock above stays current, because Hem
+  // slides into view during a swipe before it is the page on screen.
+  if (!afterRender && !homeOnScreen()) return;
+  renderMusicProgress();
+  updateCameraCountdown();
+  renderPrintTime();
+  renderPrintLight();
   // render() has just drawn all of these from the same payload.
   if (latestPayload && !afterRender && !pagerMoving()) {
     renderEnvironment(latestPayload.environment);
