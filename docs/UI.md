@@ -226,6 +226,24 @@ clicks and the pointer bridge responsive while something plays:
   frame, not with a forced reflow in the middle of the render. A command only
   redraws the controls of its own kind while pending.
 - Releasing a press redraws only if a render was held back during the press.
+- Animations change only `opacity` and `transform`, never in their keyframes a
+  `transform-origin`, a filter or a background position (those cannot be
+  composited and run on the main thread in every frame). A lit scene tile's
+  color, highlight and glow are a layer of their own (`::before`) that fades
+  by opacity; the tile's text turns dark or light in one step a little into
+  the fade. The pending sweep is a band moved by `transform` and clipped by
+  the tile. New Hem artwork fades and settles without an animated blur.
+- While Hem is not the page on screen it plays nothing: `pulse()` restarts
+  nothing there (and takes a stale class off), the theme background swaps
+  without its fade, the ring's halves do not transition, and Hem's endless
+  animations (scene request, pending sweep, camera placeholder, print light)
+  are paused. An animation off screen is not composited, so it would tick on
+  the main thread for nobody (on a track change on Musik that was about twice
+  the frames).
+- Pictures drawn into a canvas (the Foto veil) are cut and decoded from the
+  picture's bytes with `createImageBitmap` of a Blob, which decodes off the
+  main thread; drawing an `<img>` into a canvas decodes it again on the main
+  thread.
 
 ## Hub pages
 
@@ -357,7 +375,9 @@ mouse drag, or the pointer bridge's) is swallowed.
 
 The pager follows the responsiveness rules above:
 
-- Only the track moves, by `transform`. A drag writes one transform per move;
+- Only the track moves, by `transform`, and it is always its own compositor
+  layer (lifting it only for a swipe made the first frames raster it, a 50 to
+  100 ms frame on a Hub). A drag writes one transform per move;
   the settle after release is one Web Animation sampled from a spring, so it
   runs on the compositor and a busy main thread does not make it stutter.
   Past the first or last page the track follows with resistance.
@@ -382,7 +402,8 @@ The pager follows the responsiveness rules above:
   data from `display.js` read-only.
 - **Mät svep** on Info records animation-frame gaps during swipes and long
   tasks, so the Hub itself can report how a swipe ran; it is off by default and
-  remembered per Hub.
+  remembered per Hub. Info writes only the values that changed each second (the
+  rows are built again only when the set of facts changes).
 
 ### Greeting, computer and settings pages
 

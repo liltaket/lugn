@@ -48,6 +48,7 @@
 /* The camera's name, as on Hem's camera view: a pill with a dot that says
    whether the picture is fresh. */
 .cams-name {
+  transform-origin: 0 0;
   position: absolute;
   left: 10px;
   top: 10px;

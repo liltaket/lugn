@@ -463,6 +463,11 @@ function flushPulses() {
   for (const [element, names] of batch)
     for (const name of names) element.classList.add(name);
 }
+// Hem is the page on screen (or there are no pages at all).
+function homeOnScreen() {
+  const page = root?.closest?.('.hub-page');
+  return !page || page.dataset?.state === 'active';
+}
 function pulse(element, name) {
   if (
     typeof element?.classList?.remove !== 'function' ||
@@ -476,11 +481,13 @@ function pulse(element, name) {
     return;
   }
   // A dashboard that is not the page on screen (the pager's other pages) plays
-  // nothing anyone sees; restarting its animations would force a style and
-  // layout flush for the whole document, for nobody.
-  const page = root?.closest?.('.hub-page');
-  if (page && page.dataset?.state !== 'active') {
-    element.classList.add(name);
+  // nothing anyone sees. Off screen an animation is not handed to the
+  // compositor: it would tick on the main thread every frame, for nobody (and
+  // a restart would force a style and layout flush for the whole document).
+  // A class left from before is taken off, so showing the element again (an
+  // image that was hidden) cannot replay it there either.
+  if (!homeOnScreen()) {
+    element.classList.remove(name);
     return;
   }
   let names = pendingPulses.get(element);
@@ -1979,6 +1986,14 @@ function paintThemeLayer(layer, theme) {
 function fadeThemeBackground(theme) {
   const next = themeLayers[themeLive ^ 1];
   paintThemeLayer(next, theme);
+  // Off screen the fade would run on the main thread for 1.4 s (a hidden
+  // layer is not composited) and nobody would see it: the layers swap at once.
+  if (!homeOnScreen()) {
+    next.classList.add('on');
+    themeLayers[themeLive].classList.remove('on', 'fading');
+    themeLive ^= 1;
+    return;
+  }
   themeFading = true;
   // The one showing steps under the incoming one.
   themeLayers[themeLive].classList.remove('fading');

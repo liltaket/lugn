@@ -966,46 +966,58 @@
     return { slide, images, veils };
   }
 
-  // The bottom of the picture, shrunk twice (a blur by averaging), with an alpha
-  // ramp from clear at the top to dark at the bottom edge.
-  function drawVeil(canvas, image) {
+  // The bottom of the picture, shrunk to 32 × 12 (a blur by averaging) and
+  // drawn at 64 × 24, with an alpha ramp from clear at the top to dark at the
+  // bottom edge. The small copy is cut and decoded from the picture's bytes
+  // (createImageBitmap of a Blob decodes off the main thread; the picture is
+  // in the cache already). Drawing the <img> into a canvas instead decoded the
+  // whole picture a second time on the main thread, in the slide change.
+  const VEIL_W = 64;
+  const VEIL_H = 24;
+  function paintVeil(canvas, source, sx, sy, sw, sh) {
+    canvas.width = VEIL_W;
+    canvas.height = VEIL_H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, VEIL_W, VEIL_H);
+    ctx.globalCompositeOperation = 'destination-in';
+    const ramp = ctx.createLinearGradient(0, 0, 0, VEIL_H);
+    ramp.addColorStop(0, 'rgba(0,0,0,0)');
+    ramp.addColorStop(0.5, 'rgba(0,0,0,0.55)');
+    ramp.addColorStop(1, 'rgba(0,0,0,0.75)');
+    ctx.fillStyle = ramp;
+    ctx.fillRect(0, 0, VEIL_W, VEIL_H);
+  }
+  async function drawVeil(canvas, image) {
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    const sh = Math.max(1, Math.round(height * 0.45));
+    let small = null;
     try {
-      const w = 64;
-      const h = 24;
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      const step = document.createElement('canvas');
-      step.width = 32;
-      step.height = 12;
-      const stepCtx = step.getContext('2d');
-      if (!ctx || !stepCtx) return;
-      const sh = image.naturalHeight * 0.45;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(
-        image,
+      if (
+        typeof createImageBitmap !== 'function' ||
+        typeof fetch !== 'function' ||
+        !width
+      )
+        return;
+      const response = await fetch(image.currentSrc || image.src, {
+        cache: 'force-cache',
+      });
+      if (!response.ok) return;
+      small = await createImageBitmap(
+        await response.blob(),
         0,
-        image.naturalHeight - sh,
-        image.naturalWidth,
+        height - sh,
+        width,
         sh,
-        0,
-        0,
-        w,
-        h,
+        { resizeWidth: 32, resizeHeight: 12, resizeQuality: 'high' },
       );
-      stepCtx.imageSmoothingQuality = 'high';
-      stepCtx.drawImage(canvas, 0, 0, w, h, 0, 0, 32, 12);
-      ctx.clearRect(0, 0, w, h);
-      ctx.drawImage(step, 0, 0, 32, 12, 0, 0, w, h);
-      ctx.globalCompositeOperation = 'destination-in';
-      const ramp = ctx.createLinearGradient(0, 0, 0, h);
-      ramp.addColorStop(0, 'rgba(0,0,0,0)');
-      ramp.addColorStop(0.5, 'rgba(0,0,0,0.55)');
-      ramp.addColorStop(1, 'rgba(0,0,0,0.75)');
-      ctx.fillStyle = ramp;
-      ctx.fillRect(0, 0, w, h);
+      paintVeil(canvas, small, 0, 0, 32, 12);
     } catch {
-      /* no veil; the dark gradient remains */
+      /* no veil; the slide's own shade remains */
+    } finally {
+      small?.close?.();
     }
   }
 
@@ -1051,7 +1063,7 @@
           return null;
         }
         if (paging()) await new Promise((resolve) => whenStill(resolve));
-        for (const veil of made.veils) drawVeil(veil.canvas, veil.image);
+        for (const veil of made.veils) void drawVeil(veil.canvas, veil.image);
         return { ...made, layout: chosen.layout };
       } finally {
         if (building === mine) building = null;

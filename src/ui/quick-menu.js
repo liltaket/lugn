@@ -146,12 +146,33 @@
           ([name, element]) => name === 'back' || element?.hidden !== false,
         ),
       );
-    const chip = document.getElementById('presence-chip');
-    const taken =
-      chip && !chip.hidden && chip.offsetWidth
-        ? chip.offsetLeft + chip.offsetWidth + 12
-        : 18;
-    nav.style.setProperty?.('--nb-back-left', `${taken}px`);
+    placeBack();
+  }
+
+  // The back button stands right of the presence chip. The chip is measured
+  // only while the back button shows, and in the next frame: read here, in the
+  // middle of a tap's handler (and every second while the bar is open), it
+  // forced a layout of the whole document before the page had finished its
+  // own changes.
+  let backFrame = 0;
+  let backLeft = '';
+  function placeBack() {
+    if (backFrame || buttons.back?.hidden !== false) return;
+    const measure = () => {
+      backFrame = 0;
+      const chip = document.getElementById('presence-chip');
+      const taken =
+        chip && !chip.hidden && chip.offsetWidth
+          ? chip.offsetLeft + chip.offsetWidth + 12
+          : 18;
+      const value = `${taken}px`;
+      if (value === backLeft) return;
+      backLeft = value;
+      nav.style.setProperty?.('--nb-back-left', value);
+    };
+    if (typeof requestAnimationFrame === 'function')
+      backFrame = requestAnimationFrame(measure);
+    else measure();
   }
 
   function drawDock() {

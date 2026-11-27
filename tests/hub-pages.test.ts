@@ -348,7 +348,7 @@ describe('Hub pager', () => {
       'active',
       'near',
     ]);
-    // At rest the track is painted with the page again, not as its own layer.
+    // At rest the pager is no longer marked as moving (the track stays a layer).
     advance(400);
     expect(pager.classes.has('moving')).toBe(false);
     expect(settledEvents()).toBe(1);
