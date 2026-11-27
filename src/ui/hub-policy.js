@@ -3,7 +3,8 @@
 // only carries it out, so the rules, the clock and the arrival time live in one
 // place and a Hub never disagrees with another about what a rule means.
 //
-// A policy (`payload.hubPolicy`; absent means no rules, and nothing here runs):
+// A policy (`payload.hubPolicy`; absent means no rules, and only the leaving of
+// a quiet Musik, below, runs):
 //   pages  which pages the pager contains (null: the usual ones, that is all but
 //          the conditional greeting and computer pages). The others are taken
 //          out of the track, so swiping skips them. Where the page on screen
@@ -45,6 +46,7 @@
   let wanted = null; // the page list last asked for
   let actedOn = null; // the focus token this Hub has gone to
   let focus = null; // { page, returnTo } while a focus is in force
+  let offered = null; // the focus of the policy in force, taken or not
   let autoPage = null; // the page the Hub was taken to, until someone moves on
   let retryTimer = 0;
   let lastTouch = clockMs();
@@ -240,6 +242,7 @@
 
     const now =
       next.focus && typeof next.focus === 'object' ? next.focus : null;
+    offered = now;
     if (now && now.token !== actedOn) {
       actedOn = now.token;
       focus = { page: now.page, returnTo: now.returnTo || null };
@@ -269,6 +272,137 @@
   }
 
   globalThis.lugnHubPolicy = { apply, touch, preview };
+
+  // ── A quiet Musik is left ──
+  //
+  // With or without rules: a Hub on Musik goes where it would otherwise be
+  // once nothing has played and nobody has used it for a while. The wait only
+  // counts while the Hub can tell that it is quiet: fresh data from Lugn and a
+  // trusted player. Anything else starts it over, as do playback, a touch or
+  // the mouse, and coming to the page. A check that comes long after the last
+  // one (a hidden or sleeping page) starts it over too. See docs/UI.md.
+  const MUSIC_LEAVE_MS = 5 * 60_000;
+  const MUSIC_CHECK_MS = 5_000;
+  // The age at which the Hub calls its own data stale (display.js).
+  const MUSIC_STALE_MS = 30_000;
+  const NOT_PLAYING = ['paused', 'idle', 'off'];
+
+  let quietSince = null;
+  let checkedAt = 0;
+  let musicTimer = 0;
+  // Moving the mouse or dragging is use too; the dim and the rules' own
+  // `idleSeconds` count presses only, as before.
+  let lastMove = clockMs();
+  const moved = () => {
+    lastMove = clockMs();
+  };
+  for (const type of ['pointermove', 'pointerup', 'mousedown'])
+    document.addEventListener?.(type, moved, { capture: true, passive: true });
+  // The bridged mouse sends no pointermove while no button is held.
+  window.addEventListener?.('lugn:pointer-move', moved);
+
+  // Whether one player is sounding: true, false, or null for "cannot tell".
+  function sounding(payload, target, device) {
+    const playback = device?.observed?.playback;
+    if (
+      device?.availability !== 'available' ||
+      payload.musicObservationTrust?.[target] === false
+    )
+      return null;
+    // A command's later check disagrees with what the player last reported.
+    const disputed = (payload.state.music.commands ?? []).some(
+      (command) =>
+        command.target === target &&
+        command.recovery?.verifiedAt > (device.observedAt ?? -1) &&
+        typeof command.recovery.reported?.playback === 'string' &&
+        command.recovery.reported.playback !== playback,
+    );
+    if (disputed) return null;
+    const media = payload.computerNowPlaying?.[target];
+    const route = payload.state.music.computerPlayback?.[target];
+    const desktop = route?.active === true ? route : null;
+    if (
+      media?.status === 'playing' ||
+      media?.status === 'ambiguous' ||
+      desktop?.playback === 'playing'
+    )
+      return true;
+    if (NOT_PLAYING.includes(playback)) return false;
+    if (playback !== 'playing') return null;
+    // On the computer's input the player only says the input is open: the
+    // computer's own media decides.
+    if (media) return media.status === 'idle' ? false : null;
+    return desktop ? null : true;
+  }
+
+  // True only when the player Musik shows is known to be quiet and no other
+  // one is known to play. `latestPayload`, `lastFreshAt`, `musicTarget` and
+  // `isUnavailable` are display.js's.
+  function musicQuiet() {
+    if (
+      typeof latestPayload === 'undefined' ||
+      typeof lastFreshAt === 'undefined' ||
+      Date.now() - lastFreshAt > MUSIC_STALE_MS ||
+      (typeof isUnavailable === 'function' && isUnavailable()) ||
+      latestPayload?.musicObservationConnected === false
+    )
+      return false;
+    const players = Object.entries(
+      latestPayload?.state?.music?.devices ?? {},
+    ).filter(([target]) => target.startsWith('music.'));
+    const shown =
+      players.find(
+        ([target]) => typeof musicTarget === 'string' && target === musicTarget,
+      ) ?? players[0];
+    if (!shown) return false;
+    return players.every((player) => {
+      const state = sounding(latestPayload, ...player);
+      return state === false || (state === null && player !== shown);
+    });
+  }
+
+  // Where the Hub would otherwise be: the page a rule in force brings up (if it
+  // may take over from Musik), else Hem, else the first page the rules leave.
+  // A rule that brings up Musik keeps it.
+  function leaveMusic() {
+    if (offered?.page === 'music') return;
+    const ids = pagesApi.ids();
+    const page =
+      offered && ids.includes(offered.page) && mayTake(offered)
+        ? offered.page
+        : ids.includes('home')
+          ? 'home'
+          : ids.find((id) => id !== 'music');
+    // Refused while a finger drags or a dialog is open: the next check asks.
+    if (page) pagesApi.go(page);
+  }
+
+  // Runs only while Musik is the page. Times are compared with the clock, so a
+  // late timer neither shortens nor stretches what has been seen.
+  function watchMusic() {
+    window.clearTimeout(musicTimer);
+    if (pagesApi.current() !== 'music') {
+      quietSince = null;
+      return;
+    }
+    const now = clockMs();
+    if (!musicQuiet()) quietSince = null;
+    else if (quietSince === null || now - checkedAt > MUSIC_STALE_MS)
+      quietSince = now;
+    checkedAt = now;
+    if (
+      quietSince !== null &&
+      now - Math.max(quietSince, lastTouch, lastMove) >= MUSIC_LEAVE_MS
+    )
+      leaveMusic();
+    // Leaving announces the new page, which ends the watch.
+    if (pagesApi.current() === 'music')
+      musicTimer = window.setTimeout(watchMusic, MUSIC_CHECK_MS);
+  }
+  window.addEventListener?.('lugn:page', () => {
+    quietSince = null;
+    watchMusic();
+  });
 
   // The Info page's buttons.
   const SCENE_BUTTONS = [
