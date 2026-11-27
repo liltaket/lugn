@@ -258,15 +258,24 @@ describe('Musik lyrics', () => {
     expect(s.current()).toBe('One');
   });
 
-  it('stays where the player pauses', async () => {
+  it('stays where the player pauses and stops polling playhead while paused', async () => {
     const s = setup({ stored: on });
     s.draw();
     await s.wait(100);
     s.player.playing = false;
     s.player.position = 21;
     s.draw({ playing: false });
+    await s.wait(100);
+    const askedAtPause = s.asked('playhead');
     await s.wait(30_000);
     expect(s.current()).toBe('Two');
+    // No repeated 1 Hz playhead polling while playback stays paused.
+    expect(s.asked('playhead')).toBe(askedAtPause);
+    // Resuming playback immediately restarts playhead polling.
+    s.player.playing = true;
+    s.draw({ playing: true });
+    await s.wait(1_200);
+    expect(s.asked('playhead')).toBeGreaterThan(askedAtPause);
   });
 
   it('shows the lines later or earlier by a chosen delay', async () => {

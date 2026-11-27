@@ -247,6 +247,14 @@ clicks and the pointer bridge responsive while something plays:
   picture's bytes with `createImageBitmap` of a Blob, which decodes off the
   main thread; drawing an `<img>` into a canvas decodes it again on the main
   thread.
+- While Hem is paged away, its 1 Hz clock tick keeps the connection watchdog
+  running and skips Hem DOM redraws until Hem returns on screen.
+- On Foto, corner text legibility relies on static radial shades rather than
+  live `backdrop-filter` blur over drifting images, and neighbour preparation
+  waits for an active swipe to settle and skips building the fallback queue
+  when smart neighbour groups are present.
+- On Musik, playhead polling pauses once playback is paused and resumes on the
+  next play, seek or track change.
 
 ## Hub pages
 

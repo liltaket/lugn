@@ -513,10 +513,15 @@ function roleName(role) {
 // The layout is drawn 600 px tall and scaled to the Hub's viewport height; the
 // canvas takes the viewport's own width, so the whole screen is used. A very
 // narrow viewport is scaled by width instead, keeping the left column usable.
+let lastFitWidth = 0;
+let lastFitHeight = 0;
 function fitScreen() {
   const width = globalThis.innerWidth;
   const height = globalThis.innerHeight;
   if (!root.style || !width || !height) return;
+  if (width === lastFitWidth && height === lastFitHeight) return;
+  lastFitWidth = width;
+  lastFitHeight = height;
   const minimumWidth = 900;
   const zoom = Math.min(height / 600, width / minimumWidth);
   root.style.zoom = String(zoom);
@@ -526,7 +531,7 @@ globalThis.addEventListener?.('resize', fitScreen);
 
 function setRole(role) {
   const resolved = roleName(role);
-  root.dataset.role = resolved;
+  if (root.dataset.role !== resolved) root.dataset.role = resolved;
   fitScreen();
   if (refs.musicPresets && presetRoleKey !== resolved) {
     const presets =
@@ -646,30 +651,43 @@ function progressSample(values) {
     : null;
 }
 
+let cachedDateMinute = -1;
+let cachedDateText = '';
+let cachedDateTime = '';
+
 function setClock(afterRender = false) {
+  if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
+    setConnection('offline', 'Inga färska uppdateringar från Lugn.');
+  // While another page is shown on screen, Hem's 1 Hz tick has nothing visible
+  // to update; returning to Hem runs setClock() immediately.
+  if (!afterRender && !homeOnScreen()) return;
   renderMusicProgress();
   updateCameraCountdown();
   renderPrintTime();
   renderPrintLight();
-  if (lastFreshAt && Date.now() - lastFreshAt > STREAM_CHECK_MS * 2)
-    setConnection('offline', 'Inga färska uppdateringar från Lugn.');
-  const now = new Date(latestPayload ? estimatedServerNow() : Date.now());
+  const nowMs = latestPayload ? estimatedServerNow() : Date.now();
+  const now = new Date(nowMs);
   const time = timeFormat.format(now);
-  const date = dateFormat.format(now);
-  const hour = Number(timeFormat.format(now).split(':')[0]);
-  root.dataset.time = hour >= 23 || hour < 6 ? 'night' : 'day';
+  const hour = Number(time.split(':')[0]);
+  const period = hour >= 23 || hour < 6 ? 'night' : 'day';
+  if (root.dataset.time !== period) root.dataset.time = period;
   setText(refs.clockTime, time);
-  setText(refs.clockDate, date);
-  const dateParts = datePartsFormat.formatToParts(now);
-  const dateValue = {};
-  // Bolt optimization: Replaced chained .filter().map() and Object.fromEntries() with a single loop
-  // to avoid creating intermediate arrays and reduce memory allocation overhead on hot paths.
-  for (const part of dateParts) {
-    if (part.type !== 'literal') {
-      dateValue[part.type] = part.value;
+  const minuteKey = Math.floor(nowMs / 60_000);
+  if (minuteKey !== cachedDateMinute) {
+    cachedDateMinute = minuteKey;
+    cachedDateText = dateFormat.format(now);
+    const dateParts = datePartsFormat.formatToParts(now);
+    const dateValue = {};
+    for (const part of dateParts) {
+      if (part.type !== 'literal') {
+        dateValue[part.type] = part.value;
+      }
     }
+    cachedDateTime = `${dateValue.year}-${dateValue.month}-${dateValue.day}`;
   }
-  refs.clockDate.dateTime = `${dateValue.year}-${dateValue.month}-${dateValue.day}`;
+  setText(refs.clockDate, cachedDateText);
+  if (refs.clockDate.dateTime !== cachedDateTime)
+    refs.clockDate.dateTime = cachedDateTime;
   // render() has just drawn all of these from the same payload.
   if (latestPayload && !afterRender && !pagerMoving()) {
     renderEnvironment(latestPayload.environment);
@@ -1856,8 +1874,11 @@ function updateArtworkColor(image) {
     const sum = [0, 0, 0];
     let weight = 0;
     for (let i = 0; i < pixels.length; i += 4) {
-      const [r, g, b, a] = pixels.slice(i, i + 4);
+      const a = pixels[i + 3];
       if (a < 128) continue;
+      const r = pixels[i];
+      const g = pixels[i + 1];
+      const b = pixels[i + 2];
       const brightness = (r + g + b) / 3;
       if (brightness < 12 || brightness > 245) continue;
       const w = 1 + (Math.max(r, g, b) - Math.min(r, g, b)) / 128;
@@ -4703,6 +4724,9 @@ window.addEventListener('pagehide', () => {
 
 setMusicDetailsOpen(false);
 setClock();
+window.addEventListener('lugn:page', (event) => {
+  if (event?.detail?.page === 'home') setClock();
+});
 clockTimer = window.setInterval(setClock, 1000);
 void refresh();
 connectStream();
