@@ -305,7 +305,8 @@ configurable through `roomSessionContinuityMs`. A return strictly before the
 deadline keeps Pause; at or after the deadline it is a new visit, even if the
 expiry callback runs late. Expiry itself never sends Play or a preset.
 Explicit Play/preset or a genuinely newer physical Playing transition releases
-Pause immediately. A newer Pause made while absent survives the older visit's
+Pause immediately, also when the player passes through buffering on the way
+there. A newer Pause made while absent survives the older visit's
 expiry and binds to the next confirmed occupied visit. Unknown gaps, duplicate
 empty samples and home/away changes neither renew nor cancel this boundary.
 Metadata-only Home Assistant updates keep the reported state visible but do not

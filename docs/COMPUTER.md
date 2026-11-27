@@ -226,8 +226,10 @@ start an arbitrary player or claim a pause the user already made. Nest Play is
 available only for a pause owned by this Lugn process. Rapid returns wait for
 pause confirmation and the matching lease report, with a bounded telemetry wait.
 
-Stopping, externally restarting or replacing the media, losing the device or
-broker, switching input, expiry, and agent/controller restarts revoke permission.
+Stopping, externally restarting or replacing the media, starting other media that
+Lugn then selects, losing the device or broker, switching input, expiry, and
+agent/controller restarts revoke permission, so the Hub shows what plays now and
+its Pause addresses that media.
 Leases are memory-only and are never reconstructed from retained state after a
 restart. A lost or uncertain command result grants no new ownership or automatic
 retry. The receiver's physical playback/source/title remain in

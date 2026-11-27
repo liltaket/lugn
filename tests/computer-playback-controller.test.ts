@@ -925,3 +925,47 @@ it('takes one step at a time and reports a refused one', async () => {
   });
   expect(s.controller.canTransport(target, next)).toBe(true);
 });
+
+/** A change the computer reports, on both of its channels. */
+function report(
+  s: ReturnType<typeof setup>,
+  name: string,
+  status: 'Playing' | 'Paused',
+) {
+  s.players.find((player) => player.player === name)!.playback_status = status;
+  const computer = s.engine.state.computer.devices['kuffe']!;
+  computer.observed.media!.find((media) => media.player === name)!.playback =
+    status === 'Playing' ? 'playing' : 'paused';
+  computer.sequence!++;
+  s.live.state.sequence++;
+  s.controller.observe();
+}
+
+it('follows other media started after its Pause instead of reading paused, and pauses that one', async () => {
+  const s = setup();
+  report(s, firefox, 'Paused');
+  await s.controller.request(target, pause, automation);
+  report(s, spotify, 'Paused');
+  expect(s.controller.getPlayback(target)).toBe('paused');
+  report(s, firefox, 'Playing');
+  expect(s.controller.getPlayback(target)).toBe('playing');
+  expect(s.controller.state[target]).toMatchObject({
+    playback: 'playing',
+    canPause: true,
+    canResume: false,
+  });
+  await s.controller.request(target, pause, automation);
+  expect(s.sendCommand.mock.calls[1]![0]).toMatchObject({
+    action: 'pause',
+    player: firefox,
+  });
+});
+
+it('keeps its Pause while media that already played goes on', async () => {
+  const s = setup();
+  await s.controller.request(target, pause, automation);
+  report(s, spotify, 'Paused');
+  report(s, firefox, 'Playing');
+  expect(s.controller.getPlayback(target)).toBe('paused');
+  expect(s.controller.canResume(target)).toBe(true);
+});

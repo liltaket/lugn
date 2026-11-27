@@ -149,6 +149,14 @@ export class MusicController {
   private readonly releasedPauseAt = new Map<string, number>();
   private readonly latestPlaybackIntentAt = new Map<string, number>();
   private readonly latestPlaybackChangedAt = new Map<string, number>();
+  /** What an available player reported before it named no playback. */
+  private readonly playbackBeforeGap = new Map<
+    string,
+    {
+      playback: MusicObservation['values']['playback'];
+      changedAt: number | undefined;
+    }
+  >();
   private readonly latestHumanVolumeIntent = new Map<
     string,
     { sequence: number; at: number }
@@ -745,6 +753,7 @@ export class MusicController {
     this.latestPlaybackIntentAt.clear();
     this.releasedPauseAt.clear();
     this.latestPlaybackChangedAt.clear();
+    this.playbackBeforeGap.clear();
     this.latestHumanVolumeIntent.clear();
     this.authorityIntentSequences.clear();
     this.latestExternalPlaybackIntent.clear();
@@ -1316,9 +1325,13 @@ export class MusicController {
       !staleVolumeFeedback &&
       !currentCorrelatedVolumeFeedback &&
       !pendingVolumeCommand;
+    const resumedAfterGap = this.resumedAfterGap(
+      observation,
+      device.availability === 'available' ? previousPlayback : undefined,
+    );
     const externalPlaybackChange =
       observation.available &&
-      previousPlayback !== 'unknown' &&
+      (previousPlayback !== 'unknown' || resumedAfterGap) &&
       observedPlayback !== 'unknown' &&
       newPlaybackTransition &&
       !latePausePredatesNewerIntent &&
@@ -1547,6 +1560,36 @@ export class MusicController {
     );
     this.pruneHistory(confirmedIds);
     this.publish();
+  }
+
+  /**
+   * A player may resume by way of buffering, which names no playback. Playing
+   * after such a gap is a Play when the player was not playing before it and
+   * the gap began after the last Play or Pause request. A player that was
+   * unavailable meanwhile proves nothing.
+   */
+  private resumedAfterGap(
+    observation: MusicObservation,
+    availablePlayback: MusicObservation['values']['playback'] | undefined,
+  ): boolean {
+    const { target, available, playbackChangedAt: changedAt } = observation;
+    const playback = observation.values.playback;
+    const before = this.playbackBeforeGap.get(target);
+    if (!available) this.playbackBeforeGap.delete(target);
+    else if (playback === 'unknown') {
+      if (availablePlayback && availablePlayback !== 'unknown')
+        this.playbackBeforeGap.set(target, {
+          playback: availablePlayback,
+          changedAt,
+        });
+    } else this.playbackBeforeGap.delete(target);
+    if (!available || playback !== 'playing' || !before) return false;
+    const intentAt = this.latestPlaybackIntentAt.get(target);
+    return (
+      before.playback !== 'playing' &&
+      (intentAt === undefined ||
+        (before.changedAt !== undefined && before.changedAt > intentAt))
+    );
   }
 
   private isNewPlaybackTransition(

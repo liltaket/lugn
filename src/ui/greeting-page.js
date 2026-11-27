@@ -231,9 +231,11 @@
     const page = typeof refs === 'object' && refs ? refs : null;
     const route = data.state.music.computerPlayback?.[target];
     const playback = route?.active ? route.playback : device.observed?.playback;
+    // As on Hem: a held Pause says what the receiver should do, not whether
+    // the computer behind its input plays.
     const playing =
       playback === 'playing' &&
-      !data.musicPlaybackPolicies?.[target]?.manualPause;
+      (route?.active || !data.musicPlaybackPolicies?.[target]?.manualPause);
     const preset = [...(page?.musicPresets?.children ?? [])].find(
       (button) => button.dataset?.presetId && !button.disabled,
     );
@@ -355,7 +357,7 @@
           run: () =>
             command(`music:${music.target}`, {
               target: music.target,
-              request: { property: 'playback', value: 'pause' },
+              request: { property: 'playback', value: 'paused' },
             }),
         };
       if (kind === 'godnatt' || !music.preset) return null;

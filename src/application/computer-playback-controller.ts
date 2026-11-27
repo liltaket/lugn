@@ -74,6 +74,8 @@ type Ownership = {
   pending: Promise<MusicCommandRecord> | null;
   awaitingLeaseUntil: number | null;
   leaseTimer: TimerHandle | undefined;
+  /** Other players that have played without a break since the Pause. */
+  alreadyPlaying: Set<string>;
 };
 type PendingCommand = {
   requested: PlaybackRequest;
@@ -374,6 +376,30 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
     );
   }
 
+  /**
+   * Media started after our Pause replaces what was paused: the route follows
+   * what plays now, and that old Pause is no longer ours to resume.
+   */
+  private otherMediaStarted(
+    context: Context,
+    target: string,
+    owned: Ownership,
+  ): boolean {
+    for (const player of context.control.players)
+      if (
+        player.playback_status === 'Paused' ||
+        player.playback_status === 'Stopped'
+      )
+        owned.alreadyPlaying.delete(player.player);
+    const shown = this.selected(context, target);
+    return (
+      !owned.pending &&
+      shown?.playback_status === 'Playing' &&
+      shown.player !== owned.player &&
+      !owned.alreadyPlaying.has(shown.player)
+    );
+  }
+
   observe(): void {
     if (this.disposed) return;
     const state = this.options.getState();
@@ -381,7 +407,8 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
     for (const [target, owned] of this.ownership) {
       const context = this.context(target);
       const player = context && this.ownedPlayer(context, owned);
-      if (!player) this.dropOwnership(target);
+      if (!player || this.otherMediaStarted(context!, target, owned))
+        this.dropOwnership(target);
       else if (!owned.pending) {
         if (this.leaseReported(context!, owned)) this.acceptLease(owned);
         else if (!this.canResume(target)) this.dropOwnership(target);
@@ -573,6 +600,11 @@ export class ComputerPlaybackController implements ComputerPlaybackControl {
             contentId: command.content_id,
             token: null,
             expiresAt: now + 20 * 60_000,
+            alreadyPlaying: new Set(
+              context.control.players
+                .filter((other) => other.playback_status === 'Playing')
+                .map((other) => other.player),
+            ),
             pending: null,
             awaitingLeaseUntil: null,
             leaseTimer: undefined,
