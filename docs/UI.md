@@ -234,8 +234,12 @@ clicks and the pointer bridge responsive while something plays:
   composited and run on the main thread in every frame). A lit scene tile's
   color, highlight and glow are a layer of their own (`::before`) that fades
   by opacity; the tile's text turns dark or light in one step a little into
-  the fade. The pending sweep is a band moved by `transform` and clipped by
-  the tile. New Hem artwork fades and settles without an animated blur.
+  the fade. The pending indicator is a soft opacity pulse inside the tile's own
+  rounded bounds (without toggling `overflow: hidden`). The two `.theme-bg`
+  cross-fade layers stay promoted (`will-change: opacity`) so theme swaps and
+  foreground updates inside the always-promoted pager track do not split and
+  re-rasterize the screen. New Hem artwork fades and settles without an
+  animated blur.
 - While Hem is not the page on screen it plays nothing: `pulse()` restarts
   nothing there (and takes a stale class off), the theme background swaps
   without its fade, the ring's halves do not transition, and Hem's endless
